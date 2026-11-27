@@ -149,7 +149,10 @@ import {
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { ThreadContextPanel } from "./ThreadContextPanel";
-import type { WorkspaceHandoffRequest } from "../composer/thread-workspace";
+import type {
+  WorkspaceHandoffAvailability,
+  WorkspaceHandoffRequest,
+} from "../composer/thread-workspace";
 import type { DecisionSetupSettings } from "./context-panels/DecisionsPanel";
 import { ArrowRightToLineIcon } from "../../icons/ArrowRightToLineIcon";
 import {
@@ -1829,6 +1832,8 @@ export function ThreadView(props: ThreadViewProps) {
   const requestWorkspaceHandoff = useEventCallback((direction: ThreadWorkspaceHandoffDirection) => {
     setWorkspaceHandoffRequest((current) => ({ id: (current?.id ?? 0) + 1, direction }));
   });
+  // What the composer would open now, so the menu offers no handoff it refuses.
+  const [workspaceHandoffAvailability, setWorkspaceHandoffAvailability] = useState<WorkspaceHandoffAvailability>();
   const showRunningMonitors = useEventCallback(() => {
     setWaitingHeadingThreadId(selectedThread?.id);
     onActiveContextTabChange("waiting");
@@ -3221,6 +3226,7 @@ export function ThreadView(props: ThreadViewProps) {
           onRefreshNavigation: props.onRefreshNavigation,
           onHandoffThreadWorkspace: props.onHandoffThreadWorkspace,
           workspaceHandoffRequest,
+          onWorkspaceHandoffAvailabilityChange: setWorkspaceHandoffAvailability,
           onMoveThreadToMainCheckout: props.onMoveThreadToMainCheckout,
           onBeforeStartTurn:
             selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
@@ -3760,6 +3766,7 @@ export function ThreadView(props: ThreadViewProps) {
             onRequestWorkspaceHandoff: props.onHandoffThreadWorkspace && !composerReplacedByRecovery
               ? requestWorkspaceHandoff
               : undefined,
+            workspaceHandoffAvailability,
             workspaceHandoffBlocked: Boolean(
               props.pendingRequest || props.pendingUserInput || props.pendingMcpInteraction,
             ),

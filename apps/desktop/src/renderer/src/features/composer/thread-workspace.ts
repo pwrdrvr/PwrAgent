@@ -152,6 +152,24 @@ export type WorkspaceHandoffRequest = {
 };
 
 /**
+ * What the composer's handoff dialog would accept now: moving the thread to
+ * a project, and handing its checkout to a worktree or Local.
+ */
+export type WorkspaceHandoffAvailability = {
+  project: boolean;
+  workspace: boolean;
+};
+
+/** Whether the composer would open the dialog for `direction`. */
+export function isWorkspaceHandoffAvailable(
+  availability: WorkspaceHandoffAvailability | undefined,
+  direction: ThreadWorkspaceHandoffDirection,
+): boolean {
+  if (!availability) return false;
+  return direction === "to-project" ? availability.project : availability.workspace;
+}
+
+/**
  * The handoffs a thread's workspace offers, in menu order, as the composer's
  * Worktree menu lists them: a worktree can go to a new worktree or to Local,
  * a local checkout to a new worktree, and either can move to a project.

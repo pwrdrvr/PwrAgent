@@ -200,6 +200,7 @@ import {
   isThreadWorkspaceHandoffEligible,
   primaryWorkspacePullRequests,
   type ThreadWorkspace,
+  type WorkspaceHandoffAvailability,
   type WorkspaceHandoffRequest,
 } from "./thread-workspace";
 import {
@@ -816,6 +817,11 @@ export type ComposerProps = {
    * folder menu asks here, so both use one dialog and one set of checks.
    */
   workspaceHandoffRequest?: WorkspaceHandoffRequest;
+  /**
+   * Which handoffs the composer would open now, so a control outside it
+   * offers only those; undefined once the composer is gone.
+   */
+  onWorkspaceHandoffAvailabilityChange?: (availability: WorkspaceHandoffAvailability | undefined) => void;
   /** Handoff to Local that leaves the main checkout on its own branch. */
   onMoveThreadToMainCheckout?: (
     worktreePath: string,
@@ -13011,6 +13017,14 @@ function useComposerController(props: ComposerProps) {
       // openHandoffDialog is rebuilt every render; the request id gates this.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [workspaceHandoffRequest, handoffRequestAllowed]);
+    const onWorkspaceHandoffAvailabilityChange = props.onWorkspaceHandoffAvailabilityChange;
+    useEffect(() => {
+      onWorkspaceHandoffAvailabilityChange?.({
+        project: canMoveThreadProject,
+        workspace: canHandoffThreadWorkspace,
+      });
+    }, [canHandoffThreadWorkspace, canMoveThreadProject, onWorkspaceHandoffAvailabilityChange]);
+    useEffect(() => () => onWorkspaceHandoffAvailabilityChange?.(undefined), [onWorkspaceHandoffAvailabilityChange]);
     const handoffDialogRef = useModalDialog({
       open: Boolean(handoffDialog && threadWorkspace),
       onClose: () => {

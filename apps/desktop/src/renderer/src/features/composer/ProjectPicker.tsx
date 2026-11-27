@@ -106,8 +106,12 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
     width: POPOVER_WIDTH,
   });
   const onOpenChange = props.onOpenChange;
+  // Balanced, like the rail's other portaled menus: true while open, false
+  // on close or unmount, and nothing for a picker that never opened.
   useEffect(() => {
-    onOpenChange?.(open);
+    if (!open) return undefined;
+    onOpenChange?.(true);
+    return () => onOpenChange?.(false);
   }, [onOpenChange, open]);
 
   useEffect(() => {

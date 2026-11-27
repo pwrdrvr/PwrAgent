@@ -382,6 +382,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     setRememberedSegment(activeTarget.segment);
   }
   const detailsSegment = activeTarget.segment ?? rememberedSegment;
+  // The tab the operator last picked from the spine or the segments. It
+  // opens at the top: Jobs is stored as "actions", which names Commands,
+  // and scrolling there hid the running sub-agents drawn above it. Only a
+  // reveal from elsewhere scrolls to the section its id names.
+  const [pickedTab, setPickedTab] = useState<ContextTabId | undefined>(props.activeTab);
+  const detailsSection = pickedTab === activeTab ? undefined : activeTarget.section;
   // The PR whose activity the PRs segment shows, chosen per thread.
   const [activityPr, setActivityPr] = useState<{ thread: string; key: string }>();
   const pricingSummaries = props.pricing?.summaries ?? [];
@@ -701,10 +707,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     }
   };
   const selectTab = (tab: ContextRailTabId): void => {
-    showContextTab(tab === "details" ? contextTabIdForDetailsSegment(detailsSegment) : tab);
+    const id = tab === "details" ? contextTabIdForDetailsSegment(detailsSegment) : tab;
+    setPickedTab(id);
+    showContextTab(id);
   };
   const selectDetailsSegment = (segment: DetailsSegmentId): void => {
-    showContextTab(contextTabIdForDetailsSegment(segment));
+    const id = contextTabIdForDetailsSegment(segment);
+    setPickedTab(id);
+    showContextTab(id);
   };
 
   const resizeRail = (nextWidth: number): void => {
@@ -1117,7 +1127,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     return (
       <DetailsPanel
         segment={detailsSegment}
-        section={activeTarget.section}
+        section={detailsSection}
         revealKey={activeTab}
         badges={{
           changes: {

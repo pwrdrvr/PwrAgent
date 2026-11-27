@@ -505,7 +505,7 @@ describe("ThreadContextPanel", () => {
     // Details' own strip is a tablist inside that panel, with its own panel.
     const segment = within(panel!).getByRole("tab", { name: "Thread" });
     expect(segment).toHaveAttribute("aria-selected", "true");
-    expect(document.getElementById("details-segment-panel"))
+    expect(document.getElementById(segment.getAttribute("aria-controls")!))
       .toHaveAttribute("aria-labelledby", segment.id);
   });
 
@@ -5203,5 +5203,94 @@ describe("ThreadContextPanel Details render work", () => {
 
     expect(reads).toEqual({ paths: 0, groups: 0 });
     expect(within(segments).getByRole("tab", { name: /^Changes/ })).toHaveTextContent("2");
+  });
+});
+
+describe("ThreadContextPanel Details navigation", () => {
+  const worktreeThread: NavigationThreadSummary = {
+    ...baseThread,
+    projectKey: "/Users/fixture-user/github/widgets/.worktrees/fix",
+    linkedDirectories: [{
+      id: "widgets-worktree",
+      kind: "worktree",
+      label: "widgets",
+      path: "/Users/fixture-user/github/widgets",
+      worktreePath: "/Users/fixture-user/github/widgets/.worktrees/fix",
+    }],
+  };
+
+  // Jobs is stored as "actions", whose old tab named Commands. Picking Jobs
+  // scrolled to Commands, past the running sub-agents drawn above it.
+  it("opens a picked segment at the top, and scrolls only for a reveal from elsewhere", () => {
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      const thread: NavigationThreadSummary = {
+        ...baseThread,
+        activeSubAgents: [{ monitorId: "m1", task: "Audit", status: "running", createdAt: 1, updatedAt: 1 }],
+      };
+      const onActiveTabChange = vi.fn<(tab: ContextTabId) => void>();
+      const panelAt = (activeTab: ContextTabId) => (
+        <ThreadContextPanel activeTab={activeTab} backends={[baseBackend]} pinned thread={thread}
+          onActiveTabChange={onActiveTabChange} />
+      );
+      const { rerender } = render(panelAt("info"));
+      fireEvent.click(within(screen.getByRole("tablist", { name: "Details" })).getByRole("tab", { name: /^Jobs/ }));
+      expect(onActiveTabChange).toHaveBeenLastCalledWith("actions");
+      rerender(panelAt("actions"));
+      expect(scrolled).toEqual([]);
+
+      // A sub-agent chip asks for its section.
+      rerender(panelAt("subagents"));
+      expect(scrolled).toEqual([document.querySelector('[data-details-section="subagents"]')]);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  // Star Map draws a context card per thread, several at once.
+  it("labels each Details panel by its own segment when two rails are drawn", () => {
+    render(
+      <>
+        <ThreadContextPanel activeTab="info" backends={[baseBackend]} pinned thread={baseThread}
+          onActiveTabChange={() => undefined} />
+        <ThreadContextPanel activeTab="info" backends={[baseBackend]} pinned thread={{ ...baseThread, id: "thread-2" }}
+          onActiveTabChange={() => undefined} />
+      </>,
+    );
+    const strips = screen.getAllByRole("tablist", { name: "Details" });
+    expect(strips).toHaveLength(2);
+    for (const strip of strips) {
+      const tab = within(strip).getByRole("tab", { name: "Thread" });
+      const panel = document.getElementById(tab.getAttribute("aria-controls")!);
+      expect(panel).toBe(strip.closest(".details-panel")?.querySelector('[role="tabpanel"]'));
+      expect(panel).toHaveAttribute("aria-labelledby", tab.id);
+    }
+  });
+
+  // The composer answers a handoff request and refuses one it would not
+  // offer, such as while a queued send is pending; the click did nothing.
+  it("offers only the handoffs the composer would open now", () => {
+    const onRequestWorkspaceHandoff = vi.fn();
+    render(
+      <ThreadContextPanel activeTab="info" backends={[baseBackend]} pinned thread={worktreeThread}
+        onActiveTabChange={() => undefined}
+        detailsControls={{
+          machineLabel: "This machine",
+          onRequestWorkspaceHandoff,
+          workspaceHandoffAvailability: { project: false, workspace: true },
+        }} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Folder actions for widgets" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Move to Project" }))
+      .toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Move to Project" }));
+    expect(onRequestWorkspaceHandoff).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Handoff to Local" }));
+    expect(onRequestWorkspaceHandoff).toHaveBeenCalledExactlyOnceWith("worktree-to-local");
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
 import { EditsIcon, PullRequestIcon, TerminalIcon, ThreadIcon } from "../../../icons";
 import type { IconProps } from "../../../icons/icon-types";
 import {
@@ -39,7 +39,7 @@ const SEGMENT_ICONS: Record<DetailsSegmentId, ComponentType<IconProps>> = {
 export function DetailsPanel(props: {
   segment: DetailsSegmentId;
   section?: DetailsSectionId;
-  /** Changes with every reveal, so asking twice for one section scrolls twice. */
+  /** The stored tab: a reveal that changes it scrolls to `section` again. */
   revealKey?: string;
   badges: Partial<Record<DetailsSegmentId, DetailsSegmentBadge>>;
   onSelectSegment: (segment: DetailsSegmentId) => void;
@@ -49,6 +49,10 @@ export function DetailsPanel(props: {
   children: ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Star Map can draw several rails at once; ids name this panel's parts.
+  const idPrefix = useId();
+  const tabId = (id: DetailsSegmentId): string => `${idPrefix}details-segment-${id}`;
+  const panelId = `${idPrefix}details-segment-panel`;
   const { section, segment, revealKey } = props;
   useEffect(() => {
     if (!section) return;
@@ -72,12 +76,12 @@ export function DetailsPanel(props: {
           return (
             <button
               key={id}
-              id={`details-segment-${id}`}
+              id={tabId(id)}
               type="button"
               role="tab"
               aria-selected={selected}
-              aria-controls="details-segment-panel"
-              aria-describedby={badge?.description ? `details-segment-${id}-description` : undefined}
+              aria-controls={panelId}
+              aria-describedby={badge?.description ? `${tabId(id)}-description` : undefined}
               tabIndex={selected ? 0 : -1}
               className={`details-segments__button${selected ? " is-active" : ""}`}
               onClick={() => props.onSelectSegment(id)}
@@ -105,7 +109,7 @@ export function DetailsPanel(props: {
       {DETAILS_SEGMENT_IDS.map((id) => {
         const description = props.badges[id]?.description;
         return description ? (
-          <span key={id} id={`details-segment-${id}-description`} hidden>
+          <span key={id} id={`${tabId(id)}-description`} hidden>
             {description}
           </span>
         ) : null;
@@ -113,9 +117,9 @@ export function DetailsPanel(props: {
       <div
         ref={panelRef}
         className="details-panel__body"
-        id="details-segment-panel"
+        id={panelId}
         role="tabpanel"
-        aria-labelledby={`details-segment-${segment}`}
+        aria-labelledby={tabId(segment)}
       >
         {props.children}
       </div>

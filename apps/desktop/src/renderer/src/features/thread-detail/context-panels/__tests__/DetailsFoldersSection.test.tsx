@@ -221,6 +221,29 @@ describe("DetailsFoldersSection", () => {
       ));
       expect(api.pickDirectoryFromDisk).toHaveBeenCalledTimes(1);
     });
+
+    it("does not offer a linked project whose tracked path differs only by a trailing slash", () => {
+      render(<DetailsFoldersSection
+        desktopApi={attachApi()} thread={childThread}
+        trackedDirectories={[...tracked, { key: "slash", kind: "directory", label: "Slashed", path: `${sharedCheckout.path}/` }]}
+        hideTooltip={() => undefined} showTooltip={() => undefined}
+      />);
+      fireEvent.click(screen.getByRole("button", { name: "Attach folder" }));
+      const picker = screen.getByRole("dialog", { name: "Project picker" });
+      expect(within(picker).getAllByRole("option").map((option) => option.textContent))
+        .toEqual([expect.stringContaining("Widgets")]);
+    });
+
+    it("says so when attaching throws, and leaves the row ready to try again", async () => {
+      const api = attachApi();
+      api.attachDirectoryToThread.mockRejectedValueOnce(new Error("Permission denied."));
+      render(view(api));
+      fireEvent.click(screen.getByRole("button", { name: "Attach folder" }));
+      fireEvent.click(within(screen.getByRole("dialog", { name: "Project picker" }))
+        .getByRole("option", { name: /Widgets/ }));
+      expect(await screen.findByText("Could not attach the folder. Permission denied.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Attach folder" })).toBeEnabled();
+    });
   });
 
   describe("Share storage", () => {

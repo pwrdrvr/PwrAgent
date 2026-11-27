@@ -15,7 +15,9 @@ import { ipcErrorMessage } from "../../../lib/open-path-failure";
 import {
   getThreadWorkspace,
   isThreadWorkspaceHandoffEligible,
+  isWorkspaceHandoffAvailable,
   listWorkspaceHandoffDirections,
+  type WorkspaceHandoffAvailability,
 } from "../../composer/thread-workspace";
 import type { ThreadWorkspaceHandoffDirection } from "@pwragent/shared/contracts/normalized-app-server";
 import type { HideRailTooltip, ShowRailTooltip } from "./context-rail-shared";
@@ -48,6 +50,8 @@ export type DetailsThreadControls = {
   };
   /** Opens the composer's handoff dialog; absent where it cannot. */
   onRequestWorkspaceHandoff?: (direction: ThreadWorkspaceHandoffDirection) => void;
+  /** What the composer's handoff dialog would open now. */
+  workspaceHandoffAvailability?: WorkspaceHandoffAvailability;
   /** The composer is busy with something a handoff must wait for. */
   workspaceHandoffBlocked?: boolean;
   workspaceActionsBlocked?: boolean;
@@ -117,7 +121,11 @@ export function DetailsThreadView(props: DetailsThreadViewProps) {
         trackedDirectories={controls?.directories}
         handoff={requestHandoff && handoffDirections.length > 0 ? {
           directions: handoffDirections,
-          disabled: Boolean(props.activeTurnId || controls?.workspaceHandoffBlocked || controls?.workspaceActionsBlocked),
+          // The composer answers the request and has the last word: a
+          // queued send or a submit in flight refuses it there.
+          isDisabled: (direction) => Boolean(
+            props.activeTurnId || controls?.workspaceHandoffBlocked || controls?.workspaceActionsBlocked,
+          ) || !isWorkspaceHandoffAvailable(controls?.workspaceHandoffAvailability, direction),
           onRequest: requestHandoff,
         } : undefined}
         autoFix={controls?.autoFix ? (

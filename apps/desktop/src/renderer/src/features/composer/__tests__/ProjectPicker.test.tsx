@@ -336,3 +336,20 @@ describe("ProjectPicker", () => {
     expect(trigger).toHaveFocus();
   });
 });
+
+describe("ProjectPicker onOpenChange", () => {
+  // The rail holds itself open on one flag that every portaled menu sets.
+  // A picker that reported false before it ever opened cleared another
+  // menu's hold, and one unmounted while open never released its own.
+  it("reports open and close in pairs, including an unmount while open", () => {
+    const onOpenChange = vi.fn();
+    const view = render(
+      <ProjectPicker directories={[dirA, dirB]} onSelect={() => undefined} onOpenChange={onOpenChange} />,
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+    expect(onOpenChange.mock.calls).toEqual([[true]]);
+    view.unmount();
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+  });
+});

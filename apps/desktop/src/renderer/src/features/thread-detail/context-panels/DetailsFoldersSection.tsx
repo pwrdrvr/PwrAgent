@@ -43,8 +43,8 @@ type LinkedDirectory = NavigationThreadSummary["linkedDirectories"][number];
 
 export type DetailsFoldersHandoff = {
   directions: readonly ThreadWorkspaceHandoffDirection[];
-  /** Why the handoffs cannot run now: a turn is running, say. */
-  disabled: boolean;
+  /** True while a handoff cannot run: a turn is running, say. */
+  isDisabled: (direction: ThreadWorkspaceHandoffDirection) => boolean;
   onRequest: (direction: ThreadWorkspaceHandoffDirection) => void;
 };
 
@@ -181,6 +181,9 @@ export const DetailsFoldersSection = memo(function DetailsFoldersSection(props: 
         return;
       }
       await props.onRefreshNavigation?.();
+    } catch (error) {
+      const details = error instanceof Error && error.message ? ` ${error.message}` : "";
+      setAttachError(`Could not attach the folder.${details}`);
     } finally {
       setAttaching(false);
     }
@@ -222,7 +225,7 @@ export const DetailsFoldersSection = memo(function DetailsFoldersSection(props: 
           kind: "item",
           key: `handoff:${direction}`,
           label: formatWorkspaceHandoffDirection(direction),
-          disabled: handoff.disabled,
+          disabled: handoff.isDisabled(direction),
           onSelect: () => handoff.onRequest(direction),
         });
       }
@@ -569,12 +572,13 @@ export function listAttachableDirectories(
   tracked: readonly NavigationDirectoryView[],
   linked: readonly LinkedDirectory[],
 ): NavigationDirectoryView[] {
+  // Compared as the dedupe above compares them: "/repo/" is "/repo".
   const linkedPaths = new Set<string>();
   for (const directory of linked) {
-    linkedPaths.add(directory.path);
-    if (directory.worktreePath) linkedPaths.add(directory.worktreePath);
+    linkedPaths.add(normalizeLinkedProjectPath(directory.path));
+    if (directory.worktreePath) linkedPaths.add(normalizeLinkedProjectPath(directory.worktreePath));
   }
   return tracked.filter((directory) => directory.path !== undefined
     && directory.localAvailability !== "unconfigured"
-    && !linkedPaths.has(directory.path));
+    && !linkedPaths.has(normalizeLinkedProjectPath(directory.path)));
 }
