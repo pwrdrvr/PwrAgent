@@ -489,6 +489,26 @@ describe("resolveTerminalShell", () => {
     ).toEqual({ file: "C:\\Windows\\System32\\cmd.exe", args: [] });
   });
 
+  it.each(["deleted", "present", "unspecified"] as const)(
+    "announces a home-directory fallback only for an unavailable workspace (%s)",
+    async (workspace) => {
+      const directory = createTemporaryRoot("terminal-workspace-");
+      if (workspace === "deleted") rmSync(directory, { recursive: true });
+      const cwd = workspace === "unspecified" ? undefined : directory;
+      const spawn = vi.fn(() => fakePty());
+      const service = new IntegratedTerminalService({ loadNodePty: async () => ({ spawn }) });
+      const session = await service.createOrAttach(
+        { threadKey: "codex:workspace", cwd, cols: 100, rows: 24 },
+        fakeWebContents(),
+      );
+
+      const expectedCwd = workspace === "present" ? directory : os.homedir();
+      expect(spawn).toHaveBeenCalledWith(expect.any(String), expect.any(Array), expect.objectContaining({ cwd: expectedCwd }));
+      expect(session).toMatchObject({ cwd: expectedCwd, status: "running" });
+      expect(session.snapshot?.data.includes("Workspace unavailable. Shell opened in your home directory.")).toBe(workspace === "deleted");
+    },
+  );
+
   it("reports native node-pty load failures without creating a session", async () => {
     const service = new IntegratedTerminalService({
       loadNodePty: async () => {
