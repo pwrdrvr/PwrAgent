@@ -1,15 +1,47 @@
+import * as mcpConnections from "@pwragent/shared/contracts/mcp-connections";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { boundedCommandTools } from "../agent-tools/bounded-command-tool";
+import { BoundedCommandLines } from "../token-miser/bounded-command-lines";
 import { BoundedCommandCapture } from "../token-miser/bounded-command";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { TestTokenMiserStore } from "./token-miser-test-store";
 
 const caller = { backend: "acp:antigravity", threadId: "thread", turnId: "turn" } as const;
 const shell = "/bin/sh";
+
+it("keeps line previews equal to a full UTF-8 decode across block and range boundaries", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "bounded-line-pages-"));
+  const file = await open(path.join(dir, "capture"), "wx+");
+  try {
+    const bytes = Buffer.concat([
+      Buffer.from("a".repeat(65535) + "😀\r\n\nshort\n"),
+      Buffer.from([0xff]), Buffer.from("π".repeat(40000) + "\nlast\r"),
+    ]);
+    await file.writeFile(bytes);
+    const lines = new BoundedCommandLines(file);
+    const expected = bytes.toString("utf8").split("\n").map((line, index, all) => {
+      const preview = line.slice(0, 2048);
+      return index + 1 === all.length ? preview : preview.replace(/\r$/u, "");
+    });
+    const collect = async (start: number) => {
+      const result: string[] = [];
+      for await (const line of lines.from(start)) result.push(line);
+      return result;
+    };
+    const [full, late] = await Promise.all([collect(1), collect(4)]);
+    expect(full).toEqual(expected);
+    expect(late).toEqual(expected.slice(3));
+    expect(await collect(2)).toEqual(expected.slice(1));
+    expect(await collect(6)).toEqual([]);
+  } finally {
+    await file.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 it.skipIf(process.platform === "win32")("retains the native command's bytes and exit code only on the issuing turn", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "bounded-oracle-"));
@@ -61,6 +93,18 @@ it.skipIf(process.platform === "win32")("retains the native command's bytes and 
       const summary = await capture.inspect(caller, objectId);
       expect(Buffer.byteLength(summary)).toBeLessThan(1600);
       expect(summary).toContain(command === "git diff" ? "headers.css" : "expected sticky, got static");
+      if (command === "git diff") {
+        // The summary just visited the final block. Reading that block again needs no prefix replay.
+        const file = await open(path.join(dir, "headers.css"));
+        const reads = vi.spyOn(Object.getPrototypeOf(file) as typeof file, "read");
+        try {
+          expect(await capture.inspect(caller, objectId, { start: 4900, end: 4900 })).toBe("+.row { color: teal }");
+          expect(reads).not.toHaveBeenCalled();
+        } finally {
+          reads.mockRestore();
+          await file.close();
+        }
+      }
       const first = await capture.inspect(caller, objectId, { start: 1, end: 1 });
       expect(first.split("\n")).toHaveLength(1);
       const needle = command === "git diff" ? "headers.css" : "expected sticky, got static";
@@ -221,6 +265,11 @@ it.skipIf(process.platform === "win32")("keeps concurrent capture handles distin
   try {
     const tickets = await Promise.all(Array.from({ length: 24 }, () => capture.prepare(caller, "git diff")));
     expect(new Set(tickets.map((ticket) => ticket.objectId)).size).toBe(24);
+    const split = vi.spyOn(mcpConnections, "splitMcpCommandLine");
+    try {
+      capture.observe(caller, { id: "unrelated", command: "/bin/sh -lc 'pwd'", completed: false });
+      expect(split.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally { split.mockRestore(); }
     for (const ticket of tickets) {
       await expect(capture.inspect({ ...caller, threadId: "foreign" }, ticket.objectId)).rejects.toThrow("unavailable");
     }

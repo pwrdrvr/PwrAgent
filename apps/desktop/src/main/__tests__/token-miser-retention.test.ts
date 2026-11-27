@@ -234,6 +234,18 @@ it("never publishes a failed acceptance or exposes another thread's payload", as
   expect(await store.readAll({ objectId: accepted.objectId, threadId: "other" })).toBeUndefined();
   expect(await store.readAll({ objectId: accepted.objectId, threadId: "owner" })).toBeDefined();
 });
+it("inserts temporary receipts without checking the clock for each earlier receipt", async () => {
+  const { TokenMiserOutputCache } = await import("../token-miser/token-miser-output-cache");
+  const cache = new TokenMiserOutputCache();
+  const now = vi.spyOn(Date, "now");
+  try {
+    for (let index = 0; index < 8; index++) cache.put(String(index), "retained");
+    expect(now.mock.calls.length).toBeLessThanOrEqual(16);
+  } finally {
+    now.mockRestore();
+    for (let index = 0; index < 8; index++) cache.remove(String(index));
+  }
+});
 it("shares the payload byte budget across cache instances and bounds individual entries", async () => {
   const { TokenMiserOutputCache, TOKEN_MISER_OUTPUT_ENTRY_BYTES } = await import("../token-miser/token-miser-output-cache");
   const first = new TokenMiserOutputCache();
@@ -388,6 +400,8 @@ it("never reinterprets an expired handle as a later native cell name", async () 
   });
   const read = (groupId: string) => store.readGroupBatch({ threadId: "owner", groupId,
     operations: [{ objectId: memberHandle, mode: "full" }] });
+  const history = vi.spyOn(store, "listMetadata");
   expect(await read(stale)).toBeUndefined();
+  expect(history).not.toHaveBeenCalled();
   expect((await read(group))?.results[0]?.text).toBe("fresh");
 });

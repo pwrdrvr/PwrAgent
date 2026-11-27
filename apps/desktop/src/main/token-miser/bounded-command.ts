@@ -6,6 +6,7 @@ import { splitMcpCommandLine } from "@pwragent/shared/contracts/mcp-connections"
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { TOKEN_MISER_OUTPUT_TTL_MS } from "./token-miser-output-cache";
 import { takeUtf8Prefix } from "./token-miser-types";
+import { BoundedCommandLines } from "./bounded-command-lines";
 import { BOUNDED_HELPER_TIMEOUT_MS, type BoundedCommandHelper } from "./bounded-command-helper";
 
 type Caller = Pick<AgentToolCallContext, "backend" | "threadId" | "turnId">;
@@ -16,6 +17,7 @@ type Ticket = {
   command: string;
   shell: string;
   file: FileHandle;
+  lines: BoundedCommandLines;
   filename: string;
   unlinking?: Promise<void>;
   itemId?: string;
@@ -34,31 +36,6 @@ const isCommand = (value: string) =>
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const scope = ({ backend, threadId, turnId }: Caller) => JSON.stringify([backend, threadId, turnId]);
 
-// Keep one bounded preview per logical line. Exact byte pages also cover binary
-// output and individual lines too long for a model-facing search result.
-async function* linePreviews(file: FileHandle) {
-  const size = (await file.stat()).size;
-  if (!size) return;
-  const buffer = Buffer.alloc(64 * 1024);
-  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
-  let prefix = "";
-  let offset = 0;
-  while (offset < size) {
-    const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, size - offset), offset);
-    if (!bytesRead) throw new Error("Capture changed during retrieval.");
-    offset += bytesRead;
-    const parts = decoder.decode(buffer.subarray(0, bytesRead), { stream: offset < size }).split("\n");
-    for (const [index, part] of parts.entries()) {
-      prefix += part.slice(0, 2048 - prefix.length);
-      if (index !== parts.length - 1) {
-        yield prefix.replace(/\r$/u, "");
-        prefix = "";
-      }
-    }
-  }
-  if (prefix) yield prefix;
-}
-
 async function commandSummary(ticket: Ticket, resolveHelper: () => BoundedCommandHelper | undefined) {
   const sections: Array<{ heading: string; lines: string[]; removed: number; added: number }> = [];
   const isDiff = ticket.command.startsWith("git diff");
@@ -72,7 +49,7 @@ async function commandSummary(ticket: Ticket, resolveHelper: () => BoundedComman
   const tail: string[] = [];
   let lines = 0;
   let context = 0;
-  for await (const line of linePreviews(ticket.file)) {
+  for await (const line of ticket.lines.from()) {
     lines++;
     const preview = line.slice(0, 220);
     if (ticket.helperIdentity) {
@@ -172,7 +149,7 @@ export class BoundedCommandCapture {
       // The receipt is emitted only after the command returns, including on failure.
       const shell = `test -f ${target} || exit 125; { if ${command}; then rc=0; else rc=$?; fi; } > ${target} 2>&1 || exit 125; echo pwragent-${receipt}:$rc; exit "$rc"`;
       const timer = this.expireAfterRetention(id);
-      this.tickets.set(id, { handle, receipt, caller: { backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId }, command, shell, filename, file, timer, helperIdentity: helper?.identity, lifetime: new AbortController() });
+      this.tickets.set(id, { handle, receipt, caller: { backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId }, command, shell, filename, file, lines: new BoundedCommandLines(file), timer, helperIdentity: helper?.identity, lifetime: new AbortController() });
       this.idsByHandle.set(handle, id);
       try {
         if (this.closed || !await this.eligible(caller) || !this.tickets.has(id)) throw new Error("Capture closed.");
@@ -192,10 +169,12 @@ export class BoundedCommandCapture {
 
   observe(caller: Caller, item: { id: string; processId?: string; command?: string; completed: boolean; output?: string }) {
     if (!this.pending) return;
+    const callerScope = scope(caller);
+    let parsedShell: string | undefined;
     for (const [id, ticket] of this.tickets) {
-      if (scope(caller) !== scope(ticket.caller) || ticket.status !== undefined) continue;
+      if (callerScope !== scope(ticket.caller) || ticket.status !== undefined) continue;
       const command = item.command;
-      if (!ticket.itemId && command && (command === ticket.shell || matchesLoginShell(command, ticket.shell))) {
+      if (!ticket.itemId && command && (command === ticket.shell || (parsedShell ??= loginShellCommand(command)) === ticket.shell)) {
         ticket.itemId = item.id;
         ticket.processId = item.processId;
         clearTimeout(ticket.timer);
@@ -221,7 +200,7 @@ export class BoundedCommandCapture {
       // A recycled native process ID alone is insufficient authority to terminate it.
       cleanup.push(stop((terminal) => running.some((ticket) => ticket.itemId === terminal.itemId
         && ticket.processId === terminal.processId
-        && (ticket.shell === terminal.command || matchesLoginShell(terminal.command, ticket.shell)))));
+        && (ticket.shell === terminal.command || loginShellCommand(terminal.command) === ticket.shell))));
     }
     await Promise.all(cleanup);
   }
@@ -259,9 +238,9 @@ export class BoundedCommandCapture {
       throw new Error("Invalid line range or query.");
     }
     const selected: string[] = [];
-    let number = 0;
-    for await (const line of linePreviews(ticket.file)) {
-      if (++number < start) continue;
+    let number = start - 1;
+    for await (const line of ticket.lines.from(start)) {
+      number++;
       if (query === undefined || line.includes(query)) selected.push(query ? `${number}: ${line}` : line);
       if (selected.length > end - start) break;
     }
@@ -296,10 +275,10 @@ export class BoundedCommandCapture {
   }
 }
 
-function matchesLoginShell(display: string, command: string): boolean {
+function loginShellCommand(display: string): string {
   const argv = splitMcpCommandLine(display);
-  return !!argv && argv.length === 3 && ["/bin/bash", "/bin/zsh", "/bin/sh"].includes(argv[0]!)
-    && ["-c", "-lc"].includes(argv[1]!) && argv[2] === command;
+  return argv && argv.length === 3 && ["/bin/bash", "/bin/zsh", "/bin/sh"].includes(argv[0]!)
+    && ["-c", "-lc"].includes(argv[1]!) ? argv[2]! : "";
 }
 
 // Runs on first explicit capture only. A crashed owner may have left a name

@@ -19,6 +19,7 @@ import {
   type TokenMiserSummary,
 } from "./token-miser-types.js";
 
+const OUTPUT_HANDLE = /^o[1-9][0-9]*$/u;
 const OBSERVATION_DIRECTORY = "code-mode-observations";
 const MAX_SEARCH_RESULTS = 100;
 const MAX_READ_LINES = 2_000;
@@ -338,12 +339,13 @@ export class TokenMiserStore {
   private async groupObjectId(threadId: string, groupId: string): Promise<string | undefined> {
     const id = this.outputs.resolveId(groupId);
     if (id !== groupId) return id;
+    if (!this.outputs.hasNativeGroup(JSON.stringify([threadId, groupId]))) return undefined;
     // Historical groups used the native cell ID. Keep that lookup for old clients.
     const legacy = (await this.listMetadata(threadId)).find((entry) => entry.groupId === groupId);
     if (!legacy) return undefined;
     // A native cell name may resemble an expired handle. Only older, unaliased
     // groups could have issued that native name as their public reference.
-    if (/^o[1-9][0-9]*$/u.test(groupId) && this.outputs.publicReference(legacy.objectId) !== legacy.objectId) return undefined;
+    if (OUTPUT_HANDLE.test(groupId) && this.outputs.publicReference(legacy.objectId) !== legacy.objectId) return undefined;
     return legacy.objectId;
   }
 
@@ -409,12 +411,15 @@ export class TokenMiserStore {
       throw new Error("Token Miser original output expired or unavailable.");
     }
     // Reserve before returning a replacement. The closure retains no raw text.
+    // An aliased group never issued a handle-shaped native cell name as its reference.
+    const nativeGroupKey = params.groupId && (!params.handle || !OUTPUT_HANDLE.test(params.groupId))
+      ? JSON.stringify([params.threadId, params.groupId]) : undefined;
     const retained = params.disposition === "passed_through"
       || this.outputs.put(objectId, params.output, "turn", [
         params.summary.summary,
         ...params.summary.usefulDetails,
         ...(params.summary.suggestedNextStep ? [params.summary.suggestedNextStep] : []),
-      ].join("\n"), params.handle);
+      ].join("\n"), params.handle, nativeGroupKey);
     if (!retained) throw new Error("Token Miser temporary output capacity exceeded.");
     this.owners.set(objectId, this.threadKey(params.threadId));
     this.outputGenerations.set(objectId, generation);
@@ -719,9 +724,8 @@ export class TokenMiserStore {
   }): TokenMiserRetrievalDelivery | undefined {
     const now = Date.now();
     for (const [deliveryId, pending] of this.pendingRetrievalDeliveries) {
-      if (now - pending.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
-        this.pendingRetrievalDeliveries.delete(deliveryId);
-      }
+      if (now - pending.createdAt <= RETRIEVAL_DELIVERY_TTL_MS) break;
+      this.abandonRetrievalDelivery(deliveryId);
     }
     const deliveryId = randomUUID();
     const begin = `<pwragent_token_miser_retrieval id="${deliveryId}">`;
@@ -742,6 +746,39 @@ export class TokenMiserStore {
     return { deliveryId, text: wrappedText };
   }
 
+  private matchRetrievalDeliveries(output: string, threadId: string, generation: string) {
+    const matches: Array<{ deliveryId: string; pending: PendingRetrievalDelivery; start: number; end: number }> = [];
+    if (!this.pendingRetrievalDeliveries.size) return matches;
+    const candidates = new Map<string, { pending: PendingRetrievalDelivery; forms: string[] }>();
+    // A marker locates a candidate only. Verify the complete owner-issued raw
+    // or JSON-quoted value at this offset before treating it as a delivery.
+    const openers = /<pwragent_token_miser_retrieval id=(\\?)"([a-f0-9-]{36})/gu;
+    for (const match of output.matchAll(openers)) {
+      const id = match[2]!;
+      const reference = this.pendingRetrievalDeliveries.get(id);
+      if (reference?.threadId !== threadId) continue;
+      let candidate = candidates.get(id);
+      if (!candidate) {
+        const text = this.outputs.get(id);
+        if (!text || Date.now() - reference.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
+          this.abandonRetrievalDelivery(id);
+          continue;
+        }
+        const pending = JSON.parse(text) as PendingRetrievalDelivery;
+        candidate = { pending, forms: deliveryTextForms(pending) };
+        candidates.set(id, candidate);
+      }
+      if (candidate.pending.generation !== generation) continue;
+      const quoted = !!match[1];
+      const start = match.index - (quoted ? 1 : 0);
+      const form = candidate.forms[quoted ? 1 : 0];
+      if (start >= 0 && form && output.startsWith(form, start)) {
+        matches.push({ deliveryId: id, pending: candidate.pending, start, end: start + form.length });
+      }
+    }
+    return matches;
+  }
+
   /** Match only live, thread-owned deliveries, never script text or marker syntax. */
   async partitionRetrievalOutput(params: { output: string; threadId: string }): Promise<Array<{
     text: string;
@@ -751,27 +788,7 @@ export class TokenMiserStore {
       return [{ text: params.output, retrieval: false }];
     }
     const generation = await this.readRetentionGeneration(params.threadId);
-    const matches = [...this.pendingRetrievalDeliveries.entries()]
-      .filter(([, reference]) => reference.threadId === params.threadId)
-      .flatMap(([deliveryId, reference]) => {
-        const text = this.outputs.get(deliveryId);
-        if (!text || Date.now() - reference.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
-          this.abandonRetrievalDelivery(deliveryId);
-          return [];
-        }
-        const pending = JSON.parse(text) as PendingRetrievalDelivery;
-        if (pending.generation !== generation) return [];
-        const matches: Array<{ start: number; end: number }> = [];
-        for (const form of deliveryTextForms(pending)) {
-          let start = params.output.indexOf(form);
-          while (start >= 0) {
-            matches.push({ start, end: start + form.length });
-            start = params.output.indexOf(form, start + form.length);
-          }
-        }
-        return matches;
-      })
-      .sort((left, right) => left.start - right.start);
+    const matches = this.matchRetrievalDeliveries(params.output, params.threadId, generation);
     const parts: Array<{ text: string; retrieval: boolean }> = [];
     let offset = 0;
     for (const match of matches) {
@@ -799,54 +816,32 @@ export class TokenMiserStore {
     // those exact UTF-8 byte-budgeted ranges.
     if (await this.isArchived(params.threadId)) return 0;
     const generation = await this.readRetentionGeneration(params.threadId);
-    const candidates = [...this.pendingRetrievalDeliveries.entries()]
-      .filter(([, pending]) => pending.threadId === params.threadId)
-      .flatMap(([deliveryId, reference]) => {
-        const text = this.outputs.get(deliveryId);
-        if (!text || Date.now() - reference.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
-          this.abandonRetrievalDelivery(deliveryId);
-          return [];
-        }
-        const pending = JSON.parse(text) as PendingRetrievalDelivery;
-        for (const form of deliveryTextForms(pending)) {
-          const outputOffset = params.output.indexOf(form);
-          if (outputOffset >= 0) return [{ deliveryId, outputOffset, pending }];
-        }
-        return [];
-      })
-      .filter((candidate) => candidate.outputOffset >= 0)
-      .sort((left, right) => left.outputOffset - right.outputOffset);
+    const matches = this.matchRetrievalDeliveries(params.output, params.threadId, generation);
+    if (!matches.length) return 0;
     const visibleRanges = codexVisibleStringRanges(
       params.output,
       normalizePositiveInteger(params.maxVisibleBytes, Number.MAX_SAFE_INTEGER),
     );
-    let confirmedCharacters = 0;
-    for (const { deliveryId, outputOffset, pending } of candidates) {
-      this.abandonRetrievalDelivery(deliveryId);
-      if (pending.generation !== generation) continue;
+    const charges = new Map<string, { pending: PendingRetrievalDelivery; bytes: number }>();
+    for (const { deliveryId, start, pending } of matches) {
+      const charge = charges.get(deliveryId) ?? { pending, bytes: 0 };
+      charges.set(deliveryId, charge);
       // Host-issued text has no managed-output ledger charge.
       if (!pending.objectId) continue;
-      let visibleCharacters = 0;
-      let occurrence = outputOffset;
-      // A cell can emit the same delivery more than once. Each visible copy
-      // enters context, but update its metadata only once per delivery.
-      while (occurrence >= 0) {
-        const visibleTextStart = occurrence + pending.visibleTextOffset;
-        const visibleTextEnd = visibleTextStart + pending.visibleText.length;
-        visibleCharacters += visibleRanges.reduce((total, range) => {
-          const start = Math.max(visibleTextStart, range.start);
-          const end = Math.min(visibleTextEnd, range.end);
-          return end > start
-            ? total + utf8ByteLength(params.output.slice(start, end))
-            : total;
-        }, 0);
-        occurrence = params.output.indexOf(
-          pending.wrappedText,
-          occurrence + pending.wrappedText.length,
-        );
+      const visibleStart = start + pending.visibleTextOffset;
+      for (const range of visibleRanges) {
+        const from = Math.max(visibleStart, range.start);
+        const to = Math.min(visibleStart + pending.visibleText.length, range.end);
+        if (to > from) charge.bytes += utf8ByteLength(params.output.slice(from, to));
       }
-      await this.recordRetrieval(pending.objectId, visibleCharacters, pending.kind);
-      confirmedCharacters += visibleCharacters;
+    }
+    let confirmedCharacters = 0;
+    for (const [deliveryId, { pending, bytes }] of charges) {
+      if (!this.pendingRetrievalDeliveries.has(deliveryId)) continue;
+      this.abandonRetrievalDelivery(deliveryId);
+      if (!pending.objectId) continue;
+      await this.recordRetrieval(pending.objectId, bytes, pending.kind);
+      confirmedCharacters += bytes;
     }
     return confirmedCharacters;
   }

@@ -102,6 +102,28 @@ The ten Antigravity active-turn warnings occurred with `startReserved=true`, imm
 
 The model-facing discovery records at steps 201, 229 and 254 returned the lab schemas. `lab_request_status` required `id`. The post-compaction call at step 268 supplied `request_id`. `lab_status` accepted an empty object. Step 358 supplied `target`. Both rejected extra fields and returned invalid arguments (-32602). The capture does not expose every post-compaction request body, so it cannot establish which schema text survived compaction. No gateway change was warranted.
 
+## Owner-side scaling audit
+
+Local probes compared PR head `73a7ec8d9` with the indexed capture reader and receipt matcher. The capture probe ran the prepared foreground command against a temporary Git repository. It checked each requested line against native `git diff` stdout and counted bytes returned by the owner's file descriptor. Each series started with a fresh capture and no cached summary.
+
+| Diff rows | Old bytes for 8 forward ranges | Old bytes for 16 | Old bytes for 32 | New bytes for 8, 16 or 32 |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,024 | 854,115 | 1,640,547 | 3,213,411 | 133,282 |
+| 2,048 | 1,511,523 | 2,822,243 | 5,443,683 | 266,434 |
+| 4,096 | 2,826,339 | 5,185,635 | 9,904,227 | 532,738 |
+
+The reader keeps one page of line previews and the byte offset and line number of each page it has visited. A cold seek indexes the intervening data. A warm seek uses the nearest checkpoint. Reading within the cached page performs zero file reads. Searching for absent text still requires visiting the remaining previews. Seeded oracle checks exercised backward ranges, overlapping readers, CRLF, split and invalid UTF-8, and unterminated lines longer than a page. Exact byte paging continues to use positional reads.
+
+| Work counted | Workload | Before | After |
+| --- | --- | ---: | ---: |
+| Receipt payloads opened for one emitted receipt | 32 / 64 / 128 pending | 32 / 64 / 128 | 1 / 1 / 1 |
+| Receipt payloads opened for four emitted receipts | Same pending counts | 32 / 64 / 128 | 4 / 4 / 4 |
+| Clock reads inserting temporary cache entries | 32 / 64 / 128 insertions | 528 / 2,080 / 8,256 | 32 / 64 / 128 |
+| Shell display parses for eight unrelated native events | 6 / 12 / 24 live capture tickets | 48 / 96 / 192 | 8 / 8 / 8 |
+| History rows loaded by eight missing group lookups | 16 / 32 / 64 historical outputs | 128 / 256 / 512 | 0 / 0 / 0 |
+
+Code Mode matching still checks the complete owner-issued raw or JSON-quoted text, its thread and retention generation. The group lookup keeps the historical newest-record check for a live native cell ID. Current short handles take the direct lookup. A separate managed Codex retrieval probe read 8, 16 and 32 exact 1,024-byte pages and counted one source UTF-8 encoding per output in all nine runs. Deterministic regressions cover the warm capture read, receipt lookup, insertion, shell parse and stale-group budgets. These counters measure local owner work. The harness inference measurements are in the preceding benchmarks.
+
 ## Reproduction
 
 From the repository root, run the following for each of `agy`, `codex` and `claude`. Supply the managed executable as the final argument for a second Codex run. Use locally installed, authenticated harnesses. The script creates fresh repositories and writes private protocol evidence in the ignored desktop captures directory. Only synthetic commands should be used with this benchmark.
