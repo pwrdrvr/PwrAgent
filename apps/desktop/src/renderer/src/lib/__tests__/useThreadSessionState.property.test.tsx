@@ -334,9 +334,9 @@ class LedgerCommand implements fc.AsyncCommand<Model, Real> {
           // sent again. Only the send's turn can tell the two apart. The app
           // binds a send once startTurn resolves, so two unbound sends never
           // share a text for long: text alone could not tell them apart.
-          const repeated = textOf(model.ledger[0]!);
+          const repeated = model.ledger[0] ? textOf(model.ledger[0]) : undefined;
           model.optimistic = { turn: model.turn + 1, sequence: 0, role: "user", time: NOW,
-            ...(this.reverse && model.unboundText !== repeated ? { text: repeated } : {}) };
+            ...(this.reverse && repeated && model.unboundText !== repeated ? { text: repeated } : {}) };
           model.optimisticId = real.result.current.addOptimisticUserMessage(textOf(model.optimistic));
           if (model.optimisticId) sentKeys.set(model.optimisticId, key(model.optimistic));
           break;
@@ -1044,5 +1044,100 @@ it("keeps an echoed prompt and tool turn ordered across multi-page history resta
       new LedgerCommand("complete", 0, false),
       new LedgerCommand("start", 0, false),
     ]);
+  } finally { clock.mockRestore(); }
+}));
+
+// On a brand-new thread (`previousPageTurnIds` empty, no `loadedHistory`),
+// turns 1-3 span more than one older page before newest page [turn-4, turn-5]
+// races turn 6. Turn 1's unbound missed-echo prompt must not stay stranded in
+// `tail` after [turn-2, turn-3] loads or duplicate when [turn-1] loads next.
+it("retires multi-page skipped live turns and unbound prompts on a brand-new thread before older-page loads", () => ledgerLifetime.run(async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  const model: Model = { turn: 0, ledger: [] };
+  try {
+    await withLedgerExample(model, async (real) => {
+      await fc.asyncModelRun(() => ({ model, real }), [
+        new LedgerCommand("send", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, true),
+        new LedgerCommand("complete", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, false),
+        new LedgerCommand("complete", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, false),
+        new LedgerCommand("complete", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, false),
+        new LedgerCommand("complete", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, false),
+        new LedgerCommand("complete", 0, false),
+        new LedgerCommand("read", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, false),
+        new LedgerCommand("complete", 0, false),
+      ]);
+      await drain(model, real);
+      for (let page = 0; real.result.current.response?.replay.pagination.hasPreviousPage; page++) {
+        expect(page).toBeLessThan(10);
+        await new LedgerCommand("older", 0, false).run(model, real);
+        await drain(model, real);
+      }
+      assertLedger(model, real);
+      expect(logicalKeys(real.result.current.entries), real.trace.join(" → ")).toEqual(model.ledger.map(key));
+    });
+  } finally { clock.mockRestore(); }
+}));
+
+// Issuing a newest-page read in the same React batch right after turn/completed
+// must not let turn/completed's deferred state updater lazily bump
+// liveTranscriptVersionsRef past the read's capture and strand skipped turns.
+it("allocates turn/completed live version synchronously before a batched read capture", () => ledgerLifetime.run(async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  const model = initialModel();
+  try {
+    await withLedgerExample(model, async (real) => {
+      await new LedgerCommand("older", 0, false).run(model, real);
+      await drain(model, real);
+      await fc.asyncModelRun(() => ({ model, real }), [
+        new LedgerCommand("send", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, true),
+      ]);
+      // Emit turn/completed for turn-3 (promoting its unbound prompt inside
+      // updateSession) and immediately start turns 4-5 + reload in one React
+      // batch so the reload captures liveTranscriptVersion before updaters run.
+      await act(async () => {
+        model.active = undefined;
+        real.emit("turn/completed", { turnId: "turn-3", turn: turnMetadata(3) });
+
+        model.active = ++model.turn;
+        real.emit("turn/started", { turn: turnMetadata(4, 4) });
+        const item4: Item = { turn: 4, sequence: 0, role: "assistant" };
+        model.ledger.push(item4);
+        real.emit("item/completed", { turnId: "turn-4", item: { id: key(item4), type: "agentMessage", text: key(item4), phase: "commentary" } });
+        model.active = undefined;
+        real.emit("turn/completed", { turnId: "turn-4", turn: turnMetadata(4) });
+
+        model.active = ++model.turn;
+        real.emit("turn/started", { turn: turnMetadata(5, 5) });
+        const item5: Item = { turn: 5, sequence: 0, role: "assistant" };
+        model.ledger.push(item5);
+        real.emit("item/completed", { turnId: "turn-5", item: { id: key(item5), type: "agentMessage", text: key(item5), phase: "commentary" } });
+        model.active = undefined;
+        real.emit("turn/completed", { turnId: "turn-5", turn: turnMetadata(5) });
+
+        real.track(real.result.current.reload());
+      });
+      await drain(model, real);
+      for (let page = 0; real.result.current.response?.replay.pagination.hasPreviousPage; page++) {
+        expect(page).toBeLessThan(10);
+        await new LedgerCommand("older", 0, false).run(model, real);
+        await drain(model, real);
+      }
+      assertLedger(model, real);
+      expect(logicalKeys(real.result.current.entries), real.trace.join(" → ")).toEqual(model.ledger.map(key));
+    });
   } finally { clock.mockRestore(); }
 }));

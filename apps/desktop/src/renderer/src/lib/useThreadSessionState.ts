@@ -6311,8 +6311,10 @@ export function useThreadSessionState(params: {
           const skipsProviderTurns = bridgesRetainedRows
             && response.replay.pagination.supportsPagination
             && response.replay.pagination.hasPreviousPage
-            && (lostRetiredPageBridge || (previousPageTurnIds && previousPageTurnIds.size > 0
-              && ![...previousPageTurnIds].some((turnId) => pageTurnIds.has(turnId))));
+            && (lostRetiredPageBridge
+              || (!current.loadedHistory && !previousPageTurnIds?.size && pageTurnIds.size > 0)
+              || (previousPageTurnIds && previousPageTurnIds.size > 0
+                && ![...previousPageTurnIds].some((turnId) => pageTurnIds.has(turnId))));
           if (skipsProviderTurns) {
             delete loadedHistoryIndexesRef.current[targetThreadKey];
           }
@@ -7210,16 +7212,8 @@ export function useThreadSessionState(params: {
 
       let eventLiveTranscriptVersion: number | undefined;
       const recordLiveItemVersion = (id: string) => {
-        if (!retainTranscript) {
+        if (!retainTranscript || eventLiveTranscriptVersion === undefined) {
           return;
-        }
-        if (eventLiveTranscriptVersion === undefined) {
-          eventLiveTranscriptVersion =
-            (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
-          liveTranscriptVersionsRef.current.set(
-            targetThreadKey,
-            eventLiveTranscriptVersion,
-          );
         }
         let itemVersions = liveItemVersionsRef.current.get(targetThreadKey);
         if (!itemVersions) {
@@ -7231,16 +7225,21 @@ export function useThreadSessionState(params: {
         }
       };
 
-      if (retainTranscript && isTranscriptUpdate) {
+      // Synchronously allocate the live version before queueing updateSession so
+      // deferred React state updaters (including turn/completed promotions) never
+      // lazily bump liveTranscriptVersionsRef past a subsequent read capture.
+      if (retainTranscript && (isTranscriptUpdate || event.notification.method === "turn/completed")) {
         eventLiveTranscriptVersion =
           (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
         liveTranscriptVersionsRef.current.set(
           targetThreadKey,
           eventLiveTranscriptVersion,
         );
-        const itemId = liveNotificationItemId(event.notification);
-        if (itemId) {
-          recordLiveItemVersion(itemId);
+        if (isTranscriptUpdate) {
+          const itemId = liveNotificationItemId(event.notification);
+          if (itemId) {
+            recordLiveItemVersion(itemId);
+          }
         }
       }
 
@@ -7635,15 +7634,16 @@ export function useThreadSessionState(params: {
             fallbackStatus: "in_progress",
           });
           const phase = event.notification.params.phase ?? previousMessage?.phase;
-          const promotedOptimisticMessages = isSamePendingMessage
-            ? []
-            : optimisticMessageEntries(current.optimisticEntries);
+          const shouldFlushPendingAssistant =
+            !isSamePendingMessage && Boolean(current.pendingAssistantMessage);
+          const promotedOptimisticMessages = shouldFlushPendingAssistant
+            ? optimisticMessageEntries(current.optimisticEntries)
+            : [];
           for (const entry of promotedOptimisticMessages) {
             recordLiveItemVersion(entry.id);
           }
-          const flushedResponse = isSamePendingMessage
-            ? current.response
-              : appendPendingAssistantMessage(
+          const flushedResponse = shouldFlushPendingAssistant
+            ? appendPendingAssistantMessage(
                 current.response,
                 {
                   backend: event.backend,
@@ -7651,7 +7651,8 @@ export function useThreadSessionState(params: {
                 },
                 promotedOptimisticMessages,
                 current.pendingAssistantMessage
-              );
+              )
+            : current.response;
           const carriedSequence = readRendererSequence(previousMessage);
           const allocatedSequence =
             carriedSequence ?? current.nextLiveEntrySequence;
@@ -7971,6 +7972,7 @@ export function useThreadSessionState(params: {
             };
           }
           if (taskMonitorUsageEntry) {
+            recordLiveItemVersion(taskMonitorUsageEntry.id);
             const nextResponse = appendThreadEntries(
               current.response,
               {
