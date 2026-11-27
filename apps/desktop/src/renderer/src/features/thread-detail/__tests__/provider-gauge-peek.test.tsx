@@ -124,6 +124,65 @@ describe("AI provider gauge peek", () => {
     ]);
   });
 
+  // Antigravity reports two pools, each with a 5h and a Weekly window. The
+  // peek showed only the fullest limit, so Gemini vanished behind Claude/GPT.
+  const ANTIGRAVITY = backend("acp:antigravity", "Antigravity", [
+    { name: "5h Claude/GPT limit", limitId: "b1", usedPercent: 0, windowMinutes: 300 },
+    { name: "Weekly Claude/GPT limit", limitId: "b2", usedPercent: 36, windowMinutes: 10_080 },
+    { name: "Weekly Gemini limit", limitId: "b3", usedPercent: 30, windowMinutes: 10_080 },
+    { name: "5h Gemini limit", limitId: "b4", usedPercent: 7.4, windowMinutes: 300 },
+  ]);
+
+  it("shows each of a provider's pools by its Weekly window", () => {
+    const entries = providerPeekEntries([ANTIGRAVITY, BACKENDS[0]!], 0);
+    expect(entries.map((entry) => [
+      entry.backend.label,
+      entry.scopes.map((scope) => [scope.scope, scope.window, scope.limit.name]),
+    ])).toEqual([
+      ["Antigravity", [
+        ["Claude/GPT", "Weekly", "Weekly Claude/GPT limit"],
+        ["Gemini", "Weekly", "Weekly Gemini limit"],
+      ]],
+      // One plan: no scope, and its 5h window stays on the panel.
+      ["OpenAI", [[null, "Weekly", "Weekly limit"]]],
+    ]);
+  });
+
+  it("names the pools as subheaders, and the rows by their window alone", async () => {
+    mockLayout();
+    render(
+      <ThreadContextPanel
+        activeTab="info"
+        backends={[ANTIGRAVITY, BACKENDS[2]!]}
+        pinned={false}
+        thread={thread}
+        onActiveTabChange={vi.fn()}
+      />,
+    );
+    const shown = await openPeek();
+    const providers = [...shown.querySelectorAll<HTMLElement>(".provider-peek__provider")];
+    const read = (provider: HTMLElement) => ({
+      scopes: [...provider.querySelectorAll(".provider-peek__scope-name")].map((node) => node.textContent),
+      windows: [...provider.querySelectorAll(".provider-peek__window")].map((node) => node.textContent),
+    });
+    expect(providers.map((provider) => provider.querySelector(".provider-peek__name")!.textContent))
+      .toEqual(["Claude", "Antigravity"]);
+    expect(read(providers[0]!)).toEqual({ scopes: [], windows: ["Weekly"] });
+    expect(read(providers[1]!)).toEqual({ scopes: ["Claude/GPT", "Gemini"], windows: ["Weekly", "Weekly"] });
+    expect(providers[1]).toHaveTextContent("36% used");
+    expect(providers[1]).toHaveTextContent("30% used");
+    // The panel's own label ("Weekly Gemini limit") is hidden by the peek's
+    // stylesheet, which jsdom does not load; the visible text is the rest.
+    for (const label of shown.querySelectorAll(".provider-peek__stat dt")) label.remove();
+    expect(shown).not.toHaveTextContent(/limit/i);
+    expect(shown).not.toHaveTextContent("5h");
+    // Every row shares the one window column, so every bar starts at one edge.
+    for (const row of shown.querySelectorAll(".provider-peek__limit")) {
+      expect(row.firstElementChild).toHaveClass("provider-peek__window");
+      expect(row.querySelector(".backend-status-list__meter")).not.toBeNull();
+    }
+  });
+
   it("peeks on hover while the rail stays collapsed", async () => {
     renderPanel();
     const shown = await openPeek();

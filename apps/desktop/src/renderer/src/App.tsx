@@ -4761,6 +4761,7 @@ function DesktopAppShell(props: {
             approvalRequestThreadKeys={session.approvalRequestThreadKeys}
             inputRequestThreadKeys={session.inputRequestThreadKeys}
             terminalThreadKeys={terminalThreadKeys}
+            onOpenThreadTerminal={terminals.openPanel}
             queuedMessageThreadKeys={queuedMessageThreadKeys}
             draftThreadKeys={draftThreadKeys}
             unassignedThreadDraftCount={unassignedThreadDraftCount}
