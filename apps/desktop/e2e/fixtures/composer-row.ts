@@ -51,10 +51,6 @@ export async function isComposerTierFolded(
 
 /** A row button by name, whether drawn or folded out of sight. */
 export function composerRowButton(page: Page, name: RegExp | string): Locator {
-  return rowButton(page, name);
-}
-
-function rowButton(page: Page, name: RegExp | string): Locator {
   return composerRow(page).getByRole("button", { name, exact: true, includeHidden: true });
 }
 
@@ -80,7 +76,7 @@ async function closeComposerThreadOptions(page: Page): Promise<void> {
  * choice's radio group in ⋮ when it has folded.
  */
 export async function chooseComposerOption(page: Page, control: RegExp, option: string): Promise<void> {
-  if (await isComposerTierFolded(page, "details", rowButton(page, control))) {
+  if (await isComposerTierFolded(page, "details", composerRowButton(page, control))) {
     const menu = await openComposerThreadOptions(page);
     await menu.getByRole("menuitemradio", { name: option, exact: true }).click();
     await expect(menu).toBeHidden();
@@ -95,7 +91,7 @@ export async function chooseComposerOption(page: Page, control: RegExp, option: 
  * the checked radio in ⋮ when it has folded.
  */
 export async function expectComposerOption(page: Page, control: RegExp, option: string): Promise<void> {
-  if (await isComposerTierFolded(page, "details", rowButton(page, control))) {
+  if (await isComposerTierFolded(page, "details", composerRowButton(page, control))) {
     const menu = await openComposerThreadOptions(page);
     await expect(menu.getByRole("menuitemradio", { name: option, exact: true }))
       .toHaveAttribute("aria-checked", "true");
@@ -112,12 +108,12 @@ export async function expectComposerOption(page: Page, control: RegExp, option: 
  */
 export async function expectNoComposerEnvironment(page: Page): Promise<void> {
   await expect(composerRow(page)).toHaveAttribute("data-folded-tiers", /^\d$/);
-  await expect(rowButton(page, /^Environment(?::|$)/)).toHaveCount(0);
+  await expect(composerRowButton(page, /^Environment(?::|$)/)).toHaveCount(0);
 }
 
 /** Runs the selected environment command: the row's ▶, or its ▶ in ⋮. */
 export async function runComposerCommand(page: Page): Promise<void> {
-  if (await isComposerTierFolded(page, "run", rowButton(page, "Run"))) {
+  if (await isComposerTierFolded(page, "run", composerRowButton(page, "Run"))) {
     const menu = await openComposerThreadOptions(page);
     await menu
       .locator(".composer-thread-options__command", { has: page.locator("[aria-checked='true']") })
@@ -131,7 +127,7 @@ export async function runComposerCommand(page: Page): Promise<void> {
 
 /** Picks a workspace handoff action from the row's Workspace mode menu, or from ⋮. */
 export async function chooseComposerWorkspaceAction(page: Page, action: string): Promise<void> {
-  if (await isComposerTierFolded(page, "details", rowButton(page, /^Workspace mode(?::|$)/))) {
+  if (await isComposerTierFolded(page, "details", composerRowButton(page, /^Workspace mode(?::|$)/))) {
     const menu = await openComposerThreadOptions(page);
     await menu.getByRole("menuitem", { name: action, exact: true }).click();
     return;
@@ -146,7 +142,7 @@ export async function chooseComposerWorkspaceAction(page: Page, action: string):
  */
 export async function startComposerDictation(page: Page): Promise<void> {
   const name = "Dictate with OpenAI";
-  if (await isComposerTierFolded(page, "dictation", rowButton(page, name))) {
+  if (await isComposerTierFolded(page, "dictation", composerRowButton(page, name))) {
     const menu = await openComposerThreadOptions(page);
     await menu.getByRole("menuitem", { name, exact: true }).click();
     await expect(menu).toBeHidden();
