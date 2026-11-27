@@ -2830,6 +2830,7 @@ export type AppServerNotification =
   | {
       method: "thread/pricing/updated";
       params: {
+        /** Owner listeners may receive changed turn lines. Viewers refetch their selected display. */
         displayInvalidated?: true;
         threadId: string;
         pricing: {

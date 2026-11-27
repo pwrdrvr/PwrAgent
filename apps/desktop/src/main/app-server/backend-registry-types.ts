@@ -1346,6 +1346,7 @@ export type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<Ow
     | "readThreadUsageActivities"
     | "readThreadUsageActivityForTurn"
     | "readThreadTurnUsageLines"
+    | "readThreadSpendMicros"
     | "readThreadUsageSettings"
     | "markThreadToolInvocationsNoisy"
     | "setThreadSpendAlertPending"

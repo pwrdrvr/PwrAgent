@@ -38,8 +38,9 @@ function makeRegistry(store: SqliteOverlayStore, options: {
   workerLines?: ThreadUsageLineRecord[];
 } = {}) {
   const subAgentMonitorService = {
+    codexNativeSubAgentParentRecords: new Map([["child", "parent"]]),
     liveCodexNativeSubAgentUsageRecords: new Map(options.workerLines ? [["parent", new Map([
-      ["worker", { lines: new Map(options.workerLines.map((line) => [line.usageLineId, line])) }],
+      ["codex-native:child", { lines: new Map(options.workerLines.map((line) => [line.usageLineId, line])) }],
     ])]] : []),
   };
   const registry: DesktopBackendRegistry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {

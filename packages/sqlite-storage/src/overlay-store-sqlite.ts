@@ -43,6 +43,7 @@ import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata"
 import { prepareSqliteRead } from "./sqlite-prepared-read";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
+import { forgetThreadSpend, projectedThreadSpend } from "./thread-spend-projection";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
 import {
   PROJECT_CHECKOUT_GROUPS_META_KEY,
@@ -3453,8 +3454,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   /**
    * One thread's whole pricing ledger.
    *
-   * A turn end publishes the ledger once, and the renderer then reads it again
-   * for the transcript and an open context panel.
+   * Explicit transcript and Pricing reads can request the same baseline.
    * On a long thread each read materialized thousands of rows. A read is
    * reused until a row of this thread's ledger changes on this connection
    * (`sqliteUsageLedgerVersions`) or another connection commits. Callers
@@ -3464,9 +3464,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: ThreadOverlayState["backend"];
     threadId: string;
   }): Promise<ThreadPricingLedgerRead> {
+    return structuredClone(this.readStoredThreadPricing(params));
+  }
+
+  private readStoredThreadPricing(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }, ownedSnapshot = false): ThreadPricingLedgerRead {
     const db = this.stateDb.raw;
     const ledgerVersions = sqliteUsageLedgerVersions(db);
-    if (!ledgerVersions || db.inTransaction) {
+    if (!ledgerVersions || (db.inTransaction && !ownedSnapshot)) {
       return this.materializeThreadPricing(params);
     }
     const key = buildThreadIdentityKey(params.backend, params.threadId);
@@ -3479,7 +3486,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       && cached.ledgerVersion === (ledgerVersions.get(params.threadId) ?? 0)
     ) {
       this.threadPricingCache.set(key, cached);
-      return structuredClone(cached.pricing);
+      return cached.pricing;
     }
     const pricing = this.materializeThreadPricing(params);
     // Lazy repricing may have written; record the version after it.
@@ -3494,7 +3501,91 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       this.threadPricingCache.delete(staleKey);
     }
-    return structuredClone(pricing);
+    return pricing;
+  }
+
+  /** The alert total includes priced historical gaps and in-flight monitor usage. */
+  async readThreadSpendMicros(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    localModelIds: readonly string[];
+    liveLines: readonly ThreadUsageLineRecord[];
+  }): Promise<number> {
+    const db = this.stateDb.raw;
+    // The summary and gap probes share a SQLite snapshot. The partial
+    // indexes contain only main rows that could anchor a priced usage gap.
+    const readSummary = () => prepareSqliteRead(db, `
+      SELECT SUM(CASE WHEN UPPER(currency) = 'USD' THEN total_cost_micros ELSE 0 END) AS micros,
+             SUM(unpriced_usage_line_count) AS unpriced,
+             EXISTS (
+               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_spend_thread
+               WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
+                 AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL
+               UNION ALL
+               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_spend_parent
+               WHERE backend = @backend AND parent_thread_id = @threadId AND parent_thread_id IS NOT NULL
+                 AND status != 'superseded' AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL
+             ) AS possible_gap
+        FROM thread_pricing_summaries INDEXED BY idx_thread_pricing_summaries_thread
+       WHERE backend = @backend AND thread_id = @threadId
+    `).get({ backend: params.backend, threadId: params.threadId }) as {
+      micros: number | null; unpriced: number | null; possible_gap: number;
+    };
+    let summary = readSummary();
+    if (summary.unpriced && this.firstUnpricedBatchHasModel(params)) {
+      await this.repriceThreadUsageHistory(params);
+      summary = readSummary();
+    }
+    if (!summary.possible_gap && !params.localModelIds.length && !params.liveLines.length) return summary.micros ?? 0;
+    // Never retain uncommitted caller state. Our own read transaction keeps
+    // the spend checkpoint, changed rows, worker replacements and summary on
+    // the same snapshot when another owner is writing this profile.
+    const retain = !db.inTransaction;
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    if (retain) sqliteUsageLedgerVersions(db);
+    try {
+      return db.transaction(() => projectedThreadSpend({
+        ...params,
+        db,
+        key,
+        retain,
+        readSummaryMicros: () => readSummary().micros ?? 0,
+        readBaseline: () => this.readStoredThreadPricing(params, retain).lines,
+        readChanged: (ids) => {
+          const lines: ThreadUsageLineRecord[] = [];
+          for (const id of ids) {
+            const line = this.readThreadUsageLineSync(id);
+            if (line && line.backend === params.backend && line.status !== "superseded"
+              && (line.threadId === params.threadId || line.parentThreadId === params.threadId)) lines.push(line);
+          }
+          this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
+          return lines;
+        },
+      }))();
+    } catch (error) {
+      if (retain) {
+        this.threadPricingCache.delete(key);
+        forgetThreadSpend(db, key);
+      }
+      throw error;
+    }
+  }
+
+  /** A model-less retry batch cannot repair a price, apart from a free fork baseline. */
+  private firstUnpricedBatchHasModel(params: { backend: ThreadOverlayState["backend"]; threadId: string }): boolean {
+    return Boolean(prepareSqliteRead(this.stateDb.raw, `
+      SELECT 1 FROM (
+        SELECT model, scope, created_at, usage_line_id
+          FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_unpriced_thread
+         WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded' AND price_status != 'priced'
+         UNION ALL
+        SELECT model, scope, created_at, usage_line_id
+          FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_unpriced_parent
+         WHERE backend = @backend AND parent_thread_id = @threadId AND thread_id != @threadId
+           AND status != 'superseded' AND price_status != 'priced'
+         ORDER BY created_at DESC, usage_line_id DESC LIMIT @batch
+      ) WHERE model IS NOT NULL OR scope = 'fork-baseline' LIMIT 1
+    `).get({ backend: params.backend, threadId: params.threadId, batch: THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE }));
   }
 
   /** Transcript usage candidates for the requested turn IDs in ledger order. */
@@ -5050,6 +5141,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     threadId: string;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    forgetThreadSpend(this.stateDb.raw, threadKey);
     const current = this.getThread(threadKey) ?? {
       backend: params.backend,
       threadId: params.threadId,
