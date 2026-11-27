@@ -134,6 +134,7 @@ describe("Electron shutdown policy", () => {
   it("force-kills only after the bounded graceful close and then waits for reaping", async () => {
     const order: string[] = [];
     let now = 100;
+    let launcherExited = false;
     const closePromise = Promise.resolve();
 
     const result = await executeElectronClose({
@@ -151,8 +152,13 @@ describe("Electron shutdown policy", () => {
         now = 6_100;
         return "timeout";
       },
+      observeLauncherExit: () => {
+        order.push("observe-launcher-exit");
+        return launcherExited;
+      },
       forceKillTree: async () => {
         order.push("force-kill-tree");
+        launcherExited = true;
       },
       waitForPostKillClose: async () => {
         order.push("wait-post-kill-close");
@@ -165,23 +171,26 @@ describe("Electron shutdown policy", () => {
       "request-quit",
       "start-close",
       "wait-graceful",
+      "observe-launcher-exit",
       "force-kill-tree",
       "wait-post-kill-close",
     ]);
     expect(result).toMatchObject({
       elapsedMs: 6_050,
       forced: true,
+      launcherExitObservedBeforeForce: false,
       forceExitOutcome: "exited",
     });
   });
 
-  it("keeps the owning close abnormal when launcher exit leaves pipes open", async () => {
+  it("keeps the owning close abnormal when the launcher exits before close completes", async () => {
     let forceKillCalls = 0;
     const result = await executeElectronClose({
       now: () => 0,
       requestQuit: async () => undefined,
       startClose: () => new Promise<void>(() => undefined),
       waitForGracefulClose: async () => "timeout",
+      observeLauncherExit: () => true,
       forceKillTree: async () => {
         forceKillCalls += 1;
       },
@@ -193,6 +202,7 @@ describe("Electron shutdown policy", () => {
       forced: true,
       gracefulCloseOutcome: "timeout",
       forceExitOutcome: "timed-out",
+      launcherExitObservedBeforeForce: true,
     });
   });
 
@@ -218,11 +228,13 @@ describe("Electron shutdown policy", () => {
         forceExitOutcome: "exited",
         forced: true,
         gracefulCloseOutcome: "timeout",
+        launcherExitObservedBeforeForce: true,
         quitRequestOutcome: "rejected",
       },
       launchId: "launch-3",
     });
 
+    expect(summary.launcherExitObservedBeforeForce).toBe(true);
     expect(summary.phases).toEqual({
       rendererWindow: { durationMs: 8, outcome: "completed" },
       integratedTerminal: { durationMs: 2_000, outcome: "timed-out" },
@@ -255,9 +267,16 @@ describe("Electron shutdown policy", () => {
     ]);
   });
 
-  it("reports a single incomplete close on its owning test after cleanup", async () => {
+  it.each([
+    [false, "The launcher had not reported process exit before forced cleanup."],
+    [true, "The launcher had reported process exit before forced cleanup."],
+    [undefined, "The launcher exit state before forced cleanup was unavailable."],
+  ])("reports the launcher exit observation (%s) on the owning test after cleanup", async (
+    launcherExitObservedBeforeForce,
+    expectedObservation,
+  ) => {
     const order: string[] = [];
-    const summary = trippedSummary();
+    const summary = { ...trippedSummary(), launcherExitObservedBeforeForce };
     summary.circuit.tripped = false;
     await expect(finalizeElectronFixtureTeardown({
       closeApplication: async () => summary,
@@ -267,7 +286,7 @@ describe("Electron shutdown policy", () => {
       removeHomeRoot: async () => {
         order.push("remove-home-root");
       },
-    })).rejects.toThrow("launcher pipe");
+    })).rejects.toThrow(`Electron close timed out. ${expectedObservation}`);
     expect(order).toEqual(["profile-process-cleanup", "remove-home-root"]);
   });
 });
