@@ -246,11 +246,57 @@ function chooseDropdownOption(label: string, optionName: string): void {
     chooseSpeed(optionName as "Standard" | "Fast" | "Ultrafast");
     return;
   }
+  if (label === "Environment" || label === "Environment command") {
+    // A thread's environment and command are in the Run split's menu; a new
+    // thread's environment is in its Where panel.
+    if (runSplitMenuButton()) {
+      const group = within(openRunSplitMenu()).getByRole("group", {
+        name: label === "Environment" ? "Environment" : "Command",
+      });
+      fireEvent.click(within(group).getByRole("menuitemradio", { name: optionName }));
+      return;
+    }
+    openWherePanel();
+  }
   openDropdown(label);
   fireEvent.click(screen.getByRole("option", { name: optionName }));
 }
 
-/** Opens the launchpad's Where panel, which holds project, checkout and machine. */
+/** Closes the Where panel from its button, as a second click does. */
+function closeWherePanel(): void {
+  fireEvent.click(screen.getByRole("button", { name: /^Where:/ }));
+  expect(screen.queryByRole("dialog", { name: "Where this thread runs" })).not.toBeInTheDocument();
+}
+
+/** Expects a new thread's environment, chosen in its Where panel. */
+function expectLaunchpadEnvironment(name: string): void {
+  openWherePanel();
+  expect(screen.getByRole("button", { name: /^Environment(?::|$)/ })).toHaveTextContent(name);
+}
+
+/** The Run split's menu half, named for the thread's environment. */
+function runSplitMenuButton(): HTMLElement | undefined {
+  return screen.queryAllByRole("button", { name: /^Environment(?::|$)/ })
+    .find((button) => button.getAttribute("aria-haspopup") === "menu");
+}
+
+/** The Run split's run half, named for the command it runs. */
+function runSplitButton(): HTMLElement {
+  return screen.getByRole("button", { name: /^Run / });
+}
+
+/** Opens the Run split's menu: commands, environments, Edit environments. */
+function openRunSplitMenu(): HTMLElement {
+  const existing = screen.queryByRole("menu", { name: "Environment and commands" });
+  if (existing) return existing;
+  fireEvent.click(runSplitMenuButton()!);
+  return screen.getByRole("menu", { name: "Environment and commands" });
+}
+
+/**
+ * Opens the Where panel: on a new thread, project, checkout, machine and
+ * environment; on a thread, its directories and handoffs.
+ */
 function openWherePanel(): HTMLElement {
   const existing = screen.queryByRole("dialog", { name: "Where this thread runs" });
   if (existing) return existing;
@@ -3164,7 +3210,7 @@ describe("Composer", () => {
       git: { path: { value: "", source: "default" }, discovery: { candidates: [] } },
     };
 
-    it("puts the application launchers and environment pickers before the ▶ that runs the chosen command", () => {
+    it("puts the application launchers before the Run split, whose ▶ runs the chosen command", () => {
       render(<Composer skills={[]} applications={applications}
         thread={{ ...thread,
           linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }],
@@ -3175,7 +3221,7 @@ describe("Composer", () => {
       const tools = screen.getByLabelText("Composer tools");
       const buttons = within(tools).getAllByRole("button");
       expect(buttons.map((button) => button.getAttribute("aria-label")?.split(":")[0])).toEqual([
-        "VS Code", "Terminal", "Environment", "Environment command", "Run",
+        "VS Code", "Terminal", "Run Work", "Environment",
       ]);
       // The terminal toggle lives in the thread header now.
       expect(screen.queryByRole("button", { name: /integrated terminal/ })).toBeNull();
@@ -3907,11 +3953,9 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
-    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent(
-      "Dev - Messaging",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(runSplitMenuButton()).toHaveAccessibleName("Environment: PwrAgnt");
+    expect(runSplitButton()).toHaveTextContent("Dev - Messaging");
+    fireEvent.click(runSplitButton());
     await waitFor(() => {
       expect(runCodexEnvironmentAction).toHaveBeenCalledWith({
         backend: "codex",
@@ -3977,8 +4021,8 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Work");
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
+    expect(runSplitButton()).toHaveTextContent("Work");
+    expect(runSplitMenuButton()).toHaveAccessibleName("Environment: PwrAgnt");
 
     chooseDropdownOption("Environment", "No environment");
     await waitFor(() => {
@@ -4012,8 +4056,9 @@ describe("Composer", () => {
     render(<Composer backends={[backendSummary("codex")]} disabled={false} skills={[]}
       thread={thread} onStopEnvActionRun={onStopEnvActionRun} />);
 
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("No environment");
-    expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+    expect(runSplitMenuButton()).toHaveAccessibleName("Environment: No environment");
+    // Without an environment there is nothing to run, so only the menu shows.
+    expect(screen.queryByRole("button", { name: /^Run / })).not.toBeInTheDocument();
     const row = screen.getByLabelText("Env action running");
     row.setAttribute("open", "");
     expect(within(row).getByText(/Dev · Original/)).toBeInTheDocument();
@@ -4073,7 +4118,7 @@ describe("Composer", () => {
         />,
       );
 
-      expect(environmentChip()).toHaveTextContent("No environment");
+      expect(environmentChip()).toHaveAccessibleName("Environment: No environment");
       expect(environmentChip()).toBeEnabled();
 
       chooseDropdownOption("Environment", "PwrAgnt");
@@ -4081,12 +4126,12 @@ describe("Composer", () => {
       // Main records the runtime only after setup exits, so the thread prop
       // still has none here: the chip must not fall back to "No environment".
       expect(setCodexThreadEnvironment).toHaveBeenCalledTimes(1);
-      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toHaveAccessibleName("Environment: PwrAgnt");
       expect(environmentChip()).toBeDisabled();
       expect(environmentChip()).toHaveAttribute("aria-busy", "true");
       expect(
         container.querySelector(
-          ".composer-dropdown__button[aria-busy='true'] .pending-spinner",
+          ".composer-run__menu-button[aria-busy='true'] .pending-spinner",
         ),
       ).not.toBeNull();
 
@@ -4110,7 +4155,7 @@ describe("Composer", () => {
         await Promise.resolve();
       });
 
-      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toHaveAccessibleName("Environment: PwrAgnt");
       expect(environmentChip()).toBeEnabled();
       expect(environmentChip()).not.toHaveAttribute("aria-busy");
       expect(
@@ -4145,7 +4190,7 @@ describe("Composer", () => {
         await Promise.resolve();
       });
 
-      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toHaveAccessibleName("Environment: PwrAgnt");
       expect(environmentChip()).toBeEnabled();
       expect(environmentChip()).not.toHaveAttribute("aria-busy");
 
@@ -4163,7 +4208,7 @@ describe("Composer", () => {
           })}
         />,
       );
-      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toHaveAccessibleName("Environment: PwrAgnt");
 
       // Settled: a later change elsewhere back to no environment shows.
       rerender(
@@ -4175,7 +4220,7 @@ describe("Composer", () => {
           thread={buildEnvironmentThread()}
         />,
       );
-      expect(environmentChip()).toHaveTextContent("No environment");
+      expect(environmentChip()).toHaveAccessibleName("Environment: No environment");
     });
 
     it("returns the chip to the recorded environment when the selection fails", async () => {
@@ -4206,7 +4251,7 @@ describe("Composer", () => {
         await Promise.resolve();
       });
 
-      expect(environmentChip()).toHaveTextContent("No environment");
+      expect(environmentChip()).toHaveAccessibleName("Environment: No environment");
       expect(environmentChip()).toBeEnabled();
       expect(environmentChip()).not.toHaveAttribute("aria-busy");
     });
@@ -4231,7 +4276,7 @@ describe("Composer", () => {
         />,
       );
 
-      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toHaveAccessibleName("Environment: PwrAgnt");
       expect(environmentChip()).toBeDisabled();
       expect(environmentChip()).toHaveAttribute("aria-busy", "true");
     });
@@ -4280,7 +4325,7 @@ describe("Composer", () => {
       />,
     );
 
-    const runButton = screen.getByRole("button", { name: "Run" });
+    const runButton = runSplitButton();
     expect(runButton).not.toBeDisabled();
 
     await act(async () => {
@@ -4357,7 +4402,7 @@ describe("Composer", () => {
       />,
     );
 
-    const firstRunButton = screen.getByRole("button", { name: "Run" });
+    const firstRunButton = runSplitButton();
     await act(async () => {
       fireEvent.click(firstRunButton);
       await Promise.resolve();
@@ -4374,7 +4419,7 @@ describe("Composer", () => {
       />,
     );
 
-    const secondRunButton = screen.getByRole("button", { name: "Run" });
+    const secondRunButton = runSplitButton();
     expect(secondRunButton).not.toBeDisabled();
     expect(
       secondRunButton.querySelector(".pending-spinner"),
@@ -4447,7 +4492,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Test");
+    expect(runSplitButton()).toHaveTextContent("Test");
 
     rerender(
       <Composer
@@ -4459,7 +4504,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Dev");
+    expect(runSplitButton()).toHaveTextContent("Dev");
 
     rerender(
       <Composer
@@ -4471,7 +4516,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Test");
+    expect(runSplitButton()).toHaveTextContent("Test");
   });
 
   it("persists thread environment command changes without running the action", async () => {
@@ -4547,7 +4592,7 @@ describe("Composer", () => {
     expect(runCodexEnvironmentAction).not.toHaveBeenCalled();
   });
 
-  it("offers Edit environments… above the Environment list for the thread's workspace", () => {
+  it("offers Edit environments… after the Environment list for the thread's workspace", () => {
     const onEditEnvironments = vi.fn();
     const thread = {
       id: "thread-1",
@@ -4583,22 +4628,15 @@ describe("Composer", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /^Environment(?::|$)/ }));
-    const listbox = screen.getByRole("listbox", { name: "Environment" });
-    // A button outside the list, not an option, so choosing it never changes
-    // the selection.
-    expect(within(listbox).queryByText("Edit environments…")).not.toBeInTheDocument();
-    const editEnvironments = screen.getByRole("button", { name: "Edit environments…" });
-    // The menu opens up from the composer footer, so the command sits above
-    // the list, away from the trigger and the pointer.
-    expect(
-      editEnvironments.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(listbox.closest(".composer-dropdown")).toHaveClass("composer-dropdown--dense");
-    fireEvent.click(editEnvironments);
+    const menu = openRunSplitMenu();
+    const environments = within(menu).getByRole("group", { name: "Environment" });
+    // A menu item outside the radio group, so choosing it never changes the
+    // selection.
+    expect(within(environments).queryByText("Edit environments…")).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Edit environments…" }));
 
     expect(onEditEnvironments).toHaveBeenCalledWith("/repo/.worktrees/abc/repo");
-    expect(screen.queryByRole("listbox", { name: "Environment" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu", { name: "Environment and commands" })).not.toBeInTheDocument();
 
     // Environments run on the machine that owns the thread, so a remote
     // execution workspace offers no editor here.
@@ -4615,8 +4653,8 @@ describe("Composer", () => {
         onEditEnvironments={onEditEnvironments}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /^Environment(?::|$)/ }));
-    expect(screen.queryByRole("button", { name: "Edit environments…" })).not.toBeInTheDocument();
+    expect(within(openRunSplitMenu()).queryByRole("menuitem", { name: "Edit environments…" }))
+      .not.toBeInTheDocument();
   });
 
   it("shows an explicit empty state when a selected environment has no commands", () => {
@@ -4652,11 +4690,9 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent(
-      "No commands",
-    );
-    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toBeDisabled();
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
+    expect(runSplitButton()).toHaveTextContent("No commands");
+    expect(runSplitButton()).toBeDisabled();
+    expect(runSplitMenuButton()).toHaveAccessibleName("Environment: PwrAgnt");
   });
 
   it("hides thread environment commands when no environment is selected", () => {
@@ -4692,11 +4728,9 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
-      "No environment",
-    );
+    expect(runSplitMenuButton()).toHaveAccessibleName("Environment: No environment");
     expect(screen.queryByLabelText(/^Environment command(?::|$)/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Run / })).not.toBeInTheDocument();
   });
 
   it("does not show environment commands on a launchpad", () => {
@@ -4742,7 +4776,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
+    expectLaunchpadEnvironment("PwrAgnt");
     expect(screen.queryByText("Run setup")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^Environment command(?::|$)/)).not.toBeInTheDocument();
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
@@ -6469,9 +6503,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
-      "No environment",
-    );
+    expectLaunchpadEnvironment("No environment");
 
     chooseDropdownOption("Environment", "PwrAgnt");
 
@@ -6545,7 +6577,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Lunch");
+    expectLaunchpadEnvironment("Lunch");
     expect(screen.queryByLabelText(/^Environment command(?::|$)/)).not.toBeInTheDocument();
 
     chooseDropdownOption("Environment", "Dinner");
@@ -7868,7 +7900,7 @@ describe("Composer", () => {
     expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-5.6-luna");
     expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
     expect(modelSettingsPill()).toHaveAttribute("data-speed", "fast");
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
+    expectLaunchpadEnvironment("Codex Environment");
 
     chooseDropdownOption("Model", "GPT-5.6 Sol");
     await waitFor(() => {
@@ -7897,7 +7929,7 @@ describe("Composer", () => {
     expect(modelSettingsPill()).toHaveAttribute("data-model", "grok-4.5-pro");
     expect(modelSettingsPill()).toHaveAttribute("data-effort", "low");
     expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("priority");
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
+    expectLaunchpadEnvironment("Codex Environment");
     openWherePanel();
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
@@ -7919,7 +7951,7 @@ describe("Composer", () => {
     expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-5.6-sol");
     expect(modelSettingsPill()).toHaveAttribute("data-effort", "ultra");
     expect(modelSettingsPill()).toHaveAttribute("data-speed", "fast");
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
+    expectLaunchpadEnvironment("Codex Environment");
     openWherePanel();
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
@@ -7933,7 +7965,7 @@ describe("Composer", () => {
       expect(modelSettingsPill()).toHaveAttribute("data-effort", "medium");
       expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
       expect(accessTrigger()).toHaveValue("yolo");
-      expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
+      expect(screen.getByRole("button", { name: /^Environment(?::|$)/ })).toHaveTextContent(
         "Codex Environment",
       );
     });
@@ -20696,8 +20728,8 @@ describe("Composer", () => {
         } } : {}),
       }}
     />);
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
     await screen.findByRole("option", { name: /Owner demo/ });
@@ -20740,8 +20772,8 @@ describe("Composer", () => {
         inbox: { inInbox: false },
       }}
     />);
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
     await screen.findByRole("option", { name: /Alpha/ });
@@ -20788,8 +20820,8 @@ describe("Composer", () => {
         } } : {}),
       }}
     />);
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
     await screen.findByRole("option", { name: /Demo/ });
@@ -20837,8 +20869,8 @@ describe("Composer", () => {
         inbox: { inInbox: false },
       }}
     />);
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Move to Project" }));
     // The visible caption labels the field, so clicking it reaches the input.
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     expect(screen.getByText("Destination project", { selector: "label" })).toHaveAttribute("for", destination.id);
@@ -20868,8 +20900,8 @@ describe("Composer", () => {
         },
       }}
     />);
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     act(() => destination.focus());
     await waitFor(() => expect(getNavigationQueryPage).toHaveBeenCalled());
@@ -20897,8 +20929,8 @@ describe("Composer", () => {
         },
       }}
     />);
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Move to Project" }));
     fireEvent.focus(screen.getByRole("combobox", { name: "Destination project" }));
     await screen.findByText("Peer unavailable");
     expect(screen.queryByRole("option", { name: /Viewer project/ })).not.toBeInTheDocument();
@@ -20919,9 +20951,9 @@ describe("Composer", () => {
         }}
       />
     );
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
+    openWherePanel();
+    expect(screen.getByRole("button", { name: "Handoff to New Worktree" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Move to Project" }));
     expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Move" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Destination project"), { target: { value: "/projects/demo" } });
@@ -20952,10 +20984,10 @@ describe("Composer", () => {
         }}
       />
     );
-    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
-    workspaceMode.focus();
-    act(() => workspaceMode.click());
-    const item = screen.getByRole("menuitem", { name: "Move to Project" });
+    const where = screen.getByRole("button", { name: /^Where:/ });
+    where.focus();
+    act(() => where.click());
+    const item = screen.getByRole("button", { name: "Move to Project" });
     item.focus();
     act(() => item.click());
     const dialog = screen.getByRole("dialog", { name: "Move to Project" });
@@ -20978,8 +21010,8 @@ describe("Composer", () => {
 
     pressEscape();
     expect(screen.queryByRole("dialog", { name: "Move to Project" })).not.toBeInTheDocument();
-    // The menu item that opened the dialog is gone; its menu's button is not.
-    expect(document.activeElement).toBe(workspaceMode);
+    // The panel button that opened the dialog is gone; Where's button is not.
+    expect(document.activeElement).toBe(where);
   });
 
   it("shows thread access in the composer and opens workspace handoff", async () => {
@@ -21070,14 +21102,14 @@ describe("Composer", () => {
     );
 
     expect(accessTrigger()).toHaveValue("default");
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    expect(screen.getByRole("separator")).toBeInTheDocument();
+    openWherePanel();
+    expect(screen.getByRole("button", { name: "Handoff to New Worktree" })).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByLabelText("Reply"));
     expect(
-      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
+      screen.queryByRole("dialog", { name: "Where this thread runs" })
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to New Worktree" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
     expect(dialog).toBeInTheDocument();
     expect(dialog.closest(".workspace-handoff-modal")).toBeInTheDocument();
@@ -21197,8 +21229,8 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff to New Branch/ }));
 
     const newBranchInput = screen.getByLabelText("New branch name");
@@ -21368,7 +21400,12 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toBeDisabled();
+    // Where still opens to show the directories; only the handoffs wait.
+    const where = openWherePanel();
+    for (const handoff of within(where).getAllByRole("button", { name: /^(Handoff|Move) to / })) {
+      expect(handoff).toBeDisabled();
+    }
+    closeWherePanel();
 
     rerender(
       <Composer
@@ -21381,7 +21418,10 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toBeEnabled();
+    for (const handoff of within(openWherePanel()).getAllByRole("button", { name: /^(Handoff|Move) to / })) {
+      expect(handoff).toBeEnabled();
+    }
+    closeWherePanel();
   });
 
   it.each(["held", "paused", "queued", "submitting"] as const)(
@@ -21411,13 +21451,12 @@ describe("Composer", () => {
         }}
       />);
 
-      const workspaceMode = screen.getByRole("button", { name: "Workspace mode: Local" });
+      fireEvent.click(screen.getByRole("button", { name: "Where: Repo, local checkout" }));
+      const handoff = screen.getByRole("button", { name: "Handoff to New Worktree" });
       if (mayMove) {
-        expect(workspaceMode).toBeEnabled();
-        fireEvent.click(workspaceMode);
-        expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeEnabled();
+        expect(handoff).toBeEnabled();
       } else {
-        expect(workspaceMode).toBeDisabled();
+        expect(handoff).toBeDisabled();
       }
       expect(draftStore.getQueuedTurns(scope)).toHaveLength(1);
     },
@@ -21455,13 +21494,11 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
-    expect(workspaceMode).toBeDisabled();
-    expect(workspaceMode).toHaveValue("local");
-    fireEvent.click(workspaceMode);
-    expect(
-      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
-    ).not.toBeInTheDocument();
+    const where = screen.getByRole("button", { name: /^Where:/ });
+    expect(where).toHaveAttribute("data-mode", "local");
+    fireEvent.click(where);
+    expect(screen.getByRole("button", { name: "Handoff to New Worktree" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move to Project" })).toBeDisabled();
   });
 
   it("does not offer existing thread workspace handoff for non-git Workspaces", () => {
@@ -21534,9 +21571,10 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
-    expect(screen.getByRole("menuitem", { name: "Move to Project" })).toBeEnabled();
+    openWherePanel();
+    expect(screen.getByRole("button", { name: "Handoff to New Worktree" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move to Project" })).toBeEnabled();
+    closeWherePanel();
 
     fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
     expect(openApplication).toHaveBeenCalledWith({
@@ -21545,7 +21583,7 @@ describe("Composer", () => {
       targetPath: projectPath,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    fireEvent.click(runSplitButton());
     expect(runCodexEnvironmentAction).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -21596,8 +21634,8 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
 
     const leaveOn = screen.getByLabelText(/^Leave current checkout on(?::|$)/);
@@ -21653,8 +21691,8 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
     const branchButton = screen.getByRole("button", { name: /^Leave current checkout on(?::|$)/ });
     branchButton.focus();
@@ -21716,8 +21754,8 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
     fireEvent.click(
       screen.getByRole("button", { name: /^Leave current checkout on(?::|$)/ })
@@ -22655,8 +22693,8 @@ describe("Composer", () => {
     };
     render(<Composer {...props} />);
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to Local" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to Local" });
     const keep = within(dialog).getByRole("radio", { name: /^Keep Local on main/ });
     expect(keep).toHaveAttribute("aria-checked", "true");
@@ -22671,8 +22709,8 @@ describe("Composer", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Handoff to Local" })).toBeNull());
 
     // Today's behavior is still one click away.
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to Local" }));
     const again = screen.getByRole("dialog", { name: "Handoff to Local" });
     fireEvent.click(within(again).getByRole("radio", { name: /^Move feature\/handoff to Local/ }));
     fireEvent.click(within(again).getByRole("button", { name: "Handoff" }));
@@ -22712,8 +22750,8 @@ describe("Composer", () => {
       }}
     />);
     const open = () => {
-      fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-      fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+      openWherePanel();
+      fireEvent.click(screen.getByRole("button", { name: "Handoff to Local" }));
       return screen.getByRole("dialog", { name: "Handoff to Local" });
     };
 
@@ -22758,9 +22796,9 @@ describe("Composer", () => {
       />,
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    expect(screen.getByRole("menuitem", { name: "Handoff to Local" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    openWherePanel();
+    expect(screen.getByRole("button", { name: "Handoff to Local" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to New Worktree" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
     expect(within(dialog).getByRole("radio", { name: /^Handoff to Detached HEAD/ })).toHaveAttribute("aria-checked", "true");
     expect(within(dialog).getByText(/current worktree is archived with a checkpoint/)).toBeInTheDocument();
@@ -22803,8 +22841,8 @@ describe("Composer", () => {
       />,
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to New Worktree" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
     fireEvent.click(within(dialog).getByRole("radio", { name: /^Start Fresh from a Branch/ }));
     // The remote copy of the default branch is picked first.
@@ -22846,8 +22884,8 @@ describe("Composer", () => {
       />,
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to New Worktree" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
     fireEvent.click(within(dialog).getByRole("radio", { name: /^Start Fresh from a Branch/ }));
     expect(within(dialog).getByLabelText(/^Base branch:/)).toHaveAttribute("data-value", "main");
@@ -22887,8 +22925,8 @@ describe("Composer", () => {
       />,
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     expect(await screen.findByText("studio-mac runs an older PwrAgent that cannot make this move. Update PwrAgent on studio-mac. Nothing moved."))
@@ -22919,8 +22957,8 @@ describe("Composer", () => {
       />,
     );
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to Local" }));
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     expect(await screen.findByText(/studio-mac runs an older PwrAgent that can only hand off by switching Local’s branch/))
@@ -23002,8 +23040,8 @@ describe("Composer", () => {
       });
     });
 
-    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    openWherePanel();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff to Local" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to Local" });
     expect(dialog).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Detached HEAD to move");

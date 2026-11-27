@@ -3,11 +3,22 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp, threadRowCard } from "./fixtures/electron-app";
+import { closeComposerWherePanel, openComposerWherePanel } from "./fixtures/composer-row";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import type { ReplayFixture } from "../src/main/testing/replay-fixture";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
+
+/** Expects the thread's handoffs, in its Where panel, to be enabled or not. */
+async function expectWorkspaceHandoff(page: Page, state: "enabled" | "disabled"): Promise<void> {
+  const where = await openComposerWherePanel(page);
+  const handoff = where.getByRole("button", { name: /^Handoff to / }).first();
+  if (state === "enabled") await expect(handoff).toBeEnabled();
+  else await expect(handoff).toBeDisabled();
+  await closeComposerWherePanel(page);
+}
 
 const turnLifecycleSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -470,9 +481,9 @@ test("disables workspace handoff on the focused thread while its turn is active"
       })
     ).toBeVisible();
 
-    await expect(app.window.getByLabel(/^Workspace mode(?::|$)/)).toBeEnabled();
+    await expectWorkspaceHandoff(app.window, "enabled");
     await app.advance({ stepId: "turn-started-active" });
-    await expect(app.window.getByLabel(/^Workspace mode(?::|$)/)).toBeDisabled();
+    await expectWorkspaceHandoff(app.window, "disabled");
 
     await app.window
       .getByRole("button", { name: /Idle workspace handoff replay/i })
@@ -485,7 +496,7 @@ test("disables workspace handoff on the focused thread while its turn is active"
         name: "Idle workspace handoff replay",
       })
     ).toBeVisible();
-    await expect(app.window.getByLabel(/^Workspace mode(?::|$)/)).toBeEnabled();
+    await expectWorkspaceHandoff(app.window, "enabled");
   } finally {
     await app.close();
     await fixture.cleanup();

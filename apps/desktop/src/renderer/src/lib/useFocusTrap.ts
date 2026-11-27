@@ -10,8 +10,12 @@ const TABBABLE =
   "a[href],area[href],button,input,select,textarea,summary,iframe,object,embed,"
   + "[contenteditable],[tabindex]";
 
-/** A popup whose item can open a dialog, and whose trigger is the way back. */
-const POPUP = '[role="menu"],[role="listbox"]';
+/**
+ * A popup whose item can open a dialog, and whose trigger is the way back: a
+ * menu, a listbox, or a non-modal popover dialog such as the composer's Where
+ * panel (its trigger says `aria-haspopup="dialog"`).
+ */
+const POPUP = '[role="menu"],[role="listbox"],[role="dialog"]:not([aria-modal="true"])';
 
 /** A control that says it opened a popup that is showing now. */
 const OPEN_POPUP_TRIGGER =

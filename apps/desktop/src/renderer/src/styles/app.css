@@ -50306,18 +50306,14 @@ button.composer__subthread-source-parent:hover {
   margin-left: auto;
 }
 
-/* The model name and the Where label give way, never the effort meter or
-   the checkout. The fold hook measures what is left of each pill and sets it
-   as the floor, so one pill cannot shrink past it while the other has
-   room. */
-.composer__setup .composer__pending-controls > .model-settings,
-.composer__setup .composer__pending-controls > .composer-where {
+/* The model name gives way, never the effort meter. The fold hook measures
+   what is left of the pill and sets it as the floor. */
+.composer__setup .composer__pending-controls > .model-settings {
   flex: 0 1 auto;
   min-width: var(--composer-row-floor, 0px);
 }
 
-.composer__setup .model-settings__pill,
-.composer__setup .composer-where__pill {
+.composer__setup .model-settings__pill {
   overflow: hidden;
 }
 
@@ -50396,68 +50392,26 @@ button.composer__subthread-source-parent:hover {
   padding: 0 8px 4px;
 }
 
-/* The new-thread Where pill: project, checkout and machine behind one
-   chip. Its accent rim marks the one choice a new thread needs before it
-   starts. The label truncates, as the model name does. */
+/* Where a thread runs, as one icon: a folder for a local checkout, the
+   worktree glyph (accent) for a worktree, stacked folders with a count for
+   two or more directories. The project is in the title bar already, so the
+   row carries only how the thread works on disk; the panel has the words. */
 .composer-where {
   position: relative;
   display: inline-flex;
-}
-
-.composer-where__pill {
-  display: inline-flex;
-  max-width: 100%;
-  min-height: 26px;
-  box-sizing: border-box;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--accent-border);
-  border-radius: 999px;
-  background: var(--bg-input);
-  color: var(--text-primary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.composer-where__pill:hover:not(:disabled),
-.composer-where__pill:focus-visible,
-.composer-where__pill.is-open {
-  background: var(--bg-panel-hover);
-}
-
-.composer-where__pill:disabled {
-  color: var(--text-secondary);
-  cursor: default;
-}
-
-.composer-where__pill > svg {
   flex: none;
-  color: var(--text-secondary);
 }
 
-.composer-where__label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* `.composer__toggle` is declared later and paints every toggle secondary,
+   so these name both classes. */
+.composer__toggle.composer-where__trigger--worktree,
+.composer__toggle.composer-where__trigger--worktree:hover:not(:disabled) {
+  color: var(--accent-bright);
 }
 
-.composer-where__label svg {
-  margin: 0 4px 0 0;
-  vertical-align: -2px;
-  color: var(--text-secondary);
-}
-
-.composer-where__sep {
-  margin: 0 6px;
-  color: var(--text-muted);
-}
-
-.composer-where__checkout {
-  color: var(--text-secondary);
+.composer__toggle.composer-where__trigger.is-open {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
 }
 
 .composer-where__panel {
@@ -50497,6 +50451,191 @@ button.composer__subthread-source-parent:hover {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.composer-where__directories {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.composer-where__directory {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+}
+
+.composer-where__directory-icon {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.composer-where__directory-icon.is-worktree {
+  color: var(--accent-bright);
+}
+
+.composer-where__directory-text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.composer-where__directory-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-where__directory-path {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-where__directory-kind {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.composer-where__action {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.composer-where__action:hover:not(:disabled),
+.composer-where__action:focus-visible {
+  background: var(--bg-panel-hover);
+}
+
+.composer-where__action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.composer-where__action:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.composer-where__action > svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+/* The environment, its command and ▶ as one split pill: the left half runs
+   the selected command and carries its name, the chevron opens the menu of
+   commands, environments and Edit environments. Without an environment only
+   the menu half shows, as a round icon button like the row's toggles. */
+.composer-run {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.composer-run__pill {
+  display: inline-flex;
+  height: 26px;
+  box-sizing: border-box;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-input);
+}
+
+.composer-run.is-open .composer-run__pill,
+.composer-run__pill:hover {
+  border-color: var(--accent-border);
+}
+
+.composer-run__run,
+.composer-run__menu-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+}
+
+.composer-run__run {
+  max-width: 160px;
+  gap: 6px;
+  padding: 0 8px 0 10px;
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.composer-run__run > svg {
+  flex: none;
+  color: var(--accent-bright);
+}
+
+.composer-run__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-run__menu-button {
+  width: 24px;
+}
+
+.composer-run__run:hover:not(:disabled),
+.composer-run__menu-button:hover:not(:disabled),
+.composer-run.is-open .composer-run__menu-button {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.composer-run__run:focus-visible,
+.composer-run__menu-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.composer-run__run:disabled,
+.composer-run__menu-button:disabled {
+  cursor: default;
+}
+
+.composer-run__run:disabled > svg,
+.composer-run__run:disabled .composer-run__label {
+  opacity: 0.55;
 }
 
 .composer__pending-controls {
@@ -51490,10 +51629,6 @@ button.composer__subthread-source-parent:hover {
 .composer__action-button:disabled {
   color: var(--text-secondary);
   cursor: default;
-}
-
-.composer__attach-directory-button {
-  gap: 6px;
 }
 
 /* Draft `@`-referenced directory (linked to the thread when the turn is
@@ -55676,6 +55811,46 @@ button.stepped-bar__tick:focus-visible {
 
 .composer__cancel-preparation:hover {
   color: var(--text-primary);
+}
+
+/* Stop a running turn: a filled square beside Send, the shape every agent
+   composer uses. It stays neutral at rest so the row's one accent remains
+   Send; red arrives only under the pointer or keyboard focus, as a warning
+   that this ends the turn. */
+.composer__stop-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.composer__stop-button:hover:not(:disabled),
+.composer__stop-button:focus-visible {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.composer__stop-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.composer__stop-button:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 /* Scheduled-send split button. One pill, two zones: a caret trigger that opens

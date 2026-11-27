@@ -240,10 +240,10 @@ describe("composer controls layout", () => {
   });
 
   it("folds the Details-bound controls and then ▶ into ⋮ on a narrow row, keeping the pinned ones", async () => {
-    // Access 28 + model 150 + attach 28 + ⋮ 28 + the Send group 90, with
-    // four 4px gaps, is 340. The Details-bound controls (120px each) and ▶
-    // do not fit beside them.
-    installRowLayout(345);
+    // Access 28 + model 150 + Where 28 + attach 28 + ⋮ 28 + the Send group
+    // 90, with five 4px gaps, is 372. The Details-bound controls (120px
+    // each) and the Run split do not fit beside them.
+    installRowLayout(377);
     const runCodexEnvironmentAction = vi.fn<NonNullable<DesktopApi["runCodexEnvironmentAction"]>>();
     const setCodexThreadEnvironment = vi.fn<NonNullable<DesktopApi["setCodexThreadEnvironment"]>>();
     const { container } = render(
@@ -293,7 +293,10 @@ describe("composer controls layout", () => {
   });
 
   it.each(["toolbar", "overflow", "cleared"] as const)("shows only confirmed actions on the first commit of a revisit (%s)", async (scenario) => {
-    installRowLayout(scenario === "overflow" ? 345 : 1600);
+    // This row has no access control or attach: model 150 + Where 28 + ⋮ 28
+    // + the Send group 90, with three 4px gaps, is 308. The Run split
+    // (28 + 4) does not fit beside them in 330, so it folds into ⋮.
+    installRowLayout(scenario === "overflow" ? 330 : 1600);
     const listeners = new Set<(event: AgentEvent) => void>();
     const runCodexEnvironmentAction = vi.fn<NonNullable<DesktopApi["runCodexEnvironmentAction"]>>();
     const setCodexThreadEnvironment = vi.fn<NonNullable<DesktopApi["setCodexThreadEnvironment"]>>();
@@ -327,8 +330,8 @@ describe("composer controls layout", () => {
       useLayoutEffect(() => {
         commits.push({
           id: navigation.selectedThread?.id,
-          run: Boolean(document.querySelector('[data-composer-fold="run"]')),
-          environment: Boolean(document.querySelector('[data-composer-fold="details"] [aria-label*="environment" i]')),
+          run: Boolean(document.querySelector('[data-composer-fold="run"] [aria-label^="Run "]')),
+          environment: Boolean(document.querySelector('[data-composer-fold="run"] [aria-label^="Environment:"]')),
           authorized: navigation.selectedThreadConfigurationReady,
         });
       });
@@ -367,7 +370,7 @@ describe("composer controls layout", () => {
     expect.soft(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
     const setup = document.querySelector<HTMLElement>(".composer__setup")!;
     if (scenario === "toolbar") {
-      const run = within(setup).getByRole("button", { name: "Run" });
+      const run = within(setup).getByRole("button", { name: /^Run / });
       const picker = within(setup).getByRole("button", { name: /^Environment:/i });
       await act(async () => { run.click(); picker.click(); });
       expect.soft(run).toBeDisabled();
@@ -390,7 +393,7 @@ describe("composer controls layout", () => {
     await act(async () => nextRead.resolve());
     expect(commits.at(-1)).toMatchObject({ id: row.id, run: scenario === "toolbar", environment: scenario === "toolbar", authorized: true });
     if (scenario === "toolbar") {
-      const run = within(setup).getByRole("button", { name: "Run" });
+      const run = within(setup).getByRole("button", { name: /^Run / });
       expect(run).toBeEnabled();
       await act(async () => { run.click(); });
       expect(runCodexEnvironmentAction).toHaveBeenCalledWith(expect.objectContaining({ threadId: row.id, actionId: "test" }));
@@ -398,9 +401,9 @@ describe("composer controls layout", () => {
   });
 
   it("folds Plan with the Details controls while it is off and keeps it in the row once on", async () => {
-    // Pinned controls are 340 (see above). ▶ (28 + 4) fits beside them in
-    // 380; the Details controls, Plan among them, do not.
-    installRowLayout(380);
+    // Pinned controls are 372 (see above). The Run split (28 + 4) fits
+    // beside them in 412; the Details controls, Plan among them, do not.
+    installRowLayout(412);
     const { container } = render(
       <Composer
         backends={[backendSummary()]}
