@@ -244,8 +244,11 @@ test("Claude archive removes its snapshotted worktree and restores its branch an
       }));
     },
   });
+  const threadRow = app.window
+    .getByRole("complementary", { name: "Threads", exact: true })
+    .getByRole("button", { name: "Claude archive retention", exact: true });
   try {
-    await expect(app.window.getByRole("button", { name: /Claude archive retention/i })).toBeVisible();
+    await expect(threadRow).toBeVisible();
     const response = await app.window.evaluate(async (id) => {
       const api = (window as Window & { pwragent?: DesktopApi }).pwragent;
       if (!api?.archiveThread) throw new Error("Desktop archive bridge is unavailable.");
@@ -261,7 +264,7 @@ test("Claude archive removes its snapshotted worktree and restores its branch an
       if (!api?.restoreThread) throw new Error("Desktop restore bridge is unavailable.");
       await api.restoreThread({ backend: "claude", threadId: id });
     }, threadId);
-    await expect(app.window.getByRole("button", { name: /Claude archive retention/i })).toBeVisible();
+    await expect(threadRow).toBeVisible();
     expect(await pathExists(fixture.worktreePath)).toBe(true);
     expect(git(fixture.worktreePath, ["branch", "--show-current"])).toBe("feat/archive-cleanup");
     expect(await readFile(path.join(fixture.worktreePath, "README.md"), "utf8")).toBe("Saved Claude edits\n");
