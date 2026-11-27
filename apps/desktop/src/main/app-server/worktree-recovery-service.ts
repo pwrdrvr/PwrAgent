@@ -36,6 +36,8 @@ export type RecreateWorktreeParams = {
   expectedHead?: string;
   /** With `detached`: explicitly choose the commit to check out. */
   startPoint?: string;
+  /** Recreate from the best remaining commit when the saved ref or branch is gone. */
+  fallbackMissingSources?: boolean;
   now?: number;
 };
 
@@ -125,7 +127,8 @@ export class WorktreeRecoveryService {
       steps.set(id, { id, status, ...(detail ? { detail } : {}) });
     };
     const orderedSteps = () => STEP_ORDER.map((id) => steps.get(id) ?? { id, status: "skipped" as const });
-    const detached = params.detached === true || !params.branch;
+    let detached = params.detached === true || !params.branch;
+    const warnings: string[] = [];
 
     try {
       if (await pathKind(params.repositoryPath) === "missing") {
@@ -147,6 +150,9 @@ export class WorktreeRecoveryService {
       const checkpoint = params.skipCheckpoint
         ? undefined
         : await this.resolveCheckpoint(repositoryPath, new Set([worktreePath, ownPath]), params);
+      if (params.fallbackMissingSources && params.checkpoint && !checkpoint && !params.skipCheckpoint) {
+        warnings.push("The saved checkpoint is unavailable. Its uncommitted changes could not be recovered.");
+      }
       mark(
         "find-checkpoint",
         checkpoint ? "done" : "skipped",
@@ -177,18 +183,31 @@ export class WorktreeRecoveryService {
       }
 
       let startPoint: string;
-      if (detached) {
-        startPoint = params.startPoint
-          ?? checkpoint?.base
-          ?? (params.branch ? await this.resolveCommit(repositoryPath, `refs/heads/${params.branch}`) : undefined)
-          ?? await this.resolveCommit(repositoryPath, "HEAD")
-          ?? "HEAD";
-      } else {
-        const branch = params.branch!;
-        const tip = await this.resolveCommit(repositoryPath, `refs/heads/${branch}`);
-        if (!tip) {
+      const branch = params.branch;
+      const tip = branch && !detached ? await this.resolveCommit(repositoryPath, `refs/heads/${branch}`) : undefined;
+      const elsewhere = tip ? recorded.find((record) => record !== ownRecord && record.branch === branch) : undefined;
+      if (!detached && !tip) {
+        if (!params.fallbackMissingSources) {
           throw new RecoveryRefusal("branch-missing", "add-worktree", `The branch ${branch} no longer exists.`);
         }
+        detached = true;
+      }
+      if (elsewhere && params.fallbackMissingSources && !params.expectedHead) detached = true;
+      if (detached) {
+        const start = params.startPoint && params.fallbackMissingSources
+          ? await this.resolveCommit(repositoryPath, params.startPoint)
+          : params.startPoint;
+        const available = start
+          ?? checkpoint?.base
+          ?? (params.fallbackMissingSources && params.checkpoint?.sourceHead
+            ? await this.resolveCommit(repositoryPath, params.checkpoint.sourceHead) : undefined)
+          ?? tip
+          ?? (branch && params.detached ? await this.resolveCommit(repositoryPath, `refs/heads/${branch}`) : undefined);
+        startPoint = available ?? await this.resolveCommit(repositoryPath, "HEAD") ?? "HEAD";
+        if (!available && params.fallbackMissingSources) {
+          warnings.push("Recreated the worktree detached at the main checkout's current commit.");
+        }
+      } else {
         if (params.expectedHead && tip !== params.expectedHead) {
           throw new RecoveryRefusal(
             "branch-moved",
@@ -197,9 +216,8 @@ export class WorktreeRecoveryService {
           );
         }
         if (cleanCommit && tip !== cleanCommit) {
-          await this.assertCleanCheckpointInHistory(repositoryPath, cleanCommit, tip, branch);
+          await this.assertCleanCheckpointInHistory(repositoryPath, cleanCommit, tip!, branch!);
         }
-        const elsewhere = recorded.find((record) => record !== ownRecord && record.branch === branch);
         if (elsewhere) {
           throw new RecoveryRefusal(
             "branch-checked-out",
@@ -208,7 +226,7 @@ export class WorktreeRecoveryService {
             { branchCheckedOutAt: elsewhere.path },
           );
         }
-        startPoint = branch;
+        startPoint = branch!;
       }
 
       // Writes start here. An empty folder at the path would keep Git from
@@ -244,7 +262,6 @@ export class WorktreeRecoveryService {
       }
       mark("add-worktree", "done");
 
-      const warnings: string[] = [];
       let checkpointResult: Extract<RecreateThreadWorktreeResponse, { status: "recreated" }>["checkpoint"];
       if (checkpoint) {
         const applied = checkpoint.base === checkpoint.commit
@@ -252,6 +269,11 @@ export class WorktreeRecoveryService {
           : await this.applyCheckpoint(worktreePath, checkpoint.commit);
         if (applied.restored) {
           mark("apply-checkpoint", "done");
+        } else if (params.fallbackMissingSources) {
+          // A usable checkpoint must come back before an automatic send.
+          // Git refuses removal if the new checkout has been edited.
+          await removeManagedWorktree({ worktreePath, git: (args) => this.git(repositoryPath, args) });
+          throw new Error("The saved changes did not apply to the restored checkout. They are kept in its snapshot.");
         } else {
           mark("apply-checkpoint", "failed", "The branch moved on and the checkpoint conflicts.");
           warnings.push(
@@ -324,8 +346,13 @@ export class WorktreeRecoveryService {
     params: RecreateWorktreeParams,
   ): Promise<{ ref: string; commit: string; base: string } | undefined> {
     if (params.checkpoint) {
-      const commit = await this.resolveCommit(repositoryPath, params.checkpoint.snapshotRef);
-      if (commit !== params.checkpoint.snapshotCommit) {
+      const refCommit = await this.resolveCommit(repositoryPath, params.checkpoint.snapshotRef);
+      const { snapshotCommit, snapshotRef } = params.checkpoint;
+      const refMatches = refCommit === snapshotCommit;
+      const commit = refMatches ? refCommit : params.fallbackMissingSources
+        ? await this.resolveCommit(repositoryPath, snapshotCommit) : undefined;
+      if (commit !== snapshotCommit) {
+        if (params.fallbackMissingSources) return undefined;
         throw new RecoveryRefusal(
           "checkpoint-missing",
           "find-checkpoint",
@@ -335,7 +362,7 @@ export class WorktreeRecoveryService {
       // Clean snapshots pin the saved HEAD itself. Dirty snapshots add a
       // commit on top of it. Older records may only have the snapshot commit.
       const base = params.checkpoint.sourceHead ?? await this.inferCheckpointBase(repositoryPath, commit, worktreePaths);
-      return { ref: params.checkpoint.snapshotRef, commit, base };
+      return { ref: refMatches ? snapshotRef : commit, commit, base };
     }
     // A checkpoint written by an archive whose record was lost is still
     // found by the deterministic ref the archive names after the path.

@@ -56,6 +56,10 @@ ignores the key and uses the home folder.
   Recovery views share this check. Callers wait up to three seconds, and
   repeated checks of a path share a probe. At most two filesystem probes run
   at once, with their slots held until the filesystem actually responds.
+- An operator's Send Request can recreate a missing Codex worktree when its
+  repository is known. The owner restores any saved checkout first. If the
+  recorded branch and saved commit are both unavailable, it recreates the
+  original worktree path detached at the main checkout's current commit.
 - Codex threads keep `$CODEX_HOME/worktrees` unless **Use for Codex threads too**
   (`base_directory_includes_codex = true`) is on. Codex Desktop lists an owner-marked worktree
   (`codex-thread.json` in its Git directory) only under `$CODEX_HOME/worktrees` (#164), so it does not

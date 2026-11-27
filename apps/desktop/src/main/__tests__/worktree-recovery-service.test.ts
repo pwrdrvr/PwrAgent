@@ -374,6 +374,20 @@ describe("WorktreeRecoveryService", () => {
     expect(await readFile(path.join(worktreePath, "deliver.ts"), "utf8")).toBe("export const delay = 1;\n");
   });
 
+  it("uses the retained checkpoint commit when its reference and branch are gone", async () => {
+    await writeFile(path.join(worktreePath, "deliver.ts"), "saved changes\n");
+    const snapshot = await new WorktreeArchiveService().archive({
+      backend: "codex", threadId: "t1", repositoryPath: repoPath, worktreePath,
+    });
+    await git(repoPath, ["update-ref", "-d", snapshot.snapshotRef]);
+    await git(repoPath, ["branch", "-D", "fix/retry-backoff"]);
+    await expect(service.recreate({
+      backend: "codex", threadId: "t1", repositoryPath: repoPath, worktreePath,
+      branch: "fix/retry-backoff", checkpoint: snapshot, fallbackMissingSources: true,
+    })).resolves.toMatchObject({ status: "recreated", checkpoint: { restored: true } });
+    expect(await readFile(path.join(worktreePath, "deliver.ts"), "utf8")).toBe("saved changes\n");
+  });
+
   it("leaves the worktree clean and keeps the commit when the checkpoint conflicts", async () => {
     await writeFile(path.join(worktreePath, "deliver.ts"), "export const delay = 300;\n");
     const snapshot = await new WorktreeArchiveService().archive({

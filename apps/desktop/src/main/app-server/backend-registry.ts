@@ -12609,7 +12609,8 @@ export class DesktopBackendRegistry {
         // bridge result, and only config inventory needs the resolved cwd.
         const cwdPreparation =
           params.backend === "codex"
-            ? this.resolveCodexTurnCwd(params.threadId, overlay)
+            ? this.resolveCodexTurnCwd(params.threadId, overlay, params.messageOrigin?.operatorApproved === true
+              && (Boolean(params.messageOrigin.threadTodo) || params.agentMessageOrigins?.some((origin) => origin.threadTodo) === true))
             : Promise.resolve(undefined);
         const runtimePreparation = tokenMiserEnabledForThread
           ? this.prepareTokenMiserRuntime()
@@ -19929,21 +19930,25 @@ export class DesktopBackendRegistry {
     return { cwd, thread };
   }
 
-  private async resolveCodexTurnCwd(threadId: string, overlay?: ThreadOverlayState): Promise<string | undefined> {
+  private async resolveCodexTurnCwd(threadId: string, overlay?: ThreadOverlayState, recreateMissing = false): Promise<string | undefined> {
     const { cwd, thread } = await this.resolveThreadEnvironmentWorkspace("codex", threadId, overlay);
     if (!cwd) return undefined;
     const target = normalizeWorktreePathForComparison(cwd);
-    const worktree = isLikelyToolManagedWorktreePath(cwd)
-      || [...(thread?.linkedDirectories ?? []), ...(overlay?.extraLinkedDirectories ?? [])].some((directory) => {
-        const worktreePath = linkedDirectoryWorktreePath(directory);
-        return worktreePath !== undefined && normalizeWorktreePathForComparison(worktreePath) === target;
-      });
-    if (worktree) {
-      // Hibernation has already had a chance to restore. Check the actual
-      // turn cwd before announcing a start or letting Codex resume into it.
+    const directory = [...(overlay?.extraLinkedDirectories ?? []), ...(thread?.linkedDirectories ?? [])].find((candidate) => {
+      const worktreePath = linkedDirectoryWorktreePath(candidate);
+      return worktreePath !== undefined && normalizeWorktreePathForComparison(worktreePath) === target;
+    });
+    if (!directory && !isLikelyToolManagedWorktreePath(cwd)) return cwd;
+    // Check the actual turn cwd after any in-flight recovery of this checkout.
+    return await this.threadArchiveCoordinator.withCheckoutRecovery(cwd, async () => {
       const status = await checkWorktreeDirectory(cwd);
       switch (status) {
         case "missing":
+          if (recreateMissing && directory?.kind === "worktree" && directory.worktreePath
+            && path.isAbsolute(directory.path) && normalizeWorktreePathForComparison(directory.path) !== target
+            && await this.threadWorkspaceService.recoverMissingCodexWorktreeForTurn({ backend: "codex", threadId, worktreePath: cwd })) {
+            return cwd;
+          }
           throw new Error(`The thread's worktree is missing. Open the thread to recover its workspace: ${cwd}`);
         case "not-directory":
           throw new Error(`A file blocks the thread's worktree path. Open the thread to recover its workspace: ${cwd}`);
@@ -19954,8 +19959,8 @@ export class DesktopBackendRegistry {
         case "unavailable":
           throw new Error(`Could not access the thread's worktree. Check its permissions and retry: ${cwd}`);
       }
-    }
-    return cwd;
+      return cwd;
+    });
   }
 
   private async recordCodexWorktreeOwnerThread(params: {

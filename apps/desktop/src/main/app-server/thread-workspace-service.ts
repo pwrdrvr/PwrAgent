@@ -32,6 +32,7 @@ import {
   type RecreateThreadWorktreeRequest,
   type RecreateThreadWorktreeResponse,
   type ThreadExecutionMode,
+  type ThreadMissingWorkspace,
   type ThreadWorkspaceHandoffDirection,
   type ThreadWorkspaceHandoffStrategy,
   type ReadThreadWorktreeLockRequest,
@@ -684,55 +685,78 @@ export class ThreadWorkspaceService {
   async recreateThreadWorktree(
     request: RecreateThreadWorktreeRequest,
   ): Promise<RecreateThreadWorktreeResponse> {
-    return await this.withWorkspaceMutation(request, async () => {
+    return await this.withWorkspaceMutation(request, () => this.threadArchiveCoordinator.withCheckoutRecovery(request.worktreePath, async () => {
       await this.assertWorkspaceRecoveryAllowed(request);
       const { missing } = await this.resolveRecoveryWorktree(request);
       if (!missing) {
         throw new Error("This thread's worktree folder exists again. Reopen the thread to continue.");
       }
-      const result = await this.threadArchiveCoordinator.withArchiveWorkspaceWrite([request.worktreePath], async () => await this.host().worktreeRecoveryService.recreate({
-        backend: request.backend,
-        threadId: request.threadId,
-        repositoryPath: missing.repositoryPath,
-        worktreePath: missing.worktreePath,
-        branch: missing.branch,
-        checkpoint: missing.checkpoint,
-        skipCheckpoint: request.skipCheckpoint,
-        detached: request.detached,
-      }));
-      if (result.status !== "recreated") {
-        return result;
-      }
+      return await this.recreateResolvedWorktree(request, missing);
+    }));
+  }
 
-      const overlay = await this.context.stores.threads.getThreadOverlayState(request);
-      const snapshot = missing.checkpoint
-        ? overlay?.worktreeSnapshots?.find((candidate) =>
-            candidate.snapshotRef === missing.checkpoint?.snapshotRef
-            && candidate.snapshotCommit === missing.checkpoint.snapshotCommit)
-        : undefined;
-      if (snapshot && result.checkpoint?.restored) {
-        await this.context.stores.archive.upsertWorktreeSnapshot({
-          backend: request.backend,
-          threadId: request.threadId,
-          snapshot: { ...snapshot, state: "restored", restoredAt: result.completedAt },
-        });
-      }
-      await this.host().updateThreadGitBranchMetadata({
+  /** The caller owns the Codex start reservation and the checkout's recovery lock. */
+  async recoverMissingCodexWorktreeForTurn(request: { backend: "codex"; threadId: string; worktreePath: string }): Promise<boolean> {
+    const { missing } = await this.resolveRecoveryWorktree(request);
+    if (!missing?.repositoryAvailable
+      || path.resolve(missing.repositoryPath) === path.resolve(missing.worktreePath)) return false;
+    await this.assertWorkspaceRecoveryAllowed(request, true);
+    const result = await this.recreateResolvedWorktree(request, missing, true);
+    if (result.status === "failed") throw new Error(result.message);
+    if (result.warnings.length) {
+      await this.context.emit({ backend: request.backend, notification: {
+        method: "warning", params: { threadId: request.threadId, message: result.warnings.join(" ") },
+      } }).catch(() => {});
+    }
+    return true;
+  }
+
+  private async recreateResolvedWorktree(
+    request: RecreateThreadWorktreeRequest,
+    missing: ThreadMissingWorkspace,
+    fallbackMissingSources = false,
+  ): Promise<RecreateThreadWorktreeResponse> {
+    const result = await this.threadArchiveCoordinator.withArchiveWorkspaceWrite([request.worktreePath], async () => await this.host().worktreeRecoveryService.recreate({
+      backend: request.backend,
+      threadId: request.threadId,
+      repositoryPath: missing.repositoryPath,
+      worktreePath: missing.worktreePath,
+      branch: missing.branch,
+      checkpoint: missing.checkpoint,
+      skipCheckpoint: request.skipCheckpoint,
+      detached: request.detached,
+      ...(fallbackMissingSources ? { fallbackMissingSources: true } : {}),
+    }));
+    if (result.status !== "recreated") return result;
+
+    const overlay = await this.context.stores.threads.getThreadOverlayState(request);
+    const snapshot = missing.checkpoint
+      ? overlay?.worktreeSnapshots?.find((candidate) =>
+          candidate.snapshotRef === missing.checkpoint?.snapshotRef
+          && candidate.snapshotCommit === missing.checkpoint.snapshotCommit)
+      : undefined;
+    if (snapshot && result.checkpoint?.restored) {
+      await this.context.stores.archive.upsertWorktreeSnapshot({
         backend: request.backend,
         threadId: request.threadId,
-        branch: result.branch ?? "HEAD",
+        snapshot: { ...snapshot, state: "restored", restoredAt: result.completedAt },
       });
-      this.host().invalidateThreadListCache(request.backend, true, request.threadId);
-      this.host().threadInfoStore.invalidateSummaries({ backend: request.backend, threadId: request.threadId });
-      await this.host().publishLocalEvent({
-        backend: request.backend,
-        notification: {
-          method: "navigation/threadDirectories/updated",
-          params: { reason: "selected-thread", threadIds: [request.threadId] },
-        },
-      });
-      return result;
+    }
+    await this.host().updateThreadGitBranchMetadata({
+      backend: request.backend,
+      threadId: request.threadId,
+      branch: result.branch ?? "HEAD",
     });
+    this.host().invalidateThreadListCache(request.backend, true, request.threadId);
+    this.host().threadInfoStore.invalidateSummaries({ backend: request.backend, threadId: request.threadId });
+    await this.host().publishLocalEvent({
+      backend: request.backend,
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: { reason: "selected-thread", threadIds: [request.threadId] },
+      },
+    });
+    return result;
   }
 
   /**
@@ -917,10 +941,10 @@ export class ThreadWorkspaceService {
   private async assertWorkspaceRecoveryAllowed(request: {
     backend: AppServerBackendKind;
     threadId: string;
-  }): Promise<void> {
+  }, ignoreCodexStartReservation = false): Promise<void> {
     await this.host().assertThreadNotLocked(request.backend, request.threadId);
     this.host().assertThreadNotHandingOff(request.backend, request.threadId);
-    if (this.host().threadHasActiveTurn(request.threadId, request.backend)) {
+    if (this.host().threadHasActiveTurn(request.threadId, request.backend, ignoreCodexStartReservation)) {
       throw new Error(ACTIVE_TURN_WORKSPACE_RECOVERY_ERROR);
     }
   }
