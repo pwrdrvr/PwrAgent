@@ -50,6 +50,10 @@ export async function isComposerTierFolded(
 }
 
 /** A row button by name, whether drawn or folded out of sight. */
+export function composerRowButton(page: Page, name: RegExp | string): Locator {
+  return rowButton(page, name);
+}
+
 function rowButton(page: Page, name: RegExp | string): Locator {
   return composerRow(page).getByRole("button", { name, exact: true, includeHidden: true });
 }
@@ -134,4 +138,19 @@ export async function chooseComposerWorkspaceAction(page: Page, action: string):
   }
   await composerRow(page).getByLabel(/^Workspace mode(?::|$)/).click();
   await page.getByRole("menuitem", { name: action, exact: true }).click();
+}
+
+/**
+ * Starts dictation: the row's button, or ⋮'s item when dictation has folded.
+ * A listening dictation never folds, so its Stop button is always in the row.
+ */
+export async function startComposerDictation(page: Page): Promise<void> {
+  const name = "Dictate with OpenAI";
+  if (await isComposerTierFolded(page, "dictation", rowButton(page, name))) {
+    const menu = await openComposerThreadOptions(page);
+    await menu.getByRole("menuitem", { name, exact: true }).click();
+    await expect(menu).toBeHidden();
+    return;
+  }
+  await composerRow(page).getByRole("button", { name, exact: true }).click();
 }

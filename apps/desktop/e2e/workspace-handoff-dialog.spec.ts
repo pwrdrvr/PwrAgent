@@ -4,6 +4,7 @@ import {
   createWorktreeHandoffFixture,
 } from "./fixtures/workspace-handoff-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { chooseComposerWorkspaceAction } from "./fixtures/composer-row";
 
 async function expectDialogCentered(dialog: Locator) {
   const geometry = await dialog.evaluate((element) => {
@@ -34,8 +35,7 @@ test("centers the local-to-worktree handoff dialog in the window", async () => {
   try {
     await app.window.getByRole("button", { name: "Local handoff thread", exact: true }).click();
 
-    await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
-    await app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
+    await chooseComposerWorkspaceAction(app.window, "Handoff to New Worktree");
 
     const dialog = app.window.getByRole("dialog", { name: "Handoff to New Worktree" });
     await expect(dialog).toBeVisible();
@@ -76,8 +76,7 @@ test("centers the worktree-to-local handoff dialog in the window", async () => {
       .getByRole("button", { name: "Worktree handoff thread", exact: true })
       .click();
 
-    await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
-    await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
+    await chooseComposerWorkspaceAction(app.window, "Handoff to Local");
 
     const dialog = app.window.getByRole("dialog", { name: "Handoff to Local" });
     await expect(dialog).toBeVisible();
