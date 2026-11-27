@@ -10572,13 +10572,9 @@ button.stack-display__thread,
   color: var(--text-secondary);
 }
 
+/* Hover is a neutral wash; the accent marks the app choice in use. */
 .sidebar-thread-card__row:hover {
-  background: var(--accent-soft);
-  color: var(--accent-bright);
-}
-
-.sidebar-thread-card__row:hover > svg {
-  color: var(--accent);
+  background: var(--surface-overlay-hover);
 }
 
 .sidebar-thread-card__row.is-current {
