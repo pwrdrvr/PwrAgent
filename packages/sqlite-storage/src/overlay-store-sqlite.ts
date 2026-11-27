@@ -178,6 +178,7 @@ import {
   changedProviderModelDefaultBackends,
   forgetLegacyDefaultLaunchpadExecutionModes,
   isAcpBackendId,
+  isRemoteLaunchpadStorageKey,
   normalizeNavigationBrowseMode,
   normalizeThreadIdentityKey,
   parseThreadIdentityKey,
@@ -10687,8 +10688,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     if (changedBackends.length === 0 && changedAccessBackends.length === 0) {
       return 0;
     }
-    // Access reaches every launchpad, including ones that have not used the
-    // provider yet, so switching a launchpad to it later finds the choice.
+    // Access reaches every local launchpad, including ones that have not
+    // used the provider yet.
     const apply = <T extends NavigationLaunchpadDefaults>(
       launchpad: T,
       includeAllModels: boolean,
@@ -10710,6 +10711,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       const now = Date.now();
       let count = 0;
       for (const launchpad of Object.values(this.readAllDirectoryLaunchpads())) {
+        // Peer sub-threads retain a plain key and record the owner in the draft.
+        if (launchpad.federationTarget?.scope === "remote" || isRemoteLaunchpadStorageKey(launchpad.directoryKey)) continue;
         const usesChangedModelBackend = changedBackends.some((backend) =>
           navigationLaunchpadProviderKey(launchpad) === backend
           || launchpad.providerSettings?.[backend] !== undefined
