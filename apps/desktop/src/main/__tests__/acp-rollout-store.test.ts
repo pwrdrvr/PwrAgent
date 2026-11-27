@@ -1069,4 +1069,53 @@ describe("AcpRolloutStore", () => {
     expect(merged.entries.map((entry) => entry.id)).toEqual(["prov-0", "synth-0"]);
     expect(merged.messages.map((message) => message.id)).toEqual(["prov-0", "synth-0"]);
   });
+
+  it("caches parsed rollout records across repeated reads and invalidates on external edits", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:antigravity" as AcpBackendId;
+    const sessionId = "cached-session";
+
+    for (let index = 0; index < 12; index += 1) {
+      store.appendUpdate({
+        backendId,
+        sessionId,
+        receivedAt: 1_000 + index * 10,
+        update: index % 2 === 0
+          ? { sessionUpdate: "user_message_chunk", content: { type: "text", text: `Prompt ${index}` } }
+          : { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Reply ${index}` } },
+      });
+    }
+    store.flushAll();
+
+    const freshStore = new AcpRolloutStore(tempDir);
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+    try {
+      const first = freshStore.readReplay({ backendId, sessionId });
+      const second = freshStore.readReplay({ backendId, sessionId });
+      const third = freshStore.readReplay({ backendId, sessionId });
+      expect(readFileSpy).toHaveBeenCalledTimes(1);
+      expect(second.messages).toEqual(first.messages);
+      expect(third.messages).toEqual(first.messages);
+
+      const rolloutPath = path.join(tempDir, "acp_antigravity", sessionId, "rollout.jsonl");
+      fs.appendFileSync(
+        rolloutPath,
+        `${JSON.stringify({
+          type: "update",
+          receivedAt: 5_000,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "External append" },
+          },
+        })}\n`,
+        "utf8",
+      );
+
+      const updated = freshStore.readReplay({ backendId, sessionId });
+      expect(readFileSpy).toHaveBeenCalledTimes(2);
+      expect(updated.messages.at(-1)?.text).toContain("External append");
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
 });

@@ -57,9 +57,21 @@ export function isPwrAgentSyntheticAcpUpdate(
   );
 }
 
+type CachedRolloutRecords = {
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+  records: AcpRolloutRecord[];
+};
+
+const MAX_CACHED_ROLLOUT_SESSIONS = 32;
+
 export class AcpRolloutStore {
-  private readonly chunkBuffers = new Map<string, ChunkBuffer>();
-  private readonly lastFingerprints = new Map<string, string>();
+  private readonly chunkBuffersBySession = new Map<string, Map<string, ChunkBuffer>>();
+  private readonly lastFingerprintsBySession = new Map<string, Map<string, string>>();
+  private readonly knownRolloutPaths = new Set<string>();
+  private readonly recordCache = new Map<string, CachedRolloutRecords>();
 
   constructor(private readonly rootDir: string) {}
 
@@ -78,11 +90,17 @@ export class AcpRolloutStore {
     const duplicateKey = updateDuplicateKey(params);
     const fingerprint = updateFingerprint(params.update);
     if (duplicateKey && fingerprint) {
-      const previous = this.lastFingerprints.get(duplicateKey);
+      const sessionKey = rolloutSessionKey(params.backendId, params.sessionId);
+      let sessionFingerprints = this.lastFingerprintsBySession.get(sessionKey);
+      if (!sessionFingerprints) {
+        sessionFingerprints = new Map();
+        this.lastFingerprintsBySession.set(sessionKey, sessionFingerprints);
+      }
+      const previous = sessionFingerprints.get(duplicateKey);
       if (previous === fingerprint) {
         return;
       }
-      this.lastFingerprints.set(duplicateKey, fingerprint);
+      sessionFingerprints.set(duplicateKey, fingerprint);
     } else {
       this.clearSessionFingerprints(params.backendId, params.sessionId);
     }
@@ -95,9 +113,31 @@ export class AcpRolloutStore {
     sessionId: string;
   }): AcpRolloutRecord[] {
     this.flushSession(params.backendId, params.sessionId);
-    return readRolloutRecords(
-      this.rolloutPath(params.backendId, params.sessionId),
-    );
+    const rolloutPath = this.rolloutPath(params.backendId, params.sessionId);
+    const stat = statRolloutFile(rolloutPath);
+    if (!stat) {
+      this.recordCache.delete(rolloutPath);
+      return [];
+    }
+    const cached = this.recordCache.get(rolloutPath);
+    if (
+      cached
+      && cached.ino === stat.ino
+      && cached.size === stat.size
+      && cached.mtimeNs === stat.mtimeNs
+      && cached.ctimeNs === stat.ctimeNs
+    ) {
+      return [...cached.records];
+    }
+    const records = readRolloutRecords(rolloutPath);
+    this.setCachedRecords(rolloutPath, {
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+      records,
+    });
+    return [...records];
   }
 
   readReplay(params: {
@@ -137,8 +177,8 @@ export class AcpRolloutStore {
   }
 
   flushAll(): void {
-    for (const key of [...this.chunkBuffers.keys()]) {
-      this.flushChunk(key);
+    for (const sessionKey of [...this.chunkBuffersBySession.keys()]) {
+      this.flushSessionByKey(sessionKey);
     }
   }
 
@@ -150,11 +190,13 @@ export class AcpRolloutStore {
     if (!text) {
       return;
     }
-    const existing = this.chunkBuffers.get(chunkKey);
+    const sessionKey = rolloutSessionKey(params.backendId, params.sessionId);
+    const sessionBuffers = this.chunkBuffersBySession.get(sessionKey);
+    const existing = sessionBuffers?.get(chunkKey);
     if (existing) {
       existing.text += text;
       if (existing.text.length >= CHUNK_FLUSH_TEXT_LENGTH) {
-        this.flushChunk(chunkKey);
+        this.flushChunk(sessionKey, chunkKey);
       }
       return;
     }
@@ -162,9 +204,14 @@ export class AcpRolloutStore {
     // Switching chunk kind or message id starts a new transcript stream; flush
     // any earlier buffered chunk for this session first so rollout.jsonl keeps
     // wire order even when the new stream hits its flush threshold.
-    this.flushSession(params.backendId, params.sessionId);
+    this.flushSessionByKey(sessionKey);
 
-    this.chunkBuffers.set(chunkKey, {
+    let nextBuffers = this.chunkBuffersBySession.get(sessionKey);
+    if (!nextBuffers) {
+      nextBuffers = new Map();
+      this.chunkBuffersBySession.set(sessionKey, nextBuffers);
+    }
+    nextBuffers.set(chunkKey, {
       backendId: params.backendId,
       receivedAt: params.receivedAt,
       sessionId: params.sessionId,
@@ -172,25 +219,34 @@ export class AcpRolloutStore {
       text,
     });
     if (text.length >= CHUNK_FLUSH_TEXT_LENGTH) {
-      this.flushChunk(chunkKey);
+      this.flushChunk(sessionKey, chunkKey);
     }
   }
 
   private flushSession(backendId: AcpBackendId, sessionId: string): void {
-    const prefix = `${backendId}:${sessionId}:`;
-    for (const key of [...this.chunkBuffers.keys()]) {
-      if (key.startsWith(prefix)) {
-        this.flushChunk(key);
-      }
+    this.flushSessionByKey(rolloutSessionKey(backendId, sessionId));
+  }
+
+  private flushSessionByKey(sessionKey: string): void {
+    const sessionBuffers = this.chunkBuffersBySession.get(sessionKey);
+    if (!sessionBuffers || sessionBuffers.size === 0) {
+      return;
+    }
+    for (const chunkKey of [...sessionBuffers.keys()]) {
+      this.flushChunk(sessionKey, chunkKey);
     }
   }
 
-  private flushChunk(chunkKey: string): void {
-    const buffer = this.chunkBuffers.get(chunkKey);
-    if (!buffer) {
+  private flushChunk(sessionKey: string, chunkKey: string): void {
+    const sessionBuffers = this.chunkBuffersBySession.get(sessionKey);
+    const buffer = sessionBuffers?.get(chunkKey);
+    if (!buffer || !sessionBuffers) {
       return;
     }
-    this.chunkBuffers.delete(chunkKey);
+    sessionBuffers.delete(chunkKey);
+    if (sessionBuffers.size === 0) {
+      this.chunkBuffersBySession.delete(sessionKey);
+    }
     this.writeRecord({
       backendId: buffer.backendId,
       sessionId: buffer.sessionId,
@@ -201,32 +257,57 @@ export class AcpRolloutStore {
 
   private writeRecord(params: AcpRolloutStoreAppendParams): void {
     const rolloutPath = this.rolloutPath(params.backendId, params.sessionId);
-    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    if (!this.knownRolloutPaths.has(rolloutPath)) {
+      fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+      this.knownRolloutPaths.add(rolloutPath);
+    }
+    const record: AcpRolloutRecord = {
+      type: "update",
+      receivedAt: params.receivedAt,
+      update: params.update,
+    };
+    const cached = this.recordCache.get(rolloutPath);
     fs.appendFileSync(
       rolloutPath,
-      `${JSON.stringify({
-        type: "update",
-        receivedAt: params.receivedAt,
-        update: params.update,
-      } satisfies AcpRolloutRecord)}\n`,
+      `${JSON.stringify(record)}\n`,
       // The owner commits the replacement provider ID after this boundary.
       { encoding: "utf8", flush: params.update.kind === ACP_WORKSPACE_HANDOFF_RECORD },
     );
+    if (cached) {
+      const stat = statRolloutFile(rolloutPath);
+      if (stat && stat.ino === cached.ino) {
+        cached.records.push(record);
+        cached.size = stat.size;
+        cached.mtimeNs = stat.mtimeNs;
+        cached.ctimeNs = stat.ctimeNs;
+      } else {
+        this.recordCache.delete(rolloutPath);
+      }
+    }
   }
 
   private clearSessionFingerprints(backendId: AcpBackendId, sessionId: string): void {
-    const prefix = `${backendId}:${sessionId}:`;
-    for (const key of [...this.lastFingerprints.keys()]) {
-      if (key.startsWith(prefix)) {
-        this.lastFingerprints.delete(key);
-      }
-    }
+    this.lastFingerprintsBySession.delete(rolloutSessionKey(backendId, sessionId));
   }
 
   deleteSession(backendId: AcpBackendId, sessionId: string): void {
     this.flushSession(backendId, sessionId);
     this.clearSessionFingerprints(backendId, sessionId);
-    fs.rmSync(path.dirname(this.rolloutPath(backendId, sessionId)), { recursive: true, force: true });
+    const rolloutPath = this.rolloutPath(backendId, sessionId);
+    this.knownRolloutPaths.delete(rolloutPath);
+    this.recordCache.delete(rolloutPath);
+    fs.rmSync(path.dirname(rolloutPath), { recursive: true, force: true });
+  }
+
+  private setCachedRecords(rolloutPath: string, entry: CachedRolloutRecords): void {
+    this.recordCache.delete(rolloutPath);
+    this.recordCache.set(rolloutPath, entry);
+    if (this.recordCache.size > MAX_CACHED_ROLLOUT_SESSIONS) {
+      const oldestKey = this.recordCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.recordCache.delete(oldestKey);
+      }
+    }
   }
 
   private rolloutPath(backendId: AcpBackendId, sessionId: string): string {
@@ -236,7 +317,9 @@ export class AcpRolloutStore {
       encodePathSegment(sessionId),
       "rollout.jsonl",
     );
-    this.recoverLegacySession(backendId, sessionId, rolloutPath);
+    if (!this.knownRolloutPaths.has(rolloutPath)) {
+      this.recoverLegacySession(backendId, sessionId, rolloutPath);
+    }
     return rolloutPath;
   }
 
@@ -454,6 +537,29 @@ function encodeBackendPathSegment(value: AcpBackendId): string {
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function rolloutSessionKey(backendId: AcpBackendId, sessionId: string): string {
+  return `${backendId}:${sessionId}`;
+}
+
+function statRolloutFile(rolloutPath: string): {
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+} | undefined {
+  try {
+    const stat = fs.statSync(rolloutPath, { bigint: true });
+    return {
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function readRolloutRecords(rolloutPath: string): AcpRolloutRecord[] {

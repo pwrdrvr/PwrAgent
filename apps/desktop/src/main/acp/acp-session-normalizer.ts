@@ -215,6 +215,37 @@ export function inferAcpReplayTurns(
   const entries: AppServerThreadEntry[] = replay.entries.map((entry) => ({
     ...entry,
   }));
+  // Provider session/load replays can stamp untimestamped messages with reload
+  // time while tool calls in the same turn keep their real historical
+  // timestamps. Clamp non-monotonic timestamps backward along provider wire
+  // order so an earlier row never carries a timestamp after a later row.
+  let minSubsequentCreatedAt: number | undefined;
+  const clampedMessageTimes = new Map<string, number>();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry || typeof entry.createdAt !== "number") {
+      continue;
+    }
+    if (
+      minSubsequentCreatedAt !== undefined
+      && entry.createdAt > minSubsequentCreatedAt
+    ) {
+      entries[index] = { ...entry, createdAt: minSubsequentCreatedAt };
+      if (entry.type === "message") {
+        clampedMessageTimes.set(entry.id, minSubsequentCreatedAt);
+      }
+    } else {
+      minSubsequentCreatedAt = entry.createdAt;
+    }
+  }
+  const messages = clampedMessageTimes.size > 0
+    ? replay.messages.map((message) => {
+        const clamped = clampedMessageTimes.get(message.id);
+        return clamped !== undefined && clamped !== message.createdAt
+          ? { ...message, createdAt: clamped }
+          : message;
+      })
+    : replay.messages;
   let active: InferredAcpTurn | undefined;
 
   const applyActiveTurn = (
@@ -322,6 +353,7 @@ export function inferAcpReplayTurns(
   return {
     ...replay,
     entries,
+    messages,
   };
 }
 
@@ -373,6 +405,9 @@ export class AcpSessionReplayNormalizer {
     steeredTurns: Set<string>;
     nextIndex: number;
     attachmentNextIndex: number;
+    indexesByDigest: Map<string, number[]>;
+    attachmentIndexesByDigest: Map<string, number[]>;
+    nextAttachmentFrom: Int32Array;
   };
   /** Filename from a preceding synthetic image-annotation chunk, for a following image chunk. */
   private pendingUserImageAlt?: string;
@@ -409,11 +444,42 @@ export class AcpSessionReplayNormalizer {
   }
 
   beginProviderPromptReplay(prompts: AcpReplayPromptIdentity[]): void {
+    const indexesByDigest = new Map<string, number[]>();
+    const attachmentIndexesByDigest = new Map<string, number[]>();
+    const nextAttachmentFrom = new Int32Array(prompts.length + 1);
+    let nextAttachment = prompts.length;
+    for (let index = prompts.length - 1; index >= 0; index -= 1) {
+      if (prompts[index]!.attachmentParts?.length) {
+        nextAttachment = index;
+      }
+      nextAttachmentFrom[index] = nextAttachment;
+    }
+    nextAttachmentFrom[prompts.length] = prompts.length;
+    for (let index = 0; index < prompts.length; index += 1) {
+      const prompt = prompts[index]!;
+      const bucket = indexesByDigest.get(prompt.textDigest);
+      if (bucket) {
+        bucket.push(index);
+      } else {
+        indexesByDigest.set(prompt.textDigest, [index]);
+      }
+      if (prompt.attachmentParts?.length) {
+        const attachmentBucket = attachmentIndexesByDigest.get(prompt.textDigest);
+        if (attachmentBucket) {
+          attachmentBucket.push(index);
+        } else {
+          attachmentIndexesByDigest.set(prompt.textDigest, [index]);
+        }
+      }
+    }
     this.providerPromptReplay = {
       prompts,
       steeredTurns: new Set(prompts.filter((prompt) => prompt.steerMessageId).map((prompt) => prompt.turnId)),
       nextIndex: 0,
       attachmentNextIndex: 0,
+      indexesByDigest,
+      attachmentIndexesByDigest,
+      nextAttachmentFrom,
     };
     this.pendingUserImageAlt = undefined;
     this.pendingUserImageAlts = [];
@@ -431,8 +497,54 @@ export class AcpSessionReplayNormalizer {
     this.absorbedProviderImages.clear();
     this.overlayImageParts.clear();
     this.matchedImageAnnotations.clear();
+    if (completedAt !== undefined) {
+      this.clampNonMonotonicTimestamps();
+    }
     if (this.currentTurnId && completedAt !== undefined) {
       this.recordTurnFinished(this.currentTurnId, completedAt);
+    }
+  }
+
+  private clampNonMonotonicTimestamps(): void {
+    let minFollowingCreatedAt: number | undefined;
+    let clampedMessageIds: Map<string, number> | undefined;
+    for (let index = this.entries.length - 1; index >= 0; index -= 1) {
+      const entry = this.entries[index]!;
+      const createdAt = entry.createdAt;
+      if (typeof createdAt !== "number") {
+        continue;
+      }
+      if (minFollowingCreatedAt !== undefined && createdAt > minFollowingCreatedAt) {
+        this.entries[index] = {
+          ...entry,
+          createdAt: minFollowingCreatedAt,
+        };
+        if (entry.type === "message") {
+          clampedMessageIds ??= new Map<string, number>();
+          clampedMessageIds.set(entry.id, minFollowingCreatedAt);
+        }
+      } else {
+        minFollowingCreatedAt = createdAt;
+      }
+    }
+    if (
+      minFollowingCreatedAt !== undefined
+      && this.currentTurnStartedAt !== undefined
+      && this.currentTurnStartedAt > minFollowingCreatedAt
+    ) {
+      this.currentTurnStartedAt = minFollowingCreatedAt;
+    }
+    if (clampedMessageIds) {
+      for (let index = 0; index < this.messages.length; index += 1) {
+        const message = this.messages[index]!;
+        const clampedAt = clampedMessageIds.get(message.id);
+        if (clampedAt !== undefined) {
+          this.messages[index] = {
+            ...message,
+            createdAt: clampedAt,
+          };
+        }
+      }
     }
   }
 
@@ -1040,9 +1152,10 @@ export class AcpSessionReplayNormalizer {
     const combinedText = `${lastEntry.text}\n${text}`;
     const combinedDigest = acpReplayPromptTextDigest(combinedText);
     const startIndex = Math.min(replay.nextIndex, replay.attachmentNextIndex);
-    const matchesCombined = replay.prompts
-      .slice(startIndex)
-      .some((prompt) => prompt.textDigest === combinedDigest);
+    const matchingIndexes = replay.indexesByDigest.get(combinedDigest);
+    const matchesCombined =
+      matchingIndexes !== undefined
+      && matchingIndexes[matchingIndexes.length - 1]! >= startIndex;
     if (!matchesCombined) {
       return false;
     }
@@ -1299,28 +1412,28 @@ export class AcpSessionReplayNormalizer {
       return undefined;
     }
     const textDigest = acpReplayPromptTextDigest(text);
-    for (let index = replay.attachmentNextIndex; index < replay.prompts.length; index += 1) {
-      const candidate = replay.prompts[index]!;
-      if (candidate.textDigest !== textDigest) {
-        if (candidate.attachmentParts?.length) {
-          break;
-        }
-        continue;
-      }
-      if (!candidate.attachmentParts?.length) {
-        replay.attachmentNextIndex = index + 1;
-        return undefined;
-      }
-      const allImagesUnnamed =
-        candidate.attachmentParts.some((part) => part.type === "image")
-        && candidate.attachmentParts.every((part) => part.type !== "image" || !part.alt);
-      if (!allImagesUnnamed) {
-        return undefined;
-      }
-      replay.attachmentNextIndex = index + 1;
-      return candidate.attachmentParts;
+    const matchingIndexes = replay.indexesByDigest.get(textDigest);
+    if (!matchingIndexes) {
+      return undefined;
     }
-    return undefined;
+    const stopIndex = replay.nextAttachmentFrom[replay.attachmentNextIndex]!;
+    const matchIndex = firstIndexAtOrAfter(matchingIndexes, replay.attachmentNextIndex);
+    if (matchIndex === undefined || matchIndex > stopIndex) {
+      return undefined;
+    }
+    const candidate = replay.prompts[matchIndex]!;
+    if (!candidate.attachmentParts?.length) {
+      replay.attachmentNextIndex = matchIndex + 1;
+      return undefined;
+    }
+    const allImagesUnnamed =
+      candidate.attachmentParts.some((part) => part.type === "image")
+      && candidate.attachmentParts.every((part) => part.type !== "image" || !part.alt);
+    if (!allImagesUnnamed) {
+      return undefined;
+    }
+    replay.attachmentNextIndex = matchIndex + 1;
+    return candidate.attachmentParts;
   }
 
   private consumeAttachmentReplayPartsForUserMessage(
@@ -1332,9 +1445,15 @@ export class AcpSessionReplayNormalizer {
       return undefined;
     }
     const textDigest = acpReplayPromptTextDigest(text);
-    for (let index = replay.attachmentNextIndex; index < replay.prompts.length; index += 1) {
+    const matchingIndexes = replay.attachmentIndexesByDigest.get(textDigest);
+    if (!matchingIndexes) {
+      return undefined;
+    }
+    let pos = lowerBound(matchingIndexes, replay.attachmentNextIndex);
+    for (; pos < matchingIndexes.length; pos += 1) {
+      const index = matchingIndexes[pos]!;
       const prompt = replay.prompts[index]!;
-      if (!prompt.attachmentParts?.length || prompt.textDigest !== textDigest) {
+      if (!prompt.attachmentParts?.length) {
         continue;
       }
       if (fileName) {
@@ -1361,9 +1480,15 @@ export class AcpSessionReplayNormalizer {
       return undefined;
     }
     const emptyDigest = acpReplayPromptTextDigest("");
-    for (let index = replay.attachmentNextIndex; index < replay.prompts.length; index += 1) {
+    const matchingIndexes = replay.attachmentIndexesByDigest.get(emptyDigest);
+    if (!matchingIndexes) {
+      return undefined;
+    }
+    let pos = lowerBound(matchingIndexes, replay.attachmentNextIndex);
+    for (; pos < matchingIndexes.length; pos += 1) {
+      const index = matchingIndexes[pos]!;
       const prompt = replay.prompts[index]!;
-      if (!prompt.attachmentParts?.length || prompt.textDigest !== emptyDigest) {
+      if (!prompt.attachmentParts?.length) {
         continue;
       }
       if (fileName) {
@@ -2069,6 +2194,28 @@ export class AcpSessionReplayNormalizer {
       };
     }
   }
+}
+
+function lowerBound(sorted: readonly number[], target: number): number {
+  let low = 0;
+  let high = sorted.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (sorted[mid]! < target) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
+}
+
+function firstIndexAtOrAfter(
+  sorted: readonly number[],
+  target: number,
+): number | undefined {
+  const pos = lowerBound(sorted, target);
+  return pos < sorted.length ? sorted[pos] : undefined;
 }
 
 function appendAcpTranscriptChunk(

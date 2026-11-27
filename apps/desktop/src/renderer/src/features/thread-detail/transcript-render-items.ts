@@ -124,15 +124,28 @@ export function buildTranscriptRenderItems(params: {
   return renderWithGroups(entries, fallbackGroups);
 }
 
+const antigravityEditGroupCache = new WeakMap<
+  AppServerThreadActivityEntry,
+  {
+    run: AppServerThreadActivityEntry[];
+    grouped: AppServerThreadActivityEntry;
+  }
+>();
+
 /**
  * Antigravity replays one tool row per edit. Fold neighboring successful or
  * active edits like a batched tool activity, keeping each call's exact patch.
  * The original replay entries still own ordering, ids, and diff references.
+ *
+ * Unchanged multi-edit runs reuse their cached folded entry by object identity
+ * so streaming deltas on the active turn do not replace historical row
+ * references or invalidate memoized workPhaseGroups.
  */
 function groupAntigravityEdits(
   entries: AppServerThreadEntry[],
   alwaysVisibleEntryIds: ReadonlySet<string> | undefined,
 ): AppServerThreadEntry[] {
+  let changed = false;
   const result: AppServerThreadEntry[] = [];
   let run: AppServerThreadActivityEntry[] = [];
   const flush = () => {
@@ -141,15 +154,27 @@ function groupAntigravityEdits(
     if (run.length === 1) {
       result.push(first);
     } else {
-      const details = run.flatMap((entry) => entry.details);
-      result.push({
-        ...first,
-        summary: formatFileEditActivitySummary(details),
-        status: run.some((entry) => entry.status === "in_progress")
-          ? "in_progress"
-          : run.at(-1)?.status,
-        details,
-      });
+      changed = true;
+      const cached = antigravityEditGroupCache.get(first);
+      if (
+        cached
+        && cached.run.length === run.length
+        && cached.run.every((entry, index) => entry === run[index])
+      ) {
+        result.push(cached.grouped);
+      } else {
+        const details = run.flatMap((entry) => entry.details);
+        const grouped: AppServerThreadActivityEntry = {
+          ...first,
+          summary: formatFileEditActivitySummary(details),
+          status: run.some((entry) => entry.status === "in_progress")
+            ? "in_progress"
+            : run.at(-1)?.status,
+          details,
+        };
+        antigravityEditGroupCache.set(first, { run, grouped });
+        result.push(grouped);
+      }
     }
     run = [];
   };
@@ -167,7 +192,7 @@ function groupAntigravityEdits(
     run.push(entry);
   }
   flush();
-  return result;
+  return changed ? result : entries;
 }
 
 type RenderGroup = {

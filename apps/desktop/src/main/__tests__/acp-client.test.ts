@@ -4017,6 +4017,97 @@ describe("AcpAgentClient", () => {
     ).toHaveLength(5);
   });
 
+  it("anchors untimestamped session/load updates to historical provider timestamps instead of reload time", async () => {
+    const edit1Ts = Date.parse("2026-11-25T17:17:00Z");
+    const edit2Ts = Date.parse("2026-11-25T17:20:00Z");
+    const reloadTs = Date.parse("2026-11-26T01:06:00Z");
+
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true },
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      transport: {
+        request: async (method, params) => {
+          const result = await transport.request(method, params);
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-mixed-ts", {
+              sessionUpdate: "user_message_chunk",
+              content: { type: "text", text: "Check submodule counts" },
+            });
+            transport.emitSessionUpdate("session-mixed-ts", {
+              sessionUpdate: "tool_call",
+              toolCallId: "t1",
+              title: "Edited 1 file",
+              status: "completed",
+              timestamp: edit1Ts,
+            });
+            transport.emitSessionUpdate("session-mixed-ts", {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "Tests passed; waiting for lint." },
+            });
+            transport.emitSessionUpdate("session-mixed-ts", {
+              sessionUpdate: "tool_call",
+              toolCallId: "t2",
+              title: "Edited 1 file",
+              status: "completed",
+              timestamp: edit2Ts,
+            });
+            transport.emitSessionUpdate("session-mixed-ts", {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "All done." },
+            });
+          }
+          return result;
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => reloadTs,
+    });
+    store.upsertSession({
+      backendId: "acp:antigravity",
+      sessionId: "session-mixed-ts",
+      title: "Mixed timestamps",
+      cwd: "/repo",
+      createdAt: edit1Ts,
+      updatedAt: edit2Ts,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession(
+      store.getSession("acp:antigravity", "session-mixed-ts")!,
+    );
+
+    expect(
+      replay.messages.map((message) => ({
+        role: message.role,
+        text: message.text,
+        createdAt: message.createdAt,
+      })),
+    ).toEqual([
+      { role: "user", text: "Check submodule counts", createdAt: edit1Ts },
+      { role: "assistant", text: "Tests passed; waiting for lint.", createdAt: edit1Ts },
+      { role: "assistant", text: "All done.", createdAt: edit2Ts },
+    ]);
+    expect(replay.entries.every((entry) => entry.createdAt !== reloadTs)).toBe(true);
+    expect(replay.entries.map((entry) => entry.createdAt)).toEqual([
+      edit1Ts,
+      edit1Ts,
+      edit1Ts,
+      edit2Ts,
+      edit2Ts,
+    ]);
+  });
+
   it("preserves newer metadata activity over complete local rollout history", async () => {
     const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
     rolloutStore.appendUpdate({
