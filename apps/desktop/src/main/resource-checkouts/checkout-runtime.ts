@@ -117,6 +117,8 @@ export async function initializeResourceCheckouts(
         isViewer: false, onViewerMachine: Boolean(machineId), observedAt: marker.heartbeatAt, freshness: "fresh",
         note: "Live profile on this PwrAgent root",
       }))),
+    checkoutPeers: (known) => federation.resourceCheckoutPeers(known),
+    peerConnected: (id) => federation.resourceCheckoutPeerConnected(id),
     requestPeer: (id, request) => federation.requestResourceCheckout(id, request),
     threadTitle: (thread) => thread.instanceId === undefined || thread.instanceId === instanceId
       ? localThreadTitle?.(thread)

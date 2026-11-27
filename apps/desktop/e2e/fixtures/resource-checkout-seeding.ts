@@ -21,6 +21,7 @@ import type { ResourceCondition } from "@pwragent/shared/contracts/resource-chec
 import { readMachineCheckoutEvidence } from "../../src/main/resource-checkouts/checkout-machine-evidence";
 import { readExternalCheckoutBindings } from "../../src/main/resource-checkouts/checkout-configuration";
 import { DesktopResourceCheckoutService } from "../../src/main/resource-checkouts/resource-checkout-service";
+import { FederationStore } from "@pwragent/sqlite-storage/federation-store";
 import { StateDb } from "../../src/main/state/state-db";
 import {
   openFederationCheckoutStorage,
@@ -89,6 +90,7 @@ function auditService(seed: ResourcesAuditSeed, allowChangedDefinitions = false)
       machineStore,
       machineCpuCount: cpus().length,
       externalStore,
+      checkoutPeers: () => new Map([[AUDIT_PEER_INSTANCE_ID, "disconnected"]]),
       bindings: readExternalCheckoutBindings(seed.root).bindings,
       bootId: seed.bootId,
       requestPeer: () => Promise.reject(new Error("The audit has no Federation peers.")),
@@ -142,6 +144,10 @@ export async function seedResourcesAuditState(homeRoot: string): Promise<Resourc
   await writeFile(path.join(root, "machine-id"), `${machineId}\n`);
   const stateDb = StateDb.open(stateDbPathForHomeRoot(homeRoot));
   try {
+    new FederationStore(stateDb).upsertPeer({
+      peer: { id: AUDIT_PEER_INSTANCE_ID, label: "Audit peer", role: "client", status: "disconnected", capabilities: [] },
+      updatedAt: Date.now(),
+    });
     stateDb.setMeta("federation_instance_id", AUDIT_INSTANCE_ID);
   } finally {
     stateDb.close();
@@ -154,7 +160,7 @@ export async function seedResourcesAuditState(homeRoot: string): Promise<Resourc
         ...common,
         canonicalKey: RESOURCES_AUDIT_POOL.resourceId, displayName: RESOURCES_AUDIT_POOL.displayName,
         kindLabel: "GPU slots", capacity: 4,
-        authorityInstanceId: AUDIT_INSTANCE_ID, authorityMachineId: machineId, allowedInstances: [],
+        authorityInstanceId: AUDIT_INSTANCE_ID, authorityMachineId: machineId,
         instructions: "Render jobs only. Free slots before ending the turn.",
       },
       {
@@ -162,20 +168,18 @@ export async function seedResourcesAuditState(homeRoot: string): Promise<Resourc
         canonicalKey: RESOURCES_AUDIT_UNREACHABLE.resourceId, displayName: RESOURCES_AUDIT_UNREACHABLE.displayName,
         kindLabel: "Test machine", capacity: 1,
         authorityInstanceId: AUDIT_PEER_INSTANCE_ID, authorityMachineId: otherMachineId,
-        allowedInstances: [AUDIT_INSTANCE_ID],
       },
       {
         ...common,
         canonicalKey: RESOURCES_AUDIT_UNRESOLVED.resourceId, displayName: RESOURCES_AUDIT_UNRESOLVED.displayName,
         kindLabel: "Bench instrument", capacity: 1,
         authorityInstanceId: AUDIT_INSTANCE_ID, authorityMachineId: otherMachineId,
-        allowedInstances: [AUDIT_INSTANCE_ID],
       },
       {
         ...common,
         canonicalKey: RESOURCES_AUDIT_CHANGED.resourceId, displayName: RESOURCES_AUDIT_CHANGED.displayName,
         kindLabel: "Bench instrument", capacity: 1,
-        authorityInstanceId: AUDIT_INSTANCE_ID, authorityMachineId: machineId, allowedInstances: [],
+        authorityInstanceId: AUDIT_INSTANCE_ID, authorityMachineId: machineId,
       },
     ],
   }));

@@ -66,6 +66,7 @@ import type { FederationGatewayConnection } from "../federation/federation-trans
 import { replacementPages } from "../federation/federation-replacement-pages";
 import { FEDERATION_EVENT_STREAM_METHOD } from "../federation/federation-event-stream";
 import { appendPeerDependents, collectPeerActiveDependencies } from "../app-server/thread-dependencies-federation";
+import * as containment from "../member-containment";
 import * as appState from "../state/app-state";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
 import * as directoryRegistration from "../app-server/directory-registration-service";
@@ -87,7 +88,7 @@ type RuntimeHarness = {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ) => Promise<void>;
-  applyPeerDirectory: (envelope: FederationProtocolEnvelope) => boolean;
+  applyPeerDirectory: (envelope: FederationProtocolEnvelope, sourcePeerId?: string) => boolean;
   applyEventSubscription: (
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
@@ -1327,6 +1328,40 @@ describe("DesktopFederationRuntime", () => {
       delete process.env[SQLITE_WRITE_METRICS_ENV];
       await disposeDesktopFederationRuntime();
     }
+  });
+
+  it("requires the current gateway's membership and negotiated checkout version for a relayed owner", () => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    harness.localInstanceId = "viewer";
+    harness.gatewayInstanceId = "gateway";
+    harness.store = () => ({ getPeer: () => undefined, listPeers: () => [] });
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    harness.router.registerConnection({ ...createConnection({ peerId: "gateway" }), resourceCheckoutProtocol: 2 });
+    const role = vi.spyOn(containment, "localMemberRole").mockReturnValue("full");
+    const announce = (source: string, peer: Partial<FederationPeerSummary>) => {
+      harness.applyPeerDirectory({ id: "directory", kind: "notification", method: "federation.peerDirectoryPage",
+        sourceInstanceId: source, targetInstanceId: "viewer", createdAt: 1, protocolVersion: 1,
+        params: replacementPages([{ id: "owner", role: "client", status: "connected", capabilities: [], ...peer }])[0],
+      }, source);
+    };
+    try {
+      announce("downstream", { resourceCheckoutProtocol: 2 });
+      expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(false);
+      announce("gateway", {});
+      expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(false);
+      announce("gateway", { resourceCheckoutProtocol: 2, permissionRole: "full" });
+      expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(true);
+      expect(runtime.resourceCheckoutPeers().get("owner")).toBe("connected");
+      role.mockReturnValue("contained");
+      expect(runtime.resourceCheckoutPeers().size).toBe(0);
+      expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(false);
+      role.mockReturnValue("full");
+      announce("gateway", { resourceCheckoutProtocol: 2, permissionRole: "contained" });
+      expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(false);
+      announce("gateway", { resourceCheckoutProtocol: 2, status: "revoked" });
+      expect(runtime.resourceCheckoutPeers().has("owner")).toBe(false);
+    } finally { role.mockRestore(); }
   });
 
   it("records gateway-advertised peers for client instance health and opening", () => {

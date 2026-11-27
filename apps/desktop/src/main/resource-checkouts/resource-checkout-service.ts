@@ -10,7 +10,7 @@ import type {
 } from "@pwragent/owner-core/resource-checkout-storage";
 import {
   RESOURCE_CHECKOUTS_CONTRACT_VERSION, type ResourceAuthority, type ResourceCheckoutActionResult,
-  type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceDomain, type ResourceAdvertisement, type ResourceCheckoutActionRequest,
+  type ResourceCheckoutsSnapshot, type ResourceViewer, type ResourceAdvertisement, type ResourceCheckoutActionRequest,
   type ResourceHolder, type ResourceOwnershipConflict, type ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
@@ -21,8 +21,9 @@ import { labelResourceThreads, projectCheckoutDomain, UNEXPLAINED_OWNERSHIP_CONF
 import { misboundAuthorityConflict, OWNERSHIP_CONFLICTS } from "./checkout-ownership";
 import type { MachineCpuBudgetPublisher } from "./machine-cpu-budget-file";
 import { ResourceUsageRecorder } from "./checkout-usage-history";
+import { CheckoutPeerCatalog, catalogPage, type CheckoutPeers, type CheckoutView as ExternalView, type CheckoutRoute } from "./checkout-peer-catalog";
 
-export const CHECKOUT_FEDERATION_METHOD = "resourceCheckouts.authority.v1";
+export const CHECKOUT_FEDERATION_METHOD = "resourceCheckouts.authority.v2";
 const REFRESH_MS = 2_000;
 
 type Store = CheckoutStore & { close(): void };
@@ -43,6 +44,8 @@ type Options = {
   /** Why no Federation store was passed, for the operator. */
   externalUnresolved?: ResourceOwnershipConflict;
   bindings: ExternalBinding[];
+  checkoutPeers?: (known: Iterable<string>) => CheckoutPeers;
+  peerConnected?: (instanceId: string) => boolean;
   allowAgentDrafts?: boolean;
   approvedLabCheckouts?: ReadonlyMap<string, ApprovedLabCheckout>;
   bootId?: string;
@@ -64,7 +67,6 @@ type Options = {
 
 type CheckoutDelegation = Extract<ResourceCheckoutActionRequest, { kind: "delegate_execution" }>;
 type OwnershipAction = Extract<ResourceCheckoutActionRequest, { kind: "resolve_ownership" }>;
-type ExternalView = { authority: ResourceAuthority; resource: ResourceDomain };
 
 export class DesktopResourceCheckoutService {
   private readonly now: () => number;
@@ -78,7 +80,11 @@ export class DesktopResourceCheckoutService {
   private readonly operator: CheckoutActor;
   private readonly listeners = new Set<(revision: number) => void>();
   private readonly usage = new ResourceUsageRecorder();
-  private readonly remoteViews = new Map<string, ExternalView>();
+  private readonly catalog: CheckoutPeerCatalog;
+  private catalogGeneration = randomUUID();
+  private readonly localBindings: Map<string, ExternalBinding>;
+  private readonly legacyClientBindings: ExternalBinding[];
+  private readonly publications: ExternalBinding[] = [];
   private readonly threadsWithCheckouts = new Set<string>();
   private readonly timer: NodeJS.Timeout;
   private readonly shutdown = new AbortController();
@@ -101,6 +107,7 @@ export class DesktopResourceCheckoutService {
   private machineConflictExplanation: ResourceOwnershipConflict = UNEXPLAINED_OWNERSHIP_CONFLICT;
   /** The setting read failed last time; warn once per failure streak. */
   private agentToolsReadFailing = false;
+  private peerRosterReadFailing = false;
   private lastAdvertisementScan = -Infinity;
   private localAdvertisements: ResourceAdvertisement[] = [];
 
@@ -109,6 +116,11 @@ export class DesktopResourceCheckoutService {
     const initialWallClock = Date.now();
     const initialMonotonicClock = performance.now();
     this.now = options.now ?? (() => Math.floor(Math.max(Date.now(), initialWallClock + performance.now() - initialMonotonicClock)));
+    this.catalog = new CheckoutPeerCatalog((known) => this.readPeerRoster(known), options.requestPeer, this.now);
+    // Legacy copies on clients are readable but cannot publish or supply a destination.
+    this.localBindings = new Map(bindings.filter((b) => b.authorityInstanceId === viewer.instanceId)
+      .map((b) => [b.definition.resourceId, b]));
+    this.legacyClientBindings = bindings.filter((b) => b.authorityInstanceId !== viewer.instanceId);
     this.operator = this.operatorFor(viewer.instanceId);
     const machineKey = `machine:${viewer.machineId ?? "unresolved"}:cpu`;
     this.machineDefinition = {
@@ -140,6 +152,7 @@ export class DesktopResourceCheckoutService {
         try {
           this.external.ensure(binding.definition);
           this.hosted.add(binding.definition.resourceId);
+          this.publications.push(binding);
         } catch (error) {
           if (error instanceof CheckoutDefinitionConflictError) this.changedDefinitions.add(binding.definition.resourceId);
           options.warn(error);
@@ -195,8 +208,10 @@ export class DesktopResourceCheckoutService {
   }
 
   isCountedResource(resourceId: string): boolean {
-    const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === resourceId);
+    const binding = this.localBindings.get(resourceId);
     if (binding) return binding.definition.counted;
+    const remote = this.catalog.current().get(resourceId);
+    if (remote) return remote.view.resource.sharing.mode === "counted";
     if (resourceId === this.machineDefinition.resourceId) return this.machineDefinition.counted;
     return this.machine?.records(resourceId)[0]?.definition.counted ?? false;
   }
@@ -287,23 +302,35 @@ export class DesktopResourceCheckoutService {
     return UNEXPLAINED_OWNERSHIP_CONFLICT;
   }
 
-  private readView(actor: CheckoutActor, remotes: ReadonlyMap<string, ExternalView>): ExternalView[] {
-    const bindings = this.options.bindings.filter((binding) => this.isLocalAuthority(binding)
-      || binding.allowedInstances.includes(this.options.viewer.instanceId));
-    const external = new Set(bindings.map(({ definition }) => definition.canonicalKey));
-    const local = this.localMachineView(actor).filter(({ resource }) => !external.has(resource.canonicalKey));
-    for (const binding of bindings) {
+  private readView(actor: CheckoutActor, remotes: ReadonlyMap<string, CheckoutRoute>): ExternalView[] {
+    const external: ExternalView[] = [];
+    for (const binding of this.localBindings.values()) {
       try {
-        local.push(remotes.get(binding.definition.resourceId) ?? this.externalView(binding, actor));
+        external.push(this.externalView(binding, actor));
       } catch (error) {
         this.options.warn(error);
         const authority = this.authorityView(binding.definition, "federation_coordinator", "unreachable");
-        local.push({ authority, resource: projectCheckoutDomain({
+        external.push({ authority, resource: projectCheckoutDomain({
           definition: binding.definition, queue: [], grants: [], generation: 0,
         }, actor, authority) });
       }
     }
-    return local.map((view) => this.labelView(view));
+    for (const [id, { view }] of remotes) {
+      if (!this.localBindings.has(id)) external.push(view);
+    }
+    if (actor === this.operator && this.legacyClientBindings.length) {
+      // Preserve the old offline inspector for an enrolled, disconnected full peer. A copied
+      // file never supplies an actionable route, and a connected owner replaces it entirely.
+      const peers = this.readPeerRoster(this.legacyClientBindings.map((binding) => binding.authorityInstanceId));
+      for (const binding of this.legacyClientBindings) {
+        if (!remotes.has(binding.definition.resourceId) && peers.get(binding.authorityInstanceId) === "disconnected") {
+          external.push(this.externalView(binding, actor));
+        }
+      }
+    }
+    const keys = new Set(external.map(({ resource }) => resource.canonicalKey));
+    const local = this.localMachineView(actor).filter(({ resource }) => !keys.has(resource.canonicalKey));
+    return [...local, ...external].map((view) => this.labelView(view));
   }
 
   read(): ResourceCheckoutsSnapshot {
@@ -324,7 +351,8 @@ export class DesktopResourceCheckoutService {
    * next revision, which comes only when a held or waiting value changes.
    */
   private observe(): Pick<ResourceCheckoutsSnapshot, "authorities" | "resources" | "registerGate" | "agentTools" | "observedAt"> {
-    const views = this.readView(this.operator, this.remoteViews);
+    const remoteRoutes = this.catalog.current();
+    const views = this.readView(this.operator, remoteRoutes);
     const authorities = [...new Map(views.map(({ authority }) => [authority.authorityId, authority])).values()];
     const resources = views.map(({ resource }) => resource);
     const registerGate = this.machineConflict
@@ -332,7 +360,7 @@ export class DesktopResourceCheckoutService {
       : { allowed: true as const };
     const agentTools = this.readAgentTools();
     const observedAt = this.now();
-    this.usage.observe(resources, observedAt);
+    this.usage.observe(resources, observedAt, remoteRoutes);
     const machineResource = resources.find((resource) => resource.resourceId === this.machineDefinition.resourceId);
     this.options.machineCpuBudgetPublisher?.sync(machineResource, observedAt);
     // The setting is in the fingerprint, so turning it on or off publishes a
@@ -393,39 +421,30 @@ export class DesktopResourceCheckoutService {
   }
 
   private async refreshRemoteViews(): Promise<void> {
-    const bindings = this.options.bindings.filter((binding) => binding.authorityInstanceId !== this.options.viewer.instanceId
-      && binding.allowedInstances.includes(this.options.viewer.instanceId));
-    await Promise.all(bindings.map(async (binding) => {
-      const id = binding.definition.resourceId;
-      const latest = await this.readPeerView(binding);
-      if (this.closed) return;
-      if (latest) {
-        this.remoteViews.set(id, latest);
-      } else {
-        const old = this.remoteViews.get(id);
-        if (old) this.remoteViews.set(id, {
-          authority: { ...old.authority, status: "unreachable" },
-          resource: { ...old.resource, condition: "unreachable", actions: {},
-            allocations: old.resource.allocations.map((grant) => ({ ...grant, lastKnown: true })) },
-        });
-      }
-    }));
+    await this.catalog.refresh();
     this.poll();
   }
 
-  private async readPeerView(binding: ExternalBinding, actor?: CheckoutActor): Promise<ExternalView | undefined> {
-    const id = binding.definition.resourceId;
+  private async refreshPeerAfterAction(owner: string): Promise<void> {
+    if (this.closing || this.closed) return;
+    await this.catalog.refresh(undefined, owner);
+    this.poll();
+  }
+
+  private readPeerRoster(known: Iterable<string>): CheckoutPeers {
     try {
-      const view = await this.options.requestPeer<ExternalView>(binding.authorityInstanceId, {
-        operation: "read", resourceId: id, epoch: binding.definition.epoch, ...(actor ? { subject: this.subject(actor) } : {}),
-      });
-      if (view.authority.authorityId !== binding.definition.authorityId
-        || view.authority.epoch !== binding.definition.epoch
-        || view.resource.resourceId !== id || view.resource.canonicalKey !== binding.definition.canonicalKey) return undefined;
-      return view;
-    } catch {
-      return undefined;
+      const peers = this.options.checkoutPeers?.(known) ?? new Map();
+      this.peerRosterReadFailing = false;
+      return peers;
+    } catch (error) {
+      if (!this.peerRosterReadFailing) this.options.warn(error);
+      this.peerRosterReadFailing = true;
+      return new Map();
     }
+  }
+
+  private peerConnected(id: string): boolean {
+    return this.options.peerConnected?.(id) ?? this.readPeerRoster([id]).get(id) === "connected";
   }
 
   private subject(actor: CheckoutActor): { backend: AppServerBackendKind; threadId: string } | undefined {
@@ -433,25 +452,19 @@ export class DesktopResourceCheckoutService {
   }
 
   async discover(actor: CheckoutActor): Promise<ExternalView[]> {
-    const remotes = new Map<string, ExternalView>();
-    await Promise.all(this.options.bindings.map(async (binding) => {
-      if (binding.authorityInstanceId !== this.options.viewer.instanceId
-        && binding.allowedInstances.includes(this.options.viewer.instanceId)) {
-        const view = await this.readPeerView(binding, actor);
-        if (view) remotes.set(binding.definition.resourceId, view);
-      }
-    }));
-    return this.readView(actor, remotes);
+    await this.refreshPeers();
+    return this.readView(actor, await this.catalog.refresh(this.subject(actor)));
   }
 
   async status(actor: CheckoutActor, resourceId: string, key: string): Promise<CheckoutStatus | undefined> {
-    const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === resourceId);
-    if (binding && !this.isLocalAuthority(binding)) {
-      if (this.isMisbound(binding) || !binding.allowedInstances.includes(this.options.viewer.instanceId)) return undefined;
-      const response = await this.options.requestPeer<CheckoutStatus | null>(binding.authorityInstanceId, {
-        operation: "status", resourceId, key, epoch: binding.definition.epoch, subject: this.subject(actor),
+    const binding = this.localBindings.get(resourceId);
+    const remote = !binding && this.catalog.current().get(resourceId);
+    if (remote) {
+      if (!this.peerConnected(remote.owner)) return undefined;
+      const response = await this.catalog.request<CheckoutStatus | null>(remote.owner, {
+        operation: "status", resourceId, key, epoch: remote.view.authority.epoch, subject: this.subject(actor),
       });
-      return response ?? undefined;
+      return this.peerConnected(remote.owner) ? response ?? undefined : undefined;
     }
     if (binding) return this.hosted.has(resourceId) ? this.external?.status(actor, key, resourceId) : undefined;
     if (this.machineConflict) return undefined;
@@ -461,6 +474,7 @@ export class DesktopResourceCheckoutService {
   }
 
   async perform(value: unknown, actor = this.operator, handoff = false): Promise<ResourceCheckoutActionResult> {
+    let remoteOwner: string | undefined;
     let action;
     try {
       action = parseCheckoutAction(value);
@@ -474,7 +488,7 @@ export class DesktopResourceCheckoutService {
       if (action.kind === "register_definition") {
         if (!this.machine || this.machineConflict) return rejectCheckout("ownership_unresolved", "Machine ownership is unresolved.");
         const { draft } = action;
-        if (this.options.bindings.some(({ definition }) => definition.canonicalKey === draft.canonicalKey)) {
+        if (this.localBindings.has(draft.canonicalKey) || this.catalog.current().has(draft.canonicalKey)) {
           return rejectCheckout("conflict", "This canonical key has a configured Federation authority.");
         }
         const owner = this.options.viewer.instanceId;
@@ -490,27 +504,26 @@ export class DesktopResourceCheckoutService {
           } } : {}),
         } });
       }
-      const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === action.resourceId);
+      const binding = this.localBindings.get(action.resourceId);
+      const remote = !binding && this.catalog.current().get(action.resourceId);
       const executor = action.kind === "delegate_execution"
-        ? this.checkoutExecutor(action.executor, binding)
+        ? this.checkoutExecutor(action.executor, !!binding || !!remote)
         : undefined;
       if (action.kind === "delegate_execution" && !executor) {
-        return rejectCheckout("not_authorized", "The requested executor is outside this resource's authorized instances.");
+        return rejectCheckout("not_authorized", "The executor must belong to an authorized instance.");
       }
       if (binding) {
-        if (this.isLocalAuthority(binding)) {
-          if (!this.hosted.has(action.resourceId)) return rejectCheckout("ownership_unresolved", "The configured authority could not confirm this definition.");
-          return this.performWithExecutor(this.external!, actor, action, executor);
+        if (this.isMisbound(binding)) return rejectCheckout("ownership_unresolved", misboundAuthorityConflict(binding.authorityMachineId).reason);
+        if (!this.hosted.has(action.resourceId)) return rejectCheckout("ownership_unresolved", "The configured authority could not confirm this definition.");
+        return this.performWithExecutor(this.external!, actor, action, executor);
+      }
+      if (remote) {
+        if (!this.peerConnected(remote.owner) || remote.view.authority.status === "unreachable") {
+          return rejectCheckout("authority_unreachable", "The Federation authority is unreachable.");
         }
-        if (this.isMisbound(binding)) {
-          return rejectCheckout("ownership_unresolved", misboundAuthorityConflict(binding.authorityMachineId).reason);
-        }
-        if (!binding.allowedInstances.includes(this.options.viewer.instanceId)) return rejectCheckout("not_authorized", "This instance cannot use the resource.");
-        if (this.remoteViews.get(action.resourceId)?.authority.status === "unreachable") {
-          return rejectCheckout("authority_unreachable", "The configured Federation authority is unreachable.");
-        }
-        return await this.options.requestPeer(binding.authorityInstanceId, {
-          operation: "perform", resourceId: action.resourceId, action, epoch: binding.definition.epoch, subject: this.subject(actor),
+        remoteOwner = remote.owner;
+        return await this.catalog.request(remote.owner, {
+          operation: "perform", resourceId: action.resourceId, action, epoch: remote.view.authority.epoch, subject: this.subject(actor),
         });
       }
       if (!this.machine || this.machineConflict) return rejectCheckout("ownership_unresolved", "Machine ownership is unresolved.");
@@ -526,7 +539,7 @@ export class DesktopResourceCheckoutService {
       return { outcome: "unknown", message: "The authority did not confirm the outcome. Check status or retry with the same key." };
     } finally {
       this.poll();
-      void this.refreshPeers();
+      if (remoteOwner) await this.refreshPeerAfterAction(remoteOwner);
     }
   }
 
@@ -534,14 +547,15 @@ export class DesktopResourceCheckoutService {
     actor: CheckoutActor, token: CheckoutToken, cost: number | "recover", signal = this.shutdown.signal,
   ): Promise<"rejected" | "released" | "recovery_required" | { outcome: "started" | "recovering"; jobId: string }> {
     if (this.closing || this.closed || signal.aborted) return "rejected";
-    const binding = this.options.bindings.find(({ definition }) => definition.resourceId === token.resourceId);
-    if (!binding || binding.definition.epoch !== token.epoch) return "rejected";
-    if (!this.isLocalAuthority(binding)) {
-      if (this.isMisbound(binding) || !binding.allowedInstances.includes(this.options.viewer.instanceId)) return "rejected";
-      return await this.options.requestPeer(binding.authorityInstanceId, {
+    const binding = this.localBindings.get(token.resourceId);
+    if (!binding) {
+      const remote = this.catalog.current().get(token.resourceId);
+      if (!remote || remote.view.authority.epoch !== token.epoch || !this.peerConnected(remote.owner)) return "rejected";
+      return await this.catalog.request(remote.owner, {
         operation: "lab_execution", resourceId: token.resourceId, epoch: token.epoch, token, cost, subject: this.subject(actor),
       });
     }
+    if (!this.isLocalAuthority(binding) || binding.definition.epoch !== token.epoch) return "rejected";
     const approved = this.options.approvedLabCheckouts?.get(token.resourceId);
     if (approved?.resourceId !== token.resourceId || !this.external || !this.hosted.has(token.resourceId)) return "rejected";
     const authority = this.external;
@@ -595,7 +609,7 @@ export class DesktopResourceCheckoutService {
     if (!actor.manage || actor.holder.kind !== "operator") {
       return rejectCheckout("not_authorized", "Only this instance's operator can resolve ownership.");
     }
-    const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === action.resourceId);
+    const binding = this.localBindings.get(action.resourceId);
     if (binding) {
       const id = binding.definition.resourceId;
       if (!this.isLocalAuthority(binding) || !this.external) return rejectCheckout("not_applicable", this.bindingConflict(binding).remedy);
@@ -605,6 +619,8 @@ export class DesktopResourceCheckoutService {
       if (result.outcome === "accepted") {
         this.changedDefinitions.delete(id);
         this.hosted.add(id);
+        this.publications.push(binding);
+        this.catalogGeneration = randomUUID();
       }
       return result;
     }
@@ -701,11 +717,10 @@ export class DesktopResourceCheckoutService {
 
   private checkoutExecutor(
     executor: CheckoutDelegation["executor"],
-    binding?: ExternalBinding,
+    external: boolean,
   ): CheckoutActor | undefined {
     const { instanceId, backend, threadId } = executor;
-    if (binding ? instanceId !== binding.authorityInstanceId && !binding.allowedInstances.includes(instanceId)
-      : instanceId !== this.options.viewer.instanceId) return undefined;
+    if (instanceId !== this.options.viewer.instanceId && !(external && this.peerConnected(instanceId))) return undefined;
     return this.peerActor(instanceId, { backend, threadId });
   }
 
@@ -772,14 +787,20 @@ export class DesktopResourceCheckoutService {
 
   receivePeer(sourceInstanceId: string, value: unknown): unknown {
     if (this.closing || this.closed) throw new Error("The checkout authority is shutting down.");
+    if (!this.peerConnected(sourceInstanceId) || sourceInstanceId === this.options.viewer.instanceId) {
+      throw new Error("Checkout access requires an authenticated full Federation member.");
+    }
     const request = object(value);
+    const actor = this.peerActor(sourceInstanceId, request.subject);
+    if (request.operation === "catalog") {
+      return catalogPage(this.catalogGeneration, this.publications, request.offset, (binding) => this.labelView(this.externalView(binding, actor)));
+    }
     const id = text(request.resourceId, "resource ID");
-    const binding = this.options.bindings.find((candidate) => candidate.definition.resourceId === id);
-    if (!binding || !this.isLocalAuthority(binding) || !this.hosted.has(id) || !binding.allowedInstances.includes(sourceInstanceId)) {
+    const binding = this.localBindings.get(id);
+    if (!binding || !this.isLocalAuthority(binding) || !this.hosted.has(id)) {
       throw new Error("This owner has no checkout authority available to the authenticated peer for that resource.");
     }
     if (request.epoch !== binding.definition.epoch) throw new Error("The configured authority epoch is stale.");
-    const actor = this.peerActor(sourceInstanceId, request.subject);
     if (request.operation === "read") return this.labelView(this.externalView(binding, actor));
     if (request.operation === "status") return this.external!.status(actor, text(request.key, "request key"), id) ?? null;
     if (request.operation === "lab_execution") {
@@ -792,8 +813,9 @@ export class DesktopResourceCheckoutService {
     }
     if (request.operation !== "perform") throw new Error("Unknown checkout authority operation.");
     const action = parseCheckoutAction(request.action);
+    if (action.kind === "resolve_ownership") return rejectCheckout("not_authorized", "Only the local operator can resolve ownership.");
     if (action.kind === "register_definition" || action.resourceId !== id) throw new Error("The action does not match the authority binding.");
-    const executor = action.kind === "delegate_execution" ? this.checkoutExecutor(action.executor, binding) : undefined;
+    const executor = action.kind === "delegate_execution" ? this.checkoutExecutor(action.executor, true) : undefined;
     if (action.kind === "delegate_execution" && !executor) {
       return rejectCheckout("not_authorized", "The requested executor is outside this resource's authorized instances.");
     }

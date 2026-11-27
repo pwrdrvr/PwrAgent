@@ -184,7 +184,7 @@ export function projectCheckoutDomain(
     }],
     instructions: definition.instructions ?? null,
     policy: {
-      useScope: machine ? "Local profiles" : "Operator-configured instances",
+      useScope: machine ? "Local profiles" : pending ? "Draft owner" : "Full Federation members",
       manageScope: "Operator", maxHoldMs: definition.maxHoldMs,
       renewalRule: "One renewal while no requester is waiting, within the maximum hold.",
       queueOrder: effectiveQueueOrder(definition),

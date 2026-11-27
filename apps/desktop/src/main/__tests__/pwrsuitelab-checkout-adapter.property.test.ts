@@ -153,7 +153,7 @@ describe("PwrSuiteLab checkout adapter", () => {
       },
     };
     const binding = {
-      authorityInstanceId: "owner", authorityMachineId: "host", allowedInstances: ["enrolled"],
+      authorityInstanceId: "owner", authorityMachineId: "host",
       definition: {
         resourceId, canonicalKey: resourceId, displayName: "Approved fixture", kindLabel: "Retained lab",
         scope: "federation" as const, counted: false, capacity: 1, authorityId: "owner", epoch: 7,
@@ -162,6 +162,7 @@ describe("PwrSuiteLab checkout adapter", () => {
     };
     const service = new DesktopResourceCheckoutService({
       viewer: { instanceId: "owner", instanceLabel: "Owner", profile: "default", machineId: "host" },
+      checkoutPeers: () => new Map([["enrolled", "connected"]]),
       bindings: [binding], externalStore: openResourceCheckoutStore(path.join(root, "checkout.db"), "host"),
       approvedLabCheckouts: new Map([[resourceId, config]]), now: () => 100,
       requestPeer: async () => { throw new Error("No outbound effects"); }, warn: () => {},

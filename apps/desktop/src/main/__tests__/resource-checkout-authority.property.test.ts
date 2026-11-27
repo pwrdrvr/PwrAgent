@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -13,7 +13,7 @@ import { createResourceCheckoutToolHandler } from "../agent-tools/pwragent-resou
 import { checkoutRootCanHostMachine } from "../resource-checkouts/checkout-runtime";
 import { projectCheckoutDomain } from "../resource-checkouts/checkout-projection";
 import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
-import type { ExternalBinding } from "../resource-checkouts/checkout-configuration";
+import { readExternalCheckoutBindings, type ExternalBinding } from "../resource-checkouts/checkout-configuration";
 import { readOrCreateFederationMachineId } from "../federation/federation-host-info";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -606,26 +606,44 @@ describe("the persisted resource checkout authority", () => {
     }
   });
 
+  it("reads a legacy peer list and an owner-only file as the same definition without rewriting either", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "checkout-manifest-"));
+    try {
+      const file = path.join(root, "resource-checkout-authorities.json");
+      const domain = { canonicalKey: resourceId, displayName: "Lab", kindLabel: "Fixture", authorityInstanceId: "owner",
+        authorityMachineId: "host", epoch: 3, capacity: 1, maxHoldMs: 10_000, revision: 1, updatedAt: 1 };
+      const read = (extra: Record<string, unknown>) => {
+        const raw = JSON.stringify({ version: 1, domains: [{ ...domain, ...extra }] });
+        writeFileSync(file, raw);
+        const result = readExternalCheckoutBindings(root);
+        expect(readFileSync(file, "utf8")).toBe(raw);
+        return result;
+      };
+      expect(read({ allowedInstances: ["previous-member"] })).toEqual(read({}));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("retains external ownership on partitions, replays a lost receipt, and blocks stale or foreign requests", async () => {
     const harness = createHarness();
     let authority: DesktopResourceCheckoutService | undefined;
     let client: DesktopResourceCheckoutService | undefined;
     try {
       const binding: ExternalBinding = {
-        authorityInstanceId: "owner", authorityMachineId: "host", allowedInstances: ["viewer"],
-        definition,
+        authorityInstanceId: "owner", authorityMachineId: "host",
+        definition: { ...definition, authorityId: `checkout:owner:${resourceId}` },
       };
+      let permitted = true;
       let offline = false;
       let loseResponse = false;
       authority = new DesktopResourceCheckoutService({
         viewer: { instanceId: "owner", instanceLabel: "Owner", profile: "default", machineId: "host" },
-        bindings: [binding], warn: () => {},
+        bindings: [binding], checkoutPeers: () => new Map(permitted ? [["viewer", "connected"]] : []), now: () => 1, warn: () => {},
         externalStore: openResourceCheckoutStore(path.join(harness.root, "external.db"), "host"),
         requestPeer: async () => { throw new Error("Unexpected outbound call"); },
       });
       client = new DesktopResourceCheckoutService({
         viewer: { instanceId: "viewer", instanceLabel: "Viewer", profile: "dev", machineId: "client" },
-        bindings: [binding], warn: () => {},
+        bindings: [], checkoutPeers: () => new Map(permitted ? [["owner", "connected"]] : []), agentToolsEnabled: () => true, now: () => 1, warn: () => {},
         machineStore: openResourceCheckoutStore(path.join(harness.root, "client.db"), "client"),
         requestPeer: async <T>(_instanceId: string, input: unknown): Promise<T> => {
           if (offline) throw new Error("Partitioned");
@@ -635,9 +653,16 @@ describe("the persisted resource checkout authority", () => {
         },
       });
       await client.refreshPeers();
+      expect(client.read().resources.map((item) => item.resourceId)).toContain(resourceId);
       const initialRevision = client.read().revision;
       const worker = client.threadActor("acp:registry.worker", "worker");
       const rival = client.threadActor("codex", "rival");
+      const tool = createResourceCheckoutToolHandler(client);
+      const ctx = { backend: "codex" as const, threadId: "rival", turnId: "turn", callId: "call", transport: "mcp" as const };
+      expect(client.read().agentTools).toBe("enabled");
+      await expect(tool("resource_checkout_discover", {}, ctx)).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ resource: expect.objectContaining({ resourceId, condition: "available" }) }),
+      ]));
       loseResponse = true;
       await expect(client.perform(request("acquire"), worker)).resolves.toMatchObject({ outcome: "unknown" });
       await client.refreshPeers();
@@ -667,6 +692,18 @@ describe("the persisted resource checkout authority", () => {
       }, { backend: "acp:registry.worker", threadId: "worker", turnId: "turn", callId: "call", transport: "mcp" });
       await expect(handoff()).resolves.toEqual({ ok: true });
       expect(handedOff).toEqual(["executor"]);
+      await expect(client.perform(request("second"), rival)).resolves.toMatchObject({ outcome: "queued" });
+      await expect(client.status(rival, resourceId, "second")).resolves.toMatchObject({ state: "queued", position: 1 });
+      permitted = false;
+      expect(client.read().resources.some((item) => item.resourceId === resourceId)).toBe(false);
+      await expect(client.discover(worker)).resolves.toHaveLength(1);
+      await expect(client.status(worker, resourceId, "acquire")).resolves.toBeUndefined();
+      for (const operation of ["catalog", "read", "status", "perform", "lab_execution"]) {
+        expect(() => authority!.receivePeer("viewer", { operation, resourceId, offset: 0, epoch: 3 }))
+          .toThrow("authenticated full Federation member");
+      }
+      permitted = true;
+      await client.refreshPeers();
       const authoritative = authority.read().resources.find((item) => item.resourceId === resourceId);
 
       for (let i = 0; i < 3; i++) {
@@ -685,6 +722,7 @@ describe("the persisted resource checkout authority", () => {
       await expect(client.status(worker, resourceId, "acquire")).resolves.toMatchObject({ state: "granted", generation: 1 });
       await expect(client.perform(change("release", { ...replay, resourceId, epoch: 3 }, "release"), worker))
         .resolves.toMatchObject({ outcome: "accepted" });
+      await expect(client.status(rival, resourceId, "second")).resolves.toMatchObject({ state: "granted" });
       await expect(handoff()).rejects.toThrow(/no longer has an idle grant/);
       expect(handedOff).toEqual(["executor"]);
     } finally {

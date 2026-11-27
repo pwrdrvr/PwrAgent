@@ -15,7 +15,7 @@ export const MAX_USAGE_POINTS = 1_024;
 /** No authority answered, so the resource's projection is not an observation. */
 const UNOBSERVED: ReadonlySet<ResourceCondition> = new Set(["unreachable", "ownership_unresolved"]);
 
-type Series = { observedSince: number; unobservedSince?: number; lastSeenAt: number; points: ResourceUsagePoint[] };
+type Series = { remoteAuthority?: string; observedSince: number; unobservedSince?: number; lastSeenAt: number; points: ResourceUsagePoint[] };
 
 export function usageUnits(resource: ResourceDomain): Omit<ResourceUsagePoint, "at"> {
   let held = 0;
@@ -37,8 +37,12 @@ export class ResourceUsageRecorder {
 
   constructor(private readonly windowMs = RESOURCE_USAGE_WINDOW_MS) {}
 
-  observe(resources: readonly ResourceDomain[], now: number): void {
+  observe(resources: readonly ResourceDomain[], now: number, remoteRoutes?: ReadonlyMap<string, { owner: string }>): void {
+    const visible = new Set<string>();
     for (const resource of resources) {
+      visible.add(resource.resourceId);
+      const remoteAuthority = remoteRoutes?.get(resource.resourceId)?.owner;
+      if (this.series.get(resource.resourceId)?.remoteAuthority !== remoteAuthority) this.series.delete(resource.resourceId);
       const series = this.series.get(resource.resourceId);
       if (series) series.lastSeenAt = Math.max(series.lastSeenAt, now);
       if (!UNOBSERVED.has(resource.condition) && !resource.allocations.some(({ lastKnown }) => lastKnown)) {
@@ -46,7 +50,7 @@ export class ResourceUsageRecorder {
         if (series) {
           delete series.unobservedSince;
           record(series.points, now, units);
-        } else this.series.set(resource.resourceId, { observedSince: now, lastSeenAt: now, points: [{ at: now, ...units }] });
+        } else this.series.set(resource.resourceId, { remoteAuthority, observedSince: now, lastSeenAt: now, points: [{ at: now, ...units }] });
       } else if (series && series.unobservedSince === undefined && now >= series.points[series.points.length - 1].at) {
         // The condition change that brought this read publishes a revision,
         // so readers learn where the observed history ends.
@@ -55,7 +59,7 @@ export class ResourceUsageRecorder {
       if (series) this.prune(series, now);
     }
     for (const [resourceId, series] of this.series) {
-      if (now - series.lastSeenAt > this.windowMs) this.series.delete(resourceId);
+      if ((series.remoteAuthority && !visible.has(resourceId)) || now - series.lastSeenAt > this.windowMs) this.series.delete(resourceId);
     }
   }
 

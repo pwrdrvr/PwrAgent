@@ -68,7 +68,7 @@ export function openResourceCheckoutStore(
     };
     return {
       change: (apply) => db.transaction(() => apply(tx)).immediate(),
-      readAll: () => tx.list(), receipt: (actor, key) => tx.receipt(actor, key), close: () => { db.close(); },
+      read: (id) => tx.read(id), readAll: () => tx.list(), receipt: (actor, key) => tx.receipt(actor, key), close: () => { db.close(); },
     };
   } catch (error) {
     db.close();
