@@ -56,15 +56,55 @@ export type CorrespondenceRecord = {
 type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId" | "stackDelivered">>;
 type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status };
 
+type ReceiptPosition = { id: string; time: number; order: number };
+type ReplayIndex = {
+  byTurn: Map<string, ReceiptPosition[]>;
+  unbound: ReceiptPosition[];
+  stackCompletions: ReceiptPosition[];
+};
+type TurnTimings = {
+  byId: Map<string, AppServerThreadTurnMetadata>;
+  // Negate timestamps so descending history pages can append to the index.
+  newestFirst?: Array<{ id: string; time: number }>;
+};
+
+function timeBoundary(sorted: readonly { time: number }[], time: number, afterEqual = false): number {
+  let start = 0;
+  let end = sorted.length;
+  while (start < end) {
+    const middle = start + Math.floor((end - start) / 2);
+    const candidate = sorted[middle]!.time;
+    if (candidate < time || (afterEqual && candidate === time)) start = middle + 1;
+    else end = middle;
+  }
+  return start;
+}
+
+function receiptBucket(index: ReplayIndex, record: CorrespondenceRecord): ReceiptPosition[] {
+  if (record.stackNotice?.completion) return index.stackCompletions;
+  if (!record.sourceTurnId) return index.unbound;
+  let bucket = index.byTurn.get(record.sourceTurnId);
+  if (!bucket) {
+    bucket = [];
+    index.byTurn.set(record.sourceTurnId, bucket);
+  }
+  return bucket;
+}
+
+function byReceiptTime(a: ReceiptPosition, b: ReceiptPosition): number {
+  return a.time - b.time || a.order - b.order;
+}
+
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
 export class ThreadCorrespondenceStore {
   private readonly records = new Map<string, Map<string, CorrespondenceRecord>>();
+  private readonly replayIndexes = new Map<string, ReplayIndex>();
   private readonly stackReads = new Map<string, Set<string>>();
   private readonly lastStackMove = new Map<string, string>();
   private readonly pendingStackReads = new Map<string, Set<string>>();
   // Retain only turn timing metadata across page reads, never transcript rows.
   // A newer page's turn start bounds the last turn of the next older page.
-  private readonly turnTimings = new Map<string, Map<string, AppServerThreadTurnMetadata>>();
+  private readonly turnTimings = new Map<string, TurnTimings>();
   constructor(private readonly directory?: string) {}
 
   private key(source: ThreadRef): string {
@@ -126,9 +166,21 @@ export class ThreadCorrespondenceStore {
 
   record(record: CorrespondenceRecord): boolean {
     const records = this.load(record.source);
-    if (record.stackNotice && records.has(record.id)) return false;
+    const replacing = records.has(record.id);
+    if (record.stackNotice && replacing) return false;
     this.append(record.source, { type: "message", record }, Boolean(record.stackNotice));
-    records.set(record.id, structuredClone(record));
+    const saved = structuredClone(record);
+    const key = this.key(record.source);
+    const index = this.replayIndexes.get(key);
+    if (index && replacing) this.replayIndexes.delete(key);
+    else if (index) {
+      const bucket = receiptBucket(index, record);
+      const position = { id: record.id, time: record.createdAt, order: records.size };
+      if ((record.sourceTurnId && !record.stackNotice?.completion)
+        || !bucket.length || bucket.at(-1)!.time <= position.time) bucket.push(position);
+      else bucket.splice(timeBoundary(bucket, position.time, true), 0, position);
+    }
+    records.set(record.id, saved);
     if (record.stackNotice && !record.stackNotice.completion) {
       this.lastStackMove.set(this.key(record.source), record.id);
       this.stackReads.delete(this.key(record.source));
@@ -224,6 +276,38 @@ export class ThreadCorrespondenceStore {
     }, id).entries[0] as AppServerThreadMessageEntry | undefined;
   }
 
+  private pageRecords(
+    key: string,
+    stored: Map<string, CorrespondenceRecord>,
+    turnIds: Iterable<string>,
+    since: number,
+    before: number,
+    stackBefore: number,
+  ): CorrespondenceRecord[] {
+    let index = this.replayIndexes.get(key);
+    if (!index) {
+      index = { byTurn: new Map(), unbound: [], stackCompletions: [] };
+      let order = 0;
+      for (const record of stored.values()) {
+        receiptBucket(index, record).push({ id: record.id, time: record.createdAt, order });
+        order += 1;
+      }
+      index.unbound.sort(byReceiptTime);
+      index.stackCompletions.sort(byReceiptTime);
+      this.replayIndexes.set(key, index);
+    }
+    const positions = index.unbound.slice(timeBoundary(index.unbound, since), timeBoundary(index.unbound, before));
+    const completions = index.stackCompletions;
+    const completionEnd = timeBoundary(completions, stackBefore);
+    for (let i = timeBoundary(completions, since); i < completionEnd; i += 1) {
+      positions.push(completions[i]!);
+    }
+    for (const turnId of turnIds) {
+      for (const position of index.byTurn.get(turnId) ?? []) positions.push(position);
+    }
+    return positions.sort(byReceiptTime).map(({ id }) => stored.get(id)!);
+  }
+
   private replayMessage(source: ThreadRef, record: CorrespondenceRecord, turnId?: string): AppServerThreadMessageEntry {
     if (record.stackNotice) {
       const text = formatStackNotice(record.stackNotice);
@@ -272,35 +356,39 @@ export class ThreadCorrespondenceStore {
     if (!onlyId && (page.limit === 0 || (page.before !== undefined && empty))) return replay;
     const stored = this.load(source);
     const selected = onlyId ? stored.get(onlyId) : undefined;
-    const records = onlyId ? (selected ? [selected] : []) : [...stored.values()];
-    if (records.length === 0) return replay;
-    records.sort((left, right) => left.createdAt - right.createdAt);
+    if (onlyId ? !selected : !stored.size) return replay;
     const providerEntries: AppServerThreadEntry[] = (replay.entries.length
       ? replay.entries
       : replay.messages.map((message) => ({ ...message, type: "message" as const })))
       .filter((entry) => !stored.has(entry.id));
     const sourceKey = this.key(source);
-    const turns = onlyId ? new Map<string, AppServerThreadTurnMetadata>()
-      : this.turnTimings.get(sourceKey) ?? new Map<string, AppServerThreadTurnMetadata>();
-    if (!onlyId) this.turnTimings.set(sourceKey, turns);
-    for (const turn of knownTurns) {
-      const previous = turns.get(turn.id);
-      turns.set(turn.id, {
-        ...previous, ...turn,
-        startedAt: turn.startedAt ?? previous?.startedAt,
-        completedAt: turn.completedAt ?? previous?.completedAt,
-      });
-    }
+    const timing: TurnTimings = (onlyId ? undefined : this.turnTimings.get(sourceKey)) ?? { byId: new Map() };
+    if (!onlyId) this.turnTimings.set(sourceKey, timing);
+    const newTurns = new Map<string, AppServerThreadTurnMetadata>();
+    const previousStarts = new Map<string, number | undefined>();
+    const rememberTurnTiming = (turn: AppServerThreadTurnMetadata) => {
+      const previous = timing.byId.get(turn.id);
+      const startedAt = turn.startedAt ?? previous?.startedAt;
+      const completedAt = turn.completedAt ?? previous?.completedAt;
+      if (previous && previous.startedAt === startedAt && previous.completedAt === completedAt) return;
+      if (previous) {
+        if (previous.startedAt !== startedAt && !newTurns.has(turn.id) && !previousStarts.has(turn.id)) {
+          previousStarts.set(turn.id, previous.startedAt);
+        }
+        previous.startedAt = startedAt;
+        previous.completedAt = completedAt;
+      } else {
+        const observed = { id: turn.id, startedAt, completedAt };
+        timing.byId.set(turn.id, observed);
+        newTurns.set(turn.id, observed);
+      }
+    };
+    for (const turn of knownTurns) rememberTurnTiming(turn);
     const indexesByTurn = new Map<string, number[]>();
     const indexesByItem = new Map<string, number>();
     providerEntries.forEach((entry, index) => {
       if (entry.turn) {
-        const previous = turns.get(entry.turn.id);
-        turns.set(entry.turn.id, {
-          ...previous, ...entry.turn,
-          startedAt: entry.turn.startedAt ?? previous?.startedAt,
-          completedAt: entry.turn.completedAt ?? previous?.completedAt,
-        });
+        rememberTurnTiming(entry.turn);
         const indexes = indexesByTurn.get(entry.turn.id) ?? [];
         indexes.push(index);
         indexesByTurn.set(entry.turn.id, indexes);
@@ -312,22 +400,49 @@ export class ThreadCorrespondenceStore {
     });
     const startedAt = (turn: AppServerThreadTurnMetadata) => turn.startedAt
       ?? (source.backend === "codex" ? readUuidV7Timestamp(turn.id) : undefined);
-    const timedTurns = [...turns.values()].flatMap((turn) => {
-      const time = startedAt(turn);
-      return time === undefined ? [] : [{ id: turn.id, time, completedAt: turn.completedAt }];
-    }).sort((left, right) => left.time - right.time);
+    const indexTurnStarts = (turns: AppServerThreadTurnMetadata[]) => turns.flatMap((turn) => {
+      const start = startedAt(turn);
+      return start === undefined ? [] : [{ id: turn.id, time: -start }];
+    }).reverse().sort((left, right) => left.time - right.time);
+    // Ledger hints and page rows can report different precision. Invalidate
+    // only when the combined observation changes a previously indexed start.
+    for (const [id, previous] of previousStarts) {
+      if (timing.byId.get(id)?.startedAt !== previous) {
+        timing.newestFirst = undefined;
+        break;
+      }
+    }
+    if (timing.newestFirst && newTurns.size) {
+      const earlier = indexTurnStarts([...newTurns.values()]);
+      const last = timing.newestFirst.at(-1)?.time ?? -Infinity;
+      if (earlier[0] && earlier[0].time <= last) timing.newestFirst = undefined;
+      else for (const turn of earlier) timing.newestFirst.push(turn);
+    }
+    const timedTurns = timing.newestFirst ??= indexTurnStarts([...timing.byId.values()]);
     const timestamp = (entry: AppServerThreadEntry) => entry.createdAt
-      ?? (entry.turn ? startedAt(turns.get(entry.turn.id) ?? entry.turn) : undefined);
+      ?? (entry.turn ? startedAt(timing.byId.get(entry.turn.id) ?? entry.turn) : undefined);
     const insertions = new Map<number, AppServerThreadMessageEntry[]>();
     const cursors = new Map<string | undefined, number>();
     const allIndexes = providerEntries.map((_entry, index) => index);
-    const pageTurns = timedTurns.filter((turn) => indexesByTurn.has(turn.id));
-    const firstPageTurn = pageTurns[0]?.time;
-    const lastPageTurn = pageTurns.at(-1)?.time;
-    const nextPageTurn = lastPageTurn === undefined ? undefined : timedTurns.find((turn) => turn.time > lastPageTurn)?.time;
-    let turnIndex = -1;
+    let firstPageTurn: number | undefined;
+    let lastPageTurn: number | undefined;
+    for (const id of indexesByTurn.keys()) {
+      const time = startedAt(timing.byId.get(id)!);
+      if (time === undefined) continue;
+      firstPageTurn = Math.min(firstPageTurn ?? time, time);
+      lastPageTurn = Math.max(lastPageTurn ?? time, time);
+    }
+    const next = lastPageTurn === undefined ? undefined : timedTurns[timeBoundary(timedTurns, -lastPageTurn) - 1];
+    const nextPageTurn = next ? -next.time : undefined;
+    const records = selected ? [selected] : indexesByTurn.size === 0
+      ? [...stored.values()].sort((left, right) => left.createdAt - right.createdAt)
+      : this.pageRecords(
+        sourceKey, stored, indexesByTurn.keys(),
+        (replay.pagination.hasPreviousPage ? firstPageTurn : undefined) ?? -Infinity,
+        nextPageTurn ?? Infinity,
+        page.before === undefined ? Infinity : nextPageTurn ?? -Infinity,
+      );
     for (const record of records) {
-      while (turnIndex + 1 < timedTurns.length && timedTurns[turnIndex + 1]!.time <= record.createdAt) turnIndex += 1;
       const completion = Boolean(record.stackNotice?.completion);
       if (!onlyId && completion) {
         if ((firstPageTurn !== undefined && record.createdAt < firstPageTurn && (replay.pagination.hasPreviousPage || page.before !== undefined))
@@ -336,18 +451,21 @@ export class ThreadCorrespondenceStore {
         && (replay.pagination.hasPreviousPage || record.sourceTurnId)) {
         continue;
       }
-      const inferredTurn = completion || record.sourceTurnId ? undefined : timedTurns[turnIndex];
+      const turnIndex = record.sourceTurnId && !completion ? timedTurns.length : timeBoundary(timedTurns, -record.createdAt);
+      const inferredTurn = completion ? undefined : timedTurns[turnIndex];
       const sourceTurnId = completion ? undefined : record.sourceTurnId ?? inferredTurn?.id;
       const turnIndexes = sourceTurnId ? indexesByTurn.get(sourceTurnId) : undefined;
       // A page owns its source turns. Never attach the thread's entire send
       // history to the newest page, where provider rows may have no dates.
       if (!onlyId && indexesByTurn.size > 0 && sourceTurnId && !turnIndexes) continue;
-      if (!onlyId && replay.pagination.hasPreviousPage && turnIndex < 0 && !sourceTurnId && timedTurns.length > 0) continue;
-      const sentAfterTurn = inferredTurn?.completedAt !== undefined && record.createdAt > inferredTurn.completedAt;
+      if (!onlyId && replay.pagination.hasPreviousPage && turnIndex === timedTurns.length
+        && !sourceTurnId && timedTurns.length > 0) continue;
+      const completedAt = inferredTurn ? timing.byId.get(inferredTurn.id)?.completedAt : undefined;
+      const sentAfterTurn = completedAt !== undefined && record.createdAt > completedAt;
       // Only the newest page has an open end. An older page may claim a send
       // after its final turn if the next known start bounds the idle interval.
-      if (!onlyId && inferredTurn && page.before !== undefined && turnIndex === timedTurns.length - 1
-        && (sentAfterTurn || inferredTurn.completedAt === undefined)) continue;
+      if (!onlyId && inferredTurn && page.before !== undefined && inferredTurn.time === timedTurns[0]?.time
+        && (sentAfterTurn || completedAt === undefined)) continue;
       const itemIndex = sourceTurnId && record.sourceItemId
         ? indexesByItem.get(`${sourceTurnId}:${record.sourceItemId}`) : undefined;
       let position: number;

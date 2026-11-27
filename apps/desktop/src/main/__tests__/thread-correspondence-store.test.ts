@@ -175,6 +175,31 @@ describe("PwrAgent correspondence persistence", () => {
     expect(heading).toHaveBeenCalledTimes(1);
   });
 
+  it("returns to a warm page without scanning older receipts or discarding newer sends", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    store.record({ ...message, id: "older-send", createdAt: 1_100 });
+    store.record({ ...message, id: "latest-send", createdAt: 3_500 });
+    const entry: AppServerThreadMessageEntry = { type: "message", id: "latest-response", role: "assistant",
+      text: "Latest", turn: { id: "latest", startedAt: 3_000, completedAt: 3_200 } };
+    const replay = { ...emptyReplay, entries: [entry], messages: [entry],
+      pagination: { supportsPagination: true, hasPreviousPage: true } };
+    store.appendToReplay(message.source, replay);
+
+    const stored: Map<string, Map<string, CorrespondenceRecord>> = Reflect.get(store, "records");
+    const scan = vi.spyOn(stored.values().next().value!, "values");
+    onTestFinished(() => { scan.mockRestore(); });
+    store.record({ ...message, id: "late-recorded-send", createdAt: 3_400 });
+    store.record({ ...message, id: "tied-send", createdAt: 3_500 });
+    store.update(message.source, "latest-send", { state: "started" });
+    const returned = store.appendToReplay(message.source, replay);
+    expect(returned.entries.map(({ id }) => id)).toEqual([
+      "latest-response", "late-recorded-send", "latest-send", "tied-send",
+    ]);
+    expect(returned.messages.find(({ id }) => id === "latest-send")?.text).toContain("Receiving thread started work");
+    expect(scan).not.toHaveBeenCalled();
+  });
+
   it("restores idle sends on the first page of a thread with no provider rows", () => {
     const store = new ThreadCorrespondenceStore();
     const message = record();
