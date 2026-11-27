@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2812,7 +2812,7 @@ describe("app server ipc", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")("uses one Git config read per standard clone checkout in the owner PR inventory", async () => {
+  it.skipIf(process.platform === "win32")("shares proved wildcard config across sibling checkouts with explicitly selected bundled Git", async () => {
     const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
     const { bundledGitDirectory, bundledGitExecutable, configureBundledGit } = await import("../bundled-git");
@@ -2820,7 +2820,7 @@ describe("app server ipc", () => {
     const { gitSubprocessDiagnostics, prGitSubprocessCaller } = await import("../diagnostics/git-subprocess-diagnostics");
     const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache, parseForgeRemote } =
       await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-single-branch-"));
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-clone-config-")));
     const restore = isolateProcessGitEnvironment(root);
     const fleet = process.env.PWRAGENT_MEASURE_SINGLE_BRANCH_INVENTORY;
     configureBundledGit(process.env.PWRAGENT_INVENTORY_GIT_RESOURCES ?? path.dirname(bundledGitDirectory()));
@@ -2831,13 +2831,16 @@ describe("app server ipc", () => {
       restore();
       await rm(root, { recursive: true, force: true });
     });
+    process.env.GIT_CONFIG_SYSTEM = path.join(root, "system-config");
+    delete process.env.GIT_CONFIG_NOSYSTEM;
+    await writeFile(process.env.GIT_CONFIG_SYSTEM, "[core]\n\tabbrev = 12\n");
     const source = path.join(root, "source");
     const branchName = fleet ? "main" : "release/v1";
     await runGitCommand(root, ["init", "-b", branchName, source]);
     await runGitCommand(source, ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
       "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture"]);
     const rows: (AppServerThreadSummary & { prs: PrSummary[] })[] = [];
-    const expected: Array<{ id: string; key: string; cwd: string; variant: string }> = [];
+    const expected: Array<{ id: string; key: string; cwd: string; clone: string; variant: string }> = [];
     for (const variant of ["single-branch", "wildcard"]) {
       const groups = Array.from({ length: fleet ? 36 : 1 }, (_, index) => index);
       const clones = await Promise.all(groups.map(async (index) => {
@@ -2851,7 +2854,7 @@ describe("app server ipc", () => {
         const refspec = (await runGitCommand(clone, ["config", "--get", "remote.origin.fetch"])).stdout.trim();
         const branch = variant === "single-branch" ? branchName : "*";
         expect(refspec).toBe(`+refs/heads/${branch}:refs/remotes/origin/${branch}`);
-        for (let index = 0; index < (fleet ? 10 : 1); index++) {
+        for (let index = 0; index < (fleet ? 10 : 2); index++) {
           const cwd = `${clone}-checkout-${index}`;
           await runGitCommand(clone, ["worktree", "add", "--detach", cwd]);
           const names = (await runGitCommand(cwd, ["remote"])).stdout.trim();
@@ -2863,7 +2866,7 @@ describe("app server ipc", () => {
             url: `https://${remote.host}/${remote.owner}/${remote.repo}/pull/${rows.length + 1}` });
           rows.push({ id, source: "codex", title: "Clone fixture", titleSource: "explicit",
             linkedDirectories: [{ id, kind: "worktree", label: "Checkout", path: clone, worktreePath: cwd }], prs: [pr] });
-          expected.push({ id, key: `${remote.host}/${remote.owner}/${remote.repo}`, cwd, variant });
+          expected.push({ id, key: `${remote.host}/${remote.owner}/${remote.repo}`, cwd, clone, variant });
         }
       }
     }
@@ -2884,8 +2887,8 @@ describe("app server ipc", () => {
     registerAppServerIpcHandlers();
     await startAppServerOwnerNavigation();
 
-    // Native Git owns the target, and only one effective config sample is
-    // needed for either clone shape with a canonical Git executable.
+    // The owner must match each checkout's native origin. Only wildcard
+    // config supplies the proof for borrowing its sibling's sample.
     expect(expected.map(({ id }) => appServerService.readPrimaryGitRepository("codex", id)))
       .toEqual(expected.map(({ key }) => key));
     if (fleet) {
@@ -2896,10 +2899,18 @@ describe("app server ipc", () => {
       }
       await writeFile(fleet, JSON.stringify(counts, null, 2));
     }
-    for (const variant of ["wildcard", "single-branch"]) {
-      expect(new Set(expected.filter((row) => row.variant === variant).map(({ cwd }) =>
-        (starts.get(cwd) ?? []).map((command) => command.split(" ", 1)[0]).join(", "))))
-        .toEqual(new Set(["config"]));
+    const wildcardStarts = new Map<string, string[]>();
+    for (const { clone, cwd, variant } of expected) {
+      if (variant === "single-branch") {
+        expect(starts.get(cwd)).toEqual([expect.stringMatching(/^config /)]);
+        continue;
+      }
+      const commands = wildcardStarts.get(clone) ?? [];
+      commands.push(...(starts.get(cwd) ?? []));
+      wildcardStarts.set(clone, commands);
+    }
+    for (const commands of wildcardStarts.values()) {
+      expect(commands).toEqual([expect.stringMatching(/^config .*--show-origin/)]);
     }
   });
 

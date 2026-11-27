@@ -166,6 +166,14 @@ function safeRemoteName(remote: string): boolean {
 
 type CheckoutLocation = { directory: string; gitDir: string; commonDir: string; gitDirLink?: string };
 
+export async function observePrGitExecutable(executable: string, demand: PrMetadataDemand) {
+  return await runPrMetadataFileProbe(async (signal) => {
+    const files = new RefFiles(signal);
+    if (!(await files.status(executable))?.isFile()) return undefined;
+    return (reader: PrMetadataDemand) => runPrMetadataFileProbe((currentSignal) => files.unchanged(currentSignal), reader);
+  }, demand);
+}
+
 async function locateRefs(cwd: string, files: RefFiles): Promise<CheckoutLocation | undefined> {
   const directory = await files.directory(cwd);
   const dotGit = path.join(directory, ".git");
