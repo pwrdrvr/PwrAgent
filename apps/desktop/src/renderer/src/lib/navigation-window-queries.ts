@@ -520,11 +520,10 @@ export class NavigationWindowQueries {
     const refreshed = Promise.all(selected.map(async (resource) => {
       const pending = resource.pending;
       let retryJoinedPinRead = Boolean(pending && owesPinRead(resource));
-      // Passing through here while a read is pending is only necessary for
-      // a mutation receipt that needs a newer observation. Owner events
-      // already fence affected reads and collapse into one replacement.
+      // Owner events already fence pending reads. Attribute the replacement
+      // to this caller without scheduling another one for the same event.
       const replacePending = requireNewObservation && forceRead(resource);
-      if ((!pending || replacePending) && (forceRead(resource) || resource.invalidated || owesPinRead(resource))) {
+      if (!pending || replacePending || resource.invalidated) {
         resource.diagnosticRefreshBatch = batch;
         if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
         resource.diagnosticTrigger ??= trigger;
@@ -533,7 +532,7 @@ export class NavigationWindowQueries {
         // between provider observations. A scoped row refresh already knows
         // exactly why its baseline is stale.
         if (!resource.invalidated) resource.membershipUncertain = true;
-        if (pending) resource.refreshAfterPending = true;
+        if (pending && replacePending) resource.refreshAfterPending = true;
         const read = this.read(resource, false, undefined, false, "refresh", false);
         startedReads ||= !pending && Boolean(resource.pending);
         await read;
