@@ -16,6 +16,8 @@ export type TokenMiserRetentionRecord = {
   archived: number;
 };
 
+export type OrderedTokenMiserMetadata<T> = { entry: T; createdAt: number; rowid: number };
+
 /** Durable accounting; original outputs and replay buffers stay with the service. */
 export interface TokenMiserStorage<
   Metadata extends TokenMiserObjectRecord,
@@ -25,6 +27,14 @@ export interface TokenMiserStorage<
   reserveOutputHandles(count: number): number;
   readMetadata(objectId: string, threadId?: string): Metadata | undefined;
   listMetadata(threadId?: string): Metadata[];
+  /** Changes since an open Pricing page's previous read. A reset needs a new baseline. */
+  watchPricingMetadata?(threadId: string, changed: (objectId: string) => void): {
+    dataVersion(): number;
+    observationCount(): number;
+    all(): OrderedTokenMiserMetadata<Metadata>[];
+    get(id: string): OrderedTokenMiserMetadata<Metadata> | undefined;
+    close(): void;
+  };
   /** Keyset page over the stored (threadId, createdAt, objectId) keys. */
   readMetadataPage(after: TokenMiserObjectRecord | undefined, limit: number, threadId?: string): {
     entries: Metadata[];

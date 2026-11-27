@@ -354,6 +354,7 @@ describe("turn end read budget", () => {
     const { internals, registry, store } = await setupThread({ historicalTurns, stateDb });
     await endTurn(internals);
     const builds = {
+      pricingPages: vi.spyOn(store, "readThreadPricingPage"),
       cardLists: vi.spyOn(store, "listThreadSubAgents"),
       cardReads: vi.spyOn(store, "getThreadSubAgents"),
       overlays: vi.spyOn(store, "getThreadOverlayState"),
@@ -397,7 +398,7 @@ describe("turn end read budget", () => {
     const small = await measureRendererRefresh(20);
     const large = await measureRendererRefresh(2_000);
     expect(small).toEqual({
-      cardLists: 0, cardReads: 1, overlays: 1, pricingLedgers: 1, tokenMiser: 1, toolAccounting: 1, turnUsage: 1,
+      pricingPages: 1, cardLists: 0, cardReads: 0, overlays: 1, pricingLedgers: 0, tokenMiser: 0, toolAccounting: 0, turnUsage: 1,
     });
     expect(large).toEqual(small);
   }, 60_000);

@@ -4,6 +4,7 @@ import type {
   TokenMiserRetentionRecord,
   TokenMiserStorage,
 } from "@pwragent/owner-core/token-miser-storage";
+import { watchPricingRows } from "./sqlite-pricing-row-changes";
 import type { StateDb } from "./state-db";
 import { prepareSqliteRead } from "./sqlite-prepared-read";
 
@@ -46,6 +47,34 @@ export class SqliteTokenMiserStorage<
       : this.db.prepare("SELECT payload FROM token_miser_objects WHERE thread_id = ? ORDER BY created_at DESC").all(threadId)
     ) as Array<{ payload: string }>;
     return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
+  }
+
+  watchPricingMetadata(threadId: string, changed: (id: string) => void) {
+    const db = this.db;
+    let observationCount: number | undefined;
+    let version: number | undefined;
+    const closeObservations = watchPricingRows(db, "token_miser_observations", threadId, () => { observationCount = undefined; });
+    const closeMetadata = watchPricingRows(db, "token_miser_objects", threadId, changed);
+    type Row = { created_at: number; rowid: number; payload: string };
+    const parse = (row: Row) => ({ createdAt: row.created_at, rowid: row.rowid, entry: JSON.parse(row.payload) as Metadata });
+    return {
+      dataVersion: () => {
+        const committed = db.pragma("data_version", { simple: true }) as number;
+        if (version !== committed) observationCount = undefined;
+        version = committed;
+        return committed;
+      },
+      all: () => (prepareSqliteRead(db, "SELECT created_at, rowid, payload FROM token_miser_objects WHERE thread_id = ?")
+        .all(threadId) as Row[]).map(parse),
+      get: (id: string) => {
+        const row = prepareSqliteRead(db, "SELECT created_at, rowid, payload FROM token_miser_objects WHERE object_id = ? AND thread_id = ?")
+          .get(id, threadId) as Row | undefined;
+        return row && parse(row);
+      },
+      observationCount: () => observationCount ??= (prepareSqliteRead(db, "SELECT count(*) AS n FROM token_miser_observations WHERE thread_id = ?")
+        .get(threadId) as { n: number }).n,
+      close: () => { closeMetadata(); closeObservations(); },
+    };
   }
 
   readMetadataPage(after: TokenMiserObjectRecord | undefined, limit: number, threadId?: string): {

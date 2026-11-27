@@ -4,7 +4,7 @@ import type { ThreadCompactionRecord, ThreadTokenMiserAccounting, ThreadTokenMis
 import { estimateOpenAiCodexCreditUsage, estimateTokenUsageCost } from "./token-usage-pricing";
 import { estimateHistoricalThreadUsageGapLines } from "./thread-pricing-projection";
 import { addUsageLineToSummary, buildPricingSpendByModel, emptyPricingSummary } from "./pricing-spend-by-model";
-import { buildTokenMiserSavingsSummary, type TokenMiserGateAccountingTotals } from "./token-miser-savings-summary";
+import { buildTokenMiserSavingsSummary, type TokenMiserGateAccountingTotals, type TokenMiserSavingsSummary } from "./token-miser-savings-summary";
 import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "./openrouter-assumed-pricing";
 
 function isTerminalSubAgent(subAgent: ThreadSubAgentSummary): boolean {
@@ -55,6 +55,23 @@ export function partitionPricingGateCards(
   return { primary, small: priced.filter((line) => !primaryIds.has(line.usageLineId)), unpricedCount: gates.length - priced.length };
 }
 
+function decisionCounts(rows: readonly (PricingDecision | undefined)[]) {
+  let helperDecisionCount = 0;
+  let policyDecisionCount = 0;
+  let helperPassThroughCount = 0;
+  let policyPassThroughCount = 0;
+  for (const row of rows) {
+    if (row?.decisionSource === "policy") {
+      policyDecisionCount++;
+      if (row.disposition === "passed_through") policyPassThroughCount++;
+    } else {
+      helperDecisionCount++;
+      if (row?.disposition === "passed_through") helperPassThroughCount++;
+    }
+  }
+  return { helperDecisionCount, policyDecisionCount, helperPassThroughCount, policyPassThroughCount };
+}
+
 /** All folded-group figures are computed on the owner, independent of loaded gate pages. */
 export function buildPricingGateGroupDisplay(params: {
   gates: readonly PricingUsageLine[];
@@ -72,10 +89,7 @@ export function buildPricingGateGroupDisplay(params: {
     gateCostMicros: gates.reduce((sum, line) => sum + line.totalCostMicros, 0),
     hasDecisions: decisions !== undefined,
     count: decisions?.length ?? gates.length,
-    helperDecisionCount: decisionRows.filter((decision) => decision?.decisionSource !== "policy").length,
-    policyDecisionCount: decisionRows.filter((decision) => decision?.decisionSource === "policy").length,
-    helperPassThroughCount: decisionRows.filter((decision) => decision?.disposition === "passed_through" && decision.decisionSource !== "policy").length,
-    policyPassThroughCount: decisionRows.filter((decision) => decision?.disposition === "passed_through" && decision.decisionSource === "policy").length,
+    ...decisionCounts(decisionRows),
   };
 }
 
@@ -514,6 +528,9 @@ export function estimateCodexCreditsForLine(line: PricingUsageLine):
 
 export type PricingHistoryPage = {
   revision: string;
+  savings?: { summary?: TokenMiserSavingsSummary };
+  cards?: ThreadSubAgentSummary[];
+  groups?: Map<string, { decisions?: PricingDecision[]; orphan: boolean; parentTurnId?: string; summary: PricingGateGroupDisplay; gates: PricingUsageLine[] }>;
   lines: PricingUsageLine[];
   compactions: ThreadCompactionRecord[];
   lineTotals: Map<string, PricingRunningLineTotals>;
@@ -548,44 +565,53 @@ export function buildThreadPricingDisplay(params: {
   const summaries = params.pricing?.summaries ?? [];
   const page = params.historyPage;
   const allDisplayLines = page?.lines ?? buildPricingDisplayLines(params.pricing?.lines ?? []);
-  const subAgentsById = new Map((params.subAgents ?? []).map((agent) => [agent.monitorId, agent]));
-  const { displayLines, gateLinesByTurn, orphanGroupsByAnchor } = partitionTokenMiserGateLines(allDisplayLines, subAgentsById);
+  const subAgentsById = new Map((page?.cards ?? params.subAgents ?? []).map((agent) => [agent.monitorId, agent]));
+  const partition = page ? undefined : partitionTokenMiserGateLines(allDisplayLines, subAgentsById);
+  const displayLines = partition?.displayLines ?? allDisplayLines;
   const summary = page ? page.summary : buildPricingDisplaySummary(summaries, allDisplayLines);
   const totals = page ? { ...page.totals, byLineId: page.lineTotals } : buildPricingRunningTotals(allDisplayLines);
   const compactionsByRow = groupCompactionsByRow(page?.compactions ?? params.pricing?.compactions ?? []);
   const claimedCompactionTurns = new Set<string>();
-  const gatesForLine = (line: PricingUsageLine) => orphanGroupsByAnchor.get(line.usageLineId)
-    ?? (line.scope !== "monitor" && line.turnId ? gateLinesByTurn.get(line.turnId) ?? [] : []);
+  const gatesForLine = (line: PricingUsageLine) => partition?.orphanGroupsByAnchor.get(line.usageLineId)
+    ?? (line.scope !== "monitor" && line.turnId ? partition?.gateLinesByTurn.get(line.turnId) ?? [] : []);
   const buildRow = (line: PricingUsageLine, nested = false): PricingUsageRowData => {
-    const orphanGroup = nested ? undefined : orphanGroupsByAnchor.get(line.usageLineId);
-    const gates = nested ? [] : gatesForLine(line);
+    const orphanGroup = nested ? undefined : partition?.orphanGroupsByAnchor.get(line.usageLineId);
+    const prepared = nested ? undefined : page?.groups?.get(line.usageLineId);
+    const gates = nested ? [] : prepared?.gates ?? gatesForLine(line);
     const isActive = isActiveUsageLine({ activeTurnId: params.activeTurnId, line, subAgentsById });
-    const decisions = gates.length === 0 ? undefined : orphanGroup
-      ? tokenMiserDecisionsForGateLines({ accounting: params.tokenMiserAccounting, gates, subAgentsById })
-      : tokenMiserDecisionsForTurn(params.tokenMiserAccounting, line.turnId);
+    let decisions: readonly PricingDecision[] | undefined;
+    let gateSummary = prepared?.summary;
+    if (prepared && page?.savings) {
+      decisions = prepared.decisions;
+    } else if (prepared || gates.length) {
+      decisions = orphanGroup ? tokenMiserDecisionsForGateLines({ accounting: params.tokenMiserAccounting, gates, subAgentsById })
+        : tokenMiserDecisionsForTurn(params.tokenMiserAccounting, prepared?.parentTurnId ?? line.turnId);
+      if (!prepared) gateSummary = buildPricingGateGroupDisplay({ gates, subAgentsById, decisions });
+      else if (decisions) gateSummary = { ...prepared.summary, ...decisionCounts(decisions), count: decisions.length, hasDecisions: true };
+    }
     return {
-      line, nested, orphan: Boolean(orphanGroup), isActive,
+      line, nested, orphan: prepared?.orphan ?? Boolean(orphanGroup), isActive,
       lineTotals: totals.byLineId.get(line.usageLineId),
       rowCompactions: selectRowCompactions(compactionsByRow, line, claimedCompactionTurns),
       subAgent: pricingSubAgent(line.scope === "monitor" && line.sourceItemId ? subAgentsById.get(line.sourceItemId) : undefined),
       turnFailure: !isActive && line.scope === "turn" ? params.turnFailures?.find((failure) => failure.turnId === line.turnId) : undefined,
       threadReasoningEffort: isActive && line.scope !== "monitor" ? params.threadReasoningEffort : undefined,
       decisions: params.deferGates ? undefined : decisions?.map(({ decisionSource, disposition }) => ({ decisionSource, disposition })),
-      ...(gates.length ? { gateSummary: buildPricingGateGroupDisplay({ gates, subAgentsById, decisions }) } : {}),
-      ...(params.deferGates && gates.length ? { gatesDeferred: true as const } : {}),
+      ...(gateSummary ? { gateSummary } : {}),
+      ...(params.deferGates && gateSummary ? { gatesDeferred: true as const } : {}),
       gates: params.deferGates ? [] : gates.map((gate) => buildRow(gate, true)),
     };
   };
   // Orphan groups without savings accounting render no card. Exclude them
   // before counting/slicing pages so hidden gates cannot crowd out turn rows.
   // The full ledger above still supplies every charge to summaries and totals.
-  let pageLines = displayLines.filter((line) => {
-    const orphanGates = orphanGroupsByAnchor.get(line.usageLineId);
+  let pageLines = page?.lines ?? displayLines.filter((line) => {
+    const orphanGates = partition?.orphanGroupsByAnchor.get(line.usageLineId);
     return !orphanGates || orphanGates.some((gate) =>
       gate.sourceItemId && subAgentsById.get(gate.sourceItemId)?.tokenMiserAccounting !== undefined,
     );
   });
-  if (params.gateSelection) {
+  if (params.gateSelection && !page) {
     const anchor = displayLines.find((line) => line.usageLineId === params.gateSelection!.usageLineId);
     // A live owner can remove an orphan anchor after its parent usage arrives.
     // An empty page lets the next parent refresh replace that obsolete group.
@@ -604,7 +630,7 @@ export function buildThreadPricingDisplay(params: {
       lines: allDisplayLines,
       resolveModel: (line) => resolveUsageLineModel(line, line.scope === "monitor" && line.sourceItemId ? subAgentsById.get(line.sourceItemId) : undefined),
     }),
-    tokenMiserSummary: buildTokenMiserSavingsSummary({
+    tokenMiserSummary: page?.savings ? page.savings.summary : buildTokenMiserSavingsSummary({
       accounting: params.tokenMiserAccounting,
       ...(params.tokenMiserGateTotals
         ? { gateTotals: params.tokenMiserGateTotals }

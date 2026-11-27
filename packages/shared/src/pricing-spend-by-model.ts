@@ -105,21 +105,20 @@ export function buildPricingSpendByModel(params: {
 export class PricingModelSpendProjection {
   private readonly providers = new Map<string, MutableProviderSpend>();
 
-  copy(): PricingModelSpendProjection {
-    const copy = new PricingModelSpendProjection();
-    for (const [key, group] of this.providers) {
-      const models = new Map<string, MutableModelSpend>();
-      for (const [id, bucket] of group.models) {
-        models.set(id, {
-          ...bucket,
-          subAgentIds: new Set(bucket.subAgentIds),
-          systemHelperIds: new Set(bucket.systemHelperIds),
-        });
-      }
-      copy.providers.set(key, { ...group, models });
-    }
-    return copy;
+  private undo?: Array<() => void>;
+
+  /** Only a recent batch can be rewound. Capture changed buckets and set
+   * insertions without copying all the historical helper identities. */
+  checkpoint(): () => void {
+    const undo: Array<() => void> = [];
+    this.undo = undo;
+    return () => {
+      for (const restore of undo.reverse()) restore();
+      this.undo = undefined;
+    };
   }
+
+  finishBatch(): void { this.undo = undefined; }
 
   add(line: PricingSpendUsageLine, model: string | undefined, newest = false): void {
     const groupKey = `${line.provider}:${line.currency}`;
@@ -132,6 +131,7 @@ export class PricingModelSpendProjection {
         provider: line.provider,
       };
       this.providers.set(groupKey, group);
+      this.undo?.push(() => { this.providers.delete(groupKey); });
     }
     const modelKey = `${groupKey}:${model ?? ""}`;
     let bucket = group.models.get(modelKey);
@@ -149,6 +149,11 @@ export class PricingModelSpendProjection {
         threadUsageLineCount: 0,
       };
       group.models.set(modelKey, bucket);
+      this.undo?.push(() => { group.models.delete(modelKey); });
+    } else if (this.undo) {
+      const target = bucket;
+      const previous = { ...target };
+      this.undo.push(() => { Object.assign(target, previous); });
     }
     if (newest) {
       // The snapshot fold encounters the newest row first. An incremental
@@ -168,7 +173,9 @@ export class PricingModelSpendProjection {
         const ids = line.sourceItemId.startsWith(SYSTEM_HELPER_SOURCE_PREFIX)
           ? bucket.systemHelperIds
           : bucket.subAgentIds;
-        ids.add(line.sourceItemId);
+        const id = line.sourceItemId;
+        if (!ids.has(id)) this.undo?.push(() => { ids.delete(id); });
+        ids.add(id);
       }
     } else {
       bucket.threadSummary = addUsageLineToSummary(bucket.threadSummary, line);
@@ -176,7 +183,7 @@ export class PricingModelSpendProjection {
     }
   }
 
-  groups(): PricingProviderSpend[] {
+  groups(adjust?: (key: string, summary: ThreadPricingSummary) => ThreadPricingSummary): PricingProviderSpend[] {
     return [...this.providers.values()]
       .map((group) => {
         const models = [...group.models.values()]
@@ -189,7 +196,7 @@ export class PricingModelSpendProjection {
               ...(bucket.modelLabel ? { modelLabel: bucket.modelLabel } : {}),
               provider: bucket.provider,
               subAgentCount: bucket.subAgentIds.size,
-              summary: bucket.summary,
+              summary: adjust?.(bucket.key, bucket.summary) ?? bucket.summary,
               systemHelperCount: bucket.systemHelperIds.size,
               // Only worth carrying when something else shares the bucket;
               // otherwise it is the bucket, and a second identical figure on the

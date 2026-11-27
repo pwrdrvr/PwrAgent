@@ -8217,17 +8217,23 @@ export class DesktopBackendRegistry {
     )) {
       await this.threadUsageLedger.repairTokenMiserHistory(request.threadId);
     }
-    const pricingHistoryPage = resource === "pricing" && backend !== "codex" && !request.display.pricingGateGroup
-      ? await this.overlayStore.readThreadPricingPage?.({ backend, threadId: request.threadId, ...threadDisplayRange(request.display) })
+    const pricingOverlay = resource === "pricing" && backend === "codex" ? this.threadUsageLedger.pricingPageOverlay(request.threadId) : undefined;
+    const pricingHistoryPage = resource === "pricing" && (backend !== "codex" || pricingOverlay)
+      ? await this.overlayStore.readThreadPricingPage?.({
+          backend, threadId: request.threadId, ...threadDisplayRange(request.display),
+          overlay: pricingOverlay, gateSelection: request.display.pricingGateGroup, deferGates: request.display.deferPricingGates,
+        })
       : undefined;
-    if (pricingHistoryPage) {
-      const tokenMiserGateTotals = await this.overlayStore.readThreadTokenMiserGateTotals({ backend, threadId: request.threadId });
+    if (pricingHistoryPage && (backend !== "codex" || pricingHistoryPage.summary)) {
+      const thread = { backend, threadId: request.threadId };
+      const accounting = backend === "codex" && this.tokenMiserStore && !pricingHistoryPage.savings ? await this.overlayStore.readThreadToolAccounting(thread) : undefined;
+      const toolAccounting = accounting ? await this.threadUsageLedger.withTokenMiserAccounting({ ...thread, accounting }) : undefined;
       return projectThreadDisplay({
-        backend, threadId: request.threadId, fetchedAt: Date.now(),
+        ...thread, fetchedAt: Date.now(), toolAccounting,
         replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
       }, request, {
-        ...overlay, pricingHistoryPage, tokenMiserGateTotals,
-        activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
+        ...overlay, pricingHistoryPage, tokenMiserGateTotals: pricingHistoryPage.tokenMiserGateTotals,
+        activeTurnId: this.getActiveTurnForThread(thread)?.turnId,
       });
     }
     const pricing = await this.threadUsageLedger.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
