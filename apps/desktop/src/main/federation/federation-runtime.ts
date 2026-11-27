@@ -312,6 +312,8 @@ import {
   type ReorderThreadPinsRequest,
   type ReorderThreadPinsResponse,
   type NavigationQueryPage,
+  type FederationNavigationPageRequest,
+  type FederationNavigationPageResult,
   type NavigationQueryRequest,
   type NavigationQueueProjection,
   type NavigationQueueProjectionRequest,
@@ -749,6 +751,7 @@ function rewriteLiveTranscriptImagesForFederation(
 
 /** What this instance advertises to every peer it connects to. */
 export const DEFAULT_CAPABILITIES: FederationCapability[] = [
+  "navigation_page_deltas_v1",
   "navigation_group_invalidations",
   "remote_window",
   "thread_navigation",
@@ -3543,12 +3546,12 @@ export class DesktopFederationRuntime {
     return this.stampRemoteNavigationQueryPage(target, await this.remoteNavigationOwnerQueryPage(target, request, rpcOptions));
   }
 
-  /** The owner's page exactly as the owner selected it. */
+  /** Raw RPC result. A caller offering a peer token expands its patch before applying viewer state. */
   async remoteNavigationOwnerQueryPage(
     target: FederationRemoteTarget,
-    request: NavigationQueryRequest,
+    request: FederationNavigationPageRequest,
     rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<NavigationQueryPage> {
+  ): Promise<FederationNavigationPageResult> {
     this.assertRemoteNavigationQueryProtocol(target);
     if (request.inventory === "viewer") throw new Error("Viewer navigation inventory is available only on its local machine.");
     // The viewer resolves owners itself. The flag never travels to an owner.
@@ -3560,7 +3563,7 @@ export class DesktopFederationRuntime {
       throw navigationUpgradeRequired(target.instanceId);
     }
     const ownerRequest = navigationRequestForOwner(request, target);
-    let page: NavigationQueryPage;
+    let page: FederationNavigationPageResult;
     try {
       page = await backend.getNavigationQueryPage(ownerRequest, rpcOptions);
     } catch (error) {

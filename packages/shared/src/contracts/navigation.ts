@@ -2796,6 +2796,21 @@ export type NavigationQueryPage = {
   remoteOwner?: NavigationRemoteOwner;
 };
 
+/** With navigation_page_deltas_v1, offer an empty string for a fresh bounded page or echo the
+ * token of the raw owner page this viewer still holds. Window and revision proofs are separate. */
+export type FederationNavigationPageRequest = NavigationQueryRequest & { ownerPageBase?: string };
+/** No base means a full page. With a base, keep its collection order unless a slot or length
+ * changes. A base with no edits acknowledges every retained row. The page shell is always fresh. */
+export type FederationNavigationPagePatch = {
+  token: string;
+  base?: string;
+  /** Unspecified slots retain the same position. -1 consumes the next changed payload. */
+  slots?: Record<number, number>;
+  length?: number;
+  orderKeys?: Record<number, string>;
+};
+export type FederationNavigationPageResult = NavigationQueryPage & { ownerPagePatch?: FederationNavigationPagePatch };
+
 /** One owner's facts for a whole page, as its viewer knows them. */
 export type NavigationRemoteOwner = {
   instanceId: FederationInstanceId;

@@ -246,8 +246,8 @@ import type {
   SetDirectoryPinResponse,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
-  NavigationQueryPage,
-  NavigationQueryRequest,
+  FederationNavigationPageResult,
+  FederationNavigationPageRequest,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
   NavigationLaunchpadConfigRequest,
@@ -2453,10 +2453,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   }
 
   async getNavigationQueryPage(
-    request: NavigationQueryRequest,
+    request: FederationNavigationPageRequest,
     rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<NavigationQueryPage> {
-    return await this.rpc.request<NavigationQueryPage>({
+  ): Promise<FederationNavigationPageResult> {
+    return await this.rpc.request<FederationNavigationPageResult>({
       method: FEDERATION_BACKEND_METHODS.getNavigationQueryPage,
       params: request,
       ...rpcOptions,
