@@ -1,12 +1,11 @@
 import { renderHook } from "@testing-library/react";
 import { expect, it } from "vitest";
 import type { NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
-import type { DesktopApi } from "../desktop-api";
 import { navigationIdentityKey, type NavigationSelectionState } from "../navigation-query-state";
-import { useComposerConfigurationPreview } from "../useComposerConfigurationPreview";
+import { type ComposerConfigurationPreview, useComposerConfigurationPreview } from "../useComposerConfigurationPreview";
 
 it("revokes the owning thread's preview even when its sidebar row has left the page", () => {
-  const api: DesktopApi = {};
+  const previews = new Map<string, ComposerConfigurationPreview>();
   const local: NavigationIdentity = { backend: "codex", threadId: "shared-id" };
   const peer = { ...local, ownerInstanceId: "peer" };
   const row: NavigationThreadSummary = { source: local.backend, id: local.threadId, title: "Local",
@@ -29,7 +28,7 @@ it("revokes the owning thread's preview even when its sidebar row has left the p
   type Props = { ref: NavigationIdentity; selection?: NavigationSelectionState; selectedRow?: NavigationThreadSummary };
   const initialProps: Props = { ref: local, selection: confirmed(local, row), selectedRow: row };
   const { result, rerender } = renderHook(({ ref, selection, selectedRow }: Props) =>
-    useComposerConfigurationPreview(api, navigationIdentityKey(ref), selection, selectedRow), { initialProps });
+    useComposerConfigurationPreview(previews, navigationIdentityKey(ref), selection, selectedRow), { initialProps });
   rerender({ ref: peer, selectedRow: peerRow });
   expect(result.current).toBeUndefined();
   rerender({ ref: peer, selection: confirmed(peer, peerRow), selectedRow: peerRow });

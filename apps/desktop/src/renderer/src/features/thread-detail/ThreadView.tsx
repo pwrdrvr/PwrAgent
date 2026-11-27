@@ -762,6 +762,7 @@ export type ThreadViewProps = {
    * environment and other Details-bound settings.
    */
   threadConfigurationReady?: boolean;
+  threadConfigurationPreview?: ComposerProps["threadConfigurationPreview"];
   workspaceActionsBlocked?: boolean;
   /** Opens Settings → Environments on a workspace, from the Environment chip. */
   onEditEnvironments?: (workspacePath: string) => void;
@@ -3354,6 +3355,7 @@ export function ThreadView(props: ThreadViewProps) {
             : props.composerDisabled
         }
         threadConfigurationReady={composerLaunchpad ? undefined : props.threadConfigurationReady}
+        threadConfigurationPreview={composerLaunchpad ? undefined : props.threadConfigurationPreview}
         unavailableReason={
           composerLaunchpad
             ? launchpadMachineOffline ?? launchpadBackend?.unavailableReason

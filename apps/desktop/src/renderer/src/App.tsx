@@ -4286,6 +4286,7 @@ function DesktopAppShell(props: {
         launchpadConfigurationError: navigation.selectedLaunchpadConfigurationError,
         onReloadLaunchpadConfiguration: navigation.refreshSelectedLaunchpadConfiguration,
         threadConfigurationReady: navigation.selectedThreadDetailReady,
+        threadConfigurationPreview: navigation.composerConfigurationPreview,
         composerDisabled:
           !navigation.selectedThread ||
           !navigation.selectedThreadConfigurationReady ||

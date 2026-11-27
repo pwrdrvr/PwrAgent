@@ -1,21 +1,19 @@
-import { useLayoutEffect, useMemo } from "react";
+import { useLayoutEffect } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
-import type { DesktopApi } from "./desktop-api";
 import type { NavigationSelectionState } from "./navigation-query-state";
 
 // Each entry references only fields from the owner's byte-bounded configuration.
 // History pages, queue payloads and transcript data have their own lifetimes.
 const MAX_COMPOSER_PREVIEWS = 32;
-type ComposerPreview = Pick<NavigationThreadSummary,
+export type ComposerConfigurationPreview = Pick<NavigationThreadSummary,
   "codexEnvironmentOptions" | "codexEnvironmentRuntime" | "codexSkillProfile" | "primaryGitRepository">;
 
 export function useComposerConfigurationPreview(
-  desktopApi: DesktopApi | undefined,
+  previews: Map<string, ComposerConfigurationPreview> | undefined,
   selectionKey: string | undefined,
   selection: NavigationSelectionState | undefined,
   selectedRow: NavigationThreadSummary | undefined,
-): ComposerPreview | undefined {
-  const previews = useMemo(() => desktopApi ? new Map<string, ComposerPreview>() : undefined, [desktopApi]);
+): ComposerConfigurationPreview | undefined {
   const thread = selection?.detail?.thread;
   const identity = selection?.detail?.identity;
   const readiness = selection?.readiness;
