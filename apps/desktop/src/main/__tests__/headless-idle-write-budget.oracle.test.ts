@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createRequire } from "node:module";
-import { afterAll, aroundEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, aroundEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { startHeadlessHost } from "../headless";
 import type { SqliteWriteDelta, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import type { StateDb } from "../state/state-db";
@@ -235,13 +235,18 @@ async function assertLifecycleBudget(
 
 const spellings: PathSpelling[] = process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"];
 describe.for(spellings)("built Node owner (%s path)", spelling => {
+  let fixtureRoot: string;
   let prepared: ReturnType<typeof prepareLifecycle>;
   let lifecycle: Promise<void> | undefined;
 
+  beforeEach(() => {
+    // The timed hook checks elapsed time even if cold bundle evaluation
+    // blocks the event loop past the deadline.
+    prepared = prepareLifecycle(fixtureRoot);
+  });
+
   aroundEach((runTest, { signal }) => runFixture(spelling, signal, async root => {
-    // Copying and evaluating the cold bundle and seeding the schema are
-    // fixture setup. Keep the test deadline on the measured lifecycle.
-    prepared = prepareLifecycle(root);
+    fixtureRoot = root;
     lifecycle = undefined;
     try {
       await runTest();
