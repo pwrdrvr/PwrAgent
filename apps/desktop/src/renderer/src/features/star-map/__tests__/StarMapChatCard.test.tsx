@@ -3631,9 +3631,11 @@ describe("StarMapChatCard settings menu", () => {
     onPointerDown.mockClear();
     onKeyDown.mockClear();
 
+    // Allow first: a press on the bar chooses a stop, which drops the
+    // pending Full Access and its Allow.
+    fireEvent.pointerDown(within(panel).getByRole("button", { name: /^Allow / }), { button: 0 });
     fireEvent.pointerDown(track, { button: 0, pointerId: 1 });
     fireEvent.pointerUp(track, { button: 0, pointerId: 1 });
-    fireEvent.pointerDown(within(panel).getByRole("button", { name: /^Allow / }), { button: 0 });
     fireEvent.keyDown(panel, { key: "a" });
 
     expect(onPointerDown).not.toHaveBeenCalled();
