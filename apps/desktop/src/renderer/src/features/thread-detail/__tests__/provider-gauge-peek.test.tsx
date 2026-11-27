@@ -4,6 +4,7 @@ import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { ReadUsageActivityResponse } from "@pwragent/shared/contracts/usage-activity";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { ThreadContextPanel } from "../ThreadContextPanel";
@@ -57,11 +58,17 @@ const BACKENDS = [
   backend("acp:kimi", "Kimi", [{ name: "Weekly limit", usedPercent: 99, windowMinutes: 10_080 }], false),
 ];
 
+/** Each pace line a limit shows under its meter makes the peek this much taller. */
+const PACE_LINE_HEIGHT = 200;
+
 /** The collapsed rail at the window's right edge: the spine alone. */
 function mockLayout(): void {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     if (this.classList.contains("context-rail")) return new DOMRect(1152, 0, 48, 800);
-    if (this.classList.contains("provider-peek")) return new DOMRect(852, 500, 290, 260);
+    if (this.classList.contains("provider-peek")) {
+      const paceLines = this.querySelectorAll(".backend-status-list__pace").length;
+      return new DOMRect(852, 500, 290, 260 + paceLines * PACE_LINE_HEIGHT);
+    }
     if (this.classList.contains("tooltip-hover-bridge")) return new DOMRect(1142, 500, 10, 260);
     return new DOMRect(1160, 740, 32, 32);
   });
@@ -181,6 +188,60 @@ describe("AI provider gauge peek", () => {
     fireEvent.click(shown.querySelector(".project-card__target")!);
     expect(onActiveTabChange).toHaveBeenCalledWith("providers");
     expect(peek()).toBeNull();
+  });
+
+  // Found in the running app: the pace read finished after the peek was
+  // placed, and the taller card ran off the bottom of the window.
+  it("re-places the peek when its pace lines arrive", async () => {
+    const now = Date.UTC(2026, 10, 24, 21);
+    vi.setSystemTime(now);
+    const weekly = {
+      name: "Weekly limit",
+      windowKey: "secondary" as const,
+      windowMinutes: 10_080,
+      resetAt: now + 82 * 3_600_000,
+    };
+    let answer: (response: ReadUsageActivityResponse) => void = () => undefined;
+    const readUsageActivity = vi.fn(() => new Promise<ReadUsageActivityResponse>((resolve) => {
+      answer = resolve;
+    }));
+    mockLayout();
+    render(
+      <ThreadContextPanel
+        activeTab="info"
+        backends={[backend("codex", "OpenAI", [{ ...weekly, usedPercent: 53 }])]}
+        desktopApi={{ readUsageActivity } as unknown as ComponentProps<typeof ThreadContextPanel>["desktopApi"]}
+        pinned={false}
+        thread={thread}
+        onActiveTabChange={vi.fn()}
+      />,
+    );
+    const shown = await openPeek();
+    // The read starts once the peek is up, on the next tick.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(readUsageActivity).toHaveBeenCalledTimes(1);
+    expect(shown.querySelector(".backend-status-list__pace")).toBeNull();
+    await act(async () => {
+      answer({
+        rows: [],
+        readAt: now,
+        rateLimits: [],
+        truncated: false,
+        limitObservation: {
+          observedAt: now,
+          accountKey: "acct",
+          planType: "pro",
+          limits: [{ ...weekly, usedPercent: 53 }],
+        },
+      } as unknown as ReadUsageActivityResponse);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const placed = peek()!;
+    expect(placed.querySelector(".backend-status-list__pace")).not.toBeNull();
+    const bottom = Number.parseFloat(placed.style.top) + placed.getBoundingClientRect().height;
+    expect(bottom).toBeLessThanOrEqual(window.innerHeight);
   });
 
   it("hands the hover reveal back when the pointer moves on up the spine", async () => {

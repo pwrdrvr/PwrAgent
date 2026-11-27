@@ -15,6 +15,7 @@ import {
   useLocalUsagePace,
   usagePaceAccountKey,
   usagePaceRefreshKey,
+  type LocalUsagePace,
 } from "../../federation-activity/useLocalUsagePace";
 import { RateLimitRow } from "./RateLimitRow";
 
@@ -26,6 +27,12 @@ export type ProviderPeekEntry = {
   limit?: BackendRateLimitSummary;
   usedPercent?: number;
 };
+
+/** The providers whose limits have a pace line: those reporting a percentage. */
+function chartableBackends(backends: readonly BackendSummary[]): BackendSummary[] {
+  return backends.filter((backend) => backend.available
+    && usageLimitProviderForBackend(backend.kind) && backend.rateLimits?.some((limit) => limit.usedPercent !== undefined));
+}
 
 /**
  * Each available provider's tightest limit, worst first. A provider that
@@ -86,12 +93,22 @@ export function useProviderGaugePeek(options: {
   });
   const { hide, show, showAfterDelay, update, visible } = tooltip;
   cardRef.current.hide = hide;
-  const optionsRef = useRef(options);
-  optionsRef.current = options;
+  // Read here, not in the card: the pace rows arrive after the card is
+  // placed, and only content passed through `update` re-places it, so a
+  // card that grew on its own ran off the bottom of the window.
+  const chartable = chartableBackends(options.backends);
+  const pace = useLocalUsagePace(
+    visible && chartable.length ? options.desktopApi?.readUsageActivity : undefined,
+    usagePaceRefreshKey(chartable),
+    usagePaceAccountKey(chartable),
+  );
+  const optionsRef = useRef({ ...options, pace });
+  optionsRef.current = { ...options, pace };
   const content = (): ReactNode => (
     <ProviderGaugePeekCard
       backends={optionsRef.current.backends}
       desktopApi={optionsRef.current.desktopApi}
+      pace={optionsRef.current.pace}
       onOpenPanel={() => {
         hide();
         optionsRef.current.onOpenPanel();
@@ -102,11 +119,12 @@ export function useProviderGaugePeek(options: {
     if (visible) bridge.shown(cardRef.current);
     else bridge.hidden(cardRef.current);
   }, [bridge, visible]);
-  // Fresh limits arrive with each turn; keep an open peek current.
+  // Fresh limits arrive with each turn, and the pace after the card opens;
+  // keep an open peek current and placed for its new height.
   useEffect(() => {
     if (visible) update(content());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options.backends, visible, update]);
+  }, [options.backends, pace, visible, update]);
 
   return {
     enter: (target) => {
@@ -131,15 +149,10 @@ export function useProviderGaugePeek(options: {
 export function ProviderGaugePeekCard(props: {
   backends: BackendSummary[];
   desktopApi?: PeekDesktopApi;
+  pace?: LocalUsagePace;
   onOpenPanel: () => void;
 }) {
-  const chartable = props.backends.filter((backend) => backend.available
-    && usageLimitProviderForBackend(backend.kind) && backend.rateLimits?.some((limit) => limit.usedPercent !== undefined));
-  const pace = useLocalUsagePace(
-    chartable.length ? props.desktopApi?.readUsageActivity : undefined,
-    usagePaceRefreshKey(chartable),
-    usagePaceAccountKey(chartable),
-  );
+  const pace = props.pace;
   // Reset times are relative to the backends' latest refresh, as in the panel.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const now = useMemo(() => Date.now(), [props.backends]);
