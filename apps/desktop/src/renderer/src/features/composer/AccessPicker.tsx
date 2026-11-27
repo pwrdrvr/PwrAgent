@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   ProviderAccessControl,
@@ -8,6 +8,7 @@ import { providerAccessOptionTier } from "@pwragent/shared/provider-access-level
 import { AccessShieldIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import {
+  accessCurrentLevel,
   accessShieldLevel,
   accessStops,
   describeAccessOption,
@@ -15,6 +16,7 @@ import {
   type AccessPickerEvent,
   type AccessPickerState,
 } from "./access-picker-model";
+import { heldPanelOffset } from "./model-settings-picker-model";
 import { SteppedLevelBar } from "./SteppedLevelBar";
 
 /**
@@ -43,22 +45,25 @@ export function AccessPicker(props: {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const confirmFocusedRef = useRef(false);
+  // Set by a Tab keydown inside the panel, read by the blur it causes.
+  const tabbedRef = useRef(false);
   const panelId = useId();
   const descriptionId = useId();
 
   const stops = accessStops(control);
   const valueIndex = stops.findIndex((stop) => stop.option.value === control.value);
-  const chosen = stops[valueIndex]?.option ?? control.selectedOption;
+  const current = accessCurrentLevel(control, stops);
+  const chosen = current.option;
   const pendingIndex = picker.pending === undefined
     ? -1
     : stops.findIndex((stop) => stop.option.value === picker.pending);
   const pending = pendingIndex >= 0 ? stops[pendingIndex] : undefined;
   const shownIndex = preview ?? (pending ? pendingIndex : valueIndex);
   const shown = stops[shownIndex];
-  const chosenLabel = stops[valueIndex]?.label ?? control.selectedOption?.label ?? control.value;
+  const chosenLabel = current.label;
   const name = `Access: ${chosenLabel}`;
   const shield = accessShieldLevel(stops, chosen);
-  const chosenTier = chosen ? providerAccessOptionTier(chosen) : undefined;
+  const chosenTier = providerAccessOptionTier(chosen);
   const shownHot = shown?.option.executionMode === "full-access";
 
   const close = useCallback(() => {
@@ -68,6 +73,28 @@ export function AccessPicker(props: {
   }, []);
 
   useDismissableLayer({ open, onDismiss: close, surfaceRef: wrapperRef, triggerRef });
+
+  // The panel hangs from the shield's left edge, shifted left only as far as
+  // it takes to stay inside the window.
+  const [panelOffset, setPanelOffset] = useState(0);
+  const placePanel = useCallback(() => {
+    const trigger = triggerRef.current?.getBoundingClientRect();
+    const panel = panelRef.current;
+    if (!trigger || !panel) return;
+    const next = heldPanelOffset({
+      anchor: trigger.left,
+      triggerLeft: trigger.left,
+      width: panel.offsetWidth,
+      viewportWidth: window.innerWidth,
+    });
+    setPanelOffset((offset) => (offset === next ? offset : next));
+  }, []);
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    placePanel();
+    window.addEventListener("resize", placePanel);
+    return () => window.removeEventListener("resize", placePanel);
+  }, [open, placePanel]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -145,10 +172,20 @@ export function AccessPicker(props: {
           id={panelId}
           ref={panelRef}
           role="dialog"
+          style={{ left: panelOffset }}
           onBlur={(event) => {
-            // Tabbing out of both the panel and its trigger closes it.
+            // Tabbing out of both the panel and its trigger closes it. Only
+            // the keyboard does: the composer moving focus in code (to the
+            // prompt) must not close a panel the operator is still choosing
+            // in, or drop a stop waiting for Allow. A click outside closes it
+            // on pointerdown instead.
+            const tabbed = tabbedRef.current;
+            tabbedRef.current = false;
             const next = event.relatedTarget as Node | null;
-            if (next && !wrapperRef.current?.contains(next)) close();
+            if (tabbed && next && !wrapperRef.current?.contains(next)) close();
+          }}
+          onKeyDown={(event) => {
+            tabbedRef.current = event.key === "Tab";
           }}
         >
           <div className="access-picker__head">

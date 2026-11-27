@@ -1,4 +1,5 @@
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { formatAcpRuntimeModeLabel } from "@pwragent/shared/acp-permission-mode";
 import {
   orderProviderAccessOptions,
   providerAccessOptionTier,
@@ -55,6 +56,31 @@ export function accessStops(control: ProviderAccessControl): AccessStop[] {
   });
 }
 
+/** The option fields that decide a level's tier. */
+export type AccessLevelRef = Pick<ProviderAccessModeOption, "kind" | "value" | "executionMode">;
+
+/**
+ * The level the target is at, and its name. The resolver keeps a requested
+ * mode it did not list, such as Full Access listed as unavailable, so with
+ * no matching stop the level is read from the value itself: a thread at Full
+ * Access still shows the Full Access warning.
+ */
+export function accessCurrentLevel(
+  control: ProviderAccessControl,
+  stops: readonly AccessStop[],
+): { option: AccessLevelRef; label: string } {
+  const stop = stops.find((candidate) => candidate.option.value === control.value);
+  if (stop) return { option: stop.option, label: stop.label };
+  if (control.selectedOption) {
+    return { option: control.selectedOption, label: accessLevelLabel(control.selectedOption) };
+  }
+  const fullAccess = control.value === "full-access";
+  return {
+    option: { kind: "acp", value: control.value, executionMode: fullAccess ? "full-access" : "default" },
+    label: control.value === "default" ? "Default" : formatAcpRuntimeModeLabel(control.value),
+  };
+}
+
 const TIER_DESCRIPTIONS: Readonly<Record<ProviderAccessTier, string>> = {
   plan: "Reads and proposes only. Nothing is edited or run.",
   default: "Asks you to approve edits and commands.",
@@ -94,7 +120,7 @@ export type AccessShieldLevel = "empty" | "low" | "half" | "full";
  */
 export function accessShieldLevel(
   stops: readonly AccessStop[],
-  chosen: ProviderAccessModeOption | undefined,
+  chosen: AccessLevelRef | undefined,
 ): AccessShieldLevel {
   const tier = chosen ? providerAccessOptionTier(chosen) ?? "default" : "default";
   if (tier === "full") return "full";

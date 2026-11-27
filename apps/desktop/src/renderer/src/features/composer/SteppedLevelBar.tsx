@@ -50,7 +50,11 @@ export function SteppedLevelBar(props: {
   const [hover, setHover] = useState<number>();
   const dragging = useRef(false);
   const trackRef = useRef<HTMLDivElement>(null);
-  const shown = preview ?? props.shown ?? value;
+  // Where the bar stands: a stop shown in place of the value (one awaiting
+  // confirmation) is where keys step from and what a press measures against,
+  // so choosing the committed stop again reaches the host and backs out.
+  const base = props.shown ?? value;
+  const shown = preview ?? base;
   const setPreview = (next: number | undefined): void => {
     setPreviewState(next);
     props.onPreviewChange?.(next);
@@ -70,7 +74,7 @@ export function SteppedLevelBar(props: {
   const usable = (stop: number | undefined): stop is number =>
     stop !== undefined && stop >= 0 && stop < count && enabled[stop] === true;
   const commit = (stop: number | undefined): void => {
-    if (!usable(stop) || stop === value) return;
+    if (!usable(stop) || stop === base) return;
     props.onCommit(stop);
   };
   const columns = { gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` };
@@ -96,7 +100,7 @@ export function SteppedLevelBar(props: {
         tabIndex={disabled ? -1 : 0}
         onKeyDown={(event) => {
           if (disabled) return;
-          const next = steppedStopForKey(event.key, value, enabled);
+          const next = steppedStopForKey(event.key, base, enabled);
           if (next === undefined) return;
           event.preventDefault();
           event.stopPropagation();
@@ -113,7 +117,7 @@ export function SteppedLevelBar(props: {
           event.currentTarget.setPointerCapture?.(event.pointerId);
           const stop = stopAt(event);
           // A press on a disabled stop starts the drag where the value is.
-          setPreview(usable(stop) ? stop : value >= 0 ? value : undefined);
+          setPreview(usable(stop) ? stop : base >= 0 ? base : undefined);
           dragging.current = true;
         }}
         onPointerLeave={() => setHover(undefined)}
