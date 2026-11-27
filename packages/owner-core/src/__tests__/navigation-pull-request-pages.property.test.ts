@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { NavigationQueryRequest, NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared/contracts/navigation";
+import { createNavigationQuerySnapshot } from "../navigation-query-projection";
 import { NavigationQueryStore, type NavigationPullRequestProjection } from "../navigation-query-store";
 
 function pullRequest(number: number): PrSummary {
@@ -26,12 +27,13 @@ it("validates at most one page of new rows and keeps each cursor's observed PR c
   await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 8 }), async (pageSize) => {
     const threads = Array.from({ length: 3 * pageSize }, (_, index) => thread(index));
     const store = new NavigationQueryStore();
+    const index = createNavigationQuerySnapshot({ threads, directories: [] });
     const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", pageSize,
       query: { kind: "lens", lens: "inbox" } };
     let removed: number | undefined;
     const loadPullRequests = vi.fn(async (batches: PrSummary[][]) => batches.map((prs) => prs.filter((pr) => pr.number !== removed)));
     const read = (options?: Partial<NavigationQueryRequest>) => store.readPage({
-      loadIndex: async () => ({ threads, directories: [] }), pullRequests: attachments(threads, loadPullRequests), request: { ...request, ...options }, scopeKey: "viewer",
+      incremental: true, loadIndex: async () => index, pullRequests: attachments(threads, loadPullRequests), request: { ...request, ...options }, scopeKey: "viewer",
     });
     const first = await read();
     expect(first.entries.map(({ row }) => row.prs?.[0]?.number)).toEqual(threads.slice(0, pageSize).map((row) => row.prs![0]!.number));

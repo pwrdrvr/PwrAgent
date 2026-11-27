@@ -2,6 +2,7 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
+  NAVIGATION_LIVE_INDEX_RECONCILED_METHOD,
   navigationInvalidationMayChangeMembership,
   navigationQueryEventRequiresRefresh,
 } from "@pwragent/shared/navigation-query-events";
@@ -54,6 +55,7 @@ export function directorySetMayHaveChanged(event: AgentEvent): boolean {
     return true;
   }
   const params = event.notification.params as { sourceMethod?: unknown } | undefined;
+  if (method === "navigation/invalidated" && params?.sourceMethod === NAVIGATION_LIVE_INDEX_RECONCILED_METHOD) return false;
   return navigationQueryEventRequiresRefresh(method, params)
     && navigationInvalidationMayChangeMembership(
       method === "navigation/invalidated" ? params?.sourceMethod : method,

@@ -8,6 +8,9 @@
 export const NAVIGATION_DIRECTORY_SET_CHANGED_METHOD = "navigation/directorySet/changed";
 export const NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD = "navigation/sidebarEnrichment/updated";
 
+// The owner has already published the new observation. Viewers still need to refetch.
+export const NAVIGATION_LIVE_INDEX_RECONCILED_METHOD = "navigation/liveIndex/reconciled";
+
 export const NAVIGATION_DIRECTORY_SCOPE_MAX_KEYS = 100;
 export const NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES = 16 * 1024;
 
@@ -66,7 +69,7 @@ export function navigationQueryEventRequiresRefresh(method: string, params?: unk
   return ROW_CHANGE_METHODS.has(method) || method.endsWith("/requestApproval");
 }
 
-function normalizedNavigationPullRequestKey(value: string): string | undefined {
+export function normalizedNavigationPullRequestKey(value: string): string | undefined {
   const match = /^([^/#]+)\/([^/#]+(?:\/[^/#]+)+)#(\d+)$/.exec(value.trim().toLowerCase());
   if (!match) return undefined;
   const [, provider, repository, number] = match;

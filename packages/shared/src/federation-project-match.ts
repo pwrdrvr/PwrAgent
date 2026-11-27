@@ -118,10 +118,69 @@ export function findPeerCounterpartDirectory<T extends PeerDirectory>(
   ));
 }
 
-function repositoryIdentities(directory: ProjectIdentity): string[] {
+function repositoryIdentities(directory: ProjectRepositoryIdentity): string[] {
   return [directory.repositoryKey, ...directory.repositoryKeys ?? []]
     .filter((repository): repository is string => Boolean(repository))
     .map((repository) => repository.toLowerCase());
+}
+
+function rememberHomeNames(names: Map<string, number>, directories: readonly RemoteHomeCandidate[], index: number,
+  labels = directoryIdentityNames(directories[index]!)): void {
+  const directory = directories[index]!;
+  for (const name of labels) {
+    const current = names.get(name);
+    if (current === undefined || compareHomeCandidates(directory, directories[current]!, name) < 0) names.set(name, index);
+  }
+}
+
+function matchCheckoutHome(home: LinkedDirectorySummary, directories: readonly RemoteHomeCandidate[], positions?: number[]): number | undefined {
+  const candidate = (directory: RemoteHomeCandidate, index: number) => directory.kind === "directory" ? [{
+    ...directory, kind: directory.kind, index,
+    repositoryKey: directory.gitStatus?.originRepository ?? directory.repositoryKey,
+    repositoryKeys: directory.gitStatus?.remoteRepositories ?? directory.repositoryKeys,
+  }] : [];
+  const candidates = positions ? positions.flatMap((index) => candidate(directories[index]!, index)) : directories.flatMap(candidate);
+  return findPeerCounterpartDirectory({ ...home, kind: "directory" }, candidates)?.index;
+}
+
+/** One lookup for a batch of mounted pins. Newly created placeholders can win
+ * legacy name matches, but only configured directories can match a checkout. */
+export function indexRemoteHomeDirectories(directories: readonly RemoteHomeCandidate[]) {
+  const names = new Map<string, number>();
+  const byKey = new Map<string, number>();
+  const checkoutNames = new Map<string, number[]>();
+  const repositories = new Map<string, number[]>();
+  const checkoutMatches = new Map<string, number | undefined>();
+  let workspace: number | undefined;
+  function append(index: number): void {
+    const directory = directories[index]!;
+    const labels = directoryIdentityNames(directory);
+    rememberHomeNames(names, directories, index, labels);
+    if (!byKey.has(directory.key)) byKey.set(directory.key, index);
+    if (directory.kind === "workspace") workspace ??= index;
+    if (directory.kind !== "directory" || directory.localAvailability === "unconfigured") return;
+    checkoutMatches.clear();
+    const add = (map: Map<string, number[]>, key: string) => {
+      const matches = map.get(key);
+      if (matches) matches.push(index);
+      else map.set(key, [index]);
+    };
+    for (const name of labels) add(checkoutNames, name);
+    for (const repo of repositoryIdentities({ repositoryKey: directory.gitStatus?.originRepository ?? directory.repositoryKey,
+      repositoryKeys: directory.gitStatus?.remoteRepositories ?? directory.repositoryKeys })) add(repositories, repo);
+  }
+  directories.forEach((_, i) => append(i));
+  return { append, byKey, names, get workspace() { return workspace; },
+    findCheckout(home: LinkedDirectorySummary): number | undefined {
+      const key = JSON.stringify([home.label, home.path, home.repositoryKey, home.repositoryKeys]);
+      if (checkoutMatches.has(key)) return checkoutMatches.get(key);
+      const matches = repositoryIdentities(home).flatMap((repo) => repositories.get(repo) ?? []);
+      const positions = new Set(matches.length ? matches : directoryIdentityNames(home).flatMap((name) => checkoutNames.get(name) ?? []));
+      const index = matchCheckoutHome(home, directories, [...positions]);
+      checkoutMatches.set(key, index);
+      return index;
+    },
+  };
 }
 
 /**
@@ -140,21 +199,17 @@ function repositoryIdentities(directory: ProjectIdentity): string[] {
 export function findRemoteHomeDirectoryIndex(
   directories: ReadonlyArray<RemoteHomeCandidate>,
   thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey" | "checkoutProject">,
+  lookup?: ReturnType<typeof indexRemoteHomeDirectories>,
 ): number | undefined {
   // Scratch folder names are per-thread identities, not project identities.
   // Match the containing workspace by kind before considering any raw names.
   const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
   const home = linkedByHomePreference[0];
   if (home && thread.checkoutProject) {
-    const match = findPeerCounterpartDirectory({ ...home, kind: "directory" }, directories.flatMap((directory, index) =>
-      directory.kind === "directory" ? [{
-        ...directory, kind: directory.kind, index,
-        repositoryKey: directory.gitStatus?.originRepository ?? directory.repositoryKey,
-        repositoryKeys: directory.gitStatus?.remoteRepositories ?? directory.repositoryKeys,
-      }] : []));
-    return match?.index;
+    return lookup ? lookup.findCheckout(home) : matchCheckoutHome(home, directories);
   }
   if (home && classifyDirectory(home).kind === "workspace") {
+    if (lookup) return lookup.workspace;
     const index = directories.findIndex((directory) => directory.kind === "workspace");
     return index === -1 ? undefined : index;
   }
@@ -163,15 +218,8 @@ export function findRemoteHomeDirectoryIndex(
   // renderer places a starting row from the list it rendered, and the two
   // are not in one order, so the first match is not one answer. The winner
   // is chosen by what the rows are instead.
-  const directoryIndexByName = new Map<string, number>();
-  directories.forEach((directory, index) => {
-    for (const name of directoryIdentityNames(directory)) {
-      const current = directoryIndexByName.get(name);
-      if (current === undefined || compareHomeCandidates(directory, directories[current]!, name) < 0) {
-        directoryIndexByName.set(name, index);
-      }
-    }
-  });
+  const directoryIndexByName = lookup?.names ?? new Map<string, number>();
+  if (!lookup) directories.forEach((_, index) => rememberHomeNames(directoryIndexByName, directories, index));
   for (const linked of linkedByHomePreference) {
     // A secondary Workspaces link is matched by kind only when it is home.
     // Its folder name (`projects`, a scratch hash) names no project, and a

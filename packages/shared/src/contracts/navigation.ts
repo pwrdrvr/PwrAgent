@@ -2356,6 +2356,7 @@ export type NavigationSnapshotTransportResponse =
 export const NAVIGATION_QUERY_PROTOCOL_VERSION = 2 as const;
 export const NAVIGATION_QUERY_MAX_PAGE_ROWS = 100;
 /** 256 KiB application message minus the reserved 4 KiB outer envelope. */
+export const NAVIGATION_INDEX_MAX_INPUT_BYTES = 32 * 1024 * 1024;
 export const NAVIGATION_QUERY_MAX_RESULT_BYTES = 252 * 1024;
 
 export type NavigationQueryConsumerClass =
@@ -2733,6 +2734,8 @@ export type NavigationQueryRequest = {
   deadlineAt?: number;
   /** Unchanged is legal only for a complete baseline of this exact query. */
   completeBaselineRevision?: string;
+  /** Local window transport only. Empty requests a full baseline. Echo its token when accepting a delta. */
+  windowPageBase?: string;
   /** Conditional acknowledgment of exactly the retained range, never a complete baseline. */
   retainedRange?: { revision: string; ownerEpoch: string; start: number; count: number };
 };
@@ -2774,6 +2777,9 @@ export type NavigationQueryPage = {
   directoryGitProof?: NavigationDirectoryGitProof;
   facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
+  /** Local window transport, expanded before applying owner paging semantics.
+   * Negative slots consume the next changed entry. Others copy a baseline slot. */
+  windowPagePatch?: { token: string; ownerContentBytes?: number; base?: string; slots?: number[]; directories?: true; orderKeys?: Record<number, string> };
   /** Offset of this page in its immutable owner generation. Omitted means zero. */
   rangeStart?: number;
   directories?: NavigationDirectoryRow[];

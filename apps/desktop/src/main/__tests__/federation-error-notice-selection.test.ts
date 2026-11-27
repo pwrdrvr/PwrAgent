@@ -3,12 +3,20 @@ import { describe, expect, it } from "vitest";
 import { FederationAccountingStream } from "../federation/federation-event-stream";
 import {
   eventMatchesThreadSelection,
+  federationEventClassForMethod,
   navigationInvalidationForLocalEvent,
   projectLocalEventForFederation,
   unsequencedFederationEventPayload,
 } from "../federation/federation-runtime";
 
 describe("federation error notice selection", () => {
+  it("delivers sidebar enrichment as a navigation invalidation to a sparse subscriber", () => {
+    const event = navigationInvalidationForLocalEvent({ backend: "codex", notification: { method: "navigation/sidebarEnrichment/updated", params: {} } });
+    expect(event?.notification).toMatchObject({ method: "navigation/invalidated", params: { sourceMethod: "navigation/sidebarEnrichment/updated" } });
+    expect(federationEventClassForMethod(event!.notification.method)).toBe("navigation");
+    expect(eventMatchesThreadSelection(event!, "navigation", { kind: "threads", threads: [] })).toBe(true);
+  });
+
   it("preserves owner-local directory scope through tiny invalidations and both event transports", () => {
     const event = { backend: "codex", navigationDirectoryScope: { version: 1, directoryKeys: ["directory:/off-page"] },
       notification: { method: "thread/backgroundTasks/updated", params: { threadId: "hidden-descendant", tasks: [] } },

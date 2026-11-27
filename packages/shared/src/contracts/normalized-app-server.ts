@@ -2904,6 +2904,7 @@ export type AppServerNotification =
   | {
       method: "navigation/providerThreads/refreshed";
       params: {
+        backend?: AppServerBackendKind;
         failedProviders: number;
       };
     }

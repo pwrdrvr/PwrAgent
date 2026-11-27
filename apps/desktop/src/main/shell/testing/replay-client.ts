@@ -133,6 +133,15 @@ export class ReplayClient {
     return asThreadList(this.controller.consumeResponse("thread/list").result);
   }
 
+  /** Fixtures record provider metadata in their ordered listing responses.
+   * A metadata-only read observes that same state without consuming a transcript. */
+  async readThreadSummary(threadId: string): Promise<AppServerThreadSummary> {
+    const rows = await this.listThreads();
+    const thread = rows.find((row) => row.id === threadId);
+    if (!thread) throw new Error(`Replay has no provider summary for thread ${threadId}`);
+    return thread;
+  }
+
   async listSkills(_params?: {
     cwd?: string;
     cwds?: string[];

@@ -255,6 +255,7 @@ import {
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
+  type AppServerBackendScope,
   type AppServerBackendKind,
   type AppServerBackendWake,
   type CodexThreadEnvironmentRuntime,
@@ -4668,6 +4669,46 @@ export class DesktopBackendRegistry {
       : summary;
   }
 
+  /** A start is visible as soon as the owner has committed its workspace,
+   * including the interval before the provider's listing catches up. */
+  getCachedNavigationThread(ref: { backend: AppServerBackendKind; threadId: string }): AppServerThreadSummary | undefined {
+    const pending = this.pendingStartedThreads.get(buildThreadIdentityKey(ref.backend, ref.threadId));
+    const cached = this.getCachedThreadSummary(ref);
+    return pending && cached ? retainPendingStartedThreadWorkspace(cached, pending) : pending ?? cached;
+  }
+
+  async refreshNavigationThread(ref: { backend: AppServerBackendKind; threadId: string }, activity: boolean, workers: boolean) {
+    const observation = this.reserveThreadInfoObservation();
+    let summary = this.getCachedNavigationThread(ref);
+    if (activity) {
+      let native: AppServerThreadSummary | undefined;
+      if (ref.backend === "codex") {
+        native = await this.withCodexThreadClient(ref.threadId, async (client) => await client.readThreadSummary?.(ref.threadId))
+          .catch(() => undefined);
+      } else if (ref.backend === "claude") {
+        native = await this.claudeBackend.readThreadSummary(ref.threadId);
+      } else if (isAcpBackendId(ref.backend)) {
+        const session = this.acpBackend.getSession(ref.backend, ref.threadId);
+        if (session) native = this.acpBackend.sessionToThreadSummary(session);
+      }
+      if (native) {
+        // Point reads omit checkout and runtime facts supplied by discovery.
+        // Keep those facts and take the activity watermark and acknowledged title.
+        const { title, titleSource } = projectOwnerThreadTitle(native, await this.overlayStore.getThreadMetadata?.(ref));
+        summary = this.withObservedThreadName({ ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt });
+      }
+    }
+    if (!summary) return undefined;
+    if (workers && ref.backend === "codex") {
+      const cards = await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
+        backend: "codex", threadIds: [ref.threadId], monitorIdPrefix: CODEX_NATIVE_MONITOR_ID_PREFIX,
+      });
+      summary = { ...summary, ...this.subAgentMonitorService.persistedCodexNativeSubAgentDisclosure(summary, cards[ref.threadId]) };
+    }
+    this.threadInfoStore.observeSummary({ identity: ref, observationSequence: observation, enriched: false, summary });
+    return summary;
+  }
+
   /** An explicit link hover needs display facts, without publishing provider
    * observations or invoking the maintenance-bearing thread list. */
   async readNavigationThreadLink(ref: { backend: AppServerBackendKind; threadId: string }): Promise<{
@@ -5330,10 +5371,32 @@ export class DesktopBackendRegistry {
     return this.inheritThreadListReadState(limited, rows);
   }
 
+  /** Display observation without consuming the provider listing's status fence. */
+  navigationThreadStatus(row: AppServerThreadSummary): AppServerThreadStatus | undefined {
+    if (this.threadHasActiveTurn(row.id, row.source)) return "active";
+    return row.source === "codex" ? this.context.turnState.statusObservation(row.id)?.status ?? row.threadStatus : row.threadStatus;
+  }
+
+  /** Refresh only SQLite-owned sessions and overlays after an external profile commit.
+   * The saved Codex discovery snapshot may predate an observed start or deletion. */
+  async reconcileSqliteNavigationThreads(threads: AppServerThreadSummary[], backend: AppServerBackendScope): Promise<AppServerThreadSummary[]> {
+    if (this.closed || this.isBootstrapModeFn()) return [];
+    const [codex, claude, acp] = await Promise.all([
+      this.applySavedCodexOverlays(threads.filter((row) => row.source === "codex")),
+      backend === "all" || backend === "claude" ? this.claudeBackend.listThreads() : [],
+      backend === "all" || isAcpBackendId(backend) ? this.readAcpThreadsForCache(true) : [],
+    ]);
+    return [...codex, ...claude, ...acp.filter((row) => backend === "all" || row.source === backend)];
+  }
+
   /** Complete available local membership while the owner checks its providers. */
   readStartupNavigationThreads(backend?: AppServerBackendKind): Promise<AppServerThreadSummary[]> | undefined {
-    if (!this.providerThreadSnapshotStore || this.closed || this.isBootstrapModeFn()
-      || this.isCodexBootstrapDeferredFn() || this.startupProviderRefreshStatus?.state !== "checking") return undefined;
+    if (this.startupProviderRefreshStatus?.state !== "checking") return undefined;
+    return this.readSavedNavigationThreads(backend);
+  }
+
+  readSavedNavigationThreads(backend?: AppServerBackendKind): Promise<AppServerThreadSummary[]> | undefined {
+    if (!this.providerThreadSnapshotStore || this.closed || this.isBootstrapModeFn() || this.isCodexBootstrapDeferredFn()) return undefined;
     return this.hydrateSavedStartupThreads().then((saved) => {
       const reviewParents = new Set<string>();
       for (const review of this.context.turnState.liveReviewRecords().values()) {
@@ -5555,7 +5618,7 @@ export class DesktopBackendRegistry {
       backend: "codex",
       notification: {
         method: "navigation/providerThreads/refreshed",
-        params: { failedProviders },
+        params: { failedProviders, backend: "codex" },
       },
     });
   }
@@ -9340,11 +9403,19 @@ export class DesktopBackendRegistry {
   }
 
   private async startThreadPrepared(params: Parameters<DesktopBackendRegistry["startThread"]>[0], pending?: PendingThreadStartReporter): Promise<StartThreadResponse> {
-    return await new ThreadCreationLifecycle().prepare(async (resources) => await this.prepareThreadCreation(params, resources, pending), (stage, error) => {
+    const created = await new ThreadCreationLifecycle().prepare(async (resources) => await this.prepareThreadCreation(params, resources, pending), (stage, error) => {
       backendRegistryLog.warn("thread creation preparation cleanup failed", {
         backend: params.backend, stage, error: error instanceof Error ? error.message : String(error),
       });
     });
+    if (created.backend === "codex") {
+      // The provider may announce the identity before the owner's workspace,
+      // parent and pin are committed. The prepared row is now discoverable.
+      await this.threadDirectoryService.emitCodexDirectoryRelationshipsUpdated({
+        reason: "thread-created", threadIds: [created.threadId],
+      }).catch((error: unknown) => backendRegistryLog.warn("created thread navigation publication failed", { threadId: created.threadId, error: String(error) }));
+    }
+    return created;
   }
 
   private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation, pending?: PendingThreadStartReporter): Promise<PreparedThreadCreation<Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure">>> {
