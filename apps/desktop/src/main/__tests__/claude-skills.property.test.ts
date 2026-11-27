@@ -6,6 +6,7 @@ import { selectClaudeCommandRows } from "../claude/claude-commands";
 import {
   claudeCommandCatalog,
   claudeSkillFileCandidates,
+  claudeSkillLinks,
   claudeSkillPrompt,
   type ClaudeSkillEvidence,
   type ClaudeSkillFile,
@@ -118,6 +119,58 @@ describe("claudeSkillPrompt", () => {
   ])("handles %s", (_name, text, expected) => {
     expect(claudeSkillPrompt([{ type: "text", text }], new Set(["release", "release-notes", "loc"])))
       .toEqual([{ type: "text", text: expected }]);
+  });
+});
+
+// The pattern the scanner replaces, kept as its oracle.
+const SKILL_LINK_ORACLE = /\[\$([^\]\r\n]+)\]\(([^)\r\n]+)\)/g;
+// Every character the pattern treats specially, plus filler.
+const LINK_ALPHABET = ["[", "$", "]", "(", ")", "a", "/", " ", "\n", "\r", "[$", "](", "[$a](b)"];
+// Weighted toward starts that fail on the same line, the input that costs most.
+const linkText = fc.array(fc.oneof(
+  { weight: 2, arbitrary: fc.constantFrom("[$", "a", " ", "](") },
+  { weight: 3, arbitrary: fc.constantFrom(...LINK_ALPHABET) },
+), { maxLength: 40, size: "max" }).map((parts) => parts.join(""));
+
+describe("claudeSkillLinks", () => {
+  it("finds exactly the links the pattern matches", () => {
+    fc.assert(fc.property(linkText, (text) => {
+      const expected = [...text.matchAll(SKILL_LINK_ORACLE)].map((match) => ({
+        start: match.index, end: match.index + match[0].length, name: match[1], target: match[2],
+      }));
+      expect(claudeSkillLinks(text)).toEqual(expected);
+    }));
+  });
+
+  it("scans each character at most once", () => {
+    fc.assert(fc.property(linkText, (text) => {
+      const work = { chars: 0 };
+      claudeSkillLinks(text, work);
+      expect(work.chars).toBeLessThanOrEqual(text.length);
+    }));
+  });
+
+  it.each([
+    // A skip past the `]` of a name without a target missed the next link.
+    ["[$[][$a](b)", [{ start: 4, end: 11, name: "a", target: "b" }]],
+    ["[$x](y) [$](z) [$a](b", [{ start: 0, end: 7, name: "x", target: "y" }]],
+  ])("finds the links in %j", (text, expected) => {
+    expect(claudeSkillLinks(text)).toEqual(expected);
+    expect(expected).toEqual([...text.matchAll(SKILL_LINK_ORACLE)].map((match) => ({
+      start: match.index, end: match.index + match[0].length, name: match[1], target: match[2],
+    })));
+  });
+
+  // Each of these scanned to the end of the line from every `[$` before.
+  it.each([
+    ["repeated starts", "[$[$[$["],
+    ["unclosed names", "[$a ".repeat(2_000)],
+    ["names without a target", "[$a] ".repeat(2_000)],
+    ["unclosed targets", "[$a](x ".repeat(2_000)],
+  ])("reads a long line of %s once", (_name, text) => {
+    const work = { chars: 0 };
+    expect(claudeSkillLinks(text, work)).toEqual([]);
+    expect(work.chars).toBeLessThanOrEqual(text.length);
   });
 });
 

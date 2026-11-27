@@ -128,8 +128,72 @@ function claudeSkillScope(source: string): string | undefined {
   }
 }
 
-const SKILL_LINK = /\[\$([^\]\r\n]+)\]\(([^)\r\n]+)\)/g;
 const SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9:_-]*$/;
+
+/** A `[$name](target)` link in a prompt: `end` is just past its `)`. */
+export type ClaudeSkillLink = { start: number; end: number; name: string; target: string };
+
+/** The first of `stop` or a line break at or after `from`, or the text's length. */
+function scanTo(text: string, from: number, stop: string, work?: { chars: number }): number {
+  let index = from;
+  while (index < text.length && text[index] !== stop && text[index] !== "\n" && text[index] !== "\r") index += 1;
+  if (work) work.chars += index - from;
+  return index;
+}
+
+/**
+ * The prompt's `[$name](target)` links: the matches of
+ * `/\[\$([^\]\r\n]+)\]\(([^)\r\n]+)\)/g`, found in one pass.
+ *
+ * That pattern scans from every `[$` to the end of its line before failing,
+ * so a pasted line of unclosed `[$` took time quadratic in its length. A
+ * failed link here moves past every later `[$` that would fail the same way:
+ * one whose name runs into the same line break, or into the same `]` without
+ * a `(` after it, or whose target would cross the same `)`-less stretch.
+ * `work` counts the characters scanned, for tests.
+ */
+export function claudeSkillLinks(text: string, work?: { chars: number }): ClaudeSkillLink[] {
+  const links: ClaudeSkillLink[] = [];
+  let from = 0;
+  for (;;) {
+    const start = text.indexOf("[$", from);
+    if (start < 0) return links;
+    const close = scanTo(text, start + 2, "]", work);
+    if (close === start + 2) {
+      from = start + 1;
+      continue;
+    }
+    if (text[close] !== "]") {
+      from = close;
+      continue;
+    }
+    if (text[close + 1] !== "(") {
+      from = close + 1;
+      continue;
+    }
+    const end = scanTo(text, close + 2, ")", work);
+    if (end === close + 2) {
+      from = close + 1;
+      continue;
+    }
+    if (text[end] !== ")") {
+      from = end;
+      continue;
+    }
+    links.push({ start, end: end + 1, name: text.slice(start + 2, close), target: text.slice(close + 2, end) });
+    from = end + 1;
+  }
+}
+
+function replaceSkillLinks(text: string, replace: (link: ClaudeSkillLink) => string): string {
+  let output = "";
+  let cursor = 0;
+  for (const link of claudeSkillLinks(text)) {
+    output += text.slice(cursor, link.start) + replace(link);
+    cursor = link.end;
+  }
+  return cursor === 0 ? text : output + text.slice(cursor);
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -176,10 +240,12 @@ export function claudeSkillPrompt(
   const opensWithSkill = new Set<number>();
   const output = input.map((item, index): AppServerTurnInputItem => {
     if (item.type !== "text") return item;
-    let text = item.text.replace(SKILL_LINK, (link, name: string, target: string, offset: number) => {
-      if (!SKILL_NAME.test(name) || (!skillNames.has(name) && !SKILL_FILE.test(target.trim()))) return link;
+    let text = replaceSkillLinks(item.text, ({ start, end, name, target }) => {
+      if (!SKILL_NAME.test(name) || (!skillNames.has(name) && !SKILL_FILE.test(target.trim()))) {
+        return item.text.slice(start, end);
+      }
       mentioned.add(name);
-      if (offset === 0) opensWithSkill.add(index);
+      if (start === 0) opensWithSkill.add(index);
       return `/${name}`;
     });
     if (bare) {
