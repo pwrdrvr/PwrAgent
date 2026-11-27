@@ -30065,6 +30065,12 @@ describe("Composer", () => {
 
     rerender(composer("thread-1"));
     expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "true");
+
+    // Each thread keeps its own Plan: turning it on in thread 2 leaves thread 1's on.
+    rerender(composer("thread-2"));
+    fireEvent.click(screen.getByLabelText("Plan mode"));
+    rerender(composer("thread-1"));
+    expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "true");
   });
 
   // Plan is one-shot: a send made while it is on carries it or turns it off
@@ -30102,7 +30108,7 @@ describe("Composer", () => {
       await waitFor(() => expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false"));
     });
 
-    it("schedules a Plan message with Plan in its turn and turns Plan off", async () => {
+    it("schedules a Plan message with Plan in its turn, turns Plan off, and brings Plan back on Edit", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
       const scheduledApi = createScheduledActionApi();
@@ -30126,10 +30132,25 @@ describe("Composer", () => {
       expect(scheduledApi.createScheduledThreadAction.mock.calls[0]![0].turn?.collaborationMode)
         .toEqual(expect.objectContaining({ mode: "plan" }));
       expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false");
+
+      // Editing it brings Plan back with the text, so rescheduling keeps it.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      });
+      expect(screen.getByLabelText("Reply")).toHaveValue("Plan this later");
+      expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "true");
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      });
+      expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledTimes(2);
+      expect(scheduledApi.createScheduledThreadAction.mock.calls[1]![0].turn?.collaborationMode)
+        .toEqual(expect.objectContaining({ mode: "plan" }));
     });
 
     it("turns Plan off and says so when the message steers the running turn", async () => {
-      const steerTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", turnId: "turn-1" }));
+      const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
+        backend: "codex" as const, threadId: request.threadId, turnId: "turn-1",
+      }));
       const onShowNotice = vi.fn();
       render(
         <Composer
@@ -30153,10 +30174,13 @@ describe("Composer", () => {
       fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
       await waitFor(() => expect(steerTurn).toHaveBeenCalledTimes(1));
+      // If the running turn has ended, the owner starts this one in Plan mode.
+      expect(steerTurn.mock.calls[0]![0].fallback?.turn.collaborationMode)
+        .toEqual(expect.objectContaining({ mode: "plan" }));
       expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false");
       expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
         title: "Plan mode",
-        message: expect.stringContaining("added to the running turn"),
+        message: expect.stringContaining("joins the running turn"),
       }));
     });
   });
