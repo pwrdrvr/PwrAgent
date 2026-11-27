@@ -1,3 +1,4 @@
+import { LivePricingLines } from "./live-pricing-lines";
 import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
@@ -666,6 +667,17 @@ export class SubAgentMonitorService {
   /** Native worker usage by parent thread, then monitor id, for the registry's reads. */
   get liveCodexNativeSubAgentUsageRecords(): ReadonlyMap<string, ReadonlyMap<string, LiveCodexNativeSubAgentUsage>> {
     return this.liveCodexNativeSubAgentUsage;
+  }
+
+  /** Pricing follows held batches until persistence succeeds, across navigation reparenting. */
+  private readonly heldParentsByMonitor = new Map<string, Set<string>>();
+
+  *heldWorkerPricingLines(threadId: string): Iterable<LivePricingLines> {
+    const monitorId = codexNativeSubAgentId(threadId);
+    for (const parent of this.heldParentsByMonitor.get(monitorId) ?? []) {
+      const held = this.liveCodexNativeSubAgentUsage.get(parent)?.get(monitorId);
+      if (held) yield held.lines;
+    }
   }
 
   /** Records the parent a thread listing grouped a native worker under. */
@@ -1978,6 +1990,9 @@ export class SubAgentMonitorService {
         // A newer notification may have replaced the entry during the write.
         if (lives.get(monitorId) === live) {
           lives.delete(monitorId);
+          const parents = this.heldParentsByMonitor.get(monitorId)!;
+          parents.delete(parentThreadId);
+          if (!parents.size) this.heldParentsByMonitor.delete(monitorId);
         }
       }
       if (lives.size === 0) {
@@ -2102,7 +2117,7 @@ export class SubAgentMonitorService {
       // worker's turn end; see `liveCodexNativeSubAgentUsage`.
       const lives = this.liveCodexNativeSubAgentUsage.get(parentThreadId)
         ?? new Map<string, LiveCodexNativeSubAgentUsage>();
-      const lines = new Map(lives.get(monitorId)?.lines ?? []);
+      const lines = new LivePricingLines(lives.get(monitorId)?.lines);
       lines.set(line.usageLineId, line);
       lives.set(monitorId, {
         ...settingsForCard,
@@ -2111,6 +2126,9 @@ export class SubAgentMonitorService {
         updatedAt: Date.now(),
       });
       this.liveCodexNativeSubAgentUsage.set(parentThreadId, lives);
+      const parents = this.heldParentsByMonitor.get(monitorId) ?? new Set<string>();
+      parents.add(parentThreadId);
+      this.heldParentsByMonitor.set(monitorId, parents);
       logUnpricedThreadUsageLine(line);
       // Codex can report usage after the turn it belongs to has ended. That
       // boundary has passed, and the worker may never run again.

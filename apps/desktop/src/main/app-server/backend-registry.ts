@@ -8065,7 +8065,7 @@ export class DesktopBackendRegistry {
       this.assertNotBootstrap("readThread");
       const thread = { backend, threadId: request.threadId };
       const turnIds = [...new Set(threadDisplayAccountingTurns(request.display).map(({ id }) => id))];
-      const pricing = await this.threadUsageLedger.readThreadTurnUsageWithLiveTokenMiser({ ...thread, turnIds });
+      const pricing = await this.threadUsageLedger.readThreadTurnUsage({ ...thread, turnIds });
       return projectThreadDisplay({
         ...thread, fetchedAt: Date.now(), pricing,
         replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },

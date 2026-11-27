@@ -23,6 +23,10 @@ export function formatPricingModelLabel(model?: string, label?: string): string 
   return display;
 }
 
+export function isCodexPricingLine(line: ThreadUsageLineRecord): boolean {
+  return line.backend === "codex" && (line.scope !== "monitor" || line.provider === "openai" || line.provider === "local");
+}
+
 /** Reversible read projection: never rewrite historical usage or token counts. */
 export function priceLocalModelUsage<T extends ThreadUsageLineRecord>(line: T): T {
   const { priceUnavailableReason: _reason, ...rest } = line;

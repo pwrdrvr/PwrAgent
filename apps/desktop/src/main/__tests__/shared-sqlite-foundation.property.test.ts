@@ -56,6 +56,8 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_child_turn"
     && row.name !== "idx_thread_usage_lines_unpriced_thread"
     && row.name !== "idx_thread_usage_lines_unpriced_parent"
+    && row.name !== "idx_thread_usage_lines_spend_thread"
+    && row.name !== "idx_thread_usage_lines_spend_parent"
     && row.name !== "idx_thread_usage_turns_pending_acp_compaction"
     && row.name !== "idx_thread_usage_turns_acp_context"
     && row.name !== "idx_automation_runs_backend_turn"
