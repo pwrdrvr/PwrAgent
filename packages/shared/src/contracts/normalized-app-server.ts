@@ -756,6 +756,8 @@ export type ThreadGitWorkingState = {
 };
 
 export type AppServerThreadSummary = {
+  /** Latest owner-observed context fill, independent of cumulative token usage. */
+  contextWindow?: { totalTokens: number; modelContextWindow: number };
   id: ThreadIdentifier;
   title: string;
   titleSource: AppServerThreadTitleSource;

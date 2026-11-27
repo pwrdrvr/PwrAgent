@@ -2652,13 +2652,15 @@ function SidebarContent(props: SidebarProps) {
     const peerLabel = target?.scope === "remote"
       ? thread.federation?.instanceLabel ?? target.instanceId
       : federationTarget ? federationLabel ?? "another machine" : undefined;
-    const context = props.readOpenThreadContext?.();
+    const openContext = thread.contextWindow ? undefined : props.readOpenThreadContext?.();
+    const context = thread.contextWindow
+      ?? (openContext?.threadKey === threadSummaryIdentityKey(thread) ? openContext : undefined);
     return threadInfoRowFacts(thread, {
       backendLabel: formatBackendLabel(thread.source, [...threadBackends(thread)]),
       machine: peerLabel
         ? { label: peerLabel, local: false }
         : { label: props.localMachineLabel ?? thisMachineLabel(props.platform), local: true },
-      ...(context?.threadKey === threadSummaryIdentityKey(thread) ? { context } : {}),
+      context,
     });
   });
   const threadCardActions = useEventCallback((

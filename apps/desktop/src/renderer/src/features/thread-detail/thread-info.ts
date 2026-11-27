@@ -131,9 +131,7 @@ export function clearThreadInfoCostCache(): void {
 /**
  * What a sidebar row's card shows beyond a chip's card: the row's own
  * folders, machine, branch, Git state, lead PR and model, as icon rows.
- * Everything comes from the navigation row the sidebar already holds; the
- * context bar only from the open thread, which is the only one with a
- * reading today.
+ * An open thread can also supply its session reading while waiting for a row.
  */
 export type ThreadInfoRowFacts = {
   backendLabel: string;
@@ -147,11 +145,7 @@ export type ThreadInfoRowFacts = {
   context?: ThreadInfoContext;
 };
 
-export type ThreadInfoContext = {
-  totalTokens: number;
-  modelContextWindow: number;
-  usedPercent: number;
-};
+export type ThreadInfoContext = NonNullable<NavigationThreadSummary["contextWindow"]>;
 
 export function threadInfoRowFacts(
   thread: NavigationThreadSummary,

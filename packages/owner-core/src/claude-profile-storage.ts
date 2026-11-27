@@ -1,3 +1,4 @@
+import { threadContextWindowReading } from "@pwragent/shared/thread-context-window";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 
 /** PwrAgent's metadata sidecar; SDK/provider sessions and history are separate. */
@@ -5,6 +6,7 @@ export type ClaudeProfileSessionMetadata = {
   cwd: string;
   thread: AppServerThreadSummary;
   ephemeral?: boolean;
+  contextWindow?: { usedTokens: number; modelContextWindow: number };
 };
 
 export interface ClaudeSessionMetadataStorage<T extends ClaudeProfileSessionMetadata> {
@@ -19,8 +21,12 @@ export interface ClaudeProfileThreadStorage {
 
 /** The metadata owns identity/name/settings; live turn state belongs to the host. */
 export function projectClaudeSessionThread(
-  { cwd, thread: { workspaceHandoff: _refusal, ...thread } }: ClaudeProfileSessionMetadata,
+  { cwd, contextWindow, thread: { workspaceHandoff: _refusal, ...thread } }: ClaudeProfileSessionMetadata,
   active = false,
 ): AppServerThreadSummary {
-  return { ...thread, projectKey: cwd, threadStatus: active ? "active" : "idle" };
+  const reading = threadContextWindowReading(contextWindow?.usedTokens, contextWindow?.modelContextWindow);
+  return {
+    ...thread, projectKey: cwd, threadStatus: active ? "active" : "idle",
+    ...(reading ? { contextWindow: reading } : {}),
+  };
 }

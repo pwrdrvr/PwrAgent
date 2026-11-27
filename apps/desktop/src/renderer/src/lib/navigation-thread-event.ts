@@ -1,3 +1,4 @@
+import { readCodexContextWindow, threadContextWindowReading } from "@pwragent/shared/thread-context-window";
 import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
 import { normalizeRenamedTitleSource } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
@@ -41,6 +42,22 @@ export function applyCheckoutHibernationUpdate<T extends NavigationThreadSummary
     next = (params.keepAwake ? { ...rest, keepCheckoutAwake: true } : rest) as T;
   }
   return next;
+}
+
+export function applyThreadContextWindowEvent(
+  thread: NavigationThreadSummary,
+  backend: AgentEvent["backend"],
+  notification: AgentEvent["notification"],
+): NavigationThreadSummary {
+  if (notification.method === "thread/contextWindow/updated" && notification.params.source === "session" && thread.contextWindow) {
+    return thread;
+  }
+  const reading = notification.method === "thread/contextWindow/updated"
+    ? threadContextWindowReading(notification.params.usedTokens, notification.params.modelContextWindow)
+    : backend === "codex" && notification.method === "thread/tokenUsage/updated" ? readCodexContextWindow(notification.params.tokenUsage) : undefined;
+  return reading && (reading.totalTokens !== thread.contextWindow?.totalTokens
+    || reading.modelContextWindow !== thread.contextWindow?.modelContextWindow)
+    ? { ...thread, contextWindow: reading } : thread;
 }
 
 /** Canonical owner events update a retained exact detail without any collection read. */

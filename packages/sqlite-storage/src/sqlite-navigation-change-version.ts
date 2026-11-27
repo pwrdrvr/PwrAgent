@@ -34,6 +34,23 @@ function ensureNavigationVersion(db: Database.Database): { owner: number; viewer
           AFTER ${operation} ON main.${table} BEGIN SELECT pwragent_viewer_navigation_changed(); END`);
       }
     }
+    // The usage ledger contributes just the latest observed fill to navigation.
+    // Pricing-only upserts must leave a reusable owner listing alone.
+    db.exec(`
+      CREATE TEMP TRIGGER pwragent_context_insert AFTER INSERT ON main.thread_usage_turns
+        WHEN NEW.final_context_tokens >= 0 AND NEW.model_context_window > 0
+        BEGIN SELECT pwragent_navigation_changed(); END;
+      CREATE TEMP TRIGGER pwragent_context_delete AFTER DELETE ON main.thread_usage_turns
+        WHEN OLD.final_context_tokens >= 0 AND OLD.model_context_window > 0
+        BEGIN SELECT pwragent_navigation_changed(); END;
+      CREATE TEMP TRIGGER pwragent_context_update AFTER UPDATE ON main.thread_usage_turns
+        WHEN ((NEW.final_context_tokens >= 0 AND NEW.model_context_window > 0)
+           OR (OLD.final_context_tokens >= 0 AND OLD.model_context_window > 0))
+          AND (NEW.final_context_tokens IS NOT OLD.final_context_tokens OR NEW.model_context_window IS NOT OLD.model_context_window
+            OR NEW.observed_at != OLD.observed_at OR NEW.backend != OLD.backend OR NEW.thread_id != OLD.thread_id
+            OR NEW.rowid != OLD.rowid)
+        BEGIN SELECT pwragent_navigation_changed(); END;
+    `);
     // Only metadata that enters the owner navigation index.
     for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
       const references = operation === "INSERT" ? ["NEW"] : operation === "DELETE" ? ["OLD"] : ["OLD", "NEW"];
@@ -49,7 +66,7 @@ function ensureNavigationVersion(db: Database.Database): { owner: number; viewer
 }
 
 /** Navigation index inputs, rather than every write on the connection. PR status and election
- * membership, separate usage tables and composer recovery do not change it.
+ * membership, unrelated usage and composer recovery do not change it.
  * TEMP triggers cover raw SQL too, without persistent counters or WAL writes.
  * Counters survive rollback; callers must bypass reuse inside transactions.
  * External commits still require data_version at the caller.

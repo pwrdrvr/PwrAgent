@@ -45,6 +45,7 @@ function fixture() {
   return {
     api, read,
     holdPages: () => { holdPages = true; },
+    send: (event: AgentEvent) => { for (const listener of listeners) listener(event); },
     emit: (target: FederationRemoteTarget, params: { subAgents?: ThreadSubAgentSummary[]; navigationChanged?: false }) => {
       const event: AgentEvent = { backend: "codex", federationTarget: target,
         notification: { method: "thread/subAgents/updated", params: { threadId: local.id, ...params } } };
@@ -129,4 +130,45 @@ it("refreshes mounted navigation for a peer sub-agent invalidation without a pay
   await waitFor(() => expect(f.read.mock.calls.length).toBeGreaterThan(readsBefore));
   expect(result.current.threads).toEqual(before);
   unmount();
+});
+
+it("patches a non-open peer row from its own usage events without requesting navigation pages", async () => {
+  const f = fixture();
+  const { result } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.threads).toHaveLength(3));
+  const savedRead = f.read.getMockImplementation()!;
+  const gate = Promise.withResolvers<void>();
+  f.read.mockImplementation(async (request) => {
+    const page = await savedRead(request);
+    await gate.promise;
+    return { ...page, entries: page.entries.map((entry) => ({
+      ...entry, row: { ...entry.row, title: "Read before the usage event" },
+    })) };
+  });
+  let pending!: Promise<void>;
+  act(() => { pending = result.current.pagedNavigation.restart("lens"); });
+  await waitFor(() => expect(result.current.pagedNavigation.resources.get("lens")?.loading).toBe(true));
+  const reads = f.read.mock.calls.length;
+  const threadId = "shared-thread";
+  await act(async () => f.send({ backend: "codex", federationTarget: studio, notification: {
+    method: "thread/tokenUsage/updated", params: { threadId, tokenUsage: {
+      last: { totalTokens: 25 }, total: { totalTokens: 750 }, modelContextWindow: 100,
+    } },
+  } }));
+  await act(async () => f.send({ backend: "codex", federationTarget: tower, notification: {
+    method: "thread/contextWindow/updated", params: { threadId, usedTokens: 60, modelContextWindow: 200 },
+  } }));
+  const reading = (target?: FederationRemoteTarget) => result.current.threads.find((thread) =>
+    threadOwner(thread) === target?.instanceId)?.contextWindow;
+  expect(reading(studio)).toEqual({ totalTokens: 25, modelContextWindow: 100 });
+  expect(reading(tower)).toEqual({ totalTokens: 60, modelContextWindow: 200 });
+  expect(reading()).toBeUndefined();
+  await act(async () => f.send({ backend: "codex", federationTarget: { scope: "local" }, notification: {
+    method: "thread/contextWindow/updated", params: { threadId, usedTokens: 0, modelContextWindow: 100 },
+  } }));
+  expect(reading()).toEqual({ totalTokens: 0, modelContextWindow: 100 });
+  expect(f.read).toHaveBeenCalledTimes(reads);
+  await act(async () => { gate.resolve(); await pending; });
+  expect(reading(studio)).toEqual({ totalTokens: 25, modelContextWindow: 100 });
+  expect(reading(tower)).toEqual({ totalTokens: 60, modelContextWindow: 200 });
 });

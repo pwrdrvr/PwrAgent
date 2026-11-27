@@ -119,6 +119,7 @@ type SidebarParams = {
   onOpenThreadTerminal?: (threadKey: string, cwd?: string, remote?: unknown) => void;
   applications?: DesktopApplicationsSnapshot;
   selectedItemKey?: string;
+  readOpenThreadContext?: () => { threadKey: string; totalTokens: number; modelContextWindow: number };
 };
 
 function renderSidebar(params: SidebarParams) {
@@ -137,6 +138,7 @@ function sidebarElement(params: SidebarParams) {
       threads={params.threads}
       localApplications={params.applications}
       selectedItemKey={params.selectedItemKey}
+      readOpenThreadContext={params.readOpenThreadContext}
       localMachineLabel="Studio-Mac"
       platform="darwin"
       onBrowseModeChange={() => undefined}
@@ -208,8 +210,27 @@ describe("sidebar thread card", () => {
     expect(shown).toHaveTextContent("this machine");
     expect(shown).toHaveTextContent("fix/table-header");
     expect(shown).toHaveTextContent("gpt-6 · high");
-    // Context has a reading only for the open thread; none is given here.
     expect(shown).not.toHaveTextContent("Context");
+  });
+
+  it.each([
+    ["other", { totalTokens: 250, modelContextWindow: 1_000 }, "25%"],
+    ["open", { totalTokens: 250, modelContextWindow: 1_000 }, "25%"],
+    ["open", undefined, "60%"],
+    ["other", undefined, undefined],
+  ] as const)("uses the row's own context or its matching open session (%s, %j)", (id, contextWindow, percent) => {
+    renderSidebar({
+      threads: ["open", "other"].map((key) => thread(key, key === id ? { contextWindow } : {})),
+      selectedItemKey: "codex:open",
+      readOpenThreadContext: () => ({ threadKey: "codex:open", totalTokens: 600, modelContextWindow: 1_000 }),
+    });
+    const shown = hoverOpen(id);
+    if (percent) {
+      expect(shown).toHaveTextContent(percent);
+      expect(shown.querySelector(".thread-info-card__context-used")).toHaveStyle({ width: percent });
+    } else {
+      expect(shown).not.toHaveTextContent("Context");
+    }
   });
 
   it("opens at once on keyboard focus, and not on a click's or a script's focus", () => {
@@ -447,9 +468,9 @@ describe("sidebar thread card", () => {
     const view = renderSidebar({ threads, onArchiveThread });
     archiveWalk.rows = 0;
     const shown = hoverOpen("a");
-    const updated = [...threads.slice(0, 2), thread("c", { title: "Thread c, renamed" })];
+    const updated = [thread("a", { contextWindow: { totalTokens: 40, modelContextWindow: 100 } }), ...threads.slice(1)];
     view.rerender(sidebarElement({ threads: updated, onArchiveThread }));
-    expect(card()).toHaveTextContent("Thread a");
+    expect(card()).toHaveTextContent("Context 40 of 100");
     expect(archiveWalk.rows).toBe(0);
     // Archiving checks the loaded rows once, for a sub-thread the count missed.
     fireEvent.click(within(shown).getByRole("button", { name: /Archive/, hidden: true }));

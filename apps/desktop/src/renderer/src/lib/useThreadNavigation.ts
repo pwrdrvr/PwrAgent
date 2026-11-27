@@ -11,7 +11,7 @@ import type { CodexEnvironmentStartupFailure, LaunchpadCreationStatus } from "@p
 import type { NavigationAttentionScope, RemoteThreadPinPublication } from "@pwragent/shared/contracts/navigation";
 import { materializeObservableLaunchpad, LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
-import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
+import { applyCheckoutHibernationUpdate, applyThreadContextWindowEvent } from "./navigation-thread-event";
 import { readBridgedNavigationResumeState } from "./navigation-resume-state";
 import { findPeerCounterpartDirectory, type ProjectIdentity } from "./federation-project-match";
 import { FederatedDirectoryIndexCache } from "./federated-directory-index-cache";
@@ -1074,6 +1074,8 @@ function threadSummariesEqual(
     left.queuedExecutionModeAt === right.queuedExecutionModeAt &&
     JSON.stringify(left.queuedTurns ?? []) ===
       JSON.stringify(right.queuedTurns ?? []) &&
+    left.contextWindow?.totalTokens === right.contextWindow?.totalTokens &&
+    left.contextWindow?.modelContextWindow === right.contextWindow?.modelContextWindow &&
     left.model === right.model &&
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
@@ -4201,6 +4203,9 @@ export function useThreadNavigation(
       [id, { request: resource.state.request, sequence: resource.state.pendingSequence }]));
     threadReactionPatchReadsRef.current.set(mutationKey, reads);
   }, []);
+  // A page already in flight when a live fill arrives may still supply other
+  // row facts. Keep the fill from the bus for that read only.
+  const contextPatchesByRequest = useRef(new WeakMap<object, { sequence: number; keys: Set<string> }>());
   const acceptedDefaultsRef = useRef<unknown>(undefined);
   const acceptedDraftHydrationRef = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
@@ -4376,6 +4381,11 @@ export function useThreadNavigation(
                 ),
               };
             }
+          }
+          const resource = boundedNavigation.resources.get(id);
+          const patched = resource && contextPatchesByRequest.current.get(resource.state.request);
+          if (patched && patched.sequence === resource?.state.pendingSequence && patched.keys.has(key) && previous?.contextWindow) {
+            presentedRow = { ...presentedRow, contextWindow: previous.contextWindow };
           }
           if (!suppressedArchivedThreadKeysRef.current.has(key)) threadRows.set(key, presentedRow);
         }
@@ -4730,6 +4740,36 @@ export function useThreadNavigation(
         if (method !== "navigation/threadGitWorkingState/updated" && method !== "navigation/directoryGitStatus/updated") {
           scheduleEventRefresh();
         }
+      }
+      if (event.notification.method === "thread/contextWindow/updated" || event.notification.method === "thread/tokenUsage/updated") {
+        if (windowTarget && !federationTargetsEqual(event.federationTarget, windowTarget)) return;
+        const notification = event.notification;
+        const key = event.federationTarget?.scope === "remote"
+          ? agentEventThreadIdentityKey(event, notification.params.threadId)
+          : buildThreadIdentityKey(event.backend, notification.params.threadId);
+        const before = stateRef.current.rows?.threadRows.get(key);
+        if (!before) return;
+        const nextRow = applyThreadContextWindowEvent(before, event.backend, notification);
+        for (const resource of navigationResourcesRef.current.values()) {
+          if (!resource.loading) continue;
+          const { request, pendingSequence } = resource.state;
+          let patched = contextPatchesByRequest.current.get(request);
+          if (patched?.sequence !== pendingSequence) {
+            patched = { sequence: pendingSequence, keys: new Set() };
+            contextPatchesByRequest.current.set(request, patched);
+          }
+          patched.keys.add(key);
+        }
+        setState((current) => {
+          const row = current.rows?.threadRows.get(key);
+          if (!current.rows || !row) return current;
+          const next = row === before ? nextRow : applyThreadContextWindowEvent(row, event.backend, notification);
+          if (next === row) return current;
+          const threadRows = new Map(current.rows.threadRows);
+          threadRows.set(key, next);
+          return { ...current, rows: { ...current.rows, threadRows } };
+        });
+        return;
       }
       if (method === "thread/start/pending") {
         // This machine's starts, drawn only in a window listing this machine.

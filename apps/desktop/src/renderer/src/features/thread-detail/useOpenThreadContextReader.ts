@@ -21,7 +21,6 @@ export function useOpenThreadContextReader(
         threadKey: threadSummaryIdentityKey(thread),
         totalTokens: contextWindow.totalTokens,
         modelContextWindow: contextWindow.modelContextWindow,
-        usedPercent: contextWindow.usedPercent,
       }
     : undefined;
   return useCallback(() => ref.current, []);
