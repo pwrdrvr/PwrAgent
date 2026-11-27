@@ -10,6 +10,12 @@ import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { accessTrigger, chooseAccessStop } from "./fixtures/access-picker";
+import {
+  closeComposerThreadOptions,
+  composerRowButton,
+  isComposerTierFolded,
+  openComposerThreadOptions,
+} from "./fixtures/composer-row";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
@@ -853,13 +859,18 @@ test("disables workspace handoff for ACP threads after conversation history", as
   try {
     await app.window.getByRole("button", { name: /ACP Handoff Thread/i }).click();
 
-    const workspaceMode = app.window.getByLabel(/^Workspace mode(?::|$)/);
+    const workspaceMode = composerRowButton(app.window, /^Workspace mode(?::|$)/);
     await expect(workspaceMode).toBeDisabled();
     await expect(workspaceMode).toHaveAttribute("value", "local");
-    await workspaceMode.click({ force: true });
-    await expect(
-      app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }),
-    ).toHaveCount(0);
+    const handoff = { name: "Handoff to New Worktree", exact: true };
+    if (await isComposerTierFolded(app.window, "details", workspaceMode)) {
+      const menu = await openComposerThreadOptions(app.window);
+      await expect(menu.getByRole("menuitem", handoff)).toBeDisabled();
+      await closeComposerThreadOptions(app.window);
+    } else {
+      await workspaceMode.click({ force: true });
+      await expect(app.window.getByRole("menuitem", handoff)).toHaveCount(0);
+    }
     await expect(
       app.window.getByRole("dialog", { name: /Handoff to/i }),
     ).toHaveCount(0);
