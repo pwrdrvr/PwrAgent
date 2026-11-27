@@ -1079,6 +1079,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
     request: RemoveLockedThreadWorktreesRequest,
   ): Promise<RemoveLockedThreadWorktreesResponse>;
   renameThread(request: RenameThreadRequest): Promise<RenameThreadResponse>;
+  applicationWorkspaceExists(targetPath: string): Promise<boolean>;
   readApplications(): Promise<DesktopApplicationsSnapshot>;
   openApplication(
     request: OpenDesktopApplicationRequest,
@@ -2335,6 +2336,10 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.renameThread(
         envelope.params as RenameThreadRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.applicationWorkspaceExists,
+    async (envelope) => await params.backend.applicationWorkspaceExists((envelope.params as { targetPath: string }).targetPath),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.readApplications,
@@ -3850,6 +3855,13 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<OpenDesktopApplicationResponse>({
       method: FEDERATION_BACKEND_METHODS.openApplication,
       params: request,
+    });
+  }
+
+  async applicationWorkspaceExists(targetPath: string): Promise<boolean> {
+    return await this.rpc.request<boolean>({
+      method: FEDERATION_BACKEND_METHODS.applicationWorkspaceExists,
+      params: { targetPath },
     });
   }
 

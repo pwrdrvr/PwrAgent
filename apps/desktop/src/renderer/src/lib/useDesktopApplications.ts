@@ -33,13 +33,16 @@ export function readPeerApplications(read: ReadApplications, instanceId: string)
   }
   const cached = peers.get(instanceId);
   if (cached) return cached;
+  const forget = (): void => {
+    if (peers.get(instanceId) === request) peers.delete(instanceId);
+  };
   const request = read({ federationTarget: { scope: "remote", instanceId } }).then(
     ({ applications }) => {
-      window.setTimeout(() => peers.delete(instanceId), APPLICATIONS_TTL_MS);
+      window.setTimeout(forget, APPLICATIONS_TTL_MS);
       return applications;
     },
     (error: unknown) => {
-      peers.delete(instanceId);
+      forget();
       throw error;
     },
   );
@@ -59,18 +62,19 @@ export function useDesktopApplications(params: {
   }>();
 
   useEffect(() => {
-    if (
-      !params.remoteInstanceId
-      || params.suspended
-      || !params.desktopApi?.readApplications
-    ) {
+    const read = params.desktopApi?.readApplications;
+    const remoteInstanceId = params.remoteInstanceId;
+    if (!remoteInstanceId || !read || params.suspended) {
+      if (params.suspended && remoteInstanceId && read) {
+        // In-flight and completed reads belong to the connection that authorized them.
+        peerApplicationReads.get(read)?.delete(remoteInstanceId);
+      }
       setRemoteApplications(undefined);
       return;
     }
 
-    const remoteInstanceId = params.remoteInstanceId;
     let cancelled = false;
-    void readPeerApplications(params.desktopApi.readApplications, remoteInstanceId).then((applications) => {
+    void readPeerApplications(read, remoteInstanceId).then((applications) => {
       if (!cancelled) {
         setRemoteApplications({
           applications,
@@ -91,7 +95,7 @@ export function useDesktopApplications(params: {
   if (!params.remoteInstanceId) {
     return params.localApplications;
   }
-  return remoteApplications?.instanceId === params.remoteInstanceId
+  return !params.suspended && remoteApplications?.instanceId === params.remoteInstanceId
     ? remoteApplications.applications
     : undefined;
 }

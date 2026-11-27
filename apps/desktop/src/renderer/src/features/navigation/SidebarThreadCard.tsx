@@ -27,6 +27,7 @@ import {
 import { AppIcon } from "../../components/AppIcon";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { readPeerApplications } from "../../lib/useDesktopApplications";
+import { useEventCallback } from "../../lib/useEventCallback";
 import { getDesktopApi } from "../../lib/desktop-api";
 import {
   POINTER_AIM_SETTLE_MS,
@@ -161,46 +162,32 @@ export const SidebarThreadCardHost = forwardRef<
     Boolean(heldRowRef.current?.contains(trigger) || crossingRowRef.current?.contains(trigger));
   const [expanded, setExpanded] = useState<Expanded>();
 
-  const cardFor = (threadKey: string, row: HTMLElement, open: Expanded) => {
+  const content = (threadKey: string, row: HTMLElement, open: Expanded): ReactElement | null => {
     const thread = optionsRef.current.readThread(threadKey);
     if (!thread) return null;
-    const facts = optionsRef.current.rowFacts(thread);
-    const actions = optionsRef.current.actionsFor(thread, row);
-    return {
-      peerInstanceId: facts.folders.length ? actions.open?.peerInstanceId : undefined,
-      render: (peerApplications?: DesktopApplicationsSnapshot) => (
-        <SidebarThreadCardContent
-          key={threadKey}
-          thread={thread}
-          facts={facts}
-          actions={actions}
-          peerApplications={peerApplications}
-          expanded={open}
-          onExpand={setExpanded}
-          onDone={hide}
-        />
-      ),
-    };
+    return (
+      <SidebarThreadCardContent
+        key={threadKey}
+        thread={thread}
+        facts={optionsRef.current.rowFacts(thread)}
+        actions={optionsRef.current.actionsFor(thread, row)}
+        expanded={open}
+        onExpand={setExpanded}
+        onDone={hide}
+        onPeerApplicationsReady={redraw}
+      />
+    );
   };
 
-  // Update in place so the tooltip re-measures when the terminal row appears.
-  useEffect(() => {
+  // A live row update, an expanded list, or a newly available terminal may
+  // change the size. Keep the mounted card and re-measure its placement.
+  const redraw = useEventCallback(() => {
     if (!visible || !shown) return;
-    const card = cardFor(shown.threadKey, shown.row, expanded);
-    if (!card) {
-      hide();
-      return;
-    }
-    update(card.render());
-    const read = getDesktopApi()?.readApplications;
-    if (!card.peerInstanceId || !read) return;
-    let current = true;
-    void readPeerApplications(read, card.peerInstanceId).then((applications) => {
-      if (current) update(card.render(applications));
-    }, () => { /* Discovery is optional. The other actions are already visible. */ });
-    return () => { current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.options, expanded, shown, visible]);
+    const next = content(shown.threadKey, shown.row, expanded);
+    if (next) update(next);
+    else hide();
+  });
+  useEffect(redraw, [props.options, expanded, shown, visible, redraw]);
 
   // The row's card is its description while it is up.
   useEffect(() => {
@@ -224,7 +211,7 @@ export const SidebarThreadCardHost = forwardRef<
     const open = (target: HTMLElement, threadKey: string, delayed: boolean): void => {
       // A dragged row passes over others; none of them is being asked about.
       if (isNativeDragInteractionActive()) return;
-      const node = cardFor(threadKey, target, undefined)?.render();
+      const node = content(threadKey, target, undefined);
       if (!node) return;
       setShown({ threadKey, row: target });
       heldRowRef.current = target.closest(ROW_SELECTOR) ?? target;
@@ -240,7 +227,7 @@ export const SidebarThreadCardHost = forwardRef<
       // chip's card shown meanwhile cancels it through the bridge.
       sidebarPrCardBridge.delaying(bridgeCardRef.current);
       pendingRef.current = true;
-      showAfterDelay(target, () => cardFor(threadKey, target, undefined)?.render(), PROJECT_CARD_HOVER_DELAY_MS);
+      showAfterDelay(target, () => content(threadKey, target, undefined), PROJECT_CARD_HOVER_DELAY_MS);
     };
     return {
       enter: (target, threadKey) => open(target, threadKey, true),
@@ -408,7 +395,7 @@ export function useSidebarThreadCardTriggers(
 function SidebarThreadCardContent(props: {
   thread: NavigationThreadSummary;
   facts: ThreadInfoRowFacts;
-  peerApplications?: DesktopApplicationsSnapshot;
+  onPeerApplicationsReady: () => void;
   actions: SidebarThreadCardActions;
   expanded: Expanded;
   onExpand: (expanded: Expanded) => void;
@@ -424,6 +411,33 @@ function SidebarThreadCardContent(props: {
     title: thread.title,
     ...(instanceId ? { instanceId, ...(instanceLabel ? { instanceLabel } : {}) } : {}),
   }), [instanceId, instanceLabel, thread.id, thread.source, thread.title]);
+  const peerId = actions.open?.peerInstanceId;
+  const folderPath = props.facts.folders[0]?.path;
+  const api = getDesktopApi();
+  const [verified, setVerified] = useState<{
+    peerId: string;
+    folderPath: string;
+    applications: DesktopApplicationsSnapshot;
+  }>();
+  const { onPeerApplicationsReady } = props;
+  useEffect(() => {
+    setVerified(undefined);
+    if (!peerId || !folderPath || !api?.applicationWorkspaceExists || !api.readApplications) return;
+    let current = true;
+    void Promise.all([
+      readPeerApplications(api.readApplications, peerId),
+      api.applicationWorkspaceExists({
+        federationTarget: { scope: "remote", instanceId: peerId },
+        targetPath: folderPath,
+      }),
+    ]).then(([applications, exists]) => {
+      if (current && exists === true) {
+        setVerified({ peerId, folderPath, applications });
+        onPeerApplicationsReady();
+      }
+    }, () => { /* An offline or older owner cannot confirm a usable launch target. */ });
+    return () => { current = false; };
+  }, [api, peerId, folderPath, onPeerApplicationsReady]);
   const cost = useThreadCardCost(thread);
   const info: ThreadInfo = { facts: threadInfoFacts(thread), factsState: "ready", cost };
   return (
@@ -437,7 +451,8 @@ function SidebarThreadCardContent(props: {
       actions={(
         <ThreadCardActions
           actions={actions}
-          peerApplications={props.peerApplications}
+          peerApplications={verified && verified.peerId === peerId && verified.folderPath === folderPath
+            ? verified.applications : undefined}
           folders={props.facts.folders}
           running={info.facts?.running === true}
           expanded={props.expanded}

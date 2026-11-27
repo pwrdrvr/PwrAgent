@@ -3,6 +3,7 @@
     "backend.acknowledgeThreadEnvironmentFailure",
     "backend.analyzeThreadToolHistory",
     "backend.analyzeUsageActivity",
+    "backend.applicationWorkspaceExists",
     "backend.archiveNavigationDirectory",
     "backend.archiveThread",
     "backend.attachDirectoryToThread",

@@ -964,6 +964,7 @@ export const SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL =
   "settings:inspect-code-signatures";
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
+export const APPLICATION_WORKSPACE_EXISTS_CHANNEL = "applications:workspace-exists";
 export const APPLICATIONS_READ_CHANNEL = "applications:read";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";

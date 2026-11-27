@@ -3789,6 +3789,7 @@ function SidebarContent(props: SidebarProps) {
     const local = !thread.federation && !federationTarget;
     const peer = thread.federation;
     const peerTarget = peer?.ref.target.scope === "remote"
+      && !thread.checkoutHibernated
       && peer.peerStatus === "connected"
       && peer.capabilities?.includes("remote_window")
       ? peer.ref.target

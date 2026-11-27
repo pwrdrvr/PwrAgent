@@ -4564,6 +4564,7 @@ describe("federation backend bridge", () => {
       getWorktreeUnpublishedCommitDiff: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
       renameThread: vi.fn(),
+      applicationWorkspaceExists: vi.fn(),
       readApplications: vi.fn(),
       openApplication: vi.fn(),
       readMessagingPlatformStatuses: vi.fn(),
@@ -5033,6 +5034,7 @@ describe("federation backend bridge", () => {
         materializeDirectoryLaunchpad: vi.fn(),
         handoffThreadWorkspace: vi.fn(),
         renameThread: vi.fn(),
+        applicationWorkspaceExists: vi.fn(),
         readApplications: vi.fn(),
         openApplication: vi.fn(),
         readMessagingPlatformStatuses: vi.fn(),
@@ -5082,6 +5084,7 @@ describe("federation backend bridge", () => {
         threadId: "thread-1",
         renamedAt: 2_000,
       })),
+      applicationWorkspaceExists: vi.fn(async () => true),
       readApplications: vi.fn(async () => ({
         editors: [],
         terminals: [{
@@ -5158,6 +5161,19 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
       envelope: {
+        id: "workspace-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.applicationWorkspaceExists,
+        params: { targetPath: "/remote/repo" },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_075,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
         id: "application-request",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.openApplication,
@@ -5194,6 +5210,7 @@ describe("federation backend bridge", () => {
       threadId: "thread-1",
       name: "Remote title",
     });
+    expect(backend.applicationWorkspaceExists).toHaveBeenCalledExactlyOnceWith("/remote/repo");
     expect(backend.readApplications).toHaveBeenCalledTimes(1);
     expect(backend.openApplication).toHaveBeenCalledWith({
       applicationId: "terminal",
@@ -5217,6 +5234,7 @@ describe("federation backend bridge", () => {
           terminals: [{ id: "terminal" }],
         },
       },
+      { kind: "response", requestId: "workspace-request", result: true },
       {
         kind: "response",
         requestId: "application-request",

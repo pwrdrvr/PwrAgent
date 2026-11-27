@@ -497,6 +497,7 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  PeerApplicationWorkspaceRequest,
   ReadDesktopApplicationsRequest,
   ReadDesktopApplicationsResponse,
   OpenMarkdownFileViewerRequest,
@@ -1106,6 +1107,7 @@ import {
   APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
   APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
+  APPLICATION_WORKSPACE_EXISTS_CHANNEL,
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
@@ -2550,6 +2552,8 @@ const desktopApi = Object.freeze({
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse> =>
     await ipcRenderer.invoke(APPLICATION_OPEN_CHANNEL, request),
+  applicationWorkspaceExists: async (request: PeerApplicationWorkspaceRequest): Promise<boolean> =>
+    await ipcRenderer.invoke(APPLICATION_WORKSPACE_EXISTS_CHANNEL, request),
   readApplications: async (
     request: ReadDesktopApplicationsRequest,
   ): Promise<ReadDesktopApplicationsResponse> =>

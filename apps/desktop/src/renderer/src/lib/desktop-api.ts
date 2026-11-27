@@ -589,6 +589,7 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  PeerApplicationWorkspaceRequest,
   ReadDesktopApplicationsRequest,
   ReadDesktopApplicationsResponse,
   OpenMarkdownFileViewerRequest,
@@ -1830,6 +1831,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   openApplication?: (
     request: OpenDesktopApplicationRequest
   ) => Promise<OpenDesktopApplicationResponse>;
+  applicationWorkspaceExists?: (request: PeerApplicationWorkspaceRequest) => Promise<boolean>;
   readApplications?: (
     request: ReadDesktopApplicationsRequest
   ) => Promise<ReadDesktopApplicationsResponse>;

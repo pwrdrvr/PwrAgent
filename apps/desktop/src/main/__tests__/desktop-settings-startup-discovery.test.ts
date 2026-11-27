@@ -7,6 +7,8 @@ import type {
   DesktopGitDiscoverySnapshot,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared/contracts/settings";
+import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import * as singleton from "../settings/desktop-settings-singleton";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
@@ -87,6 +89,29 @@ const APPLICATIONS_DISCOVERY: DesktopApplicationsSnapshot = {
 };
 
 describe("DesktopSettingsService startup discovery", () => {
+  it("reports the owner's configured terminal from the federation applications read", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-peer-apps-"));
+    tempRoots.push(root);
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, '[applications.terminal]\npreferred_id = "ghostty"\n');
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({} as ReturnType<typeof import("../app-server/backend-registry").getDesktopBackendRegistry>);
+    const owner = vi.spyOn(singleton, "getDesktopSettingsService").mockReturnValue(service);
+    try {
+      const terminals = ["terminal", "ghostty"].map((id) => ({
+        id, name: id, kind: "terminal" as const, source: "application" as const, canOpenWorkspace: true,
+      }));
+      vi.mocked(discoverDesktopApplications).mockResolvedValue({ ...APPLICATIONS_DISCOVERY, editors: [], terminals });
+      const applications = await new DesktopFederationRuntime().localBackend().readApplications();
+      expect(applications.terminals).toEqual(terminals);
+      expect(applications.preferredTerminalId).toEqual({ value: "ghostty", source: "config" });
+    } finally {
+      owner.mockRestore();
+      registry.mockRestore();
+    }
+  });
+
   it.each(["before-start", "before-retention", "retention", "probe"] as const)("discovery ownership oracle: close at %s", async (boundary) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-discovery-owner-"));
     tempRoots.push(root);

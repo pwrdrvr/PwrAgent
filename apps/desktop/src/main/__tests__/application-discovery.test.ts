@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  applicationWorkspaceExists,
   buildGhosttyAppleScriptArgs,
   discoverDesktopApplications,
   extractIcnsPng,
@@ -69,6 +70,15 @@ describe("application discovery", () => {
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
     spawnMock.mockReset();
+  });
+
+  it("reports only existing workspace directories on this owner", async () => {
+    const file = path.join(tempDir, "file");
+    writeFileSync(file, "");
+    expect(await applicationWorkspaceExists(tempDir)).toBe(true);
+    expect(await applicationWorkspaceExists(file)).toBe(false);
+    expect(await applicationWorkspaceExists(path.join(tempDir, "removed"))).toBe(false);
+    expect(await applicationWorkspaceExists(".")).toBe(false);
   });
 
   it("builds Ghostty AppleScript with an initial working directory", () => {
