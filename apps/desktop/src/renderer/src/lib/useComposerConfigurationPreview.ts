@@ -1,8 +1,7 @@
 import { useLayoutEffect, useMemo } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
-import { threadSummaryIdentityKey } from "./federated-thread-events";
-import { navigationThreadSelectionKey, type NavigationSelectionState } from "./navigation-query-state";
+import { navigationIdentityKey, type NavigationSelectionState } from "./navigation-query-state";
 
 // Each entry references only fields from the owner's byte-bounded configuration.
 // History pages, queue payloads and transcript data have their own lifetimes.
@@ -12,30 +11,29 @@ type ComposerPreview = Pick<NavigationThreadSummary,
 
 export function useComposerConfigurationPreview(
   desktopApi: DesktopApi | undefined,
+  selectedIdentity: NavigationIdentity | undefined,
   selection: NavigationSelectionState | undefined,
   selectedRow: NavigationThreadSummary | undefined,
 ): ComposerPreview | undefined {
-  const previews = useMemo(() => new Map<string, ComposerPreview>(), [desktopApi]);
+  const previews = useMemo(() => desktopApi ? new Map<string, ComposerPreview>() : undefined, [desktopApi]);
   const thread = selection?.detail?.thread;
   const identity = selection?.detail?.identity;
   const readiness = selection?.readiness;
-  const selectionKey = selection && navigationThreadSelectionKey(selection.ref);
+  const selectionKey = selection && navigationIdentityKey(selection.ref);
+  const { codexEnvironmentOptions, codexEnvironmentRuntime, codexSkillProfile, primaryGitRepository } = thread ?? {};
   useLayoutEffect(() => {
-    if (!selectionKey) return;
+    if (!previews || !selectionKey) return;
     if (readiness === "failed" || (identity && identity !== "present")) {
       previews.delete(selectionKey);
-    } else if (thread && identity === "present") {
+    } else if (identity === "present" && (readiness === "ready" || previews.has(selectionKey))) {
+      // A same-thread owner event can update the environment while the
+      // confirming read is in flight. Retain the event's configuration too.
       previews.delete(selectionKey);
-      previews.set(selectionKey, {
-        codexEnvironmentOptions: thread.codexEnvironmentOptions,
-        codexEnvironmentRuntime: thread.codexEnvironmentRuntime,
-        codexSkillProfile: thread.codexSkillProfile,
-        primaryGitRepository: thread.primaryGitRepository,
-      });
+      previews.set(selectionKey, { codexEnvironmentOptions, codexEnvironmentRuntime, codexSkillProfile, primaryGitRepository });
       if (previews.size > MAX_COMPOSER_PREVIEWS) previews.delete(previews.keys().next().value!);
     }
-  }, [identity, previews, readiness, selectionKey, thread]);
-  if (!selectedRow || selection?.detail || readiness === "failed" || selectedRow.archivedAt !== undefined
+  }, [codexEnvironmentOptions, codexEnvironmentRuntime, codexSkillProfile, identity, previews, primaryGitRepository, readiness, selectionKey]);
+  if (!selectedIdentity || !selectedRow || selection?.detail || readiness === "failed"
     || (selectedRow.federation?.peerStatus && selectedRow.federation.peerStatus !== "connected")) return undefined;
-  return previews.get(threadSummaryIdentityKey(selectedRow));
+  return previews?.get(navigationIdentityKey(selectedIdentity));
 }

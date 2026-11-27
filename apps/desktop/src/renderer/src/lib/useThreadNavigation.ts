@@ -6149,7 +6149,7 @@ export function useThreadNavigation(
       setPendingWorkspaceHandoff(undefined);
     }
   }, [pendingWorkspaceHandoff, selectedThreadKey, selectedWorkspaceHandoffPending]);
-  const composerPreview = useComposerConfigurationPreview(desktopApi, selectedDetail.state, selectedRow);
+  const composerPreview = useComposerConfigurationPreview(desktopApi, selectedIdentity, selectedDetail.state, selectedRow);
   const composerAuthorized = navigationSelectionAuthorizesComposer(selectedDetail.state);
   const selectedThreadDetailReady = composerAuthorized || Boolean(composerPreview);
   const selectedThreadConfigurationReady =
@@ -6159,8 +6159,13 @@ export function useThreadNavigation(
     const authoritativeThread = selectedDetail.state?.detail?.thread;
     if (!authoritativeThread) {
       if (!selectedRow || !composerPreview) return selectedRow;
-      return { ...selectedRow, ...composerPreview,
-        primaryGitRepository: selectedRow.primaryGitRepository ?? composerPreview.primaryGitRepository };
+      return {
+        ...selectedRow,
+        codexEnvironmentOptions: selectedRow.codexEnvironmentOptions ?? composerPreview.codexEnvironmentOptions,
+        codexEnvironmentRuntime: selectedRow.codexEnvironmentRuntime ?? composerPreview.codexEnvironmentRuntime,
+        codexSkillProfile: selectedRow.codexSkillProfile ?? composerPreview.codexSkillProfile,
+        primaryGitRepository: selectedRow.primaryGitRepository ?? composerPreview.primaryGitRepository,
+      };
     }
     const detailThread = restorePendingEnvironmentFailure(
       authoritativeThread,
