@@ -51,7 +51,9 @@ export type DecisionsRailDecision = {
   decisionId: string;
   name: string;
   version: number;
-  scope: "profile" | "thread";
+  scope: "profile" | "thread" | "research_run";
+  /** Present when scope is "research_run". */
+  researchRunId?: string;
   provider: DecisionsRailProvider;
   /** The provider is turned off in Settings → AI Providers. */
   providerDisabled: boolean;

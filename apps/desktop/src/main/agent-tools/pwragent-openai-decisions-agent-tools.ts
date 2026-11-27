@@ -127,11 +127,14 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "An active name in the same scope fails with decision_name_taken.",
     "Scope profile, the default, reaches every thread in this profile.",
     "Scope thread reaches only the registering thread.",
+    "Scope research_run shares the decision across one research run's coordinator and workers.",
+    "Pass researchRunId, or omit it when this thread belongs to one active run.",
     "Never pass a key. PwrAgent attaches the operator's OpenAI key.",
     "Call decisions_list to see what exists.",
   ].join(" "),
   decisions_list: [
-    "List registered decisions visible to this thread.",
+    "List registered decisions visible to this thread (profile, thread, and any research runs this thread belongs to).",
+    "Pass researchRunId to list only decisions registered for that research run.",
     "Each entry has its id, name, version, scope, provider, questions, choice values or score labels, and input schema.",
     "inputCapabilities.images reports support for its configured model, including experimental status, formats and limits.",
     "inputCapabilities also reports the encoded HTTP MCP request and compact batch input byte limits.",
@@ -143,7 +146,10 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "Run a registered decision on new input, or pass definition to run one ad hoc without registering it.",
     "One input returns its answers. For OpenAI it also returns the request id, response body, and token usage with an estimated price.",
     "Pass inputs or inputsFile for a batch of up to 500 items, at most 8 at once.",
-    "Use inputsFile for a local JSON array or JSONL file in the workspace, scratch project, or temp directory.",
+    "Prefer generating inputsFile with a script instead of reading source text into context and copying it inline.",
+    "Pass outputFile so results stay on disk, filter scores by script, and read only flagged source text.",
+    "inputsFile accepts a local JSON array or JSONL file in the workspace, scratch project, or $TMPDIR.",
+    "On macOS, use $TMPDIR rather than /tmp for inputsFile and outputFile.",
     "inputsFile keeps large payloads and base64 images out of the transcript.",
     "For images, pass an array with an optional input_text or input_json part first.",
     "Append one to four input_image parts with PNG or JPEG base64 data URLs in image_url.",
@@ -158,7 +164,7 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "A batch returns a batchId, totals, and results by index: each item's answers and confidence, without response bodies.",
     "Pass detail full for response bodies, request ids, and per-item usage.",
     "Inline results stop at 64 KiB. nextFrom then says where decisions_batch_results continues.",
-    "Pass outputFile to write results directly to a workspace, scratch project, or temp file.",
+    "Pass outputFile to write results directly to a workspace, scratch project, or $TMPDIR file.",
     "A .json outputFile writes one summary and results object in input order.",
     "A .jsonl or .ndjson outputFile writes one item JSON object per line in input order.",
     "outputFile omits inline results by default.",
@@ -190,18 +196,21 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "The name can then be registered again as a new decision.",
   ].join(" "),
   decisions_batch_results: [
-    "Read a decisions_invoke batch this thread started, while it runs or after it ends.",
+    "Read a decisions_invoke batch while it runs or after it ends.",
+    "Covers batches this thread started and batches run by members of its research runs.",
     "Pass batchId for its state, totals, and a page of finished items in input order.",
+    "Pass researchRunId without batchId to list batches across the coordinator and all workers of that research run.",
     "status picks succeeded, failed (skipped included), or skipped items. The default is all.",
     "from is the first input index and limit the most items, 100 by default and 500 at most.",
     "A page also stops at 64 KiB. Pass nextFrom back as from for the rest.",
     "Items are compact, answers and confidence only. Pass detail full for response bodies and per-item usage.",
-    "Without batchId, lists this thread's batches, newest first.",
+    "Without batchId or researchRunId, lists this thread's batches, newest first.",
     "Batches survive a restart: each is a JSONL file in the thread's storage, and the latest 20 are kept.",
     "Reading makes no API call.",
   ].join(" "),
   decisions_batch_cancel: [
     "Cancel a running decisions_invoke batch this thread started.",
+    "A research run coordinator can pass researchRunId to cancel a worker's batch.",
     "Requests in flight are aborted and unsent items are skipped.",
     "Finished answers stay readable with decisions_batch_results.",
     "No wake-up turn follows a cancel.",
@@ -282,7 +291,13 @@ const DEFINITION_PROPERTIES = {
     enum: ["openai", "jev", "local"],
     description: "Which decision model runs it. Omit to use the one the operator set up.",
   },
-  scope: { type: "string", enum: ["profile", "thread"] },
+  scope: { type: "string", enum: ["profile", "thread", "research_run"] },
+  researchRunId: {
+    type: "string",
+    minLength: 1,
+    maxLength: 300,
+    description: "Research run id for research_run-scoped decisions. Optional when scope is research_run and this thread belongs to one active run.",
+  },
   instructions: {
     type: "string",
     maxLength: OPENAI_DECISION_BOUNDS.instructionsMaxLength,
@@ -323,6 +338,12 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
     additionalProperties: false,
     properties: {
       includeInstructions: { type: "boolean" },
+      researchRunId: {
+        type: "string",
+        minLength: 1,
+        maxLength: 300,
+        description: "Filter to research_run-scoped decisions registered for this research run.",
+      },
     },
   },
   decisions_invoke: {
@@ -332,6 +353,12 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
       name: NAME_SCHEMA,
       decisionId: { type: "string" },
       version: { type: "integer", minimum: 1 },
+      researchRunId: {
+        type: "string",
+        minLength: 1,
+        maxLength: 300,
+        description: "Optional research run id to disambiguate a research_run decision or tag an ad hoc batch.",
+      },
       definition: {
         type: "object",
         description: "An ad hoc decision instead of name: provider, instructions, question or questions, prefix, optional inputSchema. Nothing is stored.",
@@ -394,13 +421,20 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
     properties: {
       name: NAME_SCHEMA,
       decisionId: { type: "string" },
+      researchRunId: { type: "string", minLength: 1, maxLength: 300 },
     },
   },
   decisions_batch_results: {
     type: "object",
     additionalProperties: false,
     properties: {
-      batchId: { type: "string", description: "From decisions_invoke. Omit to list this thread's batches." },
+      batchId: { type: "string", description: "From decisions_invoke. Omit to list this thread's batches (or all batches in researchRunId)." },
+      researchRunId: {
+        type: "string",
+        minLength: 1,
+        maxLength: 300,
+        description: "Research run id to list or inspect batches across the coordinator and workers of that run.",
+      },
       status: {
         type: "string",
         enum: ["all", "succeeded", "failed", "skipped"],
@@ -422,6 +456,12 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
     required: ["batchId"],
     properties: {
       batchId: { type: "string" },
+      researchRunId: {
+        type: "string",
+        minLength: 1,
+        maxLength: 300,
+        description: "Coordinator only: research run id when cancelling a worker's running batch.",
+      },
     },
   },
 };

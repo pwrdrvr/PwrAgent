@@ -6,6 +6,7 @@
  * `directory_set` subscribers. It carries no rows.
  */
 export const NAVIGATION_DIRECTORY_SET_CHANGED_METHOD = "navigation/directorySet/changed";
+export const NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD = "navigation/sidebarEnrichment/updated";
 
 export const NAVIGATION_DIRECTORY_SCOPE_MAX_KEYS = 100;
 export const NAVIGATION_DIRECTORY_SCOPE_MAX_BYTES = 16 * 1024;
@@ -49,6 +50,7 @@ const ROW_CHANGE_METHODS = new Set([
   "directory/pin/added", "directory/pin/removed", "directory/pin/reordered", "directory/threadsCollapsed/updated",
   "directory/forgeAutomation/updated",
   "navigation/providerThreads/refreshed", "navigation/remoteThreadPins/changed",
+  NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD,
   "navigation/directory/seen", "navigation/directory/removed", "navigation/directoryGitStatus/updated",
   "navigation/threadGitWorkingState/updated", "navigation/threadDirectories/updated",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
@@ -85,6 +87,7 @@ export function navigationPullRequestKeysMayMatch(left: string, right: string): 
 // archive, reparenting, provider refreshes and unknown future events retain
 // discovery coverage even when the new child's identity is not subscribed yet.
 const THREAD_ROW_ONLY_METHODS = new Set([
+  NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD,
   "thread/dependencies/updated", "thread/scheduledAction/updated",
   "thread/status/changed", "thread/name/updated", "navigation/thread/seen",
   "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated", "thread/lock/updated", "thread/agent/updated",

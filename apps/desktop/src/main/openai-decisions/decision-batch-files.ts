@@ -121,6 +121,7 @@ export function batchHeaderEntry(record: DecisionBatchRecord): Record<string, un
     background: record.background,
     createdAt: record.createdAt,
     ...(record.outputFile ? { outputFile: record.outputFile } : {}),
+    ...(record.researchRunId ? { researchRunId: record.researchRunId } : {}),
     ...(record.definition ? { definition: record.definition } : {}),
   };
 }
@@ -274,6 +275,7 @@ function headerRecord(
     createdAt: entry.createdAt,
     resultsFile: file,
     ...(typeof entry.outputFile === "string" && entry.outputFile.length > 0 ? { outputFile: entry.outputFile } : {}),
+    ...(typeof entry.researchRunId === "string" && entry.researchRunId.length > 0 ? { researchRunId: entry.researchRunId } : {}),
     ...definitionField(parseBatchDefinition(entry.definition)),
     results: new Array<DecisionBatchItem | undefined>(count).fill(undefined),
     succeeded: 0,

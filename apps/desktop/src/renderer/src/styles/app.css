@@ -9794,6 +9794,8 @@ button.stack-display__thread,
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
+  /* A hyphenless project or PR name still wraps inside the card. */
+  overflow-wrap: anywhere;
 }
 
 .pr-status-card__identity {
@@ -10100,6 +10102,7 @@ button.stack-display__thread,
    list drawn like the machine menu's rows at card density. */
 .project-card__path {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   margin-top: 4px;
   color: var(--text-secondary);
@@ -10107,18 +10110,28 @@ button.stack-display__thread,
   font-size: 11px;
 }
 
-/* Middle truncation, as `.pr-status-card__branch-name` does it: only the
-   head shrinks, so the ellipsis lands mid-path and the folder name stays. */
+/* Middle truncation, as `.pr-status-card__branch-name` does it: the head
+   gives way to the folder name, so the ellipsis lands mid-path. Its 12ch
+   basis is the least of the head that must share the folder name's line;
+   a folder name too wide for that wraps to its own line instead, so the
+   head still says where the project lives. `max-width: max-content` keeps
+   the head from growing past its own text and pushing the name right. */
 .project-card__path-head {
-  flex: 0 1 auto;
+  flex: 1 1 12ch;
   min-width: 0;
+  max-width: max-content;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The folder name never shrinks while it shares a line with the head; a
+   name wider than the card ellipsizes at its end instead of running out. */
 .project-card__path-tail {
   flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

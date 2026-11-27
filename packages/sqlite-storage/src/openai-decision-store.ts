@@ -15,8 +15,10 @@ export type OpenAIDecisionVersionRecord = {
   name: string;
   scope: OpenAIDecisionScope;
   ownerBackend: string;
-  /** Required for thread scope; undefined for profile scope. */
+  /** Required for thread scope; optional registering thread for research_run; undefined for profile scope. */
   ownerThreadId?: string;
+  /** Required for research_run scope; undefined for profile and thread scopes. */
+  researchRunId?: string;
   status: OpenAIDecisionVersionStatus;
   provider: RegisteredDecisionProvider;
   questions: OpenAIDecisionQuestion[];
@@ -26,7 +28,12 @@ export type OpenAIDecisionVersionRecord = {
   createdAt: number;
 };
 
-export type OpenAIDecisionCaller = { backend: string; threadId: string };
+export type OpenAIDecisionCaller = {
+  backend: string;
+  threadId: string;
+  /** Research run IDs visible to this caller, ordered newest/most-relevant first. */
+  researchRunIds?: readonly string[];
+};
 
 /** Thrown when an active name already exists in the requested scope. */
 export class OpenAIDecisionNameTakenError extends Error {
@@ -52,9 +59,11 @@ export interface OpenAIDecisionRegistryStorage {
   softDelete(decisionId: string): boolean;
   getVersion(decisionId: string, version: number): OpenAIDecisionVersionRecord | undefined;
   getActive(decisionId: string): OpenAIDecisionVersionRecord | undefined;
-  /** The caller's own thread-scope definition first, then the profile one. */
+  /** The caller's own thread-scope definition first, then research_run, then profile. */
   findActiveByName(name: string, caller: OpenAIDecisionCaller): OpenAIDecisionVersionRecord[];
   listVisible(caller: OpenAIDecisionCaller): OpenAIDecisionVersionRecord[];
+  /** Active research_run-scope decisions for one run, by name. */
+  listActiveForResearchRun?(researchRunId: string): OpenAIDecisionVersionRecord[];
   /** Every active profile-scope decision, by name: the ones no thread owns. */
   listActiveProfile(): OpenAIDecisionVersionRecord[];
   /** Whether a deleted decision with this name was visible to the caller. */
@@ -68,6 +77,7 @@ type Row = {
   scope: OpenAIDecisionScope;
   owner_backend: string;
   owner_thread_id: string | null;
+  research_run_id: string | null;
   status: OpenAIDecisionVersionStatus;
   provider: string;
   questions_json: string;
@@ -139,26 +149,46 @@ export class OpenAIDecisionStore implements OpenAIDecisionRegistryStorage {
   }
 
   findActiveByName(name: string, caller: OpenAIDecisionCaller): OpenAIDecisionVersionRecord[] {
+    const runIds = caller.researchRunIds ?? [];
     const rows = this.stateDb.raw.prepare(
       `SELECT * FROM openai_decision_versions
         WHERE name = @name AND status = 'active' AND (
           scope = 'profile'
           OR (scope = 'thread' AND owner_backend = @backend AND owner_thread_id = @threadId)
-        )
-        ORDER BY CASE scope WHEN 'thread' THEN 0 ELSE 1 END`,
-    ).all({ name, backend: caller.backend, threadId: caller.threadId }) as Row[];
-    return rows.map(fromRow);
+          OR (scope = 'research_run' AND research_run_id IN (SELECT value FROM json_each(@researchRunIds)))
+        )`,
+    ).all({
+      name,
+      backend: caller.backend,
+      threadId: caller.threadId,
+      researchRunIds: JSON.stringify(runIds),
+    }) as Row[];
+    return sortVisibleRecords(rows.map(fromRow), runIds, false);
   }
 
   listVisible(caller: OpenAIDecisionCaller): OpenAIDecisionVersionRecord[] {
+    const runIds = caller.researchRunIds ?? [];
     const rows = this.stateDb.raw.prepare(
       `SELECT * FROM openai_decision_versions
         WHERE status = 'active' AND (
           scope = 'profile'
           OR (scope = 'thread' AND owner_backend = @backend AND owner_thread_id = @threadId)
-        )
-        ORDER BY name, CASE scope WHEN 'thread' THEN 0 ELSE 1 END`,
-    ).all({ backend: caller.backend, threadId: caller.threadId }) as Row[];
+          OR (scope = 'research_run' AND research_run_id IN (SELECT value FROM json_each(@researchRunIds)))
+        )`,
+    ).all({
+      backend: caller.backend,
+      threadId: caller.threadId,
+      researchRunIds: JSON.stringify(runIds),
+    }) as Row[];
+    return sortVisibleRecords(rows.map(fromRow), runIds, true);
+  }
+
+  listActiveForResearchRun(researchRunId: string): OpenAIDecisionVersionRecord[] {
+    const rows = this.stateDb.raw.prepare(
+      `SELECT * FROM openai_decision_versions
+        WHERE status = 'active' AND scope = 'research_run' AND research_run_id = ?
+        ORDER BY name`,
+    ).all(researchRunId) as Row[];
     return rows.map(fromRow);
   }
 
@@ -172,29 +202,37 @@ export class OpenAIDecisionStore implements OpenAIDecisionRegistryStorage {
   }
 
   hasDeletedName(name: string, caller: OpenAIDecisionCaller): boolean {
+    const runIds = caller.researchRunIds ?? [];
     return this.stateDb.raw.prepare(
       `SELECT 1 FROM openai_decision_versions
         WHERE name = @name AND status = 'deleted' AND (
           scope = 'profile'
           OR (scope = 'thread' AND owner_backend = @backend AND owner_thread_id = @threadId)
+          OR (scope = 'research_run' AND research_run_id IN (SELECT value FROM json_each(@researchRunIds)))
         )
         LIMIT 1`,
-    ).get({ name, backend: caller.backend, threadId: caller.threadId }) !== undefined;
+    ).get({
+      name,
+      backend: caller.backend,
+      threadId: caller.threadId,
+      researchRunIds: JSON.stringify(runIds),
+    }) !== undefined;
   }
 
   private insertRow(record: OpenAIDecisionVersionRecord): void {
     this.stateDb.raw.prepare(
       `INSERT INTO openai_decision_versions (
-        decision_id, version, name, scope, owner_backend, owner_thread_id, status, provider,
+        decision_id, version, name, scope, owner_backend, owner_thread_id, research_run_id, status, provider,
         questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       record.decisionId,
       record.version,
       record.name,
       record.scope,
       record.ownerBackend,
-      record.scope === "thread" ? record.ownerThreadId ?? null : null,
+      record.scope === "profile" ? null : record.ownerThreadId ?? null,
+      record.scope === "research_run" ? record.researchRunId ?? null : null,
       record.status,
       record.provider,
       JSON.stringify(record.questions),
@@ -204,6 +242,33 @@ export class OpenAIDecisionStore implements OpenAIDecisionRegistryStorage {
       record.createdAt,
     );
   }
+}
+
+function scopePrecedence(scope: OpenAIDecisionScope): number {
+  switch (scope) {
+    case "thread": return 0;
+    case "research_run": return 1;
+    case "profile": return 2;
+  }
+}
+
+function sortVisibleRecords(
+  records: OpenAIDecisionVersionRecord[],
+  runIds: readonly string[],
+  byNameFirst: boolean,
+): OpenAIDecisionVersionRecord[] {
+  const runOrder = new Map(runIds.map((id, index) => [id, index]));
+  return records.sort((left, right) => {
+    if (byNameFirst && left.name !== right.name) return left.name < right.name ? -1 : 1;
+    const scopeDelta = scopePrecedence(left.scope) - scopePrecedence(right.scope);
+    if (scopeDelta !== 0) return scopeDelta;
+    if (left.scope === "research_run" && right.scope === "research_run") {
+      const leftIndex = runOrder.get(left.researchRunId ?? "") ?? Number.MAX_SAFE_INTEGER;
+      const rightIndex = runOrder.get(right.researchRunId ?? "") ?? Number.MAX_SAFE_INTEGER;
+      if (leftIndex !== rightIndex) return leftIndex - rightIndex;
+    }
+    return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+  });
 }
 
 function translateUniqueViolation(error: unknown, name: string): unknown {
@@ -221,6 +286,7 @@ function fromRow(row: Row): OpenAIDecisionVersionRecord {
     scope: row.scope,
     ownerBackend: row.owner_backend,
     ...(row.owner_thread_id ? { ownerThreadId: row.owner_thread_id } : {}),
+    ...(row.research_run_id ? { researchRunId: row.research_run_id } : {}),
     status: row.status,
     provider: isRegisteredDecisionProvider(row.provider) ? row.provider : "openai",
     questions: JSON.parse(row.questions_json) as OpenAIDecisionQuestion[],

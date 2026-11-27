@@ -1,5 +1,6 @@
 import { useId, useMemo, useState } from "react";
-import { sameResearchThread, type ResearchRunSummary, type ResearchThread } from "@pwragent/shared/research";
+import { readyDecisionProviders } from "@pwragent/shared/decision-models";
+import { researchDecisionsPromptGuidance, sameResearchThread, type ResearchRunSummary, type ResearchThread } from "@pwragent/shared/research";
 import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { PopoutIcon } from "../../icons";
 import { Select } from "../../components/Select";
@@ -9,6 +10,8 @@ import {
   readRendererFederationTarget,
   resolveThreadOwnerFederationTarget,
 } from "../../lib/federation-window";
+import type { DecisionSetupSettings } from "../thread-detail/context-panels/decision-setup";
+import { ResearchDecisionsView } from "./ResearchDecisionsView";
 import { ResearchItemDetail } from "./ResearchItemDetail";
 import { ResearchHarnessForm } from "./ResearchHarnessForm";
 import { ResearchDiscoveryPanel } from "./ResearchDiscoveryPanel";
@@ -19,6 +22,7 @@ import { ResearchPendingCard, ResearchStartForm, type ResearchStartValues } from
 import { ResearchThreadOwner } from "./ResearchThreadButton";
 import { ResearchActivityView, ResearchFindingsView, ResearchMapView } from "./ResearchViews";
 import { excerpt, isResearchRunLive, researchRunPhase, researchRunView, researchStartLimits } from "./research-view-model";
+import { useResearchDecisions, useResearchDecisionsStatus } from "./useResearchDecisions";
 import { useResearchSync } from "./useResearchSync";
 import { useResearchNow } from "./useResearchNow";
 import { researchErrorMessage as message, useResearchRunActions } from "./useResearchRunActions";
@@ -27,12 +31,28 @@ import "./research.css";
 
 const VIEWS = [
   { id: "map", label: "Map" }, { id: "findings", label: "Findings" }, { id: "review", label: "Review" },
+  { id: "items", label: "Items" }, { id: "decisions", label: "Decisions" }, { id: "activity", label: "Activity" },
+] as const;
+const HARNESS_VIEWS = [
+  { id: "map", label: "Map" }, { id: "findings", label: "Findings" }, { id: "review", label: "Review" },
   { id: "items", label: "Items" }, { id: "activity", label: "Activity" },
 ] as const;
 const DISCOVERY_VIEWS = [{ id: "discovery", label: "Discovery" }, { id: "activity", label: "Activity" }] as const;
 type View = typeof VIEWS[number]["id"] | typeof DISCOVERY_VIEWS[number]["id"];
 
-export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary; onOpenSettings?: () => void }) {
+export function ResearchPanel({
+  desktopApi: api,
+  thread,
+  onOpenSettings,
+  decisionSettings,
+  onOpenDecisionSettings,
+}: {
+  desktopApi?: DesktopApi;
+  thread?: NavigationThreadSummary;
+  onOpenSettings?: () => void;
+  decisionSettings?: DecisionSetupSettings;
+  onOpenDecisionSettings?: (focus?: string) => void;
+}) {
   const ownerTarget = useMemo(
     () => (thread ? resolveThreadOwnerFederationTarget(thread, readRendererFederationTarget()?.instanceId) : undefined),
     [thread],
@@ -62,6 +82,7 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
   const [openItemId, setOpenItemId] = useState<string>();
   const [returnFocusId, setReturnFocusId] = useState<string>();
   const [itemsQuery, setItemsQuery] = useState<ResearchItemsQuery>(EMPTY_RESEARCH_ITEMS_QUERY);
+  const [selectedBatchId, setSelectedBatchId] = useState<string>();
   const runs = state.runs;
   // The run on screen is the chosen one while the thread still lists it, else the newest. Its store arrives
   // after its summary. Until that first sync finishes, show no run: another run's controls would act on a
@@ -87,18 +108,46 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
     ? `Read-only view of ${ownerLabel}. Controlling or reviewing runs requires turn control.`
     : undefined;
   const live = Boolean(run && isResearchRunLive(run));
-  const views = run?.harness?.source === "discovery" ? DISCOVERY_VIEWS : VIEWS;
+  const views = run?.harness?.source === "discovery" ? DISCOVERY_VIEWS : (run?.harness || ownerTarget) ? HARNESS_VIEWS : VIEWS;
   const currentView: View = views.some((entry) => entry.id === view) ? view : views[0]!.id;
+  const localDecisionsApi = ownerTarget ? undefined : api;
+  const decisionsReadiness = useResearchDecisionsStatus(localDecisionsApi, ownerTarget ? undefined : decisionSettings?.snapshot);
+  const memberThreadKeys = useMemo(() => {
+    if (!run) return undefined;
+    const keys = new Set<string>([`${run.coordinator.backend}:${run.coordinator.threadId}`]);
+    for (const approach of run.approaches) {
+      if (approach.worker) keys.add(`${approach.worker.backend}:${approach.worker.threadId}`);
+    }
+    return keys;
+  }, [run]);
+  const decisionsState = useResearchDecisions({
+    api: localDecisionsApi,
+    thread: identity,
+    runId: !ownerTarget && run && !run.harness ? run.id : undefined,
+    revision: run?.revision,
+    live,
+    open: currentView === "decisions",
+    memberThreadKeys,
+  });
+  const batchesById = useMemo(
+    () => new Map((decisionsState.snapshot?.batches ?? []).map((entry) => [entry.batchId, entry])),
+    [decisionsState.snapshot],
+  );
 
   function selectRun(id: string) {
-    setSelectedRunId(id); setFilter(""); setOpenItemId(undefined); setItemsQuery(EMPTY_RESEARCH_ITEMS_QUERY); setNotice(""); setError(""); actions.reset();
+    setSelectedRunId(id); setFilter(""); setOpenItemId(undefined); setSelectedBatchId(undefined); setItemsQuery(EMPTY_RESEARCH_ITEMS_QUERY); setNotice(""); setError(""); actions.reset();
   }
   function openItem(itemId: string) {
     setOpenItemId(itemId); setReturnFocusId(undefined); setView("items");
   }
+  function openBatch(batchId: string) {
+    setSelectedBatchId(batchId);
+    setView("decisions");
+  }
   function chooseView(next: View) {
     setView(next); setFilter("");
     if (next !== "items") setOpenItemId(undefined);
+    if (next !== "decisions") setSelectedBatchId(undefined);
   }
   async function send(target: ResearchThread, text: string) {
     if (!api?.submitThreadReply) throw new Error("Thread replies are unavailable");
@@ -113,7 +162,11 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
     try {
       const { intentId } = await api.prepareResearch({ ...identity, ...values });
       prepared = true;
-      await send(identity, `Start a research run using research_start with intentId=${intentId}. Objective: ${values.objective}\nUse exactly ${values.workers} distinct approaches, ${researchStartLimits(values)}, and workspaceMode=${values.workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not change the worker count or any limit, and do not add one.`);
+      const decisionsNote = researchDecisionsPromptGuidance(
+        readyDecisionProviders(decisionsReadiness),
+        "coordinator",
+      );
+      await send(identity, `Start a research run using research_start with intentId=${intentId}. Objective: ${values.objective}\nUse exactly ${values.workers} distinct approaches, ${researchStartLimits(values)}, and workspaceMode=${values.workspaceMode}. These exact limits and objective are bound to the operator's request. Workers inherit this thread's model and access. Propose and distinguish their assignments before starting; explain significant overlap. Review submissions with research_update and record revisions or acceptance. Keep informal acceptance separate from verification. Do not change the worker count or any limit, and do not add one.${decisionsNote ? `\n${decisionsNote}` : ""}`);
       setCreating(false);
       return true;
     } catch (failure) {
@@ -168,6 +221,7 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
     </div>}
     {showForm && formSource === "harness" && <ResearchHarnessForm api={api} thread={identity} ownerLabel={ownerLabel} onOpenSettings={ownerTarget ? undefined : onOpenSettings} onStarted={harnessStarted} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {showForm && formSource === "native" && <ResearchStartForm firstRun={firstRun} busy={busy} disabled={!api.submitThreadReply || !api.prepareResearch} replacesPending={Boolean(pending)}
+      decisionsReadiness={decisionsReadiness} onOpenDecisionSettings={onOpenDecisionSettings}
       onSubmit={start} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {(error || state.error) && <p role="alert" className="research-error">{error || state.error}</p>}
     {notice && <p role="status" className="research-notice">{notice}</p>}
@@ -180,27 +234,37 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
     {loadingRun && !state.error && <p role="status" className="context-empty">Loading run…</p>}
     {run && <>
       <ResearchRunCard key={run.id} run={run} now={now} coordinator={coordinator} writable={writable} readOnlyNote={readOnlyNote} busy={busy}
+        decisions={ownerTarget ? undefined : decisionsState.snapshot}
+        onOpenDecisions={!ownerTarget && !run.harness ? () => chooseView("decisions") : undefined}
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
         onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}
         onResume={() => { void update({ action: "resume" }); }}
         onChangeBounds={(bounds) => update({ action: "bounds", ...bounds })}
         onReconcile={canControl && api.reconcileResearchHarness ? () => { void reconcile(); } : undefined} />
-      <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={reviewCount} onChoose={chooseView} />
+      <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={reviewCount}
+        decisionsCount={ownerTarget ? 0 : (decisionsState.snapshot?.batches.length ?? 0)} onChoose={chooseView} />
       <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${currentView}`} className="research-tabpanel">
         {(currentView === "map" || currentView === "findings" || currentView === "activity") && <input className="research-filter" type="search" aria-label="Filter this view"
           placeholder={currentView === "map" ? "Filter approaches and findings" : currentView === "findings" ? "Filter findings" : "Filter activity"} value={filter} onChange={(event) => setFilter(event.target.value)} />}
         {currentView === "discovery" && run.harness?.discovery && <ResearchDiscoveryPanel key={run.id} snapshot={run.harness.discovery} />}
         {currentView === "map" && <ResearchMapView run={run} filter={filter} onOpenItem={openItem}
           onShowApproachItems={(approachId) => { setItemsQuery({ ...EMPTY_RESEARCH_ITEMS_QUERY, approachId }); setOpenItemId(undefined); setView("items"); }} />}
-        {currentView === "findings" && <ResearchFindingsView key={run.id} api={api} thread={identity} run={run} filter={filter} evidenceAvailable={evidenceAvailable} onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
+        {currentView === "findings" && <ResearchFindingsView key={run.id} api={api} thread={identity} run={run} filter={filter} evidenceAvailable={evidenceAvailable}
+          batchesById={ownerTarget ? undefined : batchesById} onOpenBatch={ownerTarget ? undefined : openBatch} onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
         {currentView === "review" && <ResearchReviewView run={run} live={live} canReview={coordinator && writable} busy={busy} evidenceAvailable={evidenceAvailable}
+          batchesById={ownerTarget ? undefined : batchesById} onOpenBatch={ownerTarget ? undefined : openBatch}
           onReview={(submissionId, decision, reason) => update({ action: "review", submissionId, decision, reason })}
           onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
         {currentView === "items" && (openItemId
           ? <ResearchItemDetail key={`${run.id}:${openItemId}`} api={api} thread={identity} run={run} itemId={openItemId} writable={writable && !run.harness} coordinator={coordinator} evidenceAvailable={evidenceAvailable}
+            batchesById={ownerTarget ? undefined : batchesById} onOpenBatch={ownerTarget ? undefined : openBatch}
             onBack={() => { setReturnFocusId(openItemId); setOpenItemId(undefined); }} onOpenItem={openItem} />
           : <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run}
             query={itemsQuery} onQueryChange={setItemsQuery} onOpenItem={openItem} returnFocusId={returnFocusId} onFocusReturned={() => setReturnFocusId(undefined)} />)}
+        {currentView === "decisions" && !run.harness && <ResearchDecisionsView key={run.id} api={api} thread={identity} run={run}
+          snapshot={decisionsState.snapshot} readiness={decisionsReadiness} error={decisionsState.error}
+          onRefresh={decisionsState.refresh} onOpenItem={openItem} onOpenDecisionSettings={onOpenDecisionSettings}
+          selectedBatchId={selectedBatchId} onSelectBatchId={setSelectedBatchId} />}
         {currentView === "activity" && <ResearchActivityView key={run.id} api={api} thread={identity} run={run} filter={filter} onOpenItem={openItem} />}
       </div>
     </>}

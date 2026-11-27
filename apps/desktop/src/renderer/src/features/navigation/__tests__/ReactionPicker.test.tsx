@@ -12,6 +12,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReactionPicker } from "../ReactionPicker";
 import { REACTION_RECENTS_STORAGE_KEY } from "../reaction-picker-model";
+import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 
 function PickerHarness(props: {
   initialOpen?: boolean;
@@ -20,6 +21,7 @@ function PickerHarness(props: {
   onDismiss?: () => void;
 }) {
   const [open, setOpen] = useState(props.initialOpen ?? true);
+  const [reactions, setReactions] = useState<string[]>(props.current ?? []);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   return (
@@ -35,11 +37,15 @@ function PickerHarness(props: {
       </button>
       <ReactionPicker
         open={open}
-        current={props.current ?? []}
+        current={reactions}
         anchorRef={triggerRef}
         onSelect={(emoji) => {
           props.onSelect?.(emoji);
-          setOpen(false);
+          setReactions((prev) =>
+            prev.includes(emoji)
+              ? prev.filter((item) => item !== emoji)
+              : [...prev, emoji],
+          );
         }}
         onDismiss={() => {
           props.onDismiss?.();
@@ -170,20 +176,215 @@ describe("ReactionPicker", () => {
     const onSelect = vi.fn();
     render(<PickerHarness current={["❤", "☀", "☀️"]} onSelect={onSelect} />);
 
-    // "❤" matches Quick's "❤️" by normalized key; clicking toggles off "❤".
+    // "❤" matches Quick's "❤️" by normalized key; clicking toggles off "❤"
+    // and keeps the picker open for additional toggles.
     const heartButton = screen.getByRole("button", { name: "Red heart" });
     expect(heartButton).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(heartButton);
     expect(onSelect).toHaveBeenCalledWith("❤");
+    expect(heartButton).toHaveAttribute("aria-pressed", "false");
 
-    // Reopen and verify "On this thread" dedupes "☀"/"☀️" and passes stored "☀".
+    // "On this thread" dedupes "☀"/"☀️" and passes stored "☀" without closing.
     onSelect.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: "Open reactions" }));
     const activeGroup = screen.getByRole("group", { name: "On this thread" });
     const activeButtons = within(activeGroup).getAllByRole("button");
     expect(activeButtons).toHaveLength(1);
     fireEvent.click(activeButtons[0]!);
     expect(onSelect).toHaveBeenCalledWith("☀");
+  });
+
+  it("stays open while clicking multiple emojis without shifting Quick, then closes after leaving", () => {
+    vi.useFakeTimers();
+    try {
+      const onSelect = vi.fn();
+      const onDismiss = vi.fn();
+      render(<PickerHarness onSelect={onSelect} onDismiss={onDismiss} />);
+
+      const dialog = screen.getByRole("dialog", { name: "Add reaction" });
+
+      // Leaving before any pick does NOT auto-close the dialog.
+      fireEvent.mouseEnter(dialog);
+      fireEvent.mouseLeave(dialog);
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Add reaction" })).toBeInTheDocument();
+
+      // Re-enter and click multiple emojis in one go: picker stays open and
+      // does not insert a "Recent" row mid-session to shift buttons under the mouse.
+      fireEvent.mouseEnter(dialog);
+      const thumbsUp = screen.getByRole("button", { name: "Thumbs up" });
+      const rocket = screen.getByRole("button", { name: "Rocket" });
+      fireEvent.click(thumbsUp);
+      fireEvent.click(rocket);
+
+      expect(onSelect).toHaveBeenNthCalledWith(1, "👍");
+      expect(onSelect).toHaveBeenNthCalledWith(2, "🚀");
+      expect(thumbsUp).toHaveAttribute("aria-pressed", "true");
+      expect(rocket).toHaveAttribute("aria-pressed", "true");
+      expect(screen.queryByRole("group", { name: "Recent" })).toBeNull();
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Leaving after picking starts the grace delay; re-entering cancels it.
+      fireEvent.mouseLeave(dialog);
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS - 50);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+      fireEvent.mouseEnter(dialog);
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Leaving and staying out closes once the grace delay elapses.
+      fireEvent.mouseLeave(dialog);
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS);
+      });
+      expect(onDismiss).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("dialog", { name: "Add reaction" })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores synthetic stationary mouseleave after picking when layout shrinks during search or category switch", () => {
+    vi.useFakeTimers();
+    try {
+      const onDismiss = vi.fn();
+      render(<PickerHarness onDismiss={onDismiss} />);
+
+      const dialog = screen.getByRole("dialog", { name: "Add reaction" });
+      const searchInput = within(dialog).getByRole("searchbox", {
+        name: "Search emoji",
+      });
+
+      // Pointer enters and clicks an emoji at stationary coordinates (220, 300).
+      fireEvent.mouseEnter(dialog, { clientX: 220, clientY: 300 });
+      fireEvent.mouseMove(dialog, { clientX: 220, clientY: 300 });
+      fireEvent.mouseDown(dialog, { clientX: 220, clientY: 300 });
+      fireEvent.click(screen.getByRole("button", { name: "Thumbs up" }), {
+        clientX: 220,
+        clientY: 300,
+      });
+
+      // Typing shrinks the popover; Chromium fires a synthetic mouseleave at
+      // the exact same stationary coordinates. The picker must stay open.
+      fireEvent.change(searchInput, { target: { value: "rocket" } });
+      fireEvent.mouseLeave(dialog, { clientX: 220, clientY: 300 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Add reaction" })).toBeInTheDocument();
+
+      // Same for switching to a category tab whose layout shift moves under the cursor.
+      fireEvent.click(within(dialog).getByRole("button", { name: "Clear search" }));
+      const flagsTab = within(dialog).getByRole("tab", { name: "Flags" });
+      fireEvent.mouseMove(dialog, { clientX: 180, clientY: 120 });
+      fireEvent.mouseDown(flagsTab, { clientX: 180, clientY: 120 });
+      fireEvent.click(flagsTab, { clientX: 180, clientY: 120 });
+      fireEvent.mouseLeave(dialog, { clientX: 180, clientY: 120 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Actually moving the pointer away from the popover closes after the grace delay.
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS);
+      });
+      expect(onDismiss).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending leave timer on in-picker interactions while keeping post-pick leave-close armed", () => {
+    vi.useFakeTimers();
+    try {
+      const onDismiss = vi.fn();
+      render(<PickerHarness onDismiss={onDismiss} />);
+
+      const dialog = screen.getByRole("dialog", { name: "Add reaction" });
+      const searchInput = within(dialog).getByRole("searchbox", {
+        name: "Search emoji",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Thumbs up" }));
+
+      // Arm the leave timer, then type in search (interact_inside) before it fires.
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS - 50);
+      });
+      fireEvent.change(searchInput, { target: { value: "fire" } });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Arm again, then clear search (interact_inside).
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Clear search" }));
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Arm again, then switch category tab (interact_inside).
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      fireEvent.click(within(dialog).getByRole("tab", { name: "Numbers & Letters" }));
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Arm again, then use keyboard ArrowDown from search (interact_inside).
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      fireEvent.keyDown(searchInput, { key: "ArrowDown" });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // hasPicked was preserved across all interact_inside events, so a
+      // subsequent real pointer leave still closes after the grace delay.
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS);
+      });
+      expect(onDismiss).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes immediately on an outside click after picking without waiting for the leave delay", () => {
+    vi.useFakeTimers();
+    try {
+      const onDismiss = vi.fn();
+      render(<PickerHarness onDismiss={onDismiss} />);
+
+      const dialog = screen.getByRole("dialog", { name: "Add reaction" });
+      fireEvent.click(screen.getByRole("button", { name: "Thumbs up" }));
+      fireEvent.mouseLeave(dialog);
+
+      fireEvent.pointerDown(document.body);
+      expect(onDismiss).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("dialog", { name: "Add reaction" })).toBeNull();
+
+      // Timer was cancelled so advancing time does not double-dismiss.
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("filters across the full Unicode catalog and selects the top match on Enter", async () => {
@@ -222,8 +423,11 @@ describe("ReactionPicker", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Thumbs up" }));
     expect(onSelect).toHaveBeenCalledWith("👍");
+    // Stays open for multi-select until explicitly dismissed or pointer leaves.
+    expect(screen.getByRole("dialog", { name: "Add reaction" })).toBeInTheDocument();
 
-    // Reopen the picker: Recent should now surface 👍 above Quick.
+    // Close and reopen the picker: Recent should now surface 👍 above Quick.
+    fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Open reactions" }));
     const recentGroup = screen.getByRole("group", { name: "Recent" });
     expect(

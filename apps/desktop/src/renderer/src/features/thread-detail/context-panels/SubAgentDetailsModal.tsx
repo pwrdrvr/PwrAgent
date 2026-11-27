@@ -6,6 +6,7 @@ import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigatio
 import {
   claudeSubAgentTranscriptThreadIdForMonitor,
   hasDurableSubAgentTranscript,
+  isAcpNativeSubAgent,
   isClaudeNativeSubAgent,
   isCodexNativeSubAgent,
 } from "@pwragent/shared/subagent-kind";
@@ -78,14 +79,17 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
     origin: isCodexNativeSubAgent(subAgent) ? "codex-native" : "pwragent",
   });
   // A Claude sub-agent has no thread of its own; its transcript is read
-  // from its parent's session by the task id.
+  // from its parent's session by the task id. ACP native sub-agents do not
+  // expose a separate reloadable transcript window.
   const transcriptThreadId = isClaudeNativeSubAgent(subAgent)
     ? claudeSubAgentTranscriptThreadIdForMonitor(subAgent.monitorId, props.parentThreadId)
-    : hasDurableTranscript &&
-      subAgent.monitorThreadId &&
-      subAgent.monitorThreadId !== props.parentThreadId
-      ? subAgent.monitorThreadId
-      : undefined;
+    : isAcpNativeSubAgent(subAgent)
+      ? undefined
+      : hasDurableTranscript &&
+        subAgent.monitorThreadId &&
+        subAgent.monitorThreadId !== props.parentThreadId
+        ? subAgent.monitorThreadId
+        : undefined;
   const backendLabel = formatProvider(subAgent.backend ?? props.defaultBackend, model);
   const usageEstimates = usage
     ? formatSubAgentUsageEstimates({
@@ -102,10 +106,18 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   ].filter((value): value is string => Boolean(value));
   // Identity first: a name if the spawner gave one, otherwise what kind of
   // sub-agent this is. Never the prompt.
-  const headline = subAgent.agentName ?? originLabel ?? "Sub-agent";
+  const headline =
+    subAgent.agentName
+    ?? (isAcpNativeSubAgent(subAgent) ? subAgent.displayTitle : undefined)
+    ?? originLabel
+    ?? "Sub-agent";
   // The headline already says what spawned this when there is no agent name,
   // so the Source fact would only restate it.
-  const showSourceFact = Boolean(subAgent.agentName && originLabel);
+  const showSourceFact = Boolean(
+    (subAgent.agentName || (isAcpNativeSubAgent(subAgent) && subAgent.displayTitle))
+    && originLabel
+    && headline !== originLabel,
+  );
 
   if (typeof document === "undefined") {
     return null;

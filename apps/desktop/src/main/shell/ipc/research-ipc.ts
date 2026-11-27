@@ -1,10 +1,23 @@
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import path from "node:path";
 import { tmpdir } from "node:os";
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { MAX_TEXT_FILE_PREVIEW_BYTES } from "@pwragent/shared/file-preview";
+import {
+  DECISIONS_RAIL_PAGE_MAX_ITEMS,
+  type DecisionsRailBatchActionResult,
+  type DecisionsRailBatchPage,
+  type DecisionsRailOpenResultsResult,
+} from "@pwragent/shared/decisions-rail";
 import {
   RESEARCH_RUN_ATTENTION_ORDER,
   type PrepareResearchRequest,
   type ResearchChangesRequest,
+  type ResearchDecisionBatchActionRequest,
+  type ResearchDecisionBatchRequest,
+  type ResearchDecisionOpenResultsRequest,
+  type ResearchDecisionsRequest,
+  type ResearchDecisionsSnapshot,
   type ResearchEventsRequest,
   type ResearchEvidenceRequest,
   type ResearchItemReadRequest,
@@ -23,6 +36,11 @@ import type {
 } from "@pwragent/shared/research-harness";
 import {
   RESEARCH_CHANGES_CHANNEL,
+  RESEARCH_DECISION_BATCH_ACTION_CHANNEL,
+  RESEARCH_DECISION_BATCH_CHANNEL,
+  RESEARCH_DECISION_OPEN_RESULTS_CHANNEL,
+  RESEARCH_DECISIONS_CHANNEL,
+  RESEARCH_DECISIONS_STATUS_CHANNEL,
   RESEARCH_EVENTS_CHANNEL,
   RESEARCH_HARNESS_CHECK_CHANNEL,
   RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL,
@@ -48,10 +66,15 @@ import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { FederatedResearchService, type ResearchOperation } from "../../federation/federation-research";
 import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
 import { getMainLogger } from "../../log";
+import { isDecisionBatchId } from "../../openai-decisions/decision-batch-files";
+import { readDecisionProvidersReadiness } from "../../openai-decisions/decision-provider-targets";
+import { getOpenAIDecisionsRail } from "../../openai-decisions/openai-decisions-runtime";
 import { resolveHarnessEvidencePath, resolveResearchEvidencePath } from "../../research/research-evidence-path";
 import { localResearchOperations, requireResearchEnabled, validateResearchThread } from "../../research/research-operations";
 import { getResearchHarnessService, getResearchService, listResearchMathosTeams } from "../../research/research-runtime";
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
+import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
+import { showMarkdownFileViewerWindow } from "../markdown-files-window";
 import { researchWindowRunId, showResearchWindow } from "../research-window";
 import {
   federationTargetForChannelSubscriber,
@@ -199,6 +222,77 @@ export function registerResearchIpcHandlers(): void {
     const error = await shell.openPath(resolved);
     return { opened: !error, ...(error ? { error } : {}) };
   });
+  ipcMain.handle(RESEARCH_DECISIONS_STATUS_CHANNEL, async (event) => {
+    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    requireResearchEnabled();
+    return await readDecisionProvidersReadiness(getDesktopSettingsService());
+  });
+  ipcMain.handle(RESEARCH_DECISIONS_CHANNEL, async (event, request: ResearchDecisionsRequest): Promise<ResearchDecisionsSnapshot> => {
+    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    validateResearchThread(request);
+    if (typeof request.runId !== "string" || request.runId.length === 0 || request.runId.length > 300) throw new Error("Invalid research run");
+    const ctx = getResearchService().runParticipants(request.runId, { backend: request.backend, threadId: request.threadId });
+    if (!ctx) throw new Error("Research run not found");
+    const readiness = await readDecisionProvidersReadiness(getDesktopSettingsService());
+    const rail = getOpenAIDecisionsRail();
+    if (!rail) return { runId: ctx.runId, readiness, decisions: [], batches: [], now: Date.now() };
+    return await rail.researchRunDecisionsSnapshot(ctx, readiness);
+  });
+  ipcMain.handle(RESEARCH_DECISION_BATCH_CHANNEL, async (event, request: ResearchDecisionBatchRequest): Promise<DecisionsRailBatchPage> => {
+    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    validateResearchThread(request);
+    if (typeof request.runId !== "string" || request.runId.length === 0 || request.runId.length > 300) throw new Error("Invalid research run");
+    if (typeof request.batchId !== "string" || !isDecisionBatchId(request.batchId)) throw new Error("Invalid batch id");
+    if (request.status !== "all" && request.status !== "succeeded" && request.status !== "failed" && request.status !== "skipped") {
+      throw new Error("Invalid item filter");
+    }
+    if (!Number.isSafeInteger(request.from) || request.from < 0) throw new Error("Invalid item index");
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > DECISIONS_RAIL_PAGE_MAX_ITEMS) {
+      throw new Error("Invalid page size");
+    }
+    const ctx = getResearchService().runParticipants(request.runId, { backend: request.backend, threadId: request.threadId });
+    if (!ctx) throw new Error("Research run not found");
+    const rail = getOpenAIDecisionsRail();
+    if (!rail) throw new Error("Decisions are unavailable in this PwrAgent runtime");
+    return await rail.researchRunBatchPage(ctx, { batchId: request.batchId, status: request.status, from: request.from, limit: request.limit });
+  });
+  ipcMain.handle(RESEARCH_DECISION_BATCH_ACTION_CHANNEL, async (event, request: ResearchDecisionBatchActionRequest): Promise<DecisionsRailBatchActionResult> => {
+    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    validateResearchThread(request);
+    if (typeof request.runId !== "string" || request.runId.length === 0 || request.runId.length > 300) throw new Error("Invalid research run");
+    if (typeof request.batchId !== "string" || !isDecisionBatchId(request.batchId)) throw new Error("Invalid batch id");
+    if (request.action !== "stop" && request.action !== "cancel") throw new Error("Invalid batch action");
+    const ctx = getResearchService().runParticipants(request.runId, { backend: request.backend, threadId: request.threadId });
+    if (!ctx) throw new Error("Research run not found");
+    const rail = getOpenAIDecisionsRail();
+    if (!rail) throw new Error("Decisions are unavailable in this PwrAgent runtime");
+    return await rail.researchRunBatchAction(ctx, request.batchId, request.action);
+  });
+  ipcMain.handle(RESEARCH_DECISION_OPEN_RESULTS_CHANNEL, async (event, request: ResearchDecisionOpenResultsRequest): Promise<DecisionsRailOpenResultsResult> => {
+    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
+    validateResearchThread(request);
+    if (typeof request.runId !== "string" || request.runId.length === 0 || request.runId.length > 300) throw new Error("Invalid research run");
+    if (typeof request.batchId !== "string" || !isDecisionBatchId(request.batchId)) throw new Error("Invalid batch id");
+    const ctx = getResearchService().runParticipants(request.runId, { backend: request.backend, threadId: request.threadId });
+    if (!ctx) throw new Error("Research run not found");
+    const rail = getOpenAIDecisionsRail();
+    if (!rail) return { opened: false, error: "Decisions are unavailable in this PwrAgent runtime." };
+    const file = await rail.researchRunResultsFile(ctx, request.batchId);
+    const resultStat = file ? await stat(file).catch(() => undefined) : undefined;
+    if (!file || !resultStat?.isFile()) return { opened: false, error: "This batch has no results file." };
+    if (resultStat.size > MAX_TEXT_FILE_PREVIEW_BYTES) {
+      shell.showItemInFolder(file);
+      return { opened: true };
+    }
+    showMarkdownFileViewerWindow({
+      context: {
+        key: `decision-results:${path.dirname(file)}`,
+        title: "Decision batch results",
+      },
+      file: { path: file, label: path.basename(file) },
+    }, { sourceWindow: BrowserWindow.fromWebContents(event.sender) });
+    return { opened: true };
+  });
 }
 
 export function disposeResearchIpcHandlers(): void {
@@ -224,6 +318,11 @@ export function disposeResearchIpcHandlers(): void {
     RESEARCH_WORK_CHANNEL,
     RESEARCH_WITHDRAW_CHANNEL,
     RESEARCH_EVENTS_CHANNEL,
+    RESEARCH_DECISIONS_STATUS_CHANNEL,
+    RESEARCH_DECISIONS_CHANNEL,
+    RESEARCH_DECISION_BATCH_CHANNEL,
+    RESEARCH_DECISION_BATCH_ACTION_CHANNEL,
+    RESEARCH_DECISION_OPEN_RESULTS_CHANNEL,
   ]) ipcMain.removeHandler(channel);
 }
 

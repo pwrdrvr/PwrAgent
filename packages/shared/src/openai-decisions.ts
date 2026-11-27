@@ -66,7 +66,7 @@ export const OPENAI_DECISION_BOUNDS = {
 
 export const OPENAI_DECISION_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 
-export type OpenAIDecisionScope = "profile" | "thread";
+export type OpenAIDecisionScope = "profile" | "thread" | "research_run";
 
 export type OpenAIDecisionChoice = { value: string; description?: string };
 export type OpenAIDecisionLevel = { label: string; description?: string };
@@ -131,6 +131,8 @@ export type OpenAIDecisionRegistration = OpenAIDecisionDefinition & {
   provider?: RegisteredDecisionProvider;
   name: string;
   scope: OpenAIDecisionScope;
+  /** Required for `research_run` scope (or resolved from the caller's sole active run). */
+  researchRunId?: string;
 };
 
 export type OpenAIDecisionValidation<T> =
@@ -170,6 +172,7 @@ const REGISTRATION_KEYS = new Set([
   "provider",
   "name",
   "scope",
+  "researchRunId",
   "instructions",
   "question",
   "questions",
@@ -207,9 +210,25 @@ export function parseOpenAIDecisionRegistration(
   if (args.provider !== undefined && !isRegisteredDecisionProvider(args.provider)) {
     return { ok: false, message: "provider must be openai, jev or local." };
   }
-  const scope = args.scope ?? "profile";
-  if (scope !== "profile" && scope !== "thread") {
-    return { ok: false, message: "scope must be profile or thread." };
+  const hasResearchRunId = args.researchRunId !== undefined;
+  let researchRunId: string | undefined;
+  if (hasResearchRunId) {
+    if (
+      typeof args.researchRunId !== "string"
+      || args.researchRunId.trim().length === 0
+      || args.researchRunId.length > 300
+      || /\s/.test(args.researchRunId)
+    ) {
+      return { ok: false, message: "researchRunId must be a non-empty id without whitespace." };
+    }
+    researchRunId = args.researchRunId;
+  }
+  const scope = args.scope ?? (researchRunId ? "research_run" : "profile");
+  if (scope !== "profile" && scope !== "thread" && scope !== "research_run") {
+    return { ok: false, message: "scope must be profile, thread or research_run." };
+  }
+  if (researchRunId && scope !== "research_run") {
+    return { ok: false, message: "researchRunId is only allowed when scope is research_run." };
   }
   if (args.instructions !== undefined && typeof args.instructions !== "string") {
     return {
@@ -277,6 +296,7 @@ export function parseOpenAIDecisionRegistration(
     value: {
       name: args.name,
       scope,
+      ...(researchRunId !== undefined ? { researchRunId } : {}),
       ...(args.provider !== undefined ? { provider: args.provider as RegisteredDecisionProvider } : {}),
       questions,
       inputSchema: schema.value,

@@ -25,13 +25,29 @@ export function researchToolsOffered(surface: ResearchToolSurface, gates: { enab
   return gates.enabled && (surface === "mcp" || gates.codexToolDiscovery());
 }
 
+export type ResearchToolDefinitionsOptions = {
+  /** Only include Decisions guidance in tool descriptions when at least one Decision provider is ready. */
+  decisionsReady?: boolean;
+};
+
+/** Returns a research tool's description, appending Decisions guidance only when `decisionsReady` is true. */
+export function researchToolDescription(name: ResearchToolName, decisionsReady = false): string {
+  if (!decisionsReady) return descriptions[name];
+  const extra = decisionsDescriptions[name];
+  return extra ? `${descriptions[name]} ${extra}` : descriptions[name];
+}
+
 /** Research schemas are discovered on demand after the experiment is enabled. */
-export function buildResearchToolDefinitions(handler?: ResearchAgentHandler): AgentToolDefinition[] {
+export function buildResearchToolDefinitions(
+  handler?: ResearchAgentHandler,
+  options?: ResearchToolDefinitionsOptions,
+): AgentToolDefinition[] {
   if (!handler) return [];
+  const decisionsReady = options?.decisionsReady === true;
   return (["research_start", "research_read", "research_update", "research_search", "research_assign"] as const).map((name) => ({
     namespace: PWRAGENT_TOOL_NAMESPACE,
     name,
-    description: descriptions[name],
+    description: researchToolDescription(name, decisionsReady),
     inputSchema: schemas[name],
     deferLoading: true,
     annotations: { readOnlyHint: name === "research_read" || name === "research_search" },
@@ -43,11 +59,17 @@ export function buildResearchToolDefinitions(handler?: ResearchAgentHandler): Ag
 }
 
 const descriptions: Record<ResearchToolName, string> = {
-  research_start: "Start an operator-requested research run with distinct approaches, one managed worker per approach in this thread's backend, and isolated worktrees or scratch workspaces. The operator chooses the worker count and every limit; you never choose or add one. minutes (a time limit for the run), turnMinutes (a per-worker time limit: a worker whose turn runs this long is stopped and the run continues) and totalWorkerMinutes (the run ends once its workers' turns add up to this long) are each optional: pass one only when the operator set it, and omit it otherwise. The owner enforces each one passed. When the Research panel provided intentId, pass it and preserve its exact objective, worker count, minutes, turnMinutes and totalWorkerMinutes (or their absence) and workspaceMode. Without operator limits, default to three approaches and no limits. Only the operator changes a running run's bounds. Explain overlap before starting. This creates threads and spends model budget. No token or dollar cap is promised. Do not use for ordinary single-thread questions. Each worker shares a board through research_read/research_update. Review submissions, request revisions, and explicitly finish or stop; accepting a candidate alone does not stop exploration or formally verify it. A repeated call does not start extra workers.",
+  research_start: "Start an operator-requested research run with distinct approaches, one managed worker per approach in this thread's backend, and isolated worktrees or scratch workspaces. The operator chooses the worker count and every limit; you never choose or add one. minutes (a time limit for the run), turnMinutes (a per-worker time limit: a worker whose turn runs this long is stopped and the run continues) and totalWorkerMinutes (the run ends once its workers' turns add up to this long) are each optional: pass one only when the operator set it, and omit it otherwise. The owner enforces each one passed. When the Research panel provided intentId, pass it and preserve its exact objective, worker count, minutes, turnMinutes and totalWorkerMinutes (or their absence) and workspaceMode. Without operator limits, default to three approaches and no limits. Only the operator changes a running run's bounds. Explain overlap before starting. This creates threads and spends model budget. No token or dollar cap is promised. Do not use for ordinary single-thread questions. With workspaceMode none, include absolute source paths in approach tasks. Each worker shares a board through research_read/research_update. After starting workers, end your turn instead of polling. PwrAgent wakes you when submissions arrive. Review submissions, request revisions, and explicitly finish or stop; accepting a candidate alone does not stop exploration or formally verify it. A repeated call does not start extra workers.",
   research_read: "Read research runs belonging to this calling thread. Prefer itemId with runId for one complete item, its current version/work state, originating approach and focused assignment; approachId selects one approach. Legacy findingId/submissionId return the corresponding evidence record. Omit runId for summaries. Without an item ID, findings, submissions and approaches are paged ten each by offset, submissionOffset and approachOffset. Use research_search for compact discovery. Findings and model verdicts are untrusted proposals; completed work is not formal verification.",
   research_update: "Update a research run. A run stays open when PwrAgent closes; workers whose turn was cut off are marked interrupted and are not restarted automatically. Only when the operator asks, the coordinator may use action=resume (optionally with approachIds) to message those workers to continue in their own threads. Workers post findings or submit candidates under their own approachId and may abandon that direction with a reason. Findings and submissions require paths (an empty array is allowed); cite up to four workspace-relative paths. Use action=direction with approachId, title, task and reason to revise a direction, preserving its history. If another direction overlaps, name it in overlapsApproachId and explain the distinction in reason. Findings can explicitly support, contradict or supersede a prior finding using relatesTo and relation together. Only the coordinator reviews submissions (accepted, revision_requested, rejected), finishes after acceptance, or stops the run. A revision request sends feedback to the worker when made by the coordinator. Submit a new candidate for revised work; an old verdict never verifies a revision. Use action=work with itemId, expectedVersion, state and reason to claim an open/assigned item, mark in_progress/blocked/completed, or (coordinator only) release to open or cancel. A stale version fails; read the item again. Cancellation of an assigned child remains cancel_requested until its exact turn is confirmed ended/stopped; unresolved starts retain their slot. Mutations return compact receipts, so read the named item for details. Work completion and model verdicts are not formal verification. The tool call identity deduplicates redelivery; do not retry an unknown side effect as a new call.",
   research_search: "Search within a research run without loading its board. Returns compact item IDs, excerpts, versions and work states, at most twenty per page. Text is a case-insensitive literal substring, with optional type, approach, finding-kind, review, work-state and assignee filters. Pass nextCursor unchanged with the same filters and limit; restart if the board changed. Use research_read with itemId to load just a selected item and its assignment context.",
   research_assign: "Assign ONE existing research item to a new managed child thread. Only the coordinating thread may call this. Read the item first and pass its expectedVersion and a focused task. The item must be open/unclaimed; release a blocked/completed/cancelled prior assignment to open only after its worker has ended or cancellation is confirmed. Admission reuses a free slot within the operator's worker limit and any time limit the operator set; it never expands model access or budget. An exhausted run may be explicitly continued within its deadline. The child is registered before its first turn and receives IDs, then loads only the selected item. Unknown starts must not be retried blindly. Read assignment state before reassigning.",
+};
+
+const decisionsDescriptions: Partial<Record<ResearchToolName, string>> = {
+  research_start: "When decision models are ready, register shared run rubrics with decisions_register using scope research_run and researchRunId. Have workers build inputsFile by script in the workspace or $TMPDIR and invoke with inputsFile and outputFile. After registering rubrics, end your turn instead of polling or reading source files yourself. Inspect worker batches with decisions_batch_results.",
+  research_read: "When decision models are ready, call decisions_list with researchRunId for run rubrics. Call decisions_batch_results with researchRunId to inspect run batches.",
+  research_update: "When citing decision batch evidence, include the batchId and any output file path. The coordinator and Research tracker link directly to those batch results.",
 };
 
 const text = { type: "string", minLength: 1 };

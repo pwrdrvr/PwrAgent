@@ -1,13 +1,14 @@
 import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  type NavigationThreadSummary,
   type PrSummary,
 } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { graphemePrefix } from "@pwragent/shared/text-graphemes";
 import {
+  createThreadJumpMatcher,
   threadHasExactPrNumberMatch,
-  threadMatchesQuery,
   type ThreadJumpCandidate,
 } from "@pwragent/shared/thread-jump-match";
 
@@ -190,8 +191,9 @@ export function filterHashReferenceCandidates(
 ): HashReferenceCandidates {
   const trimmed = query.trim();
   const normalized = trimmed.toLowerCase();
-  const threadCandidates = threads
-    .filter((thread) => ownerMatched || !trimmed || threadMatchesQuery(thread, trimmed))
+  const matchingThreads = ownerMatched || !trimmed
+    ? [...threads] : threads.filter(createThreadJumpMatcher(trimmed));
+  const threadCandidates = matchingThreads
     .sort((left, right) => {
       const exactPrDifference =
         Number(threadHasExactPrNumberMatch(right, trimmed))
@@ -322,9 +324,16 @@ export function hashReferenceThreadIdentity(thread: ThreadJumpCandidate): string
     : buildThreadIdentityKey(thread.source, thread.id);
 }
 
+export function hashReferenceOptionKey(option: HashReferenceOption): string {
+  return option.kind === "thread" ? `thread:${hashReferenceThreadIdentity(option.thread)}`
+    : `pull-request:${buildPullRequestStatusKey(option.pullRequest)}`;
+}
+
 export function buildHashReferenceOptions(params: {
   currentThreadKey?: string;
   currentThread?: ThreadJumpCandidate;
+  loadedThreads?: readonly NavigationThreadSummary[];
+  viewerInstanceId?: string;
   localThreads: readonly ThreadJumpCandidate[];
   localOwnerMatched?: boolean;
   remoteOwnerMatched?: boolean;
@@ -346,16 +355,26 @@ export function buildHashReferenceOptions(params: {
     query,
   ).pullRequests;
   const attachedKeys = new Set(attachedPullRequests.map(buildPullRequestStatusKey));
-  const localCandidates = filterHashReferenceCandidates(
-    localThreads.filter((thread) => !isCurrentThread(thread)),
-    query,
-    params.localOwnerMatched,
-  );
-  const localThreadKeys = new Set(
-    localThreads.map((thread) =>
-      hashReferenceThreadIdentity(thread),
-    ),
-  );
+  const hasQuery = Boolean(query.trim());
+  const matchesQuery = createThreadJumpMatcher(query);
+  const localMatches = localThreads.filter((thread) => !isCurrentThread(thread)
+    && (!hasQuery || params.localOwnerMatched || matchesQuery(thread)));
+  const localThreadKeys = new Set(localMatches.map(hashReferenceThreadIdentity));
+  // Use rows already visible on this owner while its bounded search page
+  // catches up. Keep bare `#` on the owner's recent-results page.
+  if (hasQuery && params.loadedThreads) {
+    for (const thread of params.loadedThreads) {
+      const target = thread.federation?.ref.target;
+      const instanceId = target?.scope === "remote" ? target.instanceId : undefined;
+      if (instanceId !== params.viewerInstanceId || thread.archivedAt !== undefined
+        || thread.codexNativeSubAgent !== undefined) continue;
+      const key = hashReferenceThreadIdentity(thread);
+      if (key === currentThreadKey || localThreadKeys.has(key) || !matchesQuery(thread)) continue;
+      localThreadKeys.add(key);
+      localMatches.push(thread);
+    }
+  }
+  const localCandidates = filterHashReferenceCandidates(localMatches, query, true);
   const remoteCandidates = filterHashReferenceCandidates(
     (params.remoteThreads ?? []).filter(
       (thread) =>

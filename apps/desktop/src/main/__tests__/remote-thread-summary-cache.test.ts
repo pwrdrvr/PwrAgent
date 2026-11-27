@@ -7,6 +7,7 @@ import {
 import {
   buildThreadIdentityKey,
   type NavigationSnapshot,
+  type NavigationQueryRequest,
   type NavigationThreadSummary,
   type RemoteThreadPin,
 } from "@pwragent/shared/contracts/navigation";
@@ -14,6 +15,9 @@ import {
   RemoteThreadSummaryCache,
   type RemoteThreadSummaryPeer,
 } from "../federation/remote-thread-summary-cache";
+
+import { readFederationPinnedSnapshot } from "../federation/federation-collection-client";
+import { NavigationQueryStore } from "../app-server/navigation-query-store";
 
 function remoteTarget(instanceId: string): FederationRemoteTarget {
   return { scope: "remote", instanceId };
@@ -1200,6 +1204,49 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.refreshed).toEqual([]);
   });
 
+  it("keeps mounted peers connected while pin coverage is checking", async () => {
+    let checking = true;
+    const retained = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Retained" });
+    const fresh = { ...retained, federation: undefined, title: "Fresh" };
+    const reportFailure = vi.fn();
+    const publish = vi.fn();
+    const store = new NavigationQueryStore();
+    const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => {
+      const page = await store.readPage({ request, scopeKey: "peer", loadIndex: async () =>
+        ({ threads: checking ? [] : [fresh], directories: [], coverage: { state: checking ? "checking" : "complete" } }) });
+      return { ...page, entries: page.entries.map((entry) => ({ ...entry, row: { ...entry.row, federation: retained.federation } })) };
+    });
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchPinnedSnapshot: async (_target, keys, options, state) =>
+        readFederationPinnedSnapshot({ getNavigationQueryPage }, keys, options, state),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+      onPinnedRefreshProblem: reportFailure,
+      onPinnedSummariesRefreshed: publish,
+    });
+    const pins = [pin({ instanceId: "peer-a", threadId: "t1", summary: retained })];
+    try {
+      await cache.resolvePinnedThreads(pins);
+      await settle();
+      expect((await cache.resolvePinnedThreads(pins)).threads[0]).toMatchObject({
+        title: "Retained", federation: { peerStatus: "connected" },
+      });
+      expect(reportFailure).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+      expect(getNavigationQueryPage).toHaveBeenCalledOnce();
+
+      checking = false;
+      cache.invalidate("peer-a", { backend: "codex", notification: {
+        method: "navigation/invalidated", params: { sourceMethod: "navigation/providerThreads/refreshed" },
+      } });
+      await settle();
+      expect((await cache.resolvePinnedThreads(pins)).threads[0]).toMatchObject({ title: "Fresh", federation: { peerStatus: "connected" } });
+      expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
+    } finally { cache.dispose(); }
+  });
+
   it("dims rows as degraded once a connected owner fails the background fetch", async () => {
     const onPinnedSummariesRefreshed = vi.fn();
     const onPinnedRefreshProblem = vi.fn();
@@ -1988,7 +2035,7 @@ it("retains pins through repeated incomplete coverage and publishes recovery onc
   const root = stampedThread({ instanceId: "peer", threadId: "root", title: "Last known" });
   let incomplete = false;
   const fetchPinnedSnapshot = vi.fn(async () => {
-    if (incomplete) throw new Error("Pinned navigation owner coverage is checking (pending providers: unknown, failed providers: unknown).");
+    if (incomplete) throw new Error("Pinned navigation owner coverage is degraded (pending providers: unknown, failed providers: 1).");
     return snapshotOf([root]);
   });
   const problem = vi.fn();

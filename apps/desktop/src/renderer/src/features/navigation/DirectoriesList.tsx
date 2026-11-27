@@ -81,6 +81,7 @@ import {
 } from "../../components/SignalCount";
 import {
   getSubthreadDisclosureCount,
+  hasNativeSubAgents,
   isSubthreadSectionCollapsed,
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
@@ -1556,7 +1557,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
               // A child's workers belong to the child, so they render under its
               // own row. They follow it out of this tray when it is unlinked,
               // because the child summary is what carries them.
-              child.codexNativeSubAgents?.length ? (
+              hasNativeSubAgents(child) ? (
                 <NativeSubAgentsDisclosure
                   key={`${directory.key}:${childKey}:subagents`}
                   compact

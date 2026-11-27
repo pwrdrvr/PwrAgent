@@ -807,6 +807,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     onEvent: vi.fn(() => () => {}),
     synchronizeProviderRuntimeSelections: synchronizeProviderRuntimeSelectionsMock,
     listThreads: listThreadsMock,
+    markStartupProviderRefreshPending: vi.fn(),
     refreshProvidersAtStartup: refreshProvidersAtStartupMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
     setMessagingWorkingUpdatesSettings: setMessagingWorkingUpdatesSettingsMock,

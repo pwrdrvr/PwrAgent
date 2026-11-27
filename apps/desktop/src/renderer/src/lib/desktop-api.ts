@@ -1,7 +1,7 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
-import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
+import type { DecisionModelListing, DecisionProviderId, DecisionProvidersReadiness } from "@pwragent/shared/decision-models";
 import type {
   ReadWorktreeReflinkCapabilitiesRequest,
   ReadWorktreeReflinkCapabilitiesResponse,
@@ -38,6 +38,11 @@ import type {
   ResearchWorkRequest,
   ResearchItemContext,
   ResearchSearchPage,
+  ResearchDecisionsRequest,
+  ResearchDecisionsSnapshot,
+  ResearchDecisionBatchRequest,
+  ResearchDecisionBatchActionRequest,
+  ResearchDecisionOpenResultsRequest,
 } from "@pwragent/shared/research";
 import type {
   DecisionsProfileDeleteRequest,
@@ -1298,6 +1303,16 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   withdrawResearch?: (thread: ResearchThreadRequest) => Promise<void>;
   updateResearch?: (request: ResearchUpdateRequest) => Promise<ResearchUpdateReceipt>;
   openResearchEvidence?: (request: ResearchEvidenceRequest) => Promise<OpenPathResponse>;
+  /** Decision provider readiness for Research setup and run views. */
+  readResearchDecisionsStatus?: () => Promise<DecisionProvidersReadiness>;
+  /** Run-scoped decisions and all member decision batches for one research run. */
+  readResearchDecisions?: (request: ResearchDecisionsRequest) => Promise<ResearchDecisionsSnapshot>;
+  /** One page of a decision batch belonging to a member of a research run. */
+  readResearchDecisionBatch?: (request: ResearchDecisionBatchRequest) => Promise<DecisionsRailBatchPage>;
+  /** Stop or cancel a running decision batch belonging to a member of a research run. */
+  actOnResearchDecisionBatch?: (request: ResearchDecisionBatchActionRequest) => Promise<DecisionsRailBatchActionResult>;
+  /** Open the JSONL results file for a decision batch belonging to a member of a research run. */
+  openResearchDecisionResults?: (request: ResearchDecisionOpenResultsRequest) => Promise<DecisionsRailOpenResultsResult>;
   onResearchChanged?: (callback: (change: ResearchChange) => void) => () => void;
   getPrAutoDispatchBudgetStatus?: () => Promise<PrAutoDispatchBudgetStatus>;
   resumePrAutoDispatchBudget?: () => Promise<PrAutoDispatchBudgetStatus>;

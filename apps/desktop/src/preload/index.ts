@@ -23,6 +23,11 @@ import type {
   ResearchWorkRequest,
   ResearchItemContext,
   ResearchSearchPage,
+  ResearchDecisionsRequest,
+  ResearchDecisionsSnapshot,
+  ResearchDecisionBatchRequest,
+  ResearchDecisionBatchActionRequest,
+  ResearchDecisionOpenResultsRequest,
 } from "@pwragent/shared/research";
 import type {
   DecisionsProfileDeleteRequest,
@@ -38,7 +43,7 @@ import type {
   DecisionsRailSnapshot,
   DecisionsRailThreadRequest,
 } from "@pwragent/shared/decisions-rail";
-import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
+import type { DecisionModelListing, DecisionProviderId, DecisionProvidersReadiness } from "@pwragent/shared/decision-models";
 import type {
   ResearchHarnessCheck,
   ResearchHarnessReconcileRequest,
@@ -53,7 +58,24 @@ import type { DesktopTelegramPairingGrants, DesktopWorktreeFolderCheck } from "@
 import type { SaveTelegramConnectionRequest, TelegramConnectionStatus } from "@pwragent/shared/contracts/settings";
 import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL, RESEARCH_WINDOW_SELECT_EVENT_CHANNEL } from "../shared/ipc";
 import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, RESEARCH_MATHOS_TEAMS_CHANNEL, RESEARCH_MATHOS_SWARMS_CHANNEL } from "../shared/ipc";
-import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../shared/ipc";
+import {
+  RESEARCH_SNAPSHOT_CHANNEL,
+  RESEARCH_UPDATE_CHANNEL,
+  RESEARCH_CHANGED_EVENT_CHANNEL,
+  RESEARCH_OPEN_EVIDENCE_CHANNEL,
+  RESEARCH_PREPARE_CHANNEL,
+  RESEARCH_SEARCH_CHANNEL,
+  RESEARCH_ITEM_CHANNEL,
+  RESEARCH_WORK_CHANNEL,
+  RESEARCH_WITHDRAW_CHANNEL,
+  RESEARCH_EVENTS_CHANNEL,
+  RESEARCH_CHANGES_CHANNEL,
+  RESEARCH_DECISIONS_STATUS_CHANNEL,
+  RESEARCH_DECISIONS_CHANNEL,
+  RESEARCH_DECISION_BATCH_CHANNEL,
+  RESEARCH_DECISION_BATCH_ACTION_CHANNEL,
+  RESEARCH_DECISION_OPEN_RESULTS_CHANNEL,
+} from "../shared/ipc";
 import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared/contracts/federation-services";
 import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
 import {
@@ -2267,6 +2289,16 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_UPDATE_CHANNEL, request),
   openResearchEvidence: async (request: ResearchEvidenceRequest): Promise<OpenPathResponse> =>
     await ipcRenderer.invoke(RESEARCH_OPEN_EVIDENCE_CHANNEL, request),
+  readResearchDecisionsStatus: async (): Promise<DecisionProvidersReadiness> =>
+    await ipcRenderer.invoke(RESEARCH_DECISIONS_STATUS_CHANNEL),
+  readResearchDecisions: async (request: ResearchDecisionsRequest): Promise<ResearchDecisionsSnapshot> =>
+    await ipcRenderer.invoke(RESEARCH_DECISIONS_CHANNEL, request),
+  readResearchDecisionBatch: async (request: ResearchDecisionBatchRequest): Promise<DecisionsRailBatchPage> =>
+    await ipcRenderer.invoke(RESEARCH_DECISION_BATCH_CHANNEL, request),
+  actOnResearchDecisionBatch: async (request: ResearchDecisionBatchActionRequest): Promise<DecisionsRailBatchActionResult> =>
+    await ipcRenderer.invoke(RESEARCH_DECISION_BATCH_ACTION_CHANNEL, request),
+  openResearchDecisionResults: async (request: ResearchDecisionOpenResultsRequest): Promise<DecisionsRailOpenResultsResult> =>
+    await ipcRenderer.invoke(RESEARCH_DECISION_OPEN_RESULTS_CHANNEL, request),
   onResearchChanged: (callback: (change: ResearchChange) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, change: ResearchChange) => callback(change);
     ipcRenderer.on(RESEARCH_CHANGED_EVENT_CHANNEL, listener);

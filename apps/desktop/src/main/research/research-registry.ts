@@ -5,7 +5,7 @@ import type {
 } from "@pwragent/shared/contracts/thread-orchestration-tools";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getMainLogger } from "../log";
-import { createResearchAgentHandler } from "./research-runtime";
+import { createResearchAgentHandler, type ResearchAgentDecisionsAdapter } from "./research-runtime";
 
 const mainLog = getMainLogger("pwragent:main");
 
@@ -59,8 +59,18 @@ export function createResearchRegistryPorts(registry: DesktopBackendRegistry): P
   };
 }
 
-export function bindResearchRegistry(registry: DesktopBackendRegistry, research: ResearchService, enabled: () => boolean): () => void {
-  registry.setResearchHandler(createResearchAgentHandler(research, (context) => registry.researchContextIsLive(context), enabled), (thread) => research.isWorker(thread), enabled);
+export function bindResearchRegistry(
+  registry: DesktopBackendRegistry,
+  research: ResearchService,
+  enabled: () => boolean,
+  decisions?: ResearchAgentDecisionsAdapter & { isReady?: () => Promise<boolean> },
+): () => void {
+  registry.setResearchHandler(
+    createResearchAgentHandler(research, (context) => registry.researchContextIsLive(context), enabled, decisions),
+    (thread) => research.isWorker(thread),
+    enabled,
+    decisions?.isReady,
+  );
   return registry.onEvent((event) => {
     const method = event.notification.method;
     if (method === "thread/turnQueue/updated") {

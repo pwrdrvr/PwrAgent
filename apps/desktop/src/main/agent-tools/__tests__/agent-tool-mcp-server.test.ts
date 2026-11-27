@@ -252,6 +252,8 @@ describe("AgentToolMcpServer", () => {
       // Include the prerequisite route without turning the bootstrap into a guide.
       expect(client.getInstructions()!.length).toBeLessThan(900);
       expect(PWRAGENT_TOOL_GUIDE).toContain("Use list_ci_artifacts and download_ci_artifact");
+      expect(PWRAGENT_TOOL_GUIDE).toMatch(/inputsFile by script.*\$TMPDIR \(not \/tmp on macOS\)/);
+      expect(PWRAGENT_TOOL_GUIDE).toMatch(/pass outputFile .*filter scores by script, and read only flagged items/);
       // Native dynamic-tool discovery reaches the same definition as MCP tools/list.
       expect(searchPwrAgentTools(catalogs.flatMap((catalog) => catalog.dynamicTools), "PwrAgent tool guide")[0]?.name).toBe("read_tool_guide");
       await expect(client.callTool({ name: "read_tool_guide", arguments: {} })).resolves.toMatchObject({

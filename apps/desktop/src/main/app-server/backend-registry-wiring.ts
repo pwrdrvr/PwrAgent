@@ -979,7 +979,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         new AgentToolMcpServer({
           resolveCallContext: (context) =>
             ports.resolveAgentToolMcpCallContext(context),
-          resolveCatalogs: (context) => context.managedReview
+          resolveCatalogs: async (context) => context.managedReview
             ? [{ id: "managed_review", router: managedReviewLedgerRouter }]
             : context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
             ? [
@@ -1014,6 +1014,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               threadTodoHandler: ports.threadTodoHandler,
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
               researchHandler: ports.mcpResearchHandler,
+              researchDecisionsReady: await ports.isResearchDecisionsReady(),
               checkoutHandler: ports.checkoutHandler,
               checkoutMode: ports.resourceCheckoutToolMode(context),
             }, {
@@ -1111,6 +1112,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     acpAgentStore: options?.acpAgentStore,
     acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: options?.acpSessionStore,
+    recordSubAgents: async (params) => await ports.recordAcpSubAgents(params),
     agentToolMcpServer,
     onTurnTerminalIngress: (turn) => managedReviewCandidateLedger.retireToolTurn(turn),
     readJobMonitorCreationPreference: (backend, threadId) => ports.isJobMonitorCreationEnabled({ backend, threadId }),

@@ -389,3 +389,20 @@ export function decisionProvidersReadiness(input: DecisionProviderReadinessInput
         : order.find((provider) => enabled[provider]) ?? "openai";
   return { providers, defaultProvider };
 }
+
+/** Providers currently enabled and configured to run decisions, in preference order. */
+export function readyDecisionProviders(
+  readiness: Pick<DecisionProvidersReadiness, "providers"> | undefined,
+): DecisionRunProvider[] {
+  if (!readiness) return [];
+  return readiness.providers.filter((entry) => entry.ready).map((entry) => entry.provider);
+}
+
+/** Human-readable provider label for prompts and setup surfaces. */
+export function decisionRunProviderName(provider: DecisionRunProvider): string {
+  switch (provider) {
+    case "openai": return "OpenAI Decisions (gpt-6-luna)";
+    case "jev": return "TypeSafe Jev";
+    case "local": return "local Clef";
+  }
+}

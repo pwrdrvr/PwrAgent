@@ -26,6 +26,7 @@ import type {
   MarkThreadSeenRequest,
   NavigationThreadSummary,
   NavigationQueryPage,
+  NavigationQueryRequest,
   NavigationRemoteOwner,
   PrSummary,
   RefreshThreadPullRequestsRequest,
@@ -49,6 +50,7 @@ import type {
 import type { ThreadPrWatchesResponse } from "@pwragent/shared/contracts/thread-pr-watches";
 import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import type { PrStatusObservations } from "../app-server/thread-pull-request-summaries";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
@@ -307,6 +309,7 @@ function navigationReadHandler(method: string): (...args: unknown[]) => Promise<
 }
 
 const getStartupProviderRefreshStatus = vi.fn();
+const readStartupNavigationThreads = vi.fn<() => Promise<AppServerThreadSummary[]> | undefined>();
 const isIncompleteThreadList = vi.fn((_threads: unknown) => false);
 const listThreads = vi.fn(async (request?: {
   archived?: boolean;
@@ -789,7 +792,7 @@ const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const canonicalizeNavigationThreadPullRequests = vi.fn(async (threads: NavigationThreadSummary[],
   _demand?: import("../pr-status/pr-metadata-process").PrMetadataDemand, _verify?: boolean) => threads);
-const canonicalizeNavigationPullRequests = vi.fn(async (prs: PrSummary[], _demand?: unknown) => prs);
+const canonicalizeNavigationPullRequests = vi.fn(async (prs: PrSummary[], _demand?: unknown, _verifyAttachments?: boolean) => prs);
 const setLocalPullRequestAuthorityResolver = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadDependencyToolHandler = vi.fn();
@@ -1337,6 +1340,7 @@ vi.mock("../app-server/backend-registry", () => {
     getQueuedTurnsForThread: () => [],
     getQueuedExecutionModeForThread: () => undefined,
     getStartupProviderRefreshStatus,
+    readStartupNavigationThreads,
     isIncompleteThreadList,
     rememberCompleteNavigationSnapshot,
     rememberNavigationVisibilityIndex: rememberCompleteNavigationSnapshot,
@@ -2694,7 +2698,7 @@ describe("app server ipc", () => {
 
     const handler = navigationReadHandler("backend.getNavigationQueryPage")!;
     const read = async (query: import("@pwragent/shared/contracts/navigation").NavigationQueryRequest["query"], known?: NavigationQueryPage) =>
-      await handler({ sender: { id: 90490, once: vi.fn() } }, { protocol: 2, consumer: "main-sidebar", pageSize: 1, query,
+      await handler({ sender: { id: 90490, once: vi.fn() } }, { protocol: 2, consumer: "exact-link", pageSize: 1, query,
         ...(known ? { completeBaselineRevision: known.countsRevision } : {}) }) as NavigationQueryPage;
 
     await read({ kind: "directory-index" });
@@ -6265,6 +6269,112 @@ describe("app server ipc", () => {
     }), { numRuns: 8 });
   });
 
+  it("returns saved sidebar and project rows while provider and Git enrichment are held open", async () => {
+    const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
+    const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+    const { getDesktopStackReader } = await import("../stacks/stack-reader");
+    const { NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD } = await import("@pwragent/shared/navigation-query-events");
+    const provider = Promise.withResolvers<void>();
+    const git = Promise.withResolvers<void>();
+    overlayStoreFixture.stable = getDesktopOverlayStore();
+    // Keep one provider path Windows-native even when this test runs on POSIX.
+    const root = "C:\\pwragent-test\\saved-project";
+    const alternate = path.join(PWRAGENT_ROOT, "second-project");
+    const rows: NavigationThreadSummary[] = Array.from({ length: 174 }, (_, index) => ({
+      id: `saved-${index}`, source: "codex", title: `Saved ${index}`, titleSource: "explicit",
+      updatedAt: 200 - index, createdAt: 200 - index, threadStatus: index === 0 ? "active" : "idle",
+      inbox: { inInbox: false }, ...(index === 0 ? { gitBranch: "topic", pinnedRank: "1024" } : {}),
+      linkedDirectories: [{ id: index % 2 ? alternate : root, path: index % 2 ? alternate : root,
+        label: index % 2 ? "Second project" : "Saved project", kind: "local" }],
+    }));
+    const directories = buildDirectorySummaries({ threads: rows }).flatMap((directory) =>
+      directory.path ? [{ ...directory, path: directory.path }] : []);
+    const projectKey = `directory:${canonicalizeNavigationPath(root)}`;
+    const secondProjectKey = `directory:${canonicalizeNavigationPath(alternate)}`;
+    const selected = { backend: "codex" as const, threadId: rows[0]!.id };
+    const pr = githubPr({ number: 1, org: "fixture", repo: "project", state: "passing",
+      url: "https://github.com/fixture/project/pull/1", headRefName: "topic", linkedDirectoryPaths: [root] });
+    rows[0]!.prs = [pr];
+    listThreads.mockImplementation(async () => { await provider.promise; return rows as never; });
+    readStartupNavigationThreads.mockResolvedValue(rows);
+    getStartupProviderRefreshStatus.mockReturnValue({ state: "checking" });
+    readNavigationQueryIndex.mockReturnValue({ threads: rows, directories });
+    readNavigationPullRequests.mockImplementation((refs) => refs.map(({ threadId }) => threadId === selected.threadId ? [pr] : []));
+    canonicalizeNavigationPullRequests.mockImplementation(async (prs, _demand, verify) => {
+      if (verify === false) return prs;
+      await git.promise;
+      return [];
+    });
+    const stackRead = vi.spyOn(getDesktopStackReader(), "read").mockImplementation(async () => {
+      await git.promise;
+      return { catalogs: [], stacks: [{ key: "saved-stack", name: "Saved stack", repository: "github.com:fixture/project",
+        inferred: false, trunk: "main", layers: [{ role: "layer", branch: "topic", parent: "main", health: "in_sync",
+          thread: { key: `codex:${selected.threadId}`, title: rows[0]!.title } }] }] };
+    });
+    registerAppServerIpcHandlers();
+    const event = { sender: { id: 90903, once: vi.fn() } };
+    const handler = navigationReadHandler("backend.getNavigationQueryPage");
+    const consumers: string[] = [];
+    const read = (query: NavigationQueryRequest["query"], readReason?: NavigationQueryRequest["readReason"]) => {
+      const consumer = `startup-sidebar:${consumers.length}`;
+      consumers.push(consumer);
+      return handler(event, { protocol: 2, consumer: "main-sidebar", inventory: "viewer", pageSize: 10,
+        query, readReason, deadlineAt: Date.now() + 2_000 }, consumer) as Promise<NavigationQueryPage>;
+    };
+    const lens = { kind: "lens", lens: "attention" } as const;
+    const groupQuery: NavigationQueryRequest["query"] = { kind: "group-members", roots: [selected], membershipOnly: true };
+    let archiveSettled = false;
+    const archive = read(groupQuery).then((page) => { archiveSettled = true; return page; });
+    void archive.catch(() => {});
+    try {
+      const [index, attention, opened, pin] = await Promise.all([
+        read({ kind: "directory-index" }), read(lens), read({ kind: "directory", directoryKey: projectKey, roots: "pinned" }),
+        read(groupQuery, "pins"),
+      ]);
+      expect(index.directories?.map(({ key }) => key)).toEqual(expect.arrayContaining([projectKey, secondProjectKey]));
+      expect(index.counts.total).toBe(174);
+      expect(attention.entries[0]?.row.id).toBe(selected.threadId);
+      expect(attention.entries[0]?.row.prs ?? []).toEqual([]);
+      expect(opened.entries.map(({ row }) => row.id)).toEqual([selected.threadId]);
+      expect(pin.coverage.state).toBe("checking");
+      expect(archiveSettled).toBe(false);
+      expect(listThreads).not.toHaveBeenCalled();
+      expect(canonicalizeNavigationPullRequests).toHaveBeenCalledWith([pr], expect.anything());
+      expect(stackRead).not.toHaveBeenCalled();
+
+      provider.resolve();
+      readStartupNavigationThreads.mockReturnValue(undefined);
+      getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+      emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: { failedProviders: 0 } } });
+      expect((await archive).coverage.state).toBe("complete");
+      const live = await read(lens);
+      await vi.waitFor(() => expect(stackRead).toHaveBeenCalledOnce());
+      expect(live.entries[0]?.row.stackMemberships).toBeUndefined();
+      const [switched, selection] = await Promise.all([read({ kind: "directory", directoryKey: secondProjectKey }),
+        read({ kind: "exact", identities: [selected], ancestryScope: "directory" })]);
+      expect(switched.entries[0]?.row.id).toBe(rows[1]!.id);
+      expect(selection.selectionDirectory?.key).toBe(projectKey);
+      expect(selection.entries[0]?.row.id).toBe(selected.threadId);
+      expect(stackRead).toHaveBeenCalledOnce();
+
+      git.resolve();
+      await vi.waitFor(async () => {
+        expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({ notification: {
+          method: NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD, params: {},
+        } }));
+        const enriched = (await read(lens)).entries[0]?.row;
+        expect(enriched?.stackMemberships).toEqual([expect.objectContaining({ key: "saved-stack" })]);
+        expect(enriched?.prs ?? []).toEqual([]);
+      });
+    } finally {
+      provider.resolve();
+      git.resolve();
+      stackRead.mockRestore();
+      await Promise.all(consumers.map((consumer) => handlers.get("navigation:release-query")?.(event, consumer)));
+      await Promise.allSettled([archive]);
+    }
+  });
+
   it("carries renderer causes across IPC into the physical owner and index reads", async () => {
     const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const { listingDiagnostics } = await import("../diagnostics/listing-diagnostics");
@@ -6275,7 +6385,7 @@ describe("app server ipc", () => {
     try {
       const before = listingDiagnostics.snapshot().recorded;
       await navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90299, once: vi.fn() } }, {
-        protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" },
+        protocol: 2, consumer: "main-sidebar", inventory: "viewer", query: { kind: "lens", lens: "inbox" },
         diagnostic: { view: 44, effect: 2, logical: 6, attempt: 1, cause: "turn", trigger: "turn/completed", invalidations: 2 },
       });
       const snapshot = listingDiagnostics.snapshot();
