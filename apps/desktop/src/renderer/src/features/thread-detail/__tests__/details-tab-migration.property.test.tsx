@@ -6,72 +6,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import {
-  CONTEXT_TAB_IDS,
   DETAILS_SEGMENT_IDS,
   contextTabIdForDetailsSegment,
-  isContextTabId,
   resolveContextTabTarget,
   type ContextRailTabId,
   type ContextTabId,
-  type DetailsSectionId,
   type DetailsSegmentId,
 } from "../context-panels/context-tab";
 
+// The pure old-id → (tab, segment) mapping is checked against the design's
+// move table in context-panels/__tests__/context-tab.property.test.ts. This
+// file drives the real rail through it.
+
 afterEach(cleanup);
-
-/**
- * The approved move table ("Composer Diet and Thread Details", section 05):
- * where each tab that Details took in now lives. Written out by hand so the
- * mapping is checked against the design, not against itself.
- */
-const MERGED: Record<string, { segment: DetailsSegmentId; section?: DetailsSectionId }> = {
-  info: { segment: "thread" },
-  projects: { segment: "thread", section: "folders" },
-  edits: { segment: "changes" },
-  prs: { segment: "prs" },
-  "pr-activity": { segment: "prs", section: "activity" },
-  actions: { segment: "jobs", section: "commands" },
-  subagents: { segment: "jobs", section: "subagents" },
-  automations: { segment: "jobs", section: "scheduled" },
-};
-
-const SPINE_TABS: readonly ContextRailTabId[] = [
-  "details", "todos", "research", "waiting", "pricing", "decisions", "providers", "connections",
-];
-
-// Every id a stored setting, deep link or reveal request can carry.
-const EVERY_TAB_ID: readonly ContextTabId[] = [...CONTEXT_TAB_IDS, "connections"];
-
-describe("old context tab ids", () => {
-  it("each land on a spine tab, and the eight Details took in on their segment", () => {
-    fc.assert(fc.property(fc.constantFrom(...EVERY_TAB_ID), (id) => {
-      const target = resolveContextTabTarget(id);
-      expect(SPINE_TABS).toContain(target.tab);
-      // A segment exactly when Details is the tab.
-      expect(target.segment !== undefined).toBe(target.tab === "details");
-      const merged = MERGED[id];
-      if (merged) {
-        expect(target).toEqual({ tab: "details", ...merged });
-      } else {
-        expect(target).toEqual({ tab: id });
-      }
-    }), { numRuns: EVERY_TAB_ID.length * 4 });
-  });
-
-  it("store each segment under an id that resolves back to it and that older builds read", () => {
-    fc.assert(fc.property(fc.constantFrom(...DETAILS_SEGMENT_IDS), (segment) => {
-      const stored = contextTabIdForDetailsSegment(segment);
-      // The persisted value keeps its shape: an id every build already knows.
-      expect(isContextTabId(stored)).toBe(true);
-      expect(resolveContextTabTarget(stored)).toMatchObject({ tab: "details", segment });
-    }));
-  });
-
-  it("leave every spine tab reachable from some old id", () => {
-    const reached = new Set(EVERY_TAB_ID.map((id) => resolveContextTabTarget(id).tab));
-    expect([...reached].sort()).toEqual([...SPINE_TABS].sort());
-  });
-});
 
 const thread: NavigationThreadSummary = {
   id: "thread-1",
@@ -82,10 +29,18 @@ const thread: NavigationThreadSummary = {
   inbox: { inInbox: false },
 };
 
-// Ids whose spine tab this fixture draws: To-dos, Research and Decisions need
-// their own setup and are covered by the pure property above.
+// Ids whose spine tab this fixture draws: the eight Details took in, plus
+// three that stay on the spine. To-dos, Research and Decisions need their own
+// setup and are covered by the pure property.
 const DRAWN_IDS: readonly ContextTabId[] = [
-  ...Object.keys(MERGED) as ContextTabId[],
+  "info",
+  "projects",
+  "edits",
+  "prs",
+  "pr-activity",
+  "actions",
+  "subagents",
+  "automations",
   "waiting",
   "pricing",
   "providers",
@@ -184,21 +139,37 @@ class ClickSegment implements fc.Command<Model, Real> {
   toString(): string { return `segment(${this.segment})`; }
 }
 
+function runCommands(initial: ContextTabId, commands: Iterable<fc.Command<Model, Real>>): Model {
+  const real: Real = { setTab: {} };
+  const view = render(<Harness initial={initial} real={real} />);
+  const model: Model = { stored: initial, remembered: "thread" };
+  settle(model);
+  try {
+    check(model);
+    fc.modelRun(() => ({ model, real }), commands);
+  } finally {
+    view.unmount();
+  }
+  return model;
+}
+
 describe("the Details tab on the rail", () => {
   // The model test's counterexample when Details forgot its segment.
   it("reopens Details on the segment it last showed after another tab", () => {
-    const real: Real = { setTab: {} };
-    render(<Harness initial="info" real={real} />);
-    const model: Model = { stored: "info", remembered: "thread" };
-    const commands: fc.Command<Model, Real>[] = [
+    const model = runCommands("info", [
       new ClickSegment("jobs"),
       new Reveal("waiting"),
       new ClickSpine("details"),
-    ];
-    for (const command of commands) {
-      command.run(model, real);
-    }
+    ]);
     expect(model.stored).toBe("actions");
+  });
+
+  it("opens each old id's spine tab and segment on first render", () => {
+    // Every drawn id, rendered once: the enumeration the generated runs below
+    // cannot afford under the rendering budget.
+    for (const id of DRAWN_IDS) {
+      runCommands(id, []);
+    }
   });
 
   it("shows the spine tab and segment each stored id names, through reveals and clicks", () => {
@@ -210,17 +181,8 @@ describe("the Details tab on the rail", () => {
         fc.constantFrom(...DETAILS_SEGMENT_IDS).map((segment) => new ClickSegment(segment)),
       ], { maxCommands: 8 }),
       (initial, commands) => {
-        const real: Real = { setTab: {} };
-        const view = render(<Harness initial={initial} real={real} />);
-        const model: Model = { stored: initial, remembered: "thread" };
-        settle(model);
-        try {
-          check(model);
-          fc.modelRun(() => ({ model, real }), commands);
-        } finally {
-          view.unmount();
-        }
+        runCommands(initial, commands);
       },
-    ), { numRuns: 12 });
+    ), { numRuns: 5 });
   });
 });

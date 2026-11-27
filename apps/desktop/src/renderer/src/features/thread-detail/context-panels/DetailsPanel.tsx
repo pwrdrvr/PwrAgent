@@ -61,14 +61,14 @@ export function DetailsPanel(props: {
               role="tab"
               aria-selected={selected}
               aria-controls="details-segment-panel"
-              aria-label={badge?.description ? `${SEGMENT_LABELS[id]} · ${badge.description}` : SEGMENT_LABELS[id]}
+              aria-describedby={badge?.description ? `details-segment-${id}-description` : undefined}
               tabIndex={selected ? 0 : -1}
               className={`details-segments__button${selected ? " is-active" : ""}`}
               onClick={() => props.onSelectSegment(id)}
             >
               {SEGMENT_LABELS[id]}
               {count > 0 ? (
-                <span className="details-segments__count" aria-hidden="true">
+                <span className="details-segments__count">
                   {count > 99 ? "99+" : count}
                 </span>
               ) : null}
@@ -76,6 +76,17 @@ export function DetailsPanel(props: {
           );
         })}
       </div>
+      {/* The tabs' names are their visible text ("PRs 2"), which voice
+          control users say; what a count means is each tab's description.
+          A hidden node still describes through aria-describedby. */}
+      {DETAILS_SEGMENT_IDS.map((id) => {
+        const description = props.badges[id]?.description;
+        return description ? (
+          <span key={id} id={`details-segment-${id}-description`} hidden>
+            {description}
+          </span>
+        ) : null;
+      })}
       <div
         ref={panelRef}
         className="details-panel__body"

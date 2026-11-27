@@ -1871,8 +1871,10 @@ describe("App", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Previous notice" }));
     fireEvent.click(screen.getByRole("button", { name: "Previous notice" }));
-    expect(screen.getByText("Task monitor failed")).toBeInTheDocument();
-    expect(screen.getByText(rendererTarget
+    const monitorNotice = screen.getByText("Task monitor failed").closest(".app-notice-toast");
+    expect(monitorNotice).not.toBeNull();
+    // Scoped to the notice: the context rail's Location row also names the machine.
+    expect(within(monitorNotice as HTMLElement).getByText(rendererTarget
       ? "Remote instance: remote-gateway" : "This machine")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open thread Release fixture" }));
     await waitFor(() => expect(selectedDetail).toHaveBeenCalledWith(expect.objectContaining({

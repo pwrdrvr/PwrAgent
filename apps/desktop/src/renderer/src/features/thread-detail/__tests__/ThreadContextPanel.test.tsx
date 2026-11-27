@@ -417,7 +417,7 @@ describe("ThreadContextPanel", () => {
         />
       </ThreadPrWatchIndicatorsContext.Provider>,
     );
-    expect(screen.getByRole("tab", { name: "PRs · 2 watches waking this thread" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^PRs/ })).toHaveAccessibleDescription("2 watches waking this thread");
     cleanup();
 
     // A peer's thread counts the owner's projection, not this instance's list.
@@ -435,12 +435,11 @@ describe("ThreadContextPanel", () => {
         },
       } as NavigationThreadSummary,
     });
-    expect(screen.getByRole("tab", { name: "PRs · 1 watch waking this thread" }))
-      .toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^PRs/ })).toHaveAccessibleDescription("1 watch waking this thread");
     cleanup();
 
     renderPanel({ activeTab: "prs", pinned: true });
-    expect(screen.getByRole("tab", { name: "PRs" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "PRs" })).not.toHaveAttribute("aria-describedby");
   });
 
   it("counts a merge build watch, which the Pull requests card lists, on the PRs segment", () => {
@@ -464,7 +463,34 @@ describe("ThreadContextPanel", () => {
         </ThreadPrWatchIndicatorsContext.Provider>
       </ThreadDependencyIndicatorsContext.Provider>,
     );
-    expect(screen.getByRole("tab", { name: "PRs · 1 watch waking this thread" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^PRs/ })).toHaveAccessibleDescription("1 watch waking this thread");
+  });
+
+  it("names each Details segment by exactly its visible text, counts included", () => {
+    // axe label-content-name-mismatch: a voice-control user says what the tab
+    // shows ("PRs 2"). An aria-label of "PRs · 2 pull requests" broke that
+    // the moment a count badge appeared.
+    const pr = (number: number) => ({
+      provider: "github.com",
+      org: "example",
+      repo: "widgets",
+      number,
+      title: `Widget fix ${number}`,
+      url: `https://github.com/example/widgets/pull/${number}`,
+    });
+    renderPanel({
+      activeTab: "prs",
+      pinned: true,
+      thread: { ...baseThread, prs: [pr(41), pr(42)] } as NavigationThreadSummary,
+    });
+    const segments = within(screen.getByRole("tablist", { name: "Details" })).getAllByRole("tab");
+    expect(segments).toHaveLength(4);
+    for (const segment of segments) {
+      expect(segment).toHaveAccessibleName(segment.textContent ?? "");
+    }
+    const prs = within(screen.getByRole("tablist", { name: "Details" })).getByRole("tab", { name: /^PRs/ });
+    expect(within(prs).getByText("2")).toBeInTheDocument();
+    expect(prs).toHaveAccessibleDescription("2 pull requests");
   });
 
   it("wires the tabs to a labelled tabpanel when the rail is open", () => {
