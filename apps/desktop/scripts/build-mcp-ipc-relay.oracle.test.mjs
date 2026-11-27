@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { runNativeFixtureCommand } from "../src/test-setup/native-helper-fixture";
-import { appendNativeOracleTiming, profileNativeBuild } from "./native-relay-oracle-profile.mjs";
+import { appendNativeOracleTiming, profileNativeBuild, timeNativeOraclePhase } from "./native-relay-oracle-profile.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const fixtures = [];
@@ -76,10 +76,9 @@ function parseOutput(stdout) {
   return JSON.parse(stdout.trim().split(/\r?\n/).at(-1));
 }
 
-function observe(output) {
-  const started = performance.now();
-  try { return execFileSync(output, ["--build-oracle"], { encoding: "utf8" }).trim(); }
-  finally { appendNativeOracleTiming({ kind: "run-helper", output, ms: performance.now() - started }); }
+function observe(output, profile) {
+  return timeNativeOraclePhase({ kind: "run-helper", output },
+    () => execFileSync(output, ["--build-oracle"], { encoding: "utf8" }).trim(), profile);
 }
 
 function machine(output) {
@@ -280,17 +279,16 @@ int main(void) {
   mkdirSync(library);
   const object = join(library, "value.o");
   const archive = join(library, "libvalue.a");
-  const started = performance.now();
-  try {
-    execFileSync("cc", ["-x", "c", "-c", "-", "-o", object,
+  const profile = process.env.PWRAGENT_NATIVE_ORACLE_LINKED_INPUT_PROFILE || process.env.PWRAGENT_NATIVE_ORACLE_PROFILE;
+  const label = { root: f.root };
+  timeNativeOraclePhase({ kind: "archive-setup", label, command: "cc -c" },
+    () => execFileSync("cc", ["-x", "c", "-c", "-", "-o", object,
       ...(process.platform === "darwin" ? ["-mmacosx-version-min=12.0"] : []),
     ], {
       input: 'const char *oracle_library_value(void) { return "lib-one"; }\n', stdio: "pipe",
-    });
-    execFileSync("ar", ["rcs", archive, object], { stdio: "pipe" });
-  } finally {
-    appendNativeOracleTiming({ kind: "archive-setup", label: { root: f.root }, ms: performance.now() - started });
-  }
+    }), profile);
+  timeNativeOraclePhase({ kind: "archive-setup", label, command: "ar" },
+    () => execFileSync("ar", ["rcs", archive, object], { stdio: "pipe" }), profile);
   // Use a whole-second timestamp so utimesSync can restore it exactly.
   utimesSync(archive, 1, 1);
   writeFileSync(f.builder, readFileSync(f.builder, "utf8").replace('source, "-o", output', `source, ${JSON.stringify(`-Wl,${archive}`)}, "-o", output`));
@@ -298,12 +296,12 @@ int main(void) {
   // environment throughout and needs no Node subprocess for either build.
   const { buildMcpIpcRelay } = createRequire(import.meta.url)(f.builder);
   let attempt = 0;
-  const build = () => profileNativeBuild({ root: f.root, attempt: ++attempt },
-    () => buildMcpIpcRelay({ outputRoot: f.root, reuse: true }));
+  const build = () => profileNativeBuild({ ...label, attempt: ++attempt },
+    () => buildMcpIpcRelay({ outputRoot: f.root, reuse: true }), profile);
   const output = build();
   const inputs = JSON.parse(readFileSync(`${output}.build.json`, "utf8")).inputs;
   expect(inputs.some((input) => input.path === archive)).toBe(true);
-  expect(observe(output)).toBe("lib-one");
+  expect(observe(output, profile)).toBe("lib-one");
   const original = statSync(archive, { bigint: true });
   // Change the one object string in place. Its length and the archive layout
   // stay fixed, and there is no second compiler or archiver invocation.
@@ -319,7 +317,7 @@ int main(void) {
   expect(updated.size).toBe(original.size);
   expect(updated.mtimeNs).toBe(original.mtimeNs);
   expect(build()).toBe(output);
-  expect(observe(output)).toBe("lib-two");
+  expect(observe(output, profile)).toBe("lib-two");
 });
 
 it("removes an installed Outpost helper after a failed POSIX rebuild and rejects Windows", () => {
