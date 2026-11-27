@@ -115,6 +115,7 @@ const acpClientLog = getMainLogger("pwragent:acp-client");
 export type AcpJsonRpcTransport = {
   readonly disconnected?: boolean;
   disableReconnect?(): void;
+  onDisconnect?(listener: () => void): () => void;
   request(
     method: string,
     params?: Record<string, unknown>,
@@ -542,6 +543,7 @@ export class AcpAgentClient {
   private readonly approvalRequesterName: string;
   private unsubscribe?: () => void;
   private unsubscribeRequest?: () => void;
+  private unsubscribeDisconnect?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   private archiveRestoreSupported = false;
   private antigravitySessionListSupported = false;
@@ -567,6 +569,7 @@ export class AcpAgentClient {
 
   async initialize(): Promise<void> {
     this.replayKit = await loadAcpReplayKit();
+    this.unsubscribeDisconnect = this.options.transport.onDisconnect?.(() => this.resolveReadyTransfers());
     this.unsubscribe = this.options.transport.onNotification((method, params) => {
       if (method === "session/update") {
         this.applySessionUpdate(params);
@@ -695,9 +698,10 @@ export class AcpAgentClient {
   }
 
   private resolveReadyTransfers(): void {
-    if (this.hasActiveOperations()) return;
+    const disconnected = this.disconnected;
+    if (!disconnected && this.hasActiveOperations()) return;
     for (const [sessionId, waiter] of this.transferWaiters) {
-      if (this.sessionTransferBusy(sessionId)) continue;
+      if (!disconnected && this.sessionTransferBusy(sessionId)) continue;
       this.transferWaiters.delete(sessionId);
       waiter.resolve();
     }
@@ -1012,6 +1016,8 @@ export class AcpAgentClient {
     this.unsubscribe = undefined;
     this.unsubscribeRequest?.();
     this.unsubscribeRequest = undefined;
+    this.unsubscribeDisconnect?.();
+    this.unsubscribeDisconnect = undefined;
     this.agentSessionIdsByAppSessionId.clear();
     this.appSessionIdsByAgentSessionId.clear();
     this.retainableSessionIds.clear();

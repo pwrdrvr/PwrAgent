@@ -48,6 +48,9 @@ function acpTurn(registry: ReturnType<typeof owner>, turnId: string, model = "ge
       threadId, turnId, acpPromptSettling,
       turn: { id: turnId, status: "cancelled", completedAt: Date.now() },
     } }),
+    fail: () => emit({ method: "turn/failed", params: {
+      threadId, turnId, turn: { id: turnId, status: "failed", completedAt: Date.now(), error: { message: "Worker exited" } },
+    } }),
   };
 }
 
@@ -77,8 +80,8 @@ it("seeks single ACP usage rows and orders the idle baseline by completion", asy
     const spy = vi.spyOn(state.raw, "prepare").mockImplementation((sql) => {
       if (sql.startsWith("SELECT usage_turn_id, provider, model, final_context_tokens")) {
         plans.completion = recordPlan(sql, [backend, threadId, "compact"]);
-      } else if (sql.startsWith("SELECT final_context_tokens FROM thread_usage_turns")) {
-        plans.baseline = recordPlan(sql, ["google", backend, threadId, "compact", Date.now()]);
+      } else if (sql.startsWith("SELECT final_context_tokens, provider, model FROM thread_usage_turns")) {
+        plans.baseline = recordPlan(sql, [backend, threadId, "compact", Date.now()]);
       }
       return prepare(sql);
     });
@@ -99,6 +102,126 @@ it("seeks single ACP usage rows and orders the idle baseline by completion", asy
   } finally {
     await registry.close();
     state.close();
+  }
+});
+
+it("does not use the previous model's fill to arm an idle compaction", async () => {
+  const state = openFreshStateDb(":memory:");
+  const store = new SqliteOverlayStore(state);
+  const registry = owner(store);
+  try {
+    const model = "gemini-4-carbon";
+    const earlier = acpTurn(registry, "earlier-same-model", model);
+    await earlier.start();
+    await earlier.context(460_000);
+    await earlier.usage();
+    await earlier.complete();
+    const previous = acpTurn(registry, "different-model");
+    await previous.start();
+    await previous.context(470_000);
+    await previous.usage();
+    await previous.complete();
+    const setCompleted = state.raw.prepare("UPDATE thread_usage_turns SET completed_at = ? WHERE turn_id = ?");
+    setCompleted.run(10, "earlier-same-model");
+    setCompleted.run(20, "different-model");
+    const compact = acpTurn(registry, "idle-compact", model);
+    await compact.start();
+    await compact.usage();
+    await compact.complete(true);
+    const ordinary = acpTurn(registry, "ordinary", model);
+    await ordinary.start();
+    await ordinary.context(40_000);
+    await ordinary.usage();
+    await ordinary.complete();
+    // A model switch cannot make either the mismatched or a superseded sample
+    // the baseline for the first ordinary fill after the compact request.
+    expect(await store.listThreadCompactions(identity)).toEqual([]);
+  } finally {
+    await registry.close();
+    state.close();
+  }
+});
+
+it("retires a compaction on its first ordinary fill when a cancelled prompt never bills", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const fixture = createTempStateDb("acp-unbilled-completion-");
+  const state = openFreshStateDb(fixture.dbPath);
+  const store = new SqliteOverlayStore(state);
+  const registry = owner(store);
+  try {
+    const compact = acpTurn(registry, "compact");
+    await compact.start();
+    await compact.context(470_000);
+    await compact.usage();
+    await compact.complete(true);
+    const candidate = state.raw.prepare("SELECT acp_compaction_before_tokens AS tokens FROM thread_usage_turns WHERE turn_id = ?");
+    expect(candidate.get("compact")).toEqual({ tokens: 470_000 });
+    const ordinary = acpTurn(registry, "unbilled");
+    await ordinary.start();
+    const { writes } = await measureSqliteWrites(async () => {
+      const waiting = await measureSqliteWrites(async () => {
+        await ordinary.context(475_000);
+        await ordinary.cancel(true);
+      });
+      expect(waiting.writes.commits).toBe(0);
+      await ordinary.cancel();
+    });
+    expect(candidate.get("compact")).toEqual({ tokens: 0 });
+    const next = acpTurn(registry, "subsequent");
+    await next.start();
+    await next.context(43_000);
+    await next.usage();
+    await next.complete();
+    expect(await store.listThreadCompactions(identity)).toEqual([]);
+    expect((await store.readThreadPricing(identity)).lines.map((line) => line.turnId))
+      .not.toContain("unbilled");
+    expectSqliteWriteBudget({
+      scenario: "acp-compaction-unbilled-cancellation",
+      note: "One terminal commit retires a pending candidate after an unbilled ordinary prompt. The fill and stop acknowledgement make no writes.",
+      writes,
+    });
+  } finally {
+    await registry.close();
+    state.close();
+    removeTempStateDbDir(fixture.tempDir);
+    vi.unstubAllEnvs();
+  }
+});
+
+it("budgets ACP stop and provider failure after billing has already flushed", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const fixture = createTempStateDb("acp-stop-failure-");
+  const state = openFreshStateDb(fixture.dbPath);
+  const store = new SqliteOverlayStore(state);
+  const registry = owner(store);
+  try {
+    async function stopAndFail(id: string, withFill: boolean) {
+      const turn = acpTurn(registry, id);
+      await turn.start();
+      if (withFill) await turn.context(50_000);
+      await turn.usage();
+      await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
+      return (await measureSqliteWrites(async () => {
+        await turn.cancel(true);
+        await turn.fail();
+      })).writes;
+    }
+    const control = await stopAndFail("control", false);
+    expect(control.commits).toBe(1);
+    const writes = await stopAndFail("observed", true);
+    const lines = (await store.readThreadPricing(identity)).lines;
+    expect(lines.find((line) => line.turnId === "observed"))
+      .toMatchObject({ totalTokens: 1_000, finalContextTokens: 50_000 });
+    expectSqliteWriteBudget({
+      scenario: "acp-compaction-stop-failure-after-usage-flush",
+      note: `Two terminal commits after billing already flushed. The stop records timing, then the provider failure saves context without another usage line. The control without a fill commits once (${control.walBytes} WAL bytes).`,
+      writes,
+    });
+  } finally {
+    await registry.close();
+    state.close();
+    removeTempStateDbDir(fixture.tempDir);
+    vi.unstubAllEnvs();
   }
 });
 

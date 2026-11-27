@@ -1,4 +1,6 @@
 {
+  "acp-compaction-stop-failure-after-usage-flush": {"commits": 2, "note": "Two terminal commits after billing already flushed. The stop records timing, then the provider failure saves context without another usage line. The control without a fill commits once (4120 WAL bytes).", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
+  "acp-compaction-unbilled-cancellation": {"commits": 1, "note": "One terminal commit retires a pending candidate after an unbilled ordinary prompt. The fill and stop acknowledgement make no writes.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "token-miser-launchpad-override": {"commits": 1, "note": "Persist an explicit capture override on a new thread.", "observedWalBytes": 20600, "rowsChanged": 1, "statements": 1},
   "bounded-command-codex-helper-usage": {"commits": 1, "note": "One Codex selector inference writes one usage line to its invoking Claude thread.", "observedWalBytes": 82400, "rowsChanged": 3, "statements": 3},
   "token-miser-managed-group-warm": {"commits": 2, "note": "Managed group proposal and acceptance with a warm output handle block.", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},

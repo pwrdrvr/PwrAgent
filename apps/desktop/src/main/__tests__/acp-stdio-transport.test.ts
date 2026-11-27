@@ -16,6 +16,9 @@ import {
   type AcpStdioSpawn,
 } from "../acp/acp-stdio-transport";
 import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
+import { AcpAgentClient, AcpSessionTransferBusyError } from "../acp/acp-client";
+import { AcpSessionStore } from "../storage/acp-session-store";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 class MockAcpChildProcess extends EventEmitter {
   readonly writes: string[] = [];
@@ -67,6 +70,55 @@ function createBundledToolsDirectory(): string {
 }
 
 describe("AcpStdioJsonRpcTransport", () => {
+  it("wakes Antigravity transfer waiters when its worker exits with native work outstanding", async () => {
+    const child = new MockAcpChildProcess();
+    const backendId = "acp:antigravity";
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor({ backendId }),
+      spawn: () => child,
+    });
+    const state = openInMemoryStateDb();
+    const client = new AcpAgentClient({ backendId, store: new AcpSessionStore(state), transport });
+    const respond = async (method: string, result: Record<string, unknown>) => {
+      const findRequest = () => child.writes.map((line) => JSON.parse(line)).find((request) => request.method === method);
+      const request = await vi.waitFor(() => {
+        const pending = findRequest();
+        expect(pending).toBeDefined();
+        return pending;
+      });
+      child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
+    };
+    try {
+      const initialize = client.initialize();
+      await respond("initialize", { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { close: {} } } });
+      await initialize;
+      const start = client.startSession({ cwd: "/repo", executionMode: "default", mcpServers: "none" });
+      await respond("session/new", { sessionId: "garden" });
+      const { sessionId } = await start;
+      const updateSeen = new Promise<void>((resolve) => {
+        const unsubscribe = transport.onNotification(() => {
+          unsubscribe();
+          resolve();
+        });
+      });
+      child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: {
+        sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "run", name: "run_command", status: "in_progress" },
+      } })}\n`);
+      await updateSeen;
+      const busy = await client.closeSessionForTransfer(sessionId).catch((error: unknown) => error);
+      expect(busy).toBeInstanceOf(AcpSessionTransferBusyError);
+      const wake = vi.fn(() => expect(transport.disconnected).toBe(true));
+      void (busy as AcpSessionTransferBusyError).ready.then(wake);
+
+      child.exitCode = 1;
+      child.emit("close");
+      await vi.waitFor(() => expect(wake).toHaveBeenCalledTimes(1));
+    } finally {
+      await client.dispose();
+      state.close();
+    }
+  });
+
   it("prepends PwrAgent's bundled ripgrep for external ACP runtimes", async () => {
     const child = new MockAcpChildProcess();
     const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];

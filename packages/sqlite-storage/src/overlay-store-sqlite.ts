@@ -2820,7 +2820,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   private persistCompletedAcpContext(completion: AcpUsageTurnCompletion): boolean {
-    const { backend, threadId, turnId, completedAt } = completion;
+    const { backend, threadId, turnId } = completion;
     const turn = this.stateDb.raw.prepare(
       `SELECT usage_turn_id, provider, model, final_context_tokens, acp_compaction_before_tokens
          FROM thread_usage_turns
@@ -2838,22 +2838,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       final_context_tokens: number | null;
       acp_compaction_before_tokens: number | null;
     } | undefined;
-    if (!turn) return false;
+    if (!turn) {
+      // An unbilled prompt still supplied the first ordinary observation.
+      // Without a billing model it can retire the candidate, but cannot verify it.
+      if (completion.context) this.settlePendingAcpCompaction(completion, completion.context);
+      return false;
+    }
     const context = turn.final_context_tokens === null ? completion.context : undefined;
     const rememberCompaction = completion.compacted && turn.acp_compaction_before_tokens === null;
     if (!context && !rememberCompaction) return false;
 
-    if (context) this.verifyPendingAcpCompaction(completion, context, turn);
+    if (context) this.settlePendingAcpCompaction(completion, context, turn);
     const before = rememberCompaction
-      ? (completion.context?.finalContextTokens ?? turn.final_context_tokens
-        ?? (this.stateDb.raw.prepare(
-          `SELECT final_context_tokens FROM thread_usage_turns
-            WHERE provider = ? AND backend = ? AND thread_id = ? AND parent_thread_id IS NULL
-              AND backend GLOB 'acp:*'
-              AND turn_id != ? AND completed_at <= ? AND final_context_tokens > 0
-            ORDER BY completed_at DESC, observed_at DESC LIMIT 1`,
-        ).get(turn.provider, backend, threadId, turnId, completedAt) as { final_context_tokens: number } | undefined)
-          ?.final_context_tokens ?? 0)
+      ? completion.context?.finalContextTokens
+        ?? turn.final_context_tokens
+        ?? this.readAcpIdleCompactionBaseline(completion, turn)
       : null;
     this.stateDb.raw.prepare(
       `UPDATE thread_usage_turns
@@ -2867,10 +2866,33 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return true;
   }
 
-  private verifyPendingAcpCompaction(
+  private readAcpIdleCompactionBaseline(
+    { backend, threadId, turnId, completedAt }: AcpUsageTurnCompletion,
+    compactTurn: { provider: string; model: string | null },
+  ): number {
+    // A model switch invalidates the latest ordinary fill. Seeking farther
+    // back to a matching model could use the fill from a different interval.
+    const previous = this.stateDb.raw.prepare(
+      `SELECT final_context_tokens, provider, model FROM thread_usage_turns
+        WHERE backend = ? AND thread_id = ? AND parent_thread_id IS NULL
+          AND backend GLOB 'acp:*'
+          AND turn_id != ? AND completed_at <= ? AND final_context_tokens > 0
+        ORDER BY completed_at DESC, observed_at DESC LIMIT 1`,
+    ).get(backend, threadId, turnId, completedAt) as {
+      final_context_tokens: number;
+      provider: string;
+      model: string | null;
+    } | undefined;
+    return previous && previous.model !== null
+      && previous.model === compactTurn.model && previous.provider === compactTurn.provider
+      ? previous.final_context_tokens
+      : 0;
+  }
+
+  private settlePendingAcpCompaction(
     completion: AcpUsageTurnCompletion,
     context: NonNullable<AcpUsageTurnCompletion["context"]>,
-    ordinaryTurn: { provider: string; model: string | null },
+    ordinaryTurn?: { provider: string; model: string | null },
   ): void {
     const { backend, threadId, turnId } = completion;
     const pending = this.stateDb.raw.prepare(
@@ -2886,7 +2908,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       model: string | null;
     } | undefined;
     if (!pending) return;
-    if (pending.provider === ordinaryTurn.provider && pending.model === ordinaryTurn.model
+    if (ordinaryTurn && pending.model !== null
+      && pending.provider === ordinaryTurn.provider && pending.model === ordinaryTurn.model
       && context.firstContextTokens < pending.acp_compaction_before_tokens) {
       this.insertThreadCompaction({
         backend, threadId, turnId: pending.turn_id,

@@ -401,8 +401,12 @@ The ACP adapter distinguishes summary and cached session reports from
 ordinary `thread/contextWindow/updated` observations. The owner folds ordinary
 peak, final, and window values into each turn's existing ledger write. The
 first ordinary fill after a completed compact request settles the candidate.
-If it is smaller and uses the same model and billing provider, that turn's
-completion transaction records one boundary against the compact turn.
+For idle compaction, the latest prior ordinary fill must match the compact
+turn's model and billing provider before it becomes the baseline. A smaller
+ordinary fill with the same model and billing provider records one boundary
+at settlement. If the prompt settles without billing, its fill retires the
+candidate without a boundary because the model and billing provider cannot
+be verified.
 Cached session replays cannot settle a candidate, and a fresh owner can
 settle a candidate saved before restart.
 Billing uses the original prompt result. The
@@ -414,9 +418,9 @@ refused three idle starts because Antigravity had active work. The interval
 from the first start to the last refusal was 372 ms. The guard runs before
 sending a transfer request over ACP. The monitor oracle reproduces repeated
 inputs at that guard and checks that 100 re-emitted fills cause zero further
-start attempts. A separate ACP client oracle checks that the readiness
-signal resolves only after both native commands finish. The monitor then
-reevaluates the latest fill once.
+start attempts. ACP tests check that readiness resolves after all native
+commands finish or when the worker disconnects. The monitor reevaluates
+the latest fill once, and a retry after disconnect can replace the stale owner.
 
 ### Antigravity sub-agent steps
 

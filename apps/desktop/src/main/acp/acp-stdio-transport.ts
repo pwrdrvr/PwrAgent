@@ -93,6 +93,7 @@ type AcpStdioConnection = {
 
 export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
   private current?: AcpStdioConnection;
+  private readonly disconnectListeners = new Set<() => void>();
   private readonly notificationListeners = new Set<
     (method: string, params: Record<string, unknown>) => void
   >();
@@ -118,7 +119,10 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
 
   private startConnection(): AcpStdioConnection {
     const { options } = this;
-    const line = new AcpLineStdioTransport(options);
+    const line = new AcpLineStdioTransport(options, () => {
+      if (this.current?.line !== line) return;
+      for (const listener of this.disconnectListeners) listener();
+    });
     const preservePromptHandoffs = options.launchDescriptor.backendId === "acp:antigravity";
     let responseBarrier: Promise<void> | undefined;
     // A response from an asynchronous agent request belongs to the child
@@ -225,6 +229,11 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     };
   }
 
+  onDisconnect(listener: () => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => { this.disconnectListeners.delete(listener); };
+  }
+
   onRequest(
     listener: (
       method: string,
@@ -257,7 +266,10 @@ class AcpLineStdioTransport implements JsonRpcTransport {
   private readonly outboundObservers = new Set<() => void>();
   private readonly notificationWrites = new Set<(error?: Error | null) => void>();
 
-  constructor(private readonly options: AcpStdioJsonRpcTransportOptions) {}
+  constructor(
+    private readonly options: AcpStdioJsonRpcTransportOptions,
+    private readonly notifyDisconnect: () => void,
+  ) {}
 
   setMessageHandler(handler: (message: string) => void): void {
     this.messageHandler = handler;
@@ -456,6 +468,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     const flush = new Promise<void>((resolve) => setImmediate(() => {
       this.closeHandler(error);
       resolve();
+      this.notifyDisconnect();
     }));
     const cleanup = Promise.resolve().then(async () => {
       const child = this.childProcess;
