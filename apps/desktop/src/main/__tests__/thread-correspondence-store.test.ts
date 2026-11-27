@@ -1,12 +1,12 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   AppServerThreadMessageEntry,
   AppServerThreadReplay,
 } from "@pwragent/shared/contracts/normalized-app-server";
-import { parseThreadCorrespondenceMessage } from "@pwragent/shared/contracts/thread-system-messages";
+import * as threadSystemMessages from "@pwragent/shared/contracts/thread-system-messages";
 import { stackFileReadsFromItem, ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
 import { extractThreadReplayFromReadResult } from "../codex-app-server/desktop-client";
 
@@ -114,6 +114,77 @@ describe("PwrAgent correspondence persistence", () => {
     withoutBoundary.appendToReplay(message.source, page("newer", 3_000));
     const bounded = withoutBoundary.appendToReplay(message.source, undatedEnd, undefined, [], { before: "newer-page" });
     expect(bounded.entries.map((entry) => entry.id)).toEqual(["older-prompt", "older-response", "older-send"]);
+  });
+
+  it("restores stored sends made while the source thread was idle", () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-correspondence-"));
+    onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
+    const source = { backend: "codex" as const, threadId: "sender" };
+    const writer = new ThreadCorrespondenceStore(directory);
+    const sends = [
+      { id: "between-turns", createdAt: 30 },
+      { id: "during-turn", createdAt: 50, sourceTurnId: "second" },
+      { id: "after-turns-first", createdAt: 70 },
+      { id: "after-turns-second", createdAt: 80 },
+    ];
+    for (const send of sends) {
+      writer.record({ ...record(), ...send, source });
+      writer.update(source, send.id, { state: "started" });
+      expect(writer.message(source, send.id)?.text).toContain("Receiving thread started work");
+    }
+
+    const first: AppServerThreadMessageEntry = { type: "message", id: "first-response", role: "assistant",
+      text: "First", turn: { id: "first", startedAt: 10, completedAt: 20 } };
+    const second: AppServerThreadMessageEntry = { type: "message", id: "second-response", role: "assistant",
+      text: "Second", createdAt: 60, turn: { id: "second", startedAt: 40, completedAt: 60 } };
+    const page = (entries: AppServerThreadMessageEntry[], hasPreviousPage: boolean): AppServerThreadReplay => ({
+      ...emptyReplay, entries, messages: entries, pagination: { supportsPagination: true, hasPreviousPage },
+    });
+    const reader = new ThreadCorrespondenceStore(directory);
+    const latest = reader.appendToReplay(source, page([second], true));
+    const coldOlder = writer.appendToReplay(source, page([first], false), undefined, [], { before: "cursor" });
+    expect(coldOlder.entries).toEqual([first]);
+    const older = reader.appendToReplay(source, page([first], false), undefined, [], { before: "cursor" });
+    const expectedOrder = ["first-response", "between-turns", "during-turn", "second-response", "after-turns-first", "after-turns-second"];
+    // A complete read and a newest-to-oldest traversal own the same receipts once.
+    expect([...older.entries, ...latest.entries].map(({ id }) => id)).toEqual(expectedOrder);
+    expect([...older.messages, ...latest.messages].map(({ id }) => id)).toEqual(expectedOrder);
+    const merged = reader.appendToReplay(source, page([first, second], false));
+    expect(merged.entries.map(({ id }) => id)).toEqual(expectedOrder);
+    expect(merged.entries.filter(({ id }) => sends.some((send) => send.id === id)).map(({ turn }) => turn?.id))
+      .toEqual([undefined, "second", undefined, undefined]);
+    expect(merged.messages.filter(({ id }) => sends.some((send) => send.id === id)).map(({ text }) => text))
+      .toEqual(sends.map(({ id }) => writer.message(source, id)?.text));
+    expect(reader.appendToReplay(source, merged)).toEqual(merged);
+  });
+
+  it("formats only receipts owned by the requested page", () => {
+    const heading = vi.spyOn(threadSystemMessages, "buildThreadCorrespondenceHeading");
+    onTestFinished(() => { heading.mockRestore(); });
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    for (const id of ["older", "latest"]) {
+      store.record({ ...message, id: `send-${id}`, sourceTurnId: id });
+    }
+    const entry: AppServerThreadMessageEntry = { type: "message", id: "latest-response", role: "assistant",
+      text: "Latest", turn: { id: "latest", startedAt: 500 } };
+    const replay = { ...emptyReplay, entries: [entry], messages: [entry],
+      pagination: { supportsPagination: true, hasPreviousPage: true } };
+    const merged = store.appendToReplay(message.source, replay);
+    expect(merged.entries.map(({ id }) => id)).toEqual(["latest-response", "send-latest"]);
+    expect(heading).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores idle sends on the first page of a thread with no provider rows", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    store.record(message);
+    const page = { ...emptyReplay, pagination: { supportsPagination: true, hasPreviousPage: false } };
+    const merged = store.appendToReplay(message.source, page);
+    expect(merged.entries).toEqual([store.message(message.source, message.id)]);
+    expect(merged.messages).toEqual(merged.entries);
+    expect(store.appendToReplay(message.source, page, undefined, [], { before: "exhausted" })).toEqual(page);
+    expect(store.appendToReplay(message.source, page, undefined, [], { limit: 0 })).toEqual(page);
   });
 
   it("places legacy sends after earlier request usage and before the turn total", () => {
@@ -330,7 +401,7 @@ describe("PwrAgent correspondence persistence", () => {
     store.record(message);
     store.update(message.source, message.id, { state: "started", turnId: "turn-one" });
     const entry = store.appendToReplay(message.source, emptyReplay).messages[0];
-    const parsed = parseThreadCorrespondenceMessage(entry?.text ?? "");
+    const parsed = threadSystemMessages.parseThreadCorrespondenceMessage(entry?.text ?? "");
     expect(parsed).toMatchObject({
       destination: {
         backend: message.destination.backend,

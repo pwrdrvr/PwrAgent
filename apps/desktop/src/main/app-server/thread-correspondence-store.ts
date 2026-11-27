@@ -224,6 +224,43 @@ export class ThreadCorrespondenceStore {
     }, id).entries[0] as AppServerThreadMessageEntry | undefined;
   }
 
+  private replayMessage(source: ThreadRef, record: CorrespondenceRecord, turnId?: string): AppServerThreadMessageEntry {
+    if (record.stackNotice) {
+      const text = formatStackNotice(record.stackNotice);
+      return {
+        type: "message", id: record.id, role: "assistant", createdAt: record.createdAt,
+        origin: { kind: "pwragent", systemReason: "stack-notice", stackNotice: record.stackNotice },
+        text, parts: [{ type: "text", text }],
+        ...(turnId ? { turn: { id: turnId } } : {}),
+      };
+    }
+    const destination = buildThreadMarkdownLink({ ...record.destination, ...(record.turnId ? { messageId: `user:${record.turnId}` } : {}) });
+    // The transcript collapses this message by parsing the heading back.
+    const heading = buildThreadCorrespondenceHeading(destination, record.state);
+    const body = record.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
+    const text = `${heading}\n\n${body}`;
+    return {
+      type: "message",
+      id: record.id,
+      role: "assistant",
+      createdAt: record.createdAt,
+      ...(turnId ? { turn: { id: turnId } } : {}),
+      origin: { kind: "pwragent", systemReason: "thread-correspondence", sourceThread: { ...record.source, ...(source.title ? { title: source.title } : {}) } },
+      text,
+      parts: [
+        { type: "text", text },
+        ...record.input.flatMap((item) => {
+          if (item.type === "localImage") return [{ type: "image" as const, url: toTranscriptImageProtocolUrl(pathToFileURL(item.path).toString()), alt: item.name }];
+          if (item.type === "image") return [{ type: "image" as const, url: item.url, alt: item.name }];
+          return [];
+        }),
+        ...record.input.flatMap((item) => item.type === "file" || item.type === "localFile"
+          ? [{ type: "file" as const, name: item.name ?? (item.type === "file" ? "Attachment" : item.path) }]
+          : []),
+      ],
+    };
+  }
+
   appendToReplay(
     source: ThreadRef,
     replay: AppServerThreadReplay,
@@ -231,52 +268,17 @@ export class ThreadCorrespondenceStore {
     knownTurns: AppServerThreadTurnMetadata[] = [],
     page: { before?: string; limit?: number } = {},
   ): AppServerThreadReplay {
-    if (!onlyId && (page.limit === 0 || (page.before !== undefined
-      && replay.entries.length === 0 && replay.messages.length === 0))) return replay;
+    const empty = replay.entries.length === 0 && replay.messages.length === 0;
+    if (!onlyId && (page.limit === 0 || (page.before !== undefined && empty))) return replay;
     const stored = this.load(source);
     const selected = onlyId ? stored.get(onlyId) : undefined;
     const records = onlyId ? (selected ? [selected] : []) : [...stored.values()];
     if (records.length === 0) return replay;
     records.sort((left, right) => left.createdAt - right.createdAt);
-    const messages: AppServerThreadMessageEntry[] = records.map((record) => {
-      if (record.stackNotice) {
-        const text = formatStackNotice(record.stackNotice);
-        return {
-          type: "message", id: record.id, role: "assistant", createdAt: record.createdAt,
-          origin: { kind: "pwragent", systemReason: "stack-notice", stackNotice: record.stackNotice },
-          text, parts: [{ type: "text", text }],
-        };
-      }
-      const destination = buildThreadMarkdownLink({ ...record.destination, ...(record.turnId ? { messageId: `user:${record.turnId}` } : {}) });
-      // The transcript collapses this message by parsing the heading back.
-      const heading = buildThreadCorrespondenceHeading(destination, record.state);
-      const body = record.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
-      return {
-        type: "message",
-        id: record.id,
-        role: "assistant",
-        createdAt: record.createdAt,
-        ...(record.sourceTurnId ? { turn: { id: record.sourceTurnId } } : {}),
-        origin: { kind: "pwragent", systemReason: "thread-correspondence", sourceThread: { ...record.source, ...(source.title ? { title: source.title } : {}) } },
-        text: `${heading}\n\n${body}`,
-        parts: [
-          { type: "text", text: `${heading}\n\n${body}` },
-          ...record.input.flatMap((item) => {
-            if (item.type === "localImage") return [{ type: "image" as const, url: toTranscriptImageProtocolUrl(pathToFileURL(item.path).toString()), alt: item.name }];
-            if (item.type === "image") return [{ type: "image" as const, url: item.url, alt: item.name }];
-            return [];
-          }),
-          ...record.input.flatMap((item) => item.type === "file" || item.type === "localFile"
-            ? [{ type: "file" as const, name: item.name ?? (item.type === "file" ? "Attachment" : item.path) }]
-            : []),
-        ],
-      };
-    });
-    const storedIds = new Set(stored.keys());
     const providerEntries: AppServerThreadEntry[] = (replay.entries.length
       ? replay.entries
       : replay.messages.map((message) => ({ ...message, type: "message" as const })))
-      .filter((entry) => !storedIds.has(entry.id));
+      .filter((entry) => !stored.has(entry.id));
     const sourceKey = this.key(source);
     const turns = onlyId ? new Map<string, AppServerThreadTurnMetadata>()
       : this.turnTimings.get(sourceKey) ?? new Map<string, AppServerThreadTurnMetadata>();
@@ -324,37 +326,34 @@ export class ThreadCorrespondenceStore {
     const lastPageTurn = pageTurns.at(-1)?.time;
     const nextPageTurn = lastPageTurn === undefined ? undefined : timedTurns.find((turn) => turn.time > lastPageTurn)?.time;
     let turnIndex = -1;
-    for (let index = 0; index < records.length; index += 1) {
-      const record = records[index]!;
-      const message = messages[index]!;
+    for (const record of records) {
       while (turnIndex + 1 < timedTurns.length && timedTurns[turnIndex + 1]!.time <= record.createdAt) turnIndex += 1;
       const completion = Boolean(record.stackNotice?.completion);
       if (!onlyId && completion) {
         if ((firstPageTurn !== undefined && record.createdAt < firstPageTurn && (replay.pagination.hasPreviousPage || page.before !== undefined))
           || (page.before !== undefined && (nextPageTurn === undefined || record.createdAt >= nextPageTurn))) continue;
-      } else if (!onlyId && replay.entries.length === 0 && replay.messages.length === 0 && replay.pagination.supportsPagination) {
+      } else if (!onlyId && empty && replay.pagination.supportsPagination
+        && (replay.pagination.hasPreviousPage || record.sourceTurnId)) {
         continue;
       }
-      const sourceTurnId = completion ? undefined : record.sourceTurnId ?? timedTurns[turnIndex]?.id;
+      const inferredTurn = completion || record.sourceTurnId ? undefined : timedTurns[turnIndex];
+      const sourceTurnId = completion ? undefined : record.sourceTurnId ?? inferredTurn?.id;
       const turnIndexes = sourceTurnId ? indexesByTurn.get(sourceTurnId) : undefined;
       // A page owns its source turns. Never attach the thread's entire send
       // history to the newest page, where provider rows may have no dates.
       if (!onlyId && indexesByTurn.size > 0 && sourceTurnId && !turnIndexes) continue;
       if (!onlyId && replay.pagination.hasPreviousPage && turnIndex < 0 && !sourceTurnId && timedTurns.length > 0) continue;
-      if (!onlyId && !record.sourceTurnId && sourceTurnId) {
-        const inferredTurn = timedTurns[turnIndex]!;
-        if (inferredTurn.completedAt !== undefined && record.createdAt > inferredTurn.completedAt) continue;
-        // An older page's final turn cannot own arbitrary later receipts.
-        // Without a completion time or a newer turn boundary, leave legacy
-        // ownership unresolved rather than duplicate newer message bodies.
-        if (page.before !== undefined && turnIndex === timedTurns.length - 1
-          && inferredTurn.completedAt === undefined) continue;
-      }
-      if (sourceTurnId) message.turn = { id: sourceTurnId };
+      const sentAfterTurn = inferredTurn?.completedAt !== undefined && record.createdAt > inferredTurn.completedAt;
+      // Only the newest page has an open end. An older page may claim a send
+      // after its final turn if the next known start bounds the idle interval.
+      if (!onlyId && inferredTurn && page.before !== undefined && turnIndex === timedTurns.length - 1
+        && (sentAfterTurn || inferredTurn.completedAt === undefined)) continue;
       const itemIndex = sourceTurnId && record.sourceItemId
         ? indexesByItem.get(`${sourceTurnId}:${record.sourceItemId}`) : undefined;
       let position: number;
-      if (itemIndex !== undefined) {
+      if (sentAfterTurn && turnIndexes) {
+        position = turnIndexes.at(-1)! + 1;
+      } else if (itemIndex !== undefined) {
         position = itemIndex + 1;
       } else {
         const indexes = turnIndexes ?? allIndexes;
@@ -371,7 +370,9 @@ export class ThreadCorrespondenceStore {
         position = indexes[cursor] ?? (indexes.length ? indexes[indexes.length - 1]! + 1 : providerEntries.length);
       }
       const bucket = insertions.get(position) ?? [];
-      bucket.push(message);
+      // The preceding turn owns the idle interval for pagination, while the
+      // receipt itself stays outside that turn (including its usage total).
+      bucket.push(this.replayMessage(source, record, sentAfterTurn ? undefined : sourceTurnId));
       insertions.set(position, bucket);
     }
     const entries: AppServerThreadEntry[] = [];
@@ -380,14 +381,14 @@ export class ThreadCorrespondenceStore {
 
     // Derive compact-message anchors from the timeline merge, since that
     // list omits both activity rows and the source turn metadata.
-    const providerMessages = replay.messages.filter((message) => !storedIds.has(message.id));
+    const providerMessages = replay.messages.filter((message) => !stored.has(message.id));
     const providerMessageIds = new Set(providerMessages.map((message) => message.id));
     const messagesBefore = new Map<string | undefined, AppServerThreadMessageEntry[]>();
     let nextMessageId: string | undefined;
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index]!;
       if (providerMessageIds.has(entry.id)) nextMessageId = entry.id;
-      else if (storedIds.has(entry.id) && entry.type === "message") {
+      else if (stored.has(entry.id) && entry.type === "message") {
         const bucket = messagesBefore.get(nextMessageId) ?? [];
         bucket.push(entry);
         messagesBefore.set(nextMessageId, bucket);
