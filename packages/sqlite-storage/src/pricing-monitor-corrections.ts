@@ -46,6 +46,11 @@ export class PricingMonitorCorrections {
     }
   }
 
+  restore(position: number, current: ThreadUsageLineRecord, base: ThreadUsageLineRecord, model: string | undefined): void {
+    this.replace(position, current, base, model);
+    this.credits.delete(base.usageLineId);
+  }
+
   adjust(summary: ThreadPricingSummary, modelKey?: string, fallback = false): ThreadPricingSummary {
     const delta = fallback ? this.all : modelKey === undefined ? this.summaries.get(summaryKey(summary)) : this.models.get(modelKey);
     if (!delta) return summary;

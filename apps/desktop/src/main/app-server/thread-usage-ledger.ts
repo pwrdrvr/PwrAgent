@@ -4028,7 +4028,7 @@ export class ThreadUsageLedger {
     const indexes: TokenMiserLedgerIndexes = {
       pricing: liveUsageLines instanceof LivePricingLines ? {
         gateUsageLine: (id) => liveUsageLines.forSource(id),
-        parentUsageLine: () => undefined,
+        parentUsageLine: (thread, turn) => liveUsageLines.forParent(thread, turn),
         appendGateUsageLine: () => {},
       } : indexTokenMiserPricingLines((liveUsageLines as ReadonlyMap<string, ThreadUsageLineRecord>).values()),
       replays: indexTokenMiserCachedReplays([]),

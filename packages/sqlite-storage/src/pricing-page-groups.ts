@@ -84,6 +84,8 @@ export class PricingPageGroups {
     this.setAnchor(key, group, true);
   }
 
+  hasMonitor(id: string): boolean { return this.byMonitor.has(id); }
+
   setCard(id: string, card?: ThreadSubAgentSummary): boolean {
     const previous = this.cards.get(id);
     const oldModel = previous?.preferredModel ?? previous?.monitorUsage?.model ?? previous?.monitorUsage?.cost?.model;

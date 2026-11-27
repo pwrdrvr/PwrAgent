@@ -679,15 +679,13 @@ export class ThreadSubAgentTable {
    * The thread's stored gate totals. A thread that predates the columns has
    * its totals summed from its gate cards once, on this first read.
    */
+  initializeGateTotals(storageKey: string): void {
+    const pending = this.db.prepare("SELECT 1 FROM thread_sub_agent_revisions WHERE thread_id = ? AND gate_totals_ready = 0").get(storageKey);
+    if (pending) this.db.transaction(() => this.db.prepare(RECOMPUTE_GATE_TOTALS).run(storageKey)).immediate();
+  }
+
   gateTotals(storageKey: string): TokenMiserGateAccountingTotals {
-    const read = () => this.db.prepare(READ_GATE_TOTALS).get(storageKey) as GateTotalsRow | undefined;
-    let row = read();
-    if (row && row.gate_totals_ready === 0) {
-      row = this.db.transaction(() => {
-        this.db.prepare(RECOMPUTE_GATE_TOTALS).run(storageKey);
-        return read();
-      }).immediate();
-    }
+    const row = this.db.prepare(READ_GATE_TOTALS).get(storageKey) as GateTotalsRow | undefined;
     return {
       gateCount: row?.gate_count ?? 0,
       pricedCount: row?.gate_priced ?? 0,

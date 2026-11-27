@@ -35,6 +35,9 @@ export class LivePricingMap<T> extends Map<string, T> {
 /** The ledger is keyed by usage ID for replacements. Transcript reads also
  * need live-only turns, without visiting unrelated monitor rows. */
 export class LivePricingLines extends LivePricingMap<ThreadUsageLineRecord> {
+  private readonly parents = new Map<string, string[]>();
+  private readonly insertionOrder = new Map<string, number>();
+  private sequence = 0;
   private readonly sources = new Map<string, Set<string>>();
   private readonly turns = new Map<string, Set<string>>();
 
@@ -46,7 +49,14 @@ export class LivePricingLines extends LivePricingMap<ThreadUsageLineRecord> {
   }
 
   override set(id: string, line: ThreadUsageLineRecord): this {
-    if (this.get(id)?.sourceItemId !== line.sourceItemId) {
+    const previous = this.get(id);
+    if (!previous) this.insertionOrder.set(id, this.sequence++);
+    if (previous?.scope !== line.scope || Boolean(previous?.model) !== Boolean(line.model)
+      || previous?.threadId !== line.threadId || previous?.turnId !== line.turnId || previous?.usageTurnId !== line.usageTurnId) {
+      this.updateParents(id, previous, false);
+      this.updateParents(id, line, true);
+    }
+    if (previous?.sourceItemId !== line.sourceItemId) {
       this.removeSource(id);
       if (line.sourceItemId) {
         const ids = this.sources.get(line.sourceItemId) ?? new Set();
@@ -68,6 +78,32 @@ export class LivePricingLines extends LivePricingMap<ThreadUsageLineRecord> {
     return id === undefined ? undefined : this.get(id);
   }
 
+  forParent(thread: string, turn: string): ThreadUsageLineRecord | undefined {
+    const id = this.parents.get(JSON.stringify([thread, turn]))?.[0];
+    return id === undefined ? undefined : this.get(id);
+  }
+
+  private updateParents(id: string, line: ThreadUsageLineRecord | undefined, add: boolean): void {
+    if (!line?.model || line.scope === "monitor") return;
+    for (const turn of new Set([line.turnId, line.usageTurnId])) {
+      if (turn === undefined) continue;
+      const key = JSON.stringify([line.threadId, turn]);
+      const ids = this.parents.get(key) ?? [];
+      if (add) {
+        // Replacing a Map value preserves its original insertion position,
+        // even if the replacement only just acquired a model or a turn id.
+        const order = this.insertionOrder.get(id)!;
+        let at = ids.length;
+        while (at && this.insertionOrder.get(ids[at - 1]!)! > order) at--;
+        ids.splice(at, 0, id);
+        this.parents.set(key, ids);
+      } else {
+        ids.splice(ids.indexOf(id), 1);
+        if (!ids.length) this.parents.delete(key);
+      }
+    }
+  }
+
   private removeSource(id: string): void {
     const source = this.get(id)?.sourceItemId;
     if (!source) return;
@@ -86,12 +122,17 @@ export class LivePricingLines extends LivePricingMap<ThreadUsageLineRecord> {
   }
 
   override delete(id: string): boolean {
+    this.updateParents(id, this.get(id), false);
+    this.insertionOrder.delete(id);
     this.removeSource(id);
     this.removeTurnIndex(id);
     return super.delete(id);
   }
 
   override clear(): void {
+    this.parents.clear();
+    this.insertionOrder.clear();
+    this.sequence = 0;
     this.sources.clear();
     this.turns.clear();
     super.clear();

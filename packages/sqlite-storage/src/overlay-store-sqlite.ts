@@ -3612,6 +3612,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       entry = this.openPricingPages.get(key);
     }
     const storageKey = this.subAgentStorageKey(params);
+    // Legacy totals may need a write, which cannot upgrade a stale WAL read snapshot.
+    this.subAgentTable.initializeGateTotals(storageKey);
     if (!entry) {
       const page: OpenPricingPage = {
         version: -1, cards: new PricingPageCards(), dirtyCards: new Set(), localIds: new Set(),
@@ -3709,6 +3711,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             }
             return [...rows.filter((line) => !live.has(line.usageLineId)), ...live.values()].map(decorate);
           };
+          const retiredMonitors = new Set<string>();
           const changed = new Map(readChanged(page.dirty).map((line) => [line.usageLineId, line]));
           for (const id of page.dirty) {
             if (page.index.sameLine(id, changed.get(id))) {
@@ -3717,6 +3720,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             } else {
               const old = page.index.get(id);
               const next = changed.get(id);
+              if (old?.scope === "monitor" && old.sourceItemId && (next?.scope !== "monitor" || old.sourceItemId !== next.sourceItemId)) retiredMonitors.add(old.sourceItemId);
               // Stored prices win in the savings equation. Only a live-only
               // gate can change that equation independently of the stored index.
               for (const line of [old, next]) {
@@ -3728,13 +3732,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
               }
             }
           }
-          const before = new Set(page.dirty);
-          if (!page.index.rewindChanged(page.dirty)) page.index = undefined;
+          if (!page.index.rewindChanged(page.dirty, changed)) page.index = undefined;
           if (page.index) {
-            for (const line of readChanged([...page.dirty].filter((id) => !before.has(id)))) changed.set(line.usageLineId, line);
             needCards(changed.values());
             if (!page.cards.update(page.dirtyCards, readCards, overlay?.cards, page.index)
               || !page.index.append([...changed.values()])) page.index = undefined;
+            if (page.index) {
+              for (const id of retiredMonitors) page.dirtyCards.add(id);
+              page.cards.forgetUnused(page.dirtyCards, page.index, overlay?.cards);
+            }
           }
         }
         if (!page.index) {
@@ -5203,7 +5209,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: ThreadOverlayState["backend"];
     threadId: string;
   }): Promise<TokenMiserGateAccountingTotals> {
-    return this.subAgentTable.gateTotals(this.subAgentStorageKey(params));
+    const key = this.subAgentStorageKey(params);
+    this.subAgentTable.initializeGateTotals(key);
+    return this.subAgentTable.gateTotals(key);
   }
 
   /** Cards whose `monitorId` starts with `monitorIdPrefix`, keyed by thread id. */

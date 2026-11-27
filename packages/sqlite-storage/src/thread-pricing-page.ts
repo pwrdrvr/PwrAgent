@@ -37,12 +37,14 @@ export class ThreadPricingPageIndex {
     return isDeepStrictEqual(this.source.get(id), line);
   }
 
+  hasMonitor(id: string): boolean { return this.groups.hasMonitor(id); }
+
   setCard(id: string, card?: ThreadSubAgentSummary): boolean {
     return this.groups.setCard(id, card);
   }
 
   readonly usageTurns = new Map<string, Set<string>>();
-  private lastBatch?: { ids: Set<string>; rewind: () => void };
+  private readonly suffix: Array<{ lines: ThreadUsageLineRecord[]; rewind: () => void }> = [];
   private readonly newestByTurn = new Map<string, string>();
   private hash = Buffer.alloc(32);
   private readonly correctedHash = Buffer.alloc(32);
@@ -50,21 +52,17 @@ export class ThreadPricingPageIndex {
   private lastSource?: ThreadUsageLineRecord;
 
   static fromHistory(lines: ThreadUsageLineRecord[], cards?: Map<string, ThreadSubAgentSummary>): ThreadPricingPageIndex | undefined {
-    let index = new ThreadPricingPageIndex(cards);
-    if (lines.length > 1) {
-      // Retain a checkpoint for the newest turn even on a cold open. Its
-      // completion or context counters can arrive after the initial page.
-      const ordered = [...lines].sort(compareUsageLinesAscending);
-      if (index.append(ordered.slice(0, -1)) && index.append(ordered.slice(-1))) return index;
-      // A gap introduced by the last row may sort inside the earlier prefix.
-      index = new ThreadPricingPageIndex(cards);
-    }
-    return index.append(lines) ? index : undefined;
+    const index = new ThreadPricingPageIndex(cards);
+    if (index.append(lines)) return index;
+    // A synthetic gap can precede the parent that exposed it. Sort those
+    // generated rows together on the cold path if a batch boundary splits them.
+    const full = new ThreadPricingPageIndex(cards);
+    return full.appendBatch([...lines].sort(compareUsageLinesAscending), false) ? full : undefined;
   }
 
   replaceMonitor(id: string, next: ThreadUsageLineRecord | undefined): boolean {
     const old = this.source.get(id);
-    if (!next || !old || old.scope !== "monitor" || next.scope !== "monitor" || this.lastBatch?.ids.has(id)) return false;
+    if (!next || !old || old.scope !== "monitor" || next.scope !== "monitor") return false;
     // Changes to ordering, bucket membership, latest timestamps or estimate
     // flags need a new baseline. Counter substitutions affect only sums.
     const identity = ["createdAt", "startedAt", "completedAt", "backend", "threadId", "parentThreadId", "usageTurnId",
@@ -82,23 +80,40 @@ export class ThreadPricingPageIndex {
     return true;
   }
 
-  /** Reprice a recent in-flight batch from its preceding counters. Earlier
-   * corrections can reorder every subsequent gap and require a fresh fold. */
-  rewindChanged(dirty: Set<string>): boolean {
-    const known = [...dirty].filter((id) => this.source.has(id));
-    if (!known.length) return true;
-    const batch = this.lastBatch;
-    if (!batch || known.some((id) => !batch.ids.has(id))) return false;
-    batch.rewind();
-    for (const id of batch.ids) dirty.add(id);
-    this.lastBatch = undefined;
+  /** The newest parent may settle after one or more of its gates. Restore
+   * only batches at or after the earliest changed sort key, then replay the
+   * unchanged suffix rows from memory alongside their replacements. */
+  rewindChanged(dirty: Set<string>, changed: Map<string, ThreadUsageLineRecord>): boolean {
+    let earliest: ThreadUsageLineRecord | undefined;
+    for (const id of dirty) {
+      for (const line of [this.source.get(id), changed.get(id)]) {
+        if (line && (!earliest || compareUsageLinesAscending(line, earliest) < 0)) earliest = line;
+      }
+    }
+    while (earliest && this.lastSource && compareUsageLinesAscending(this.lastSource, earliest) >= 0) {
+      const batch = this.suffix.pop();
+      if (!batch) return false;
+      for (const line of batch.lines) {
+        if (!dirty.has(line.usageLineId)) changed.set(line.usageLineId, this.source.get(line.usageLineId)!);
+      }
+      batch.rewind();
+    }
     return true;
   }
 
   append(lines: ThreadUsageLineRecord[]): boolean {
+    const ordered = [...lines].sort(compareUsageLinesAscending);
+    const parent = ordered.findLastIndex((line) => line.scope !== "monitor");
+    if (parent < 0) return this.appendBatch(ordered, true);
+    this.suffix.length = 0;
+    return this.appendBatch(ordered.slice(0, parent), false)
+      && this.appendBatch([ordered[parent]!], true)
+      && this.appendBatch(ordered.slice(parent + 1), true);
+  }
+
+  private appendBatch(lines: ThreadUsageLineRecord[], rewindable: boolean): boolean {
     if (!lines.length) return true;
-    this.lastBatch = undefined;
-    if (lines.length <= 16) {
+    if (rewindable) {
       const size = this.rows.length;
       const before = {
         running: this.running.copy(),
@@ -111,7 +126,17 @@ export class ThreadPricingPageIndex {
         lastSource: this.lastSource,
       };
       const oldTurns = new Map(lines.flatMap((line) => line.turnId ? [[line.turnId, this.newestByTurn.get(line.turnId)] as const] : []));
-      this.lastBatch = { ids: new Set(lines.map((line) => line.usageLineId)), rewind: () => {
+      this.suffix.push({ lines, rewind: () => {
+        // A live monitor may already have a signed correction at its old
+        // position. The replay will fold the effective row in its new position.
+        for (const base of lines) {
+          const current = this.source.get(base.usageLineId)!;
+          if (current === base) continue;
+          const model = resolveUsageLineModel(current, this.groups.cards.get(current.sourceItemId ?? ""));
+          this.corrections!.restore(this.positions.get(base.usageLineId)!, current, base, model);
+          toggleLineHash(this.correctedHash, current);
+          toggleLineHash(this.correctedHash, base);
+        }
         for (let i = this.rows.length - 1; i >= size; i--) {
           const row = this.rows[i]!;
           this.groups.update(row, false);
@@ -139,12 +164,12 @@ export class ThreadPricingPageIndex {
           if (old) this.newestByTurn.set(id, old);
           else this.newestByTurn.delete(id);
         }
-      } };
+      } });
+    } else {
+      this.models.finishBatch();
     }
-    if (lines.length > 16) this.models.finishBatch();
-    const incoming = [...lines].sort(compareUsageLinesAscending);
     const display: PricingUsageLine[] = [];
-    for (const line of incoming) {
+    for (const line of lines) {
       if (line.usageLineId.startsWith("estimated-gap:") || this.source.has(line.usageLineId)
         || (this.lastSource && compareUsageLinesAscending(this.lastSource, line) >= 0)) return false;
       toggleLineHash(this.hash, line);

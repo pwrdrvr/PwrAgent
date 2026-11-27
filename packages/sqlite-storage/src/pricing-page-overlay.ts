@@ -104,16 +104,30 @@ export class PricingPageCards {
       const next = replacement ?? persisted;
       const old = this.effective.get(id);
       if (isDeepStrictEqual(old, next)) continue;
-      for (const card of [old, next]) {
-        if (!card) continue;
-        const digest = createHash("sha256").update(JSON.stringify(card)).digest();
-        for (let i = 0; i < digest.length; i++) this.checksum[i] = this.checksum[i]! ^ digest[i]!;
-      }
+      if (old) this.toggle(old);
+      if (next) this.toggle(next);
       if (index && !index.setCard(id, next)) valid = false;
       if (next) this.effective.set(id, next);
       else this.effective.delete(id);
     }
     return valid;
+  }
+
+  // A cold page loads cards referenced by a monitor row or the live overlay.
+  // Retiring either last reference must leave the same cursor checksum.
+  forgetUnused(ids: Set<string>, index: ThreadPricingPageIndex, live?: PricingPageOverlay["cards"]): void {
+    for (const id of ids) {
+      if (index.hasMonitor(id) || live?.has(id)) continue;
+      const previous = this.effective.get(id);
+      if (previous) this.toggle(previous);
+      this.effective.delete(id);
+      this.known.delete(id);
+    }
+  }
+
+  private toggle(card: ThreadSubAgentSummary): void {
+    const digest = createHash("sha256").update(JSON.stringify(card)).digest();
+    for (let i = 0; i < digest.length; i++) this.checksum[i] = this.checksum[i]! ^ digest[i]!;
   }
 
   revision(): string { return this.checksum.toString("base64url"); }
