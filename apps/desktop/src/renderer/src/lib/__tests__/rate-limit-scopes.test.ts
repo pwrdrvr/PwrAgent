@@ -17,8 +17,16 @@ describe("rateLimitWindowAndScope", () => {
       .toEqual({ window: { label: "Weekly", minutes: 10_080 }, scope: "Fable" });
     // Claude's own 5-hour window, and Codex's scope-first names.
     expect(rateLimitWindowAndScope(limit("5-hour limit"))).toEqual({ window: { label: "5h", minutes: 300 } });
-    expect(rateLimitWindowAndScope(limit("GPT-5.3-Codex-Spark 5h limit")))
-      .toEqual({ window: { label: "5h", minutes: 300 }, scope: "GPT-5.3-Codex-Spark" });
+    // A scope named before the window; Spark reads as the panel names it.
+    expect(rateLimitWindowAndScope(limit("Pro Lite 5h limit")))
+      .toEqual({ window: { label: "5h", minutes: 300 }, scope: "Pro Lite" });
+  });
+
+  it("names Codex's reserve and Spark windows as the panel does", () => {
+    expect(rateLimitWindowAndScope(limit("GPT-5.3-Codex-Spark Weekly limit", { limitName: "GPT-5.3-Codex-Spark" })))
+      .toEqual({ window: { label: "Weekly", minutes: 10_080 }, scope: "Spark" });
+    expect(rateLimitWindowAndScope(limit("gpt-reserve 5h limit", { limitName: "gpt-reserve" })))
+      .toEqual({ window: { label: "5h", minutes: 300 }, scope: "Luna Reserve" });
   });
 
   it("takes the window from the structured length over the name", () => {

@@ -260,7 +260,7 @@ export function ProviderGaugePeekCard(props: {
               {scopes.length ? scopes.map((entry) => {
                 const account = pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "");
                 const fiveHour = entry.fiveHour
-                  ? observeFiveHour(backend, entry.scope, entry.fiveHour, account, now)
+                  ? observeFiveHour(backend, entry.fiveHour, account, now)
                   : undefined;
                 return (
                   <div key={entry.scope ?? ""} className="provider-peek__scope">
@@ -366,14 +366,15 @@ function fiveHourSample(limit: BackendRateLimitSummary, projectedPercent: number
 /** Steps a scope's 5h latch with this reading and its pace. */
 function observeFiveHour(
   backend: BackendSummary,
-  scope: string | null,
   limit: BackendRateLimitSummary,
   account: LimitAccount | undefined,
   now: number,
 ): { shown: boolean; warning: boolean } {
   const projected = projectedPercentAtReset(limit, account, now);
-  const shown = fiveHourLatches.observe(fiveHourLatchKey(backend.kind, scope), fiveHourSample(limit, projected, now));
-  return { shown, warning: projected !== undefined && projected >= 100 };
+  const sample = fiveHourSample(limit, projected, now);
+  const shown = fiveHourLatches.observe(fiveHourLatchKey(backend.kind, limit), sample);
+  // Out already, or on pace to be before the reset.
+  return { shown, warning: (sample.usedPercent ?? 0) >= 100 || (projected ?? 0) >= 100 };
 }
 
 /** A snapshot's readings, without a pace: they can show a row or start a window. */
@@ -381,7 +382,7 @@ function observeFiveHourWindows(backends: readonly BackendSummary[], now: number
   for (const { backend, scopes } of providerPeekEntries(backends, now)) {
     for (const entry of scopes) {
       if (!entry.fiveHour) continue;
-      fiveHourLatches.observe(fiveHourLatchKey(backend.kind, entry.scope), fiveHourSample(entry.fiveHour, undefined, now));
+      fiveHourLatches.observe(fiveHourLatchKey(backend.kind, entry.fiveHour), fiveHourSample(entry.fiveHour, undefined, now));
     }
   }
 }

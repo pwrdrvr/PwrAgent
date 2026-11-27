@@ -13,14 +13,14 @@ const KEY = "scope";
  * The promise, as the operator stated it, step by step: show at 80% used or
  * projected, hide below 60% projected, keep the state between them and while
  * the projection is unknown, and start each new window hidden. A reset that
- * moves 10 minutes or less is the same window rounded.
+ * moves 2 hours or less is the same window restated (Claude rounds to the hour).
  */
 function reference(samples: readonly FiveHourSample[]): boolean[] {
   let shown = false;
   let window: number | undefined;
   return samples.map((sample) => {
     if (sample.resetAt !== undefined) {
-      if (window !== undefined && Math.abs(sample.resetAt - window) > 10 * 60_000) shown = false;
+      if (window !== undefined && Math.abs(sample.resetAt - window) > 2 * HOUR) shown = false;
       window = sample.resetAt;
     }
     const at = (value: number | undefined, bound: number) => value !== undefined && value >= bound;
@@ -43,7 +43,7 @@ const projected = (...values: Array<number | undefined>): FiveHourSample[] =>
 const sample: fc.Arbitrary<FiveHourSample> = fc.record({
   usedPercent: fc.option(fc.integer({ min: 0, max: 100 }), { nil: undefined }),
   projectedPercent: fc.option(fc.integer({ min: 0, max: 100 }), { nil: undefined }),
-  resetAt: fc.constantFrom(undefined, T0, T0 + 5 * 60_000, T0 + 5 * HOUR, T0 + 10 * HOUR),
+  resetAt: fc.constantFrom(undefined, T0, T0 + 5 * 60_000, T0 + 53 * 60_000, T0 + 5 * HOUR, T0 + 10 * HOUR),
 }, { requiredKeys: [] });
 
 describe("the 5h row's latch", () => {
@@ -55,7 +55,7 @@ describe("the 5h row's latch", () => {
       let before = false;
       samples.forEach((reading, index) => {
         const newWindow = reading.resetAt !== undefined && window !== undefined
-          && Math.abs(reading.resetAt - window) > 10 * 60_000;
+          && Math.abs(reading.resetAt - window) > 2 * HOUR;
         if (reading.resetAt !== undefined) window = reading.resetAt;
         const after = shown[index]!;
         const risk = (reading.usedPercent ?? 0) >= 80 || (reading.projectedPercent ?? 0) >= 80;
@@ -91,6 +91,9 @@ describe("the 5h row's latch", () => {
       .toEqual([true, false]);
     // A reset rounded a few minutes off is the same window.
     expect(run([...projected(85), { usedPercent: 12, projectedPercent: 70, resetAt: T0 + 5 * 60_000 }]))
+      .toEqual([true, true]);
+    // So is Claude's stream rounding the snapshot's 14:07 up to 15:00.
+    expect(run([...projected(85), { usedPercent: 12, projectedPercent: 70, resetAt: T0 + 53 * 60_000 }]))
       .toEqual([true, true]);
   });
 

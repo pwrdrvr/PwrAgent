@@ -3825,7 +3825,11 @@ function SidebarContent(props: SidebarProps) {
     const run = (target: ThreadCardOpenTarget): void => {
       if (target.kind === "integrated-terminal") {
         if (!terminal) return;
-        // The panel belongs to the thread view, so the thread opens first.
+        // The panel belongs to the thread view, so the thread opens first,
+        // as a plain row click opens it: a single selection, anchored here.
+        selectionAnchorKeyRef.current = threadSummaryIdentityKey(thread);
+        selectionAnchorDirectoryKeyRef.current = undefined;
+        setThreadBatch(undefined);
         props.onSelectThread(thread);
         props.onOpenThreadTerminal?.(terminal.threadKey, terminal.cwd, terminal.remote);
         return;

@@ -1,4 +1,8 @@
-import type { BackendRateLimitSummary } from "./backend-status-format";
+import {
+  isReserveRateLimit,
+  isSparkRateLimit,
+  type BackendRateLimitSummary,
+} from "./backend-status-format";
 
 /** A limit's renewal window, as a short row label: "Weekly", "5h". */
 export type RateLimitWindow = {
@@ -77,8 +81,18 @@ export function rateLimitWindowAndScope(
   const named = parsed ? namedWindow(parsed[2]!) : undefined;
   const window = structured ?? named;
   if (!window) return undefined;
-  const scope = (parsed?.[1] ?? parsed?.[3])?.trim();
+  const scope = scopeName(limit) ?? (parsed?.[1] ?? parsed?.[3])?.trim();
   return scope ? { window, scope } : { window };
+}
+
+/**
+ * Codex's reserve and Spark windows carry model ids in their names
+ * ("gpt-reserve", "GPT-5.3-Codex-Spark"); they read as the panel names them.
+ */
+function scopeName(limit: BackendRateLimitSummary): string | undefined {
+  if (isReserveRateLimit(limit)) return "Luna Reserve";
+  if (isSparkRateLimit(limit)) return "Spark";
+  return undefined;
 }
 
 function namedWindow(word: string): RateLimitWindow | undefined {

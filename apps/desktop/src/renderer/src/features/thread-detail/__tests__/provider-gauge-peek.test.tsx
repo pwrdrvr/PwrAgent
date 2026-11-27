@@ -190,6 +190,40 @@ describe("AI provider gauge peek", () => {
       expect(shown).toHaveTextContent("70% used");
     });
 
+    it("wears the warning tone once the window has run out", async () => {
+      mockLayout();
+      render(panel([openAi(100)]));
+      const rows = (await openPeek()).querySelectorAll(".provider-peek__limit");
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).not.toHaveClass("is-warning");
+      expect(rows[1]).toHaveClass("is-warning");
+    });
+
+    // The latch keys the window, not the scope's label, which becomes
+    // "All models" when a second scope appears.
+    it("stays shown when the provider gains a second scope", async () => {
+      mockLayout();
+      const view = render(panel([openAi(85)]));
+      move(document.body, gauge());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(TOOLTIP_HOVER_DELAY_MS);
+      });
+      move(gauge(), document.body);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(HOVER_TRANSITION_GRACE_MS * 2);
+      });
+      const withSpark = openAi(70);
+      withSpark.rateLimits = [
+        ...withSpark.rateLimits!,
+        { name: "GPT-5.3-Codex-Spark Weekly limit", limitName: "GPT-5.3-Codex-Spark", usedPercent: 4, windowMinutes: 10_080 },
+      ];
+      view.rerender(panel([withSpark]));
+      const shown = await openPeek();
+      expect([...shown.querySelectorAll(".provider-peek__scope-name")].map((node) => node.textContent))
+        .toEqual(["All models", "Spark"]);
+      expect(windows(shown)).toEqual(["Weekly", "5h", "Weekly"]);
+    });
+
     it("stays hidden in the same band without a crossing", async () => {
       mockLayout();
       render(panel([openAi(70)]));

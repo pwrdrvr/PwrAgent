@@ -113,6 +113,7 @@ type SidebarParams = {
   onSelectThread?: (thread: NavigationThreadSummary) => void;
   onOpenThreadTerminal?: (threadKey: string, cwd?: string, remote?: unknown) => void;
   applications?: DesktopApplicationsSnapshot;
+  selectedItemKey?: string;
 };
 
 function renderSidebar(params: SidebarParams) {
@@ -129,6 +130,7 @@ function sidebarElement(params: SidebarParams) {
       loading={false}
       threads={params.threads}
       localApplications={params.applications}
+      selectedItemKey={params.selectedItemKey}
       localMachineLabel="Studio-Mac"
       platform="darwin"
       onBrowseModeChange={() => undefined}
@@ -578,6 +580,28 @@ describe("sidebar thread card", () => {
     expect(onSelectThread).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }));
     expect(onOpenThreadTerminal).toHaveBeenCalledWith("codex:a", "/wt/PwrAgnt", undefined);
     expect(onSelectThread.mock.invocationCallOrder[0]).toBeLessThan(onOpenThreadTerminal.mock.invocationCallOrder[0]!);
+  });
+
+  // Found in review: the card selected the thread without what a plain row
+  // click does, so a multi-select batch outlived the new selection.
+  it("opens the terminal's thread as a plain row click does: no batch left", () => {
+    const threads = ["a", "b", "c"].map((id, index) =>
+      thread(id, { updatedAt: 10 - index, inbox: { inInbox: true, reason: "new-thread" } }));
+    renderSidebar({
+      threads,
+      selectedItemKey: "codex:a",
+      onMarkThreadsSeen: async () => undefined,
+      onOpenThreadTerminal: () => undefined,
+    });
+    const open = (id: string) => row(id).querySelector<HTMLElement>(".thread-row__open")!;
+    fireEvent.click(open("b"), { metaKey: true, ctrlKey: true });
+    fireEvent.contextMenu(open("a"));
+    expect(screen.getByRole("menuitem", { name: "Mark 2 Threads Read" })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    fireEvent.click(within(hoverOpen("c")).getByRole("button", { name: "Open terminal here", hidden: true }));
+    fireEvent.contextMenu(open("a"));
+    expect(screen.queryByRole("menuitem", { name: /Mark \d+ Threads Read/ })).toBeNull();
   });
 
   it("puts the open icons past four in the ⋯ menu's Open in…", () => {

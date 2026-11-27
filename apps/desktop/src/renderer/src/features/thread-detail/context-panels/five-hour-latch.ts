@@ -17,11 +17,13 @@ export const FIVE_HOUR_SHOW_PERCENT = 80;
 /** Below this projected percent, a shown 5h row hides. */
 export const FIVE_HOUR_HIDE_PERCENT = 60;
 /**
- * A reset that moves less than this is the provider rounding the same
- * deadline (Claude's stream rounds to the hour), not a new window; a 5h
- * window's next reset is hours away.
+ * A reset that moves this much or less is the provider restating the same
+ * deadline, not a new window: Claude's stream rounds `resetAt` up to the
+ * next hour, so a snapshot and a stream update can differ by up to an hour
+ * (the usage series allows 2 h for the same reason). A 5h window's next
+ * reset is 5 hours on.
  */
-export const FIVE_HOUR_SAME_WINDOW_MS = 10 * 60_000;
+export const FIVE_HOUR_SAME_WINDOW_MS = 2 * 60 * 60_000;
 
 /** One reading of a scope's 5h window. */
 export type FiveHourSample = {
@@ -80,7 +82,14 @@ export function createFiveHourLatchStore(): FiveHourLatchStore {
 /** The one store for this window, shared by every peek. */
 export const fiveHourLatches = createFiveHourLatchStore();
 
-/** A provider's scope, as the latch keys it. */
-export function fiveHourLatchKey(provider: string, scope: string | null): string {
-  return JSON.stringify([provider, scope ?? ""]);
+/**
+ * A 5h window, as the latch keys it: by the limit itself, never by the
+ * scope's display name, which changes ("All models") when a provider gains
+ * a second scope.
+ */
+export function fiveHourLatchKey(
+  provider: string,
+  limit: { limitId?: string; windowKey?: string; name: string },
+): string {
+  return JSON.stringify([provider, limit.limitId ?? "", limit.windowKey ?? "", limit.name]);
 }
