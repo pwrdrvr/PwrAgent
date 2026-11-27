@@ -78,7 +78,11 @@ export async function startOutpostDaemon(options: {
   const workspaceInput = options.workspaceKind === "symlink" ? path.join(root, "alias") : workspace;
   if (options.workspaceKind === "symlink") symlinkSync(workspace, workspaceInput, "dir");
   writeOutpostGatewayConfig(root);
-  const env: NodeJS.ProcessEnv = { ...process.env, ...options.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
+  // The owner's -ilc probe still captures an environment. Its shell runs the
+  // probe against the fixture's inherited PATH without sourcing login files.
+  const shell = path.join(root, "fixture-login-shell");
+  writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o700 });
+  const env: NodeJS.ProcessEnv = { ...process.env, SHELL: shell, ...options.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
   const packageRoot = options.packageRoot ?? path.join(root, "owner-package");
   const guard = options.fixturePreload ?? (options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind));
   if (guard) env.NODE_OPTIONS = `--require=${JSON.stringify(guard)}`;
