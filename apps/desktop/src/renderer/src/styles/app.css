@@ -27085,16 +27085,21 @@ button.stack-display__thread,
   flex: 1 1 auto;
 }
 
+/* On a narrow card the model pill gives way first, down to a floor that
+   still shows the start of the model's name; only then does the access
+   chip's level name shorten. Flex shrinks in proportion to basis × factor,
+   so the pill's large factor leaves the chip whole (to the pixel) while the
+   pill is above its floor. */
 .compact-composer__model {
+  display: flex;
+  flex: 0 100000 auto;
+  min-width: 72px;
+}
+
+.compact-composer__access {
   display: flex;
   flex: 0 1 auto;
   min-width: 0;
-}
-
-/* The access level never truncates; the model pill gives way first. */
-.compact-composer__access {
-  display: flex;
-  flex: 0 0 auto;
 }
 
 /* The settings chip: the thread's model · effort · access readout, and the

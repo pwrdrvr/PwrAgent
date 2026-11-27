@@ -184,6 +184,40 @@ describe("a start card's access picker", () => {
     sameSource: false,
   });
 
+  it("draws the shield at the level the thread starts at, also on a card it cannot change", () => {
+    // A card stored on another machine, or on an owner without these rules,
+    // resolves with no destination catalog: it lists no stops, and its
+    // readout must still show the level the start applies.
+    fc.assert(fc.property(caseArb, fc.boolean(), (input, locked) => {
+      const resolved = locked
+        ? resolveThreadTodoStartAccess({
+            card: input.card.executionMode ? { executionMode: input.card.executionMode } : {},
+            sourceBackend: input.sameSource ? input.destination.kind : "claude",
+            sourceExecutionMode: input.sourceExecutionMode,
+            destination: undefined,
+            destinationBackend: input.destination.kind,
+          })
+        : resolve(input);
+      fc.pre(resolved.status === "ready");
+      if (resolved.status !== "ready") return;
+      const { control, level } = todoAccessControl(resolved, locked ? undefined : input.destination.acp?.runtime);
+      const shield = accessShieldLevel(accessStops(control), level);
+      expect(shield === "full").toBe(resolved.executionMode === "full-access");
+    }));
+  });
+
+  it("draws a locked Full Access card's shield full", () => {
+    const resolved = resolveThreadTodoStartAccess({
+      card: { executionMode: "full-access" },
+      sourceBackend: "codex",
+      sourceExecutionMode: "default",
+      destination: undefined,
+      destinationBackend: "codex",
+    });
+    const { control, level } = todoAccessControl(resolved);
+    expect(accessShieldLevel(accessStops(control), level)).toBe("full");
+  });
+
   it("puts an agent's Default before its Accept Edits, whatever order it lists them in", () => {
     const input = kimi(["accept-edits", "default"]);
     const { control } = todoAccessControl(resolve(input), input.destination.acp?.runtime);

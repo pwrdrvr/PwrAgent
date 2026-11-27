@@ -863,6 +863,26 @@ describe("CompactComposer settings menu", () => {
     expect(onCardPointerDown).not.toHaveBeenCalled();
   });
 
+  it("returns focus to the chip when Tab leaves either end of the portalled panel", () => {
+    // The panel is portalled to the end of the body, so the browser's own
+    // Tab order would carry focus away from the card.
+    renderComposer({ settingsMenu: { access: accessSlot() } });
+    let panel = openAccessPicker();
+    const slider = within(panel).getByRole("slider");
+    expect(document.activeElement).toBe(slider);
+    fireEvent.keyDown(slider, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(accessTrigger());
+    expect(accessTrigger().getAttribute("aria-expanded")).toBe("false");
+
+    chooseAccessStop("full-access");
+    panel = openAccessPicker();
+    const cancel = within(panel).getByRole("button", { name: "Cancel" });
+    cancel.focus();
+    fireEvent.keyDown(cancel, { key: "Tab" });
+    expect(document.activeElement).toBe(accessTrigger());
+    expect(accessTrigger().getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("shows access as a readout when the host offers no picker", () => {
     renderComposer({
       executionMode: "full-access",

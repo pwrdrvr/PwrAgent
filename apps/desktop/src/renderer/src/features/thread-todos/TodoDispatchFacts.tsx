@@ -707,10 +707,10 @@ export function TodoDispatchFacts(props: {
     : undefined;
   const accessPicker = access?.picker;
   const accessShield = accessPicker
-    ? accessShieldLevel(accessStops(accessPicker.control), accessPicker.control.selectedOption)
+    ? accessShieldLevel(accessStops(accessPicker.control), accessPicker.level)
     : "low";
-  const accessPlan = accessPicker?.control.selectedOption
-    ? providerAccessOptionTier(accessPicker.control.selectedOption) === "plan"
+  const accessPlan = accessPicker?.level
+    ? providerAccessOptionTier(accessPicker.level) === "plan"
     : false;
   const accessChip = !accessValue ? null : access?.editable && accessPicker ? (
     <AccessPicker

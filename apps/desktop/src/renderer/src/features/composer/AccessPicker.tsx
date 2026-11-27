@@ -114,12 +114,15 @@ export function AccessPicker(props: AccessPickerProps) {
   const inside = (node: Node | null): boolean =>
     Boolean(node && (wrapperRef.current?.contains(node) || panelRef.current?.contains(node)));
 
+  // Stable, so a re-render never re-registers the layer, which would move
+  // it to the top of the Escape stack.
+  const getPortaledSurface = useCallback(() => panelRef.current, []);
   useDismissableLayer({
     open,
     onDismiss: close,
     surfaceRef: wrapperRef,
     triggerRef,
-    ...(portalled ? { getPortaledSurface: () => panelRef.current } : {}),
+    ...(portalled ? { getPortaledSurface } : {}),
   });
 
   // Above the composer, the panel hangs from the shield's left edge, shifted
@@ -259,6 +262,21 @@ export function AccessPicker(props: AccessPickerProps) {
       }}
       onKeyDown={(event) => {
         tabbedRef.current = event.key === "Tab";
+        if (event.key !== "Tab" || !portalled) return;
+        // A portalled panel is not beside its chip in the DOM. Tab past
+        // either end goes back to the chip and closes the panel, so focus
+        // carries on from the chip as it would from a menu.
+        const tabbables = [...(panelRef.current?.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), [tabindex]:not([tabindex='-1'])",
+        ) ?? [])].filter((element) => element.tabIndex >= 0);
+        const first = tabbables[0];
+        const last = tabbables[tabbables.length - 1];
+        const active = document.activeElement;
+        if (event.shiftKey ? active === first : active === last) {
+          if (event.shiftKey) event.preventDefault();
+          triggerRef.current?.focus();
+          close();
+        }
       }}
     >
       <div className="access-picker__head">

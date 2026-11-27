@@ -10,12 +10,19 @@ import {
   type ThreadTodoStartAccess,
 } from "@pwragent/shared/thread-todo-access";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import type { AccessLevelRef } from "../composer/access-picker-model";
 
 /** A start card's access as the access picker reads it, and the way back to the card's options. */
 export type TodoAccessControl = {
   control: ProviderAccessControl;
   /** The card's option behind a picker option, by the picker's value. */
   optionFor: (value: string) => ThreadTodoAccessOption | undefined;
+  /**
+   * The level the new thread starts at, for the shield. Read from the
+   * resolved access rather than the stops: a card that cannot be changed
+   * here lists none, and still starts at its own level.
+   */
+  level?: AccessLevelRef;
 };
 
 /**
@@ -79,7 +86,13 @@ export function todoAccessControl(
   const chosen = selected
     ? entries.find((entry) => sameThreadTodoAccessOption(entry.source, selected))
     : undefined;
+  const level: AccessLevelRef | undefined = resolved.status !== "ready"
+    ? undefined
+    : selected?.kind === "native"
+      ? { kind: "acp", value: selected.id, executionMode: selected.executionMode ?? "default" }
+      : { kind: "execution", value: resolved.executionMode, executionMode: resolved.executionMode };
   return {
+    ...(level ? { level } : {}),
     control: {
       kind: entries.some((entry) => entry.option.kind === "acp")
         ? entries.some((entry) => entry.option.kind === "execution") ? "hybrid-antigravity" : "acp"
