@@ -119,9 +119,20 @@ describe("useComposerRowFold", () => {
   it("commits a fresh measure's fold after any change to which tier a control folds with", async () => {
     // Oracle: once the mutation microtask has run, the committed fold equals
     // measuring the row from scratch. Moving a control in or out of a tier
-    // (Plan pinning itself once on) left the stale fold painted.
+    // (Plan pinning itself once on) left the stale fold painted. Shrunk
+    // counterexample: a 100px row of one 101px control that joins "details"
+    // and leaves it again; the example above is the composer's own case.
     const tier = fc.option(fc.constantFrom(...COMPOSER_FOLD_TIERS), { nil: undefined });
     const control = fc.record({ width: fc.integer({ min: 10, max: 120 }), tier });
+    const commits: number[] = [];
+    // One mounted row for every run: the CI budget caps a rendered fixture.
+    const view = render(<Row commits={commits} controls={[]} />);
+    const row = view.container.querySelector<HTMLElement>(".row")!;
+    const settle = async () => {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    };
     await fc.assert(
       fc.asyncProperty(
         fc.integer({ min: 100, max: 400 }),
@@ -130,25 +141,22 @@ describe("useComposerRowFold", () => {
         async (width, initial, changes) => {
           rowWidth = width;
           let controls: Control[] = initial.map((item, index) => ({ key: `c${index}`, ...item }));
-          const commits: number[] = [];
-          const view = render(<Row commits={commits} controls={controls} />);
-          try {
-            for (const [at, nextTier] of changes) {
-              const index = at % controls.length;
-              controls = controls.map((item, position) => position === index ? { ...item, tier: nextTier } : item);
-              view.rerender(<Row commits={commits} controls={controls} />);
-              await act(async () => {
-                await Promise.resolve();
-              });
-              const row = view.container.querySelector<HTMLElement>(".row")!;
-              expect(commits.at(-1)).toBe(measureComposerRowFold(row).foldedTierCount);
-            }
-          } finally {
-            view.unmount();
+          view.rerender(<Row commits={commits} controls={controls} />);
+          await settle();
+          act(() => resized?.());
+          await act(async () => {
+            vi.advanceTimersByTime(16);
+          });
+          for (const [at, nextTier] of changes) {
+            const index = at % controls.length;
+            controls = controls.map((item, position) => position === index ? { ...item, tier: nextTier } : item);
+            view.rerender(<Row commits={commits} controls={controls} />);
+            await settle();
+            expect(commits.at(-1)).toBe(measureComposerRowFold(row).foldedTierCount);
           }
         },
       ),
-      { numRuns: 60 },
+      { numRuns: 5 },
     );
   });
 

@@ -30067,6 +30067,100 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "true");
   });
 
+  // Plan is one-shot: a send made while it is on carries it or turns it off
+  // and says why (planModeForSend). Each route below once left Plan lit for
+  // the next message, and the scheduled one also sent without it.
+  describe("Plan mode on each send route", () => {
+    const planThread = {
+      id: "thread-1", title: "Plan routes", titleSource: "explicit" as const,
+      source: "codex" as const, executionMode: "default" as const,
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+
+    it("sends Plan with a message queued behind the running turn and turns Plan off", async () => {
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend, threadId: request.threadId,
+        turnId: "queue-entry-1", queueStatus: "queued" as const, queueEntryId: "queue-entry-1",
+      }));
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[backendSummary("codex")]}
+          desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+          disabled={false}
+          skills={[]}
+          thread={planThread}
+        />,
+      );
+      fireEvent.click(screen.getByLabelText("Plan mode"));
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "Plan the follow-up" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+      expect(startTurn.mock.calls[0]![0].collaborationMode).toEqual(expect.objectContaining({ mode: "plan" }));
+      await waitFor(() => expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false"));
+    });
+
+    it("schedules a Plan message with Plan in its turn and turns Plan off", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+      const scheduledApi = createScheduledActionApi();
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ ...scheduledApi, onAgentEvent: () => () => undefined, startTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={planThread}
+        />,
+      );
+      fireEvent.click(screen.getByLabelText("Plan mode"));
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Plan this later" } });
+      fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: "Send in 15m" }));
+      });
+
+      expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledTimes(1);
+      expect(scheduledApi.createScheduledThreadAction.mock.calls[0]![0].turn?.collaborationMode)
+        .toEqual(expect.objectContaining({ mode: "plan" }));
+      expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("turns Plan off and says so when the message steers the running turn", async () => {
+      const steerTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", turnId: "turn-1" }));
+      const onShowNotice = vi.fn();
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[{
+            ...backendSummary("codex", {
+              models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true, supportsSteering: true }],
+            }),
+            capabilities: { ...backendSummary("codex").capabilities, steerTurn: true },
+          }]}
+          desktopApi={{ onAgentEvent: () => () => undefined, startTurn: vi.fn(), steerTurn }}
+          disabled={false}
+          onShowNotice={onShowNotice}
+          skills={[]}
+          thread={planThread}
+        />,
+      );
+      fireEvent.click(screen.getByLabelText("Plan mode"));
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "Change direction" } });
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledTimes(1));
+      expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false");
+      expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
+        title: "Plan mode",
+        message: expect.stringContaining("added to the running turn"),
+      }));
+    });
+  });
+
   describe("permission-mode queue indicator", () => {
     function baseQueuedThread(overrides: {
       executionMode?: "default" | "full-access";

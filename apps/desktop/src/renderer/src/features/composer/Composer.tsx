@@ -119,6 +119,7 @@ import {
   useQueuedRowReorder,
 } from "./useQueuedRowReorder";
 import { notificationIncludesDraftContent, restoreQueuedMessage } from "./queued-message-content";
+import { PLAN_NOT_APPLIED_TO_STEER, planModeForSend } from "./composer-plan-mode";
 import {
   Fragment,
   memo,
@@ -1013,6 +1014,8 @@ type QueuedTurnDraft = {
   title?: string;
   reviewFix?: boolean;
   input?: AppServerTurnInputItem[];
+  /** Plan mode captured when the message was queued, sent on release. */
+  collaborationMode?: AppServerCollaborationModeRequest;
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
   scheduledSendAt?: number;
@@ -8926,15 +8929,11 @@ function useComposerController(props: ComposerProps) {
       return false;
     }
 
-    const collaborationMode =
-      !queued && planModeEnabled && supportsPlanMode
-        ? ({
-            mode: "plan",
-            settings: {
-              developerInstructions: null,
-            },
-          } satisfies AppServerCollaborationModeRequest)
-        : undefined;
+    // A released queue entry carries the mode it was queued with; a fresh
+    // send takes the toggle's.
+    const collaborationMode = queued
+      ? queued.collaborationMode
+      : planModeForSend("turn", planModeEnabled && supportsPlanMode).collaborationMode;
 
     let optimisticMessageId: string | undefined;
     if (!backendQueueSubmission) {
@@ -8950,9 +8949,11 @@ function useComposerController(props: ComposerProps) {
     }
     if (!queued && !backendQueueSubmission) {
       resetComposerDraftAndState(composerScopeKey);
-      if (collaborationMode) {
-        setPlanModeEnabled(false);
-      }
+    }
+    // Plan is used up once this send leaves, whether it starts a turn now or
+    // waits in the owner's queue; a failed send turns it back on below.
+    if (!queued && collaborationMode) {
+      setPlanModeEnabled(false);
     }
 
     try {
@@ -9299,6 +9300,10 @@ function useComposerController(props: ComposerProps) {
     }
 
     queueCurrentDraftInFlightRef.current = true;
+    const plan = planModeForSend(
+      props.thread ? "scheduled" : "local-queue",
+      planModeEnabled && supportsPlanMode,
+    );
     const complete = async (payload: ComposerTurnPayload): Promise<void> => {
       try {
         if (payload.input.length === 0) {
@@ -9325,6 +9330,9 @@ function useComposerController(props: ComposerProps) {
               input: payload.input,
               executionMode: props.thread.executionMode,
               model: selectedModelOption?.id,
+              ...(plan.collaborationMode
+                ? { collaborationMode: plan.collaborationMode }
+                : {}),
               reasoningEffort: supportsReasoning
                 ? selectedReasoningEffort
                 : undefined,
@@ -9365,10 +9373,16 @@ function useComposerController(props: ComposerProps) {
           enqueueQueuedTurn({
             id: createQueuedTurnId(),
             input: payload.input,
+            ...(plan.collaborationMode
+              ? { collaborationMode: plan.collaborationMode }
+              : {}),
             text: canonicalDraft,
             imageAttachments,
             fileAttachments,
           });
+        }
+        if (plan.clearPlan) {
+          setPlanModeEnabled(false);
         }
         recordComposerDraftHistory(
           composerScopeKey,
@@ -9601,15 +9615,10 @@ function useComposerController(props: ComposerProps) {
       return;
     }
 
-    const collaborationMode =
-      !reviewTarget && planModeEnabled && supportsPlanMode
-        ? ({
-            mode: "plan",
-            settings: {
-              developerInstructions: null,
-            },
-          } satisfies AppServerCollaborationModeRequest)
-        : undefined;
+    // A review is not a message, so Plan waits for the next one.
+    const collaborationMode = reviewTarget
+      ? undefined
+      : planModeForSend("scheduled", planModeEnabled && supportsPlanMode).collaborationMode;
     const submittedScopeKey = composerScopeKey;
     const submittedSnapshot = beginLaunchpadSubmission(submittedScopeKey);
     setSendError(undefined);
@@ -10155,8 +10164,15 @@ function useComposerController(props: ComposerProps) {
       true,
       delivery,
     );
+    const plan = planModeForSend("steer", planModeEnabled && supportsPlanMode);
     const continueSteering = (accepted?: PendingSteerDraft): void => {
       if (accepted) {
+        if (plan.clearPlan) {
+          setPlanModeEnabled(false);
+        }
+        if (plan.notApplied) {
+          showComposerNotice({ title: "Plan mode", message: PLAN_NOT_APPLIED_TO_STEER });
+        }
         void submitPendingSteer(
           accepted,
           expectedTurnId,
@@ -10440,10 +10456,12 @@ function useComposerController(props: ComposerProps) {
       const destination = getLaunchpadComposerDestination(draftStore, scopeKey);
       const snapshot = latestDraftSnapshotRef.current.snapshot;
       const text = canonicalDraft;
+      const plan = planModeForSend("local-queue", planModeEnabled && supportsPlanMode);
       const queued: QueuedTurnDraft = {
         id: createQueuedTurnId(),
         text,
         backendQueuePending: true,
+        ...(plan.collaborationMode ? { collaborationMode: plan.collaborationMode } : {}),
         imageAttachments: snapshot.imageAttachments,
         fileAttachments: snapshot.fileAttachments ?? [],
       };
@@ -10451,6 +10469,9 @@ function useComposerController(props: ComposerProps) {
       // launchpad can become a thread. The destination follows that handoff.
       enqueueQueuedTurnInScope(scopeKey, queued);
       resetComposerDraftAndState(scopeKey);
+      if (plan.clearPlan) {
+        setPlanModeEnabled(false);
+      }
       try {
         const payload = await buildTurnPayload(text, imageAttachments, fileAttachments, skillTokens);
         updateQueuedTurnInScope(destination.scopeKey, queued, (current) => ({
@@ -10678,14 +10699,7 @@ function useComposerController(props: ComposerProps) {
     } else {
       payload = payloadOrPromise;
     }
-    const collaborationMode = planModeEnabled && supportsPlanMode
-      ? ({
-          mode: "plan",
-          settings: {
-            developerInstructions: null,
-          },
-        } satisfies AppServerCollaborationModeRequest)
-      : undefined;
+    const collaborationMode = planModeForSend("turn", planModeEnabled && supportsPlanMode).collaborationMode;
 
     if (payload.input.length === 0 || props.disabled) {
       if (submittedLaunchpad) {
