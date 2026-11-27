@@ -30,6 +30,38 @@ export function isClaudeNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "mo
   return subAgent.monitorId.startsWith(CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX);
 }
 
+/** A sub-agent an ACP provider runs natively (Antigravity `invoke_subagent`, Grok `subagent_*`). */
+export const ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX = "acp-native:";
+
+export function isAcpNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitorId">): boolean {
+  return subAgent.monitorId.startsWith(ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX);
+}
+
+function acpNativeSubAgentProviderLabel(backend?: string): string {
+  if (backend === "acp:antigravity") {
+    return "Antigravity";
+  }
+  if (backend === "acp:grok") {
+    return "Grok";
+  }
+  if (backend === "acp:gemini") {
+    return "Gemini";
+  }
+  if (backend === "acp:kimi") {
+    return "Kimi";
+  }
+  if (backend === "acp:qwen") {
+    return "Qwen";
+  }
+  if (backend?.startsWith("acp:")) {
+    const id = backend.slice("acp:".length).trim();
+    if (id) {
+      return id;
+    }
+  }
+  return "ACP agent";
+}
+
 const CLAUDE_SUBAGENT_TRANSCRIPT_THREAD_ID_PREFIX = "claude-subagent:";
 /** Claude's task ids are alphanumeric. Claude Code names the sub-agent's file after one. */
 const CLAUDE_TASK_ID = /^[A-Za-z0-9_-]+$/u;
@@ -68,7 +100,11 @@ export function parseClaudeSubAgentTranscriptThreadId(
 
 /** A worker the agent harness itself started, rather than PwrAgent. */
 export function isHarnessSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitorId">): boolean {
-  return isCodexNativeSubAgent(subAgent) || isClaudeNativeSubAgent(subAgent);
+  return (
+    isCodexNativeSubAgent(subAgent)
+    || isClaudeNativeSubAgent(subAgent)
+    || isAcpNativeSubAgent(subAgent)
+  );
 }
 
 /**
@@ -78,6 +114,9 @@ export function isHarnessSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitor
 export function hasStoppableSubAgentRun(
   subAgent: Pick<ThreadSubAgentSummary, "monitorId" | "monitorThreadId" | "monitorTurnId">,
 ): boolean {
+  if (isAcpNativeSubAgent(subAgent)) {
+    return false;
+  }
   return (Boolean(subAgent.monitorThreadId) && Boolean(subAgent.monitorTurnId))
     || isClaudeNativeSubAgent(subAgent);
 }
@@ -153,6 +192,12 @@ export function subAgentOriginLabel(
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex";
   }
+  if (isClaudeNativeSubAgent(subAgent)) {
+    return "Claude";
+  }
+  if (isAcpNativeSubAgent(subAgent)) {
+    return acpNativeSubAgentProviderLabel(subAgent.backend);
+  }
   if (subAgent.monitorId.startsWith("review:")) {
     return "PwrAgent code review";
   }
@@ -182,6 +227,12 @@ export function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex";
   }
+  if (isClaudeNativeSubAgent(subAgent)) {
+    return "Claude";
+  }
+  if (isAcpNativeSubAgent(subAgent)) {
+    return acpNativeSubAgentProviderLabel(subAgent.backend);
+  }
   if (subAgent.monitorId.startsWith("review:")) {
     return "Review";
   }
@@ -189,7 +240,7 @@ export function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
 }
 
 export function subAgentPricingUsageTitle(
-  subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
+  subAgent: Pick<ThreadSubAgentSummary, "monitorId" | "backend">,
 ): string {
   if (isSystemTitleHelperSubAgent(subAgent)) {
     return "Thread naming";
@@ -205,6 +256,12 @@ export function subAgentPricingUsageTitle(
   }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex sub-agent usage";
+  }
+  if (isClaudeNativeSubAgent(subAgent)) {
+    return "Claude sub-agent usage";
+  }
+  if (isAcpNativeSubAgent(subAgent)) {
+    return `${acpNativeSubAgentProviderLabel(subAgent.backend)} sub-agent usage`;
   }
   if (subAgent.monitorId.startsWith("review:")) {
     return "Review usage";

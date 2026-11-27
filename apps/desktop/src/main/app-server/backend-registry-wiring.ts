@@ -1109,6 +1109,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     acpAgentStore: options?.acpAgentStore,
     acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: options?.acpSessionStore,
+    recordSubAgents: async (params) => await ports.recordAcpSubAgents(params),
     agentToolMcpServer,
     onTurnTerminalIngress: (turn) => managedReviewCandidateLedger.retireToolTurn(turn),
     readJobMonitorCreationPreference: (backend, threadId) => ports.isJobMonitorCreationEnabled({ backend, threadId }),

@@ -2,6 +2,7 @@ import {
   memo,
   useEffect,
   useId,
+  useMemo,
   useState,
   type KeyboardEvent,
 } from "react";
@@ -66,21 +67,21 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
   const lensTabId = (lens: SubAgentLens): string =>
     `${lensControlId}-${lens}`;
   const [requestedLens, setRequestedLens] = useState<SubAgentLens>("harness");
-  const lensCounts = props.lensCounts ?? SUB_AGENT_LENSES.reduce<Record<SubAgentLens, number>>(
-    (counts, lens) => ({
-      ...counts,
-      [lens.id]: subAgents.filter(
-        (subAgent) => subAgentLens(subAgent) === lens.id,
-      ).length,
-    }),
-    {
+  const derivedLensCounts = useMemo(() => {
+    const counts: Record<SubAgentLens, number> = {
       harness: 0,
       "token-miser": 0,
       pwragent: 0,
-    },
-  );
-  const availableLenses = SUB_AGENT_LENSES.filter(
-    (lens) => lensCounts[lens.id] > 0,
+    };
+    for (const subAgent of subAgents) {
+      counts[subAgentLens(subAgent)] += 1;
+    }
+    return counts;
+  }, [subAgents]);
+  const lensCounts = props.lensCounts ?? derivedLensCounts;
+  const availableLenses = useMemo(
+    () => SUB_AGENT_LENSES.filter((lens) => lensCounts[lens.id] > 0),
+    [lensCounts],
   );
   const preferredLens =
     availableLenses.find((lens) => lens.id === "harness")?.id
@@ -88,16 +89,18 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
     ?? availableLenses[0]?.id
     ?? "harness";
   const activeLens = props.lens ?? (lensCounts[requestedLens] > 0 ? requestedLens : preferredLens);
-  const visibleSubAgents = subAgents.filter(
-    (subAgent) => subAgentLens(subAgent) === activeLens,
+  const visibleSubAgents = useMemo(
+    () => subAgents.filter((subAgent) => subAgentLens(subAgent) === activeLens),
+    [activeLens, subAgents],
   );
   // Track the open dialog by id, not by the summary object: the snapshot the
   // Details button was clicked with goes stale the moment the sub-agent
   // streams another update, and the dialog would sit on frozen status, timing,
   // and usage until it was closed and reopened.
   const [detailsForId, setDetailsForId] = useState<string | null>(null);
-  const detailsFor =
-    subAgents.find((subAgent) => subAgent.monitorId === detailsForId) ?? null;
+  const detailsFor = detailsForId
+    ? subAgents.find((subAgent) => subAgent.monitorId === detailsForId) ?? null
+    : null;
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set());
   const [stopErrors, setStopErrors] = useState<Record<string, string>>({});
 
@@ -358,7 +361,7 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
       ) : (
         <p className="context-empty">
           No sub-agents yet. Delegated monitors, reviews, and observed native
-          Codex sub-agents started from this thread will appear here.
+          sub-agents started from this thread will appear here.
         </p>
       )}
       {detailsFor ? (

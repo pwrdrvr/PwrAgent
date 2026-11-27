@@ -7,6 +7,7 @@ import type { ManagedReviewService } from "./managed-review-service";
 import type { TaskMonitorWakeStorage } from "../storage/desktop-runtime-storage";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import type { ClaudeSubAgentCard } from "../claude/claude-tasks";
+import type { AcpSubAgentCard } from "../acp/acp-subagents";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -27,12 +28,15 @@ import {
   type ThreadExecutionMode,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
+  ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
   CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+  isAcpNativeSubAgent,
   isClaudeNativeSubAgent,
 } from "@pwragent/shared/subagent-kind";
 import { codexNativeSubAgentName } from "@pwragent/shared/subagent-activity";
 import { deriveTaskMonitorDisplayTitle } from "@pwragent/shared/task-monitor-display-title";
 import {
+  CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
   isCodexNativeSubAgentVisibleInNavigation,
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
 } from "@pwragent/shared/subagent-visibility";
@@ -1005,6 +1009,31 @@ export class SubAgentMonitorService {
           ...(subAgent.agentName ? { agentName: subAgent.agentName } : {}),
         }] });
       }
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        monitorId: params.monitorId,
+        stoppedAt: Date.now(),
+      };
+    }
+
+    if (isAcpNativeSubAgent(subAgent) && isAcpBackendId(params.backend)) {
+      const subAgentId = subAgent.monitorId.slice(ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX.length);
+      await this.recordAcpSubAgents({
+        backend: params.backend,
+        threadId: params.threadId,
+        subAgents: [{
+          monitorId: subAgent.monitorId,
+          subAgentId,
+          task: subAgent.task,
+          ...(subAgent.displayTitle ? { displayTitle: subAgent.displayTitle } : {}),
+          status: "cancelled",
+          lastMessage: "Stopped by user.",
+          ...(subAgent.agentName ? { agentName: subAgent.agentName } : {}),
+          ...(subAgent.agentRole ? { agentRole: subAgent.agentRole } : {}),
+          ...(subAgent.preferredModel ? { preferredModel: subAgent.preferredModel } : {}),
+        }],
+      });
       return {
         backend: params.backend,
         threadId: params.threadId,
@@ -2387,6 +2416,104 @@ export class SubAgentMonitorService {
     const now = Date.now();
     return threads.map((thread) => {
       // A Claude sub-agent has no thread; its row is keyed by its card.
+      const agents = (cardsByThreadId[thread.id] ?? [])
+        .map((card) => nativeSubAgentRowFromCard(card, card.monitorId))
+        .filter((agent) => isCodexNativeSubAgentVisibleInNavigation(agent, now))
+        .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0)
+          || left.threadId.localeCompare(right.threadId));
+      if (agents.length === 0) {
+        if (!thread.codexNativeSubAgents) return thread;
+        const { codexNativeSubAgents: _stale, ...rest } = thread;
+        return rest;
+      }
+      return { ...thread, codexNativeSubAgents: agents };
+    });
+  }
+
+  /**
+   * Saves the cards for native sub-agents an ACP provider runs (Antigravity
+   * `invoke_subagent`, Grok `subagent_*`), the way native Codex and Claude
+   * workers are saved. A card that already ended keeps its end.
+   */
+  async recordAcpSubAgents(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    subAgents: readonly AcpSubAgentCard[];
+  }): Promise<void> {
+    if (params.subAgents.length === 0) return;
+    const existing = new Map((await this.context.stores.subAgents.getThreadSubAgents({
+      backend: params.backend,
+      threadId: params.threadId,
+      monitorIds: params.subAgents.map((card) => card.monitorId),
+    })).map((card) => [card.monitorId, card]));
+    const now = Date.now();
+    const subAgents = params.subAgents.flatMap((card): ThreadSubAgentSummary[] => {
+      const previous = existing.get(card.monitorId);
+      if (previous && codexNativeSubAgentIsTerminal(previous.status)) return [];
+      const outcome = codexNativeSubAgentOutcome(card.status);
+      const createdAt = previous?.createdAt ?? card.startedAt ?? now;
+      const updatedAt = Math.max(now, createdAt);
+      const completedAt = outcome
+        ? previous?.completedAt ?? Math.max(card.completedAt ?? now, createdAt)
+        : undefined;
+      return [{
+        ...previous,
+        monitorId: card.monitorId,
+        task: card.task,
+        ...(card.displayTitle ? { displayTitle: card.displayTitle } : {}),
+        status: card.status,
+        createdAt,
+        updatedAt,
+        ownerRuntimeInstanceId: previous?.ownerRuntimeInstanceId ?? this.host().runtimeInstanceId,
+        ownerRegistrySessionId: previous?.ownerRegistrySessionId ?? this.host().registrySessionId,
+        backend: params.backend,
+        ...(card.agentName ? { agentName: card.agentName } : {}),
+        ...(card.agentRole ? { agentRole: card.agentRole } : {}),
+        ...(card.preferredModel ? { preferredModel: card.preferredModel } : {}),
+        ...(card.lastMessage ? { lastMessage: truncateSubAgentText(card.lastMessage, 360) } : {}),
+        ...(outcome ? { outcome, completedAt } : {}),
+      }];
+    });
+    if (subAgents.length === 0) return;
+    if (this.context.stores.subAgents.upsertThreadSubAgents) {
+      await this.context.stores.subAgents.upsertThreadSubAgents({
+        backend: params.backend,
+        threadId: params.threadId,
+        subAgents,
+      });
+    } else {
+      for (const subAgent of subAgents) {
+        await this.context.stores.subAgents.upsertThreadSubAgent({
+          backend: params.backend,
+          threadId: params.threadId,
+          subAgent,
+        });
+      }
+    }
+    this.host().invalidateThreadListCache(params.backend);
+    await this.context.emit({
+      backend: params.backend,
+      notification: { method: "thread/subAgents/updated", params: { threadId: params.threadId } },
+    });
+  }
+
+  /**
+   * The thread list's sub-agent tray for ACP threads, from their saved
+   * native sub-agent cards: running ones, and ones that ended within the hour.
+   */
+  async withAcpNativeSubAgents(
+    backend: AcpBackendId,
+    threads: AppServerThreadSummary[],
+  ): Promise<AppServerThreadSummary[]> {
+    if (threads.length === 0) return threads;
+    const now = Date.now();
+    const cardsByThreadId = await this.context.stores.subAgents.listThreadSubAgentsByMonitorIdPrefix({
+      backend,
+      threadIds: threads.map((thread) => thread.id),
+      monitorIdPrefix: ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+      visibleSince: now - CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
+    });
+    return threads.map((thread) => {
       const agents = (cardsByThreadId[thread.id] ?? [])
         .map((card) => nativeSubAgentRowFromCard(card, card.monitorId))
         .filter((agent) => isCodexNativeSubAgentVisibleInNavigation(agent, now))

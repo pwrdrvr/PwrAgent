@@ -392,6 +392,7 @@ export type AcpAgentClientOptions = {
   transport: AcpJsonRpcTransport;
   now?: () => number;
   onSessionStartError?: (error: unknown) => Promise<void>;
+  onTurnStarted?: (event: { sessionId: string; turnId: string }) => void;
   onSessionUpdate?: (event: {
     assistantMessageItemId?: string;
     completedAssistantMessage?: AppServerThreadMessageEntry;
@@ -1901,6 +1902,7 @@ export class AcpAgentClient {
           receivedAt,
           waitingForAgent: true,
         });
+        this.options.onTurnStarted?.({ sessionId: params.sessionId, turnId });
         this.appendHistoryUpdate(params.sessionId, receivedAt, {
           kind: "pwragent_user_prompt",
           reviewContextInjected: false,

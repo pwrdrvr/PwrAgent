@@ -1,4 +1,6 @@
 {
+  "acp-subagent-cards": {"commits": 2, "note": "four parallel Antigravity invoke_subagent session/updates coalesced into 1 launch commit + 1 turn-settlement commit through AcpBackendAdapter (2 commits total; ~1.0 MB/day at 20 batches/day, zero progress/idle writes)", "observedWalBytes": 49472, "rowsChanged": 8, "statements": 8},
+  "acp-subagent-progress": {"commits": 0, "note": "25 streamed Grok subagent_progress ticks through AcpBackendAdapter; progress stays in memory, zero commits", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "token-miser-history-gate-conflict": {"commits": 3, "note": "A peer advances a gate during repair, then the reader writes its missing charge and retries its card once.", "observedWalBytes": 119480, "rowsChanged": 5, "statements": 5},
   "token-miser-background-legacy-cleanup": {"commits": 2, "note": "One delayed upgrade pass imports one retained gate and marks the migration complete after removing its raw payload.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
   "token-miser-thread-family-charge-repair": {"commits": 1, "note": "A family pricing read recovers one missing helper charge for a local child without repairing cards.", "observedWalBytes": 82400, "rowsChanged": 3, "statements": 3},

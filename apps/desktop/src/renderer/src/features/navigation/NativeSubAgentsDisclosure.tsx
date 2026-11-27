@@ -1,8 +1,10 @@
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
-import { useState } from "react";
+import { memo, useState } from "react";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { claudeSubAgentTranscriptThreadIdForMonitor } from "@pwragent/shared/subagent-kind";
 import { SubAgentsIcon } from "../../icons";
+import { formatBackendLabel } from "../../lib/backend-label";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -35,6 +37,11 @@ export function getSubthreadDisclosureCount(
   return (scopedOrdinaryChildCount ?? thread.ordinaryChildCount ?? ordinaryChildCount) + (thread.nativeSubAgentGroupPresent ?? Boolean(thread.codexNativeSubAgents?.length) ? 1 : 0);
 }
 
+export function hasNativeSubAgents(thread: NavigationPresentedThread): boolean {
+  return (thread.nativeSubAgentCount ?? thread.codexNativeSubAgents?.length ?? 0) > 0
+    || thread.nativeSubAgentGroupPresent === true;
+}
+
 /** The ordinary child-section preference remains authoritative. */
 export function isSubthreadSectionCollapsed(thread: NavigationPresentedThread): boolean {
   return thread.subthreadsCollapsed === true;
@@ -46,7 +53,7 @@ const CLAUDE_DEFAULT_AGENT_TYPE = "general-purpose";
 // The group draws native workers only; the thread's other card history stays unread.
 const NATIVE_SUB_AGENT_COLLECTIONS = ["codexNativeSubAgents"] as const;
 
-export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps) {
+export const NativeSubAgentsDisclosure = memo(function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps) {
   const [expanded, setExpanded] = useState(false);
   const desktopApi = useDesktopApi();
   const openSubAgentTranscriptWindow = desktopApi?.openSubAgentTranscriptWindow;
@@ -63,7 +70,17 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
   }
 
   const claude = props.thread.source === "claude";
-  const harnessLabel = claude ? "Claude" : "native Codex";
+  const acp = isAcpBackendId(props.thread.source);
+  const harnessLabel = claude
+    ? "Claude"
+    : acp
+      ? formatBackendLabel(props.thread.source)
+      : "native Codex";
+  const listHarnessLabel = claude
+    ? "Claude"
+    : acp
+      ? formatBackendLabel(props.thread.source)
+      : "Native Codex";
   const activeCount = nativeSubAgents.filter(
     (subAgent) => subAgent.threadStatus === "active",
   ).length;
@@ -120,20 +137,32 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
         <div
           className="native-subagents__list"
           role="list"
-          aria-label={`${props.thread.source === "claude" ? "Claude" : "Native Codex"} sub-agents for ${props.thread.title}`}
+          aria-label={`${listHarnessLabel} sub-agents for ${props.thread.title}`}
         >
           {nativeSubAgents.map((subAgent) => {
             // A Claude row's nickname is its agent type, which most share
             // ("general-purpose"), so the row names its task instead and
-            // keeps a type that tells it apart as the role.
-            const label = claude ? subAgent.title : subAgent.agentNickname ?? subAgent.title;
+            // keeps a type that tells it apart as the role. ACP rows carry
+            // their role/description in `title` and distinct agent type in
+            // `agentRole`.
+            const label = claude || acp
+              ? subAgent.title || subAgent.agentNickname || subAgent.threadId
+              : subAgent.agentNickname ?? subAgent.title;
             const role = claude
               ? subAgent.agentNickname && subAgent.agentNickname !== CLAUDE_DEFAULT_AGENT_TYPE
                 ? subAgent.agentNickname
                 : undefined
-              : subAgent.agentRole;
+              : acp
+                ? subAgent.agentRole
+                  ?? (subAgent.agentNickname
+                    && subAgent.agentNickname !== label
+                    && subAgent.agentNickname !== CLAUDE_DEFAULT_AGENT_TYPE
+                    ? subAgent.agentNickname
+                    : undefined)
+                : subAgent.agentRole;
             // A Claude sub-agent is a task in its parent's session, not a
             // thread; its transcript is read from the parent by the task id.
+            // ACP native sub-agents do not yet expose a separate transcript.
             const transcriptThreadId = claude
               ? claudeSubAgentTranscriptThreadIdForMonitor(subAgent.threadId, props.thread.id)
               : props.thread.source === "codex" ? subAgent.threadId : undefined;
@@ -192,4 +221,4 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
       ) : null}
     </div>
   );
-}
+});

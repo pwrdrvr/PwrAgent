@@ -17,6 +17,7 @@ import type { NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/s
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import { ThreadContextPanel } from "../ThreadContextPanel";
+import * as subAgentFormatting from "../context-panels/subagent-format";
 import {
   CalendarPlusIcon,
   DraftIcon,
@@ -5059,5 +5060,52 @@ describe("ThreadContextPanel Decisions tab", () => {
     });
     expect(screen.queryByRole("tab", { name: "Decisions" })).not.toBeInTheDocument();
     expect(readDecisionsRail).not.toHaveBeenCalled();
+  });
+
+  it("memoizes the Sub-agents panel thread snapshot across unrelated context-panel updates", () => {
+    const subAgents: ThreadSubAgentSummary[] = [
+      {
+        monitorId: "acp-native:call-1",
+        task: "Audit streaming parser complexity",
+        displayTitle: "Parser Auditor",
+        agentName: "Parser Auditor",
+        agentRole: "research",
+        status: "running",
+        backend: "acp:antigravity",
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_000,
+      },
+    ];
+    const threadWithSubAgents: NavigationThreadSummary = {
+      ...baseThread,
+      source: "acp:antigravity",
+      id: "thread-ag-memo",
+      title: "Audit: Transcript UX",
+      subAgents,
+    };
+    const statusSpy = vi.spyOn(subAgentFormatting, "subAgentStatusLabel");
+    const { rerender } = renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: threadWithSubAgents,
+      initialLoadDurationMs: 120,
+    });
+    expect(screen.getByText("Parser Auditor")).toBeInTheDocument();
+    statusSpy.mockClear();
+
+    // Unrelated prop updates on ThreadContextPanel must not recreate the
+    // thread object passed to memoized SubAgentsPanel.
+    rerender(
+      <ThreadContextPanel
+        activeTab="subagents"
+        activeTurnId="turn-2"
+        backends={[baseBackend]}
+        initialLoadDurationMs={180}
+        pinned
+        thread={threadWithSubAgents}
+        onActiveTabChange={() => undefined}
+      />,
+    );
+    expect(statusSpy).not.toHaveBeenCalled();
   });
 });

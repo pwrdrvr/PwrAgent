@@ -378,6 +378,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       ? activeTab
       : undefined,
   });
+  const subAgentsPanelThread = useMemo(() => {
+    if (!props.thread) {
+      return undefined;
+    }
+    const nextSubAgents = displayResource.data?.subAgents ?? props.thread.subAgents;
+    return nextSubAgents === props.thread.subAgents
+      ? props.thread
+      : { ...props.thread, subAgents: nextSubAgents };
+  }, [displayResource.data?.subAgents, props.thread]);
   const visibleTabs = CONTEXT_TABS.filter((tab) =>
     props.thread
       ? tab.id !== "connections"
@@ -1034,7 +1043,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "subagents":
-        if (!props.thread) return null;
+        if (!subAgentsPanelThread) return null;
         return (
           <SubAgentsPanel
             lens={displayResource.data?.subAgentLens}
@@ -1045,7 +1054,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             desktopApi={props.desktopApi}
             onRefreshNavigation={props.onRefreshNavigation}
             pricingDisplayOptions={props.pricingDisplayOptions}
-            thread={{ ...props.thread, subAgents: displayResource.data?.subAgents ?? props.thread.subAgents }}
+            thread={subAgentsPanelThread}
             onDetailsModalOpenChange={handlePortaledInteractionChange}
           />
         );
