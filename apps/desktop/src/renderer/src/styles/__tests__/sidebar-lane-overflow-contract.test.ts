@@ -95,4 +95,13 @@ describe("sidebar lane horizontal overflow", () => {
     expect(lastValue(".pr-chip__repo", "overflow")).toBe("hidden");
     expect(lastValue(".pr-chip__repo", "text-overflow")).toBe("ellipsis");
   });
+
+  it("keeps a Details PR row's chip whole beside a long title", () => {
+    // The `min-width: 0` above let a long PR title in the Details tab's
+    // `Folders & git` rows out-shrink the chip beside it, clipping `#634` to
+    // `#6`. There the chip carries no repository prefix, so it never needs to
+    // give way; the title ellipsizes instead.
+    expect(lastValue(".details-row--pr > .pr-chip", "flex-shrink")).toBe("0");
+    expect(lastValue(".details-row__text", "min-width")).toBe("0");
+  });
 });

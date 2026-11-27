@@ -46898,6 +46898,13 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--text-muted);
 }
 
+/* A PR row's chip is only `#123` and its dot: the title beside it gives way.
+   `.pr-chip` may shrink so a repo-prefixed label fits a sidebar lane, but here
+   a long title out-shrank it and clipped the number to `#6`. */
+.details-row--pr > .pr-chip {
+  flex-shrink: 0;
+}
+
 .details-row__text {
   display: flex;
   min-width: 0;
