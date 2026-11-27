@@ -1,4 +1,5 @@
 import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import { scanSkillMentionLinks } from "@pwragent/shared/skill-mention-links";
 
 export type SkillMentionPart =
   | {
@@ -23,7 +24,6 @@ export type SkillMentionPart =
       path: string;
     };
 
-const SKILL_MENTION_PATTERN = /\[([$@][^\]\r\n]+)\]\(([^)\r\n]+)\)/g;
 const SKILL_TOKEN_BOUNDARY = "(?=$|\\s|[.,!?;:])";
 
 function escapeRegExp(value: string): string {
@@ -51,19 +51,12 @@ export function buildSkillMentionMarkdown(
   return `[$${skill.name}](${skill.path})`;
 }
 
-export function parseSkillMentionParts(text: string): SkillMentionPart[] {
+export function parseSkillMentionParts(text: string, work?: { chars: number }): SkillMentionPart[] {
   const output: SkillMentionPart[] = [];
   let lastIndex = 0;
 
-  for (const match of text.matchAll(SKILL_MENTION_PATTERN)) {
-    const fullMatch = match[0];
-    const label = match[1];
-    const path = match[2];
-    const start = match.index ?? -1;
-
-    if (start < 0) {
-      continue;
-    }
+  for (const { start, end, name, target } of scanSkillMentionLinks(text, "$@", work)) {
+    const prefix = text.charAt(start + 1);
 
     if (start > lastIndex) {
       output.push({
@@ -73,13 +66,13 @@ export function parseSkillMentionParts(text: string): SkillMentionPart[] {
     }
 
     output.push({
-      type: label.startsWith("@") ? "directory" : "skill",
-      label,
-      name: label.slice(1),
-      path,
+      type: prefix === "@" ? "directory" : "skill",
+      label: prefix + name,
+      name,
+      path: target,
     });
 
-    lastIndex = start + fullMatch.length;
+    lastIndex = end;
   }
 
   if (lastIndex < text.length) {
