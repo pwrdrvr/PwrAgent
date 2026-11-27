@@ -1,6 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { FEDERATION_BACKEND_METHOD_CAPABILITIES } from "@pwragent/federation/federation-backend-methods";
-import type { NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
+import { applyNavigationLaunchpadProviderSettingsPatch, type NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -94,14 +94,14 @@ async function setup() {
     await viewer.ensureDirectoryLaunchpad(launchpad, { owner: target, skipFilesystemInspection: true, skipMcpConnectionDefaults: true });
     return (await viewer.updateDirectoryLaunchpad({ directoryKey: launchpad.directoryKey, patch: { ...pick(model, reasoningEffort), backend: "codex" } }, { owner: target })).launchpad;
   };
-  const edit = async (patch: Parameters<typeof viewer.updateDirectoryLaunchpad>[0]["patch"], sticky = true) =>
-    (await viewer.updateDirectoryLaunchpad({ directoryKey: launchpad.directoryKey, patch, stickySettingsChanged: sticky }, { owner: target })).launchpad;
+  const edit = async (patch: Parameters<typeof viewer.updateDirectoryLaunchpad>[0]["patch"], sticky = true, explicit = sticky) =>
+    (await viewer.updateDirectoryLaunchpad({ directoryKey: launchpad.directoryKey, patch, stickySettingsChanged: sticky, explicitModelSelection: explicit }, { owner: target })).launchpad;
   const submit = (draft: NavigationLaunchpadDraft, operationId: string = crypto.randomUUID()) =>
     remote.materializeDirectoryLaunchpad({
       directoryKey: draft.directoryKey, launchpad: draft, operationId,
     });
   await open(terra, "low");
-  return { start, store, viewerStore, read, open, edit, submit };
+  return { start, store, viewer, viewerStore, read, open, edit, submit };
 }
 
 function pick(model: string, reasoningEffort: string) {
@@ -130,16 +130,24 @@ it("serves the model and effort from an accepted peer launch to the next compose
 });
 
 it("files a peer effort pick under the model's provider without changing the default provider", async () => {
-  const { store, read, open, edit, submit } = await setup();
+  const { store, viewer, read, open, edit, submit } = await setup();
   await store.setLaunchpadDefaults({ backend: "claude", model: "opus" });
   await open(terra, "low");
   await edit({ reasoningEffort: "high" });
   await submit(await edit({ executionMode: "full-access" }));
-  expect(await read()).toMatchObject({
+  const ownerDefaults = await read();
+  expect(ownerDefaults).toMatchObject({
     backend: "claude",
     model: "opus",
     providerSettings: { codex: { ...pick(terra, "high"), executionMode: "default" } },
   });
+  await open(sol, "low");
+  const fresh = await viewer.updateDirectoryLaunchpad({
+    directoryKey: launchpad.directoryKey,
+    patch: { backend: "claude", model: "opus" },
+  }, { owner: target, ownerProviderSettings: ownerDefaults.providerSettings });
+  expect(applyNavigationLaunchpadProviderSettingsPatch(fresh.launchpad, { backend: "codex" }))
+    .toMatchObject(pick(terra, "high"));
 });
 
 it("does not learn a rejected model, an inherited choice, or an access-only edit", async () => {
@@ -151,6 +159,8 @@ it("does not learn a rejected model, an inherited choice, or an access-only edit
   expect(await read()).toMatchObject(pick(terra, "low"));
 
   await open(sol, "high");
+  await submit(await edit(pick(sol, "high"), true, false));
+  expect(await read()).toMatchObject(pick(terra, "low"));
   await submit(await edit({ executionMode: "full-access" }));
   expect(await read()).toMatchObject({ ...pick(terra, "low"), executionMode: "default" });
 

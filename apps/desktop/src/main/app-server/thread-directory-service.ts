@@ -672,6 +672,8 @@ export class ThreadDirectoryService {
     options?: {
       /** A remote viewer's draft takes no environment metadata from here. */
       skipFilesystemInspection?: boolean;
+      /** Owner-provided provider defaults for an untouched peer draft. */
+      ownerProviderSettings?: NavigationLaunchpadDefaults["providerSettings"];
       /** Leave the stored draft as it is unless this holds for it. */
       onlyIf?: (current: NavigationLaunchpadDraft) => boolean;
       /** The instance that owns `directoryKey`, as on an ensure. */
@@ -726,8 +728,15 @@ export class ThreadDirectoryService {
     const isPeerDraft =
       owner?.scope === "remote"
       || isRemoteLaunchpadStorageKey(request.directoryKey);
+    const ownerProviderSettings = options?.ownerProviderSettings;
+    const draft = ownerProviderSettings ? { ...current, providerSettings: ownerProviderSettings } : current;
+    const patched = applyLaunchpadDraftSettingsPatch(draft, patch, isPeerDraft && request.explicitModelSelection);
+    const provider = navigationLaunchpadProviderKey(patched);
     const patchedLaunchpad: NavigationLaunchpadDraft = {
-      ...applyLaunchpadDraftSettingsPatch(current, patch, isPeerDraft && request.stickySettingsChanged),
+      ...patched,
+      ...(ownerProviderSettings ? {
+        providerSettings: { ...ownerProviderSettings, [provider]: patched.providerSettings?.[provider] ?? {} },
+      } : {}),
       directoryKey: request.directoryKey,
       settingsTouchedAt: request.stickySettingsChanged
         ? Date.now()

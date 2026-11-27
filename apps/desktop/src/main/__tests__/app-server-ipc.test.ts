@@ -15897,26 +15897,32 @@ describe("app server ipc", () => {
         backend: "codex" as const, executionMode: "default" as const, prompt: "Investigate", model: "viewer-only", reasoningEffort: "high",
         fastMode: true, serviceTier: "priority", branchName: undefined, createdAt: 100, updatedAt: 100 },
         defaults: { backend: "codex" as const, executionMode: "default" as const } };
-      const defaults = { backend: "codex" as const, executionMode: "default" as const, model: "owner-model", reasoningEffort: "low",
+      const providerSettings = { claude: { model: "owner-saved", reasoningEffort: "high" } };
+      const activeDefaults = { backend: "codex" as const, executionMode: "default" as const, model: "owner-model", reasoningEffort: "low",
         fastMode: false, serviceTier: undefined, acpRuntime: undefined };
+      const defaults = { ...activeDefaults, providerSettings };
       // The owner's independent draft is not the viewer's source of defaults.
       const owner = { launchpad: { ...local.launchpad, model: "owner-draft-model" }, defaults };
       federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValue(owner);
       ensureDirectoryLaunchpad.mockResolvedValueOnce(local);
       updateDirectoryLaunchpad.mockImplementationOnce(async (update) => ({
-        ...local, launchpad: { ...local.launchpad, ...update.patch },
+        ...local, launchpad: { ...local.launchpad, ...update.patch, providerSettings },
       }));
       registerAppServerIpcHandlers();
       const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
       expect(await ensure({}, request)).toMatchObject({ launchpad: {
-        model: "owner-model", reasoningEffort: "low", fastMode: false, serviceTier: undefined, prompt: "Investigate",
+        model: "owner-model", reasoningEffort: "low", fastMode: false, serviceTier: undefined, prompt: "Investigate", providerSettings,
       } });
       expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({ directoryKey, patch: {
         model: "owner-model", reasoningEffort: "low", fastMode: false, serviceTier: undefined, acpRuntime: undefined,
-      } }, expect.objectContaining({ owner: federationTarget, onlyIf: expect.any(Function) }));
+      } }, expect.objectContaining({ owner: federationTarget, ownerProviderSettings: providerSettings, onlyIf: expect.any(Function) }));
       const onlyIf = (updateDirectoryLaunchpad.mock.calls[0] as unknown as [unknown,
         { onlyIf: (current: object) => boolean }])[1].onlyIf;
       expect(onlyIf({ ...local.launchpad, settingsTouchedAt: 200 })).toBe(false);
+      updateDirectoryLaunchpad.mockClear();
+      ensureDirectoryLaunchpad.mockResolvedValueOnce({ ...local, launchpad: { ...local.launchpad, ...activeDefaults } });
+      await ensure({}, request);
+      expect(updateDirectoryLaunchpad).toHaveBeenCalledTimes(1);
       updateDirectoryLaunchpad.mockClear();
       ensureDirectoryLaunchpad.mockResolvedValueOnce({ ...local, launchpad: { ...local.launchpad, ...defaults } });
       await ensure({}, request);
@@ -15942,8 +15948,9 @@ describe("app server ipc", () => {
     const store = new SqliteOverlayStore(db);
     const launchpad = { directoryKey: "directory:/repo/app", directoryKind: "directory" as const,
       directoryLabel: "app", directoryPath: "/repo/app", backend: "codex" as const, executionMode: "default" as const,
-      model: "viewer-only", workMode: "local" as const, prompt: "Investigate", branchName: undefined, createdAt: 100, updatedAt: 100 };
-    const defaults = { backend: "codex" as const, executionMode: "default" as const, model: "owner-model" };
+      model: "owner-model", workMode: "local" as const, prompt: "Investigate", branchName: undefined, createdAt: 100, updatedAt: 100 };
+    const providerSettings = { claude: { model: "owner-saved", reasoningEffort: "high" } };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const, model: "owner-model", providerSettings };
     const request = { directoryKey: launchpad.directoryKey, directoryKind: launchpad.directoryKind,
       directoryLabel: launchpad.directoryLabel, directoryPath: launchpad.directoryPath,
       federationTarget: { scope: "remote" as const, instanceId: "owner_one" } };
@@ -15953,17 +15960,22 @@ describe("app server ipc", () => {
       ensureDirectoryLaunchpad.mockImplementation(async () => ({
         launchpad: (await store.getDirectoryLaunchpad({ directoryKey: launchpad.directoryKey }))! as typeof launchpad, defaults,
       }));
-      updateDirectoryLaunchpad.mockImplementation(async (update) => {
+      updateDirectoryLaunchpad.mockImplementation(async (update, options?: { ownerProviderSettings?: typeof providerSettings }) => {
         const current = (await store.getDirectoryLaunchpad({ directoryKey: update.directoryKey }))!;
-        return { launchpad: await store.upsertDirectoryLaunchpad(
-          applyNavigationLaunchpadProviderSettingsPatch(current, update.patch)) as typeof launchpad, defaults };
+        const patched = applyNavigationLaunchpadProviderSettingsPatch(current, update.patch);
+        return {
+          launchpad: await store.upsertDirectoryLaunchpad({
+            ...patched, providerSettings: { ...patched.providerSettings, ...options?.ownerProviderSettings },
+          }) as typeof launchpad,
+          defaults,
+        };
       });
       registerAppServerIpcHandlers();
       const ensure = handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)!;
       const seeded = await measureSqliteWrites(() => ensure({}, request));
-      expect(seeded.result).toMatchObject({ launchpad: { model: "owner-model" } });
+      expect(seeded.result).toMatchObject({ launchpad: { model: "owner-model", providerSettings } });
       expectSqliteWriteBudget({ scenario: "remote-launchpad-model-seed", writes: seeded.writes,
-        note: "One owner model correction: 1 commit; ~0.83 MB/day at 100 corrections/day. Unchanged reopens write zero.",
+        note: "One owner provider settings correction: 1 commit; ~0.83 MB/day at 100 corrections/day. Unchanged reopens write zero.",
       });
       const reopened = await measureSqliteWrites(async () => {
         for (let index = 0; index < 100; index++) await ensure({}, request);

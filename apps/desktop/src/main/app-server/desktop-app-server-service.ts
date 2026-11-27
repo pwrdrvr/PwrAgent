@@ -132,6 +132,7 @@ import { isDeepStrictEqual } from "node:util";
 import { RemoteNavigationPageBaselines } from "../federation/remote-navigation-page-baselines";
 import { readRemoteNavigationPageWithinBudget } from "../federation/federation-navigation-query";
 import { OneTimeProfileNotice } from "../notices/one-time-profile-notice";
+import { navigationLaunchpadProviderKey, type NavigationLaunchpadDefaults } from "@pwragent/shared/contracts/navigation";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared/contracts/navigation";
 import type {
   MarkNavigationDirectorySeenRequest,
@@ -709,6 +710,7 @@ async function resolveRemoteLaunchpadSettings(params: {
   updateDraftSettings: (
     from: AppServerBackendKind,
     patch: Partial<NavigationLaunchpadDraft>,
+    ownerProviderSettings: NavigationLaunchpadDefaults["providerSettings"],
   ) => Promise<NavigationLaunchpadDraft>;
 }): Promise<EnsureDirectoryLaunchpadResponse> {
   const { localResponse, ownerResponse } = params;
@@ -740,26 +742,36 @@ async function resolveRemoteLaunchpadSettings(params: {
   }
   // The viewer stores the prompt, but automatic model settings belong to the
   // owner. Its independent draft may have edits, so take resolved defaults.
-  // For another supported provider, omit viewer preferences and let the owner
-  // resolve that provider's defaults when the draft is sent.
+  // Seed every provider from the owner's learned settings so switching
+  // providers in a fresh draft uses the owner's catalog and prior choices.
+  const ownerProviderSettings = ownerResponse.defaults.providerSettings;
   const defaults = ownerResponse.defaults.backend === ownerBackend
     ? ownerResponse.defaults
+    : ownerProviderSettings?.[ownerBackend];
+  const codexModelProviderId = ownerResponse.defaults.backend === ownerBackend
+    ? ownerResponse.defaults.codexModelProviderId
     : undefined;
+  const activeProvider = navigationLaunchpadProviderKey({ backend: ownerBackend, model: defaults?.model, codexModelProviderId });
+  const inactive = (settings: NavigationLaunchpadDefaults["providerSettings"]) =>
+    Object.fromEntries(Object.entries(settings ?? {}).filter(([provider]) => provider !== activeProvider));
+  const providerSettingsChanged = ownerProviderSettings !== undefined
+    && !isDeepStrictEqual(inactive(ownerProviderSettings), inactive(localResponse.launchpad.providerSettings));
   const patch: Partial<NavigationLaunchpadDraft> = {
     ...(ownerBackend !== draftBackend ? { backend: ownerBackend } : {}),
+    ...(codexModelProviderId !== localResponse.launchpad.codexModelProviderId ? { codexModelProviderId } : {}),
     model: defaults?.model,
     reasoningEffort: defaults?.reasoningEffort,
     serviceTier: defaults?.serviceTier,
     fastMode: defaults?.fastMode,
     acpRuntime: defaults?.acpRuntime,
   };
-  if (Object.entries(patch).every(([key, value]) =>
+  if (!providerSettingsChanged && Object.entries(patch).every(([key, value]) =>
     isDeepStrictEqual(localResponse.launchpad[key as keyof NavigationLaunchpadDraft], value))) {
     return localResponse;
   }
   return {
     ...localResponse,
-    launchpad: await params.updateDraftSettings(draftBackend, patch),
+    launchpad: await params.updateDraftSettings(draftBackend, patch, ownerProviderSettings),
   };
 }
 
@@ -8943,11 +8955,12 @@ class DesktopAppServerService {
               (await federationRuntime
                 .remoteBackend(federationTarget)
                 .listBackends({ includeUnavailable: true })).backends,
-            updateDraftSettings: async (from, patch) =>
+            updateDraftSettings: async (from, patch, ownerProviderSettings) =>
               (await registry.updateDirectoryLaunchpad(
                 { directoryKey: request.directoryKey, patch },
                 {
                   skipFilesystemInspection: true,
+                  ...(ownerProviderSettings ? { ownerProviderSettings } : {}),
                   // The owner was asked over the wire; an operator pick made
                   // meanwhile, here or in another window, is theirs.
                   onlyIf: (current) =>
