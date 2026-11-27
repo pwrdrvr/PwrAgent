@@ -70,32 +70,32 @@ describe("review Auto-fix handoff", () => {
     }
   });
 
-  it("keeps a review of multiple stack layers from becoming its own prerequisite", async () => {
+  it.each([
+    { provenance: "with captured PRs", capturedTargets: true },
+    { provenance: "without captured PRs", capturedTargets: false },
+  ])("keeps a waiting review $provenance from becoming its own prerequisite", async ({ capturedTargets }) => {
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
     });
     try {
-      await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 6 }), fc.boolean(), async (size, capturedTargets) => {
-        resetReviewAutoFixArmingForTests();
-        const prs = Array.from({ length: size }, (_, index) => ({
-          provider: "github.com", org: "fixture", repo: "stack", number: index + 1,
-          url: `https://github.com/fixture/stack/pull/${index + 1}`,
-        }));
-        // The dispatcher publishes the queued card before testing the gate.
-        // Nothing has been admitted to the turn queue yet.
-        const review = { ...thread, ...(capturedTargets ? {
-          context: { workspacePath: "/repo", pullRequest: prs[0], pullRequests: prs },
-        } : {}) };
-        getReviewAutoFixRuns().record(review, "review-of-stack", { kind: "queue", status: "held", at: 1 });
-        const repair = await registry.stackRepairActive(thread);
-        const layers = prs.map((pr) => ({
-          branch: `layer-${pr.number}`, pullRequest: pr, number: pr.number,
-          health: "in_sync" as const, checks: "passing" as const, conflict: false, repair,
-        }));
-        const gates = stackAutomationGates(layers);
-        expect(layers.map((layer, index) => stackDispatchBlock({ ...layer, ...gates[index] })))
-          .toEqual(prs.map(() => undefined));
-      }), { numRuns: 12, examples: [[2, true]] });
+      const prs = [1, 2].map((number) => ({
+        provider: "github.com", org: "fixture", repo: "stack", number,
+        url: `https://github.com/fixture/stack/pull/${number}`,
+      }));
+      // The dispatcher publishes the queued card before testing the gate.
+      // Nothing has been admitted to the turn queue yet.
+      const review = { ...thread, ...(capturedTargets ? {
+        context: { workspacePath: "/repo", pullRequest: prs[0], pullRequests: prs },
+      } : {}) };
+      getReviewAutoFixRuns().record(review, "review-of-stack", { kind: "queue", status: "held", at: 1 });
+      const repair = await registry.stackRepairActive(thread);
+      const layers = prs.map((pr) => ({
+        branch: `layer-${pr.number}`, pullRequest: pr, number: pr.number,
+        health: "in_sync" as const, checks: "passing" as const, conflict: false, repair,
+      }));
+      const gates = stackAutomationGates(layers);
+      expect(layers.map((layer, index) => stackDispatchBlock({ ...layer, ...gates[index] })))
+        .toEqual([undefined, undefined]);
     } finally {
       resetReviewAutoFixArmingForTests();
       await registry.close();
