@@ -2558,27 +2558,23 @@ function applyThreadCodexEnvironmentUpdate(
     return snapshot;
   }
 
-  let changed = false;
-  const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (thread.source !== params.backend
-      || thread.id !== params.threadId
-      || !federationTargetsEqual(thread.federation?.ref.target, params.federationTarget)) {
-      return thread;
-    }
-
-    changed = true;
-    return {
-      ...thread,
-      codexEnvironmentRuntime: params.codexEnvironmentRuntime,
-    };
-  });
-
-  return changed
-    ? {
-        ...snapshot,
-        threadRows: indexLoadedThreadRows(threads),
-      }
-    : snapshot;
+  const { backend, federationTarget, threadId, codexEnvironmentRuntime } = params;
+  // Local rows can have either an ordinary identity or an explicit local target.
+  const keys = federationTarget?.scope === "remote"
+    ? [federatedThreadIdentityKey({ backend, threadId, target: federationTarget })]
+    : [
+        buildThreadIdentityKey(backend, threadId),
+        federatedThreadIdentityKey({ backend, threadId, target: { scope: "local" } }),
+      ];
+  let threadRows: Map<string, NavigationPresentedThread> | undefined;
+  for (const key of keys) {
+    const row = snapshot.threadRows.get(key);
+    if (!row || row.codexEnvironmentRuntime === codexEnvironmentRuntime
+      || row.source !== backend || row.id !== threadId || !federationTargetsEqual(row.federation?.ref.target, federationTarget)) continue;
+    threadRows ??= new Map(snapshot.threadRows);
+    threadRows.set(key, { ...row, codexEnvironmentRuntime });
+  }
+  return threadRows ? { ...snapshot, threadRows } : snapshot;
 }
 
 function applyThreadExecutionModeUpdate(
@@ -5376,19 +5372,22 @@ export function useThreadNavigation(
           const key = navigationIdentityKey({ backend: event.backend, threadId,
             ownerInstanceId: event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined });
           const preview = composerPreviews.get(key);
-          if (preview) composerPreviews.set(key, { ...preview, codexEnvironmentRuntime });
+          if (preview && preview.codexEnvironmentRuntime !== codexEnvironmentRuntime) {
+            composerPreviews.set(key, { ...preview, codexEnvironmentRuntime });
+          }
         }
-        setState((current) => ({
-          ...current,
-          rows: applyThreadCodexEnvironmentUpdate(current.rows, {
+        setState((current) => {
+          const rows = applyThreadCodexEnvironmentUpdate(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
             codexEnvironmentRuntime,
-          }),
-        }));
+          });
+          return rows === current.rows ? current : { ...current, rows };
+        });
         setOptimisticThread((current) =>
-          current && agentEventMatchesThread(event, current, threadId)
+          current && current.codexEnvironmentRuntime !== codexEnvironmentRuntime
+            && agentEventMatchesThread(event, current, threadId)
             ? { ...current, codexEnvironmentRuntime }
             : current
         );
