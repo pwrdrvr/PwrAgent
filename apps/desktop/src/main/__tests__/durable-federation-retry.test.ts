@@ -4,6 +4,7 @@ import type { DurableTurnRequestService } from "@pwragent/owner-core/durable-tur
 import { ThreadTurnQueue } from "@pwragent/owner-core/thread-turn-queue";
 import type { SubmitDurableTurnRequest } from "@pwragent/shared/contracts/durable-turn-requests";
 import type { FederationCapability, FederationPeerSummary } from "@pwragent/shared/contracts/federation";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { canonicalDurableTurnRequest } from "@pwragent/shared/durable-turn-request";
 import * as registryModule from "../app-server/backend-registry";
 import {
@@ -16,13 +17,14 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-w
 import { StateDb } from "../state/state-db";
 import * as federationStorage from "../storage/desktop-federation-storage";
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
+import { createThreadReadRegistry } from "./fixtures/thread-read-harness";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 const grants: FederationCapability[] = ["turn_control", "durable_turn_requests_v1"];
 const target = { scope: "remote" as const, instanceId: "owner" };
 const ref = { backend: "codex" as const, threadId: "thread" };
 
-it("a cold duplicate burst and its queued replays inspect no peer labels or neighboring queue entries", async () => {
+it("duplicate bursts reuse the fresh owner inventory and inspect no peer labels or neighboring queue entries", async () => {
   const peerCount = 4, depth = 4, retries = 3;
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const { dbPath, tempDir } = createTempStateDb("durable-retry-");
@@ -73,11 +75,21 @@ it("a cold duplicate burst and its queued replays inspect no peer labels or neig
     }]);
     return { status: "queued", entry, position: depth };
   });
-  const resolveThread = vi.fn(async () => ({ id: ref.threadId }));
-  const registry = Object.assign(Object.create(registryModule.DesktopBackendRegistry.prototype), {
-    threadTurnQueue: queue, onEvent: vi.fn(), resolveThread,
+  let ownerIdReads = 0;
+  const threads = Array.from({ length: 4 }, (_, i): AppServerThreadSummary => ({
+    get id() { ownerIdReads++; return i === 0 || i === 3 ? ref.threadId : `thread-${i}`; },
+    source: i === 0 ? "claude" : ref.backend, title: "Fixture", titleSource: "explicit", linkedDirectories: [],
+  }));
+  const snapshot = { threads, archived: false, expiresAt: Infinity };
+  const threadListCache = new Map([["provider", snapshot]]);
+
+  const { registry } = createThreadReadRegistry([]);
+  onTestFinished(() => registry.close());
+  Object.assign(registry, {
+    threadTurnQueue: queue, onEvent: vi.fn(), threadListCache,
     assertProjectAcceptsThreadMessage: vi.fn(), submitTurn,
   });
+  const resolveThread = vi.spyOn(registry, "resolveThread");
   vi.spyOn(registryModule, "getDesktopBackendRegistry").mockReturnValue(registry);
   vi.spyOn(federationStorage, "createDurableTurnRequestStorage").mockReturnValue(new SqliteDurableTurnRequestStore(db));
   const owner = new DesktopFederationRuntime();
@@ -96,12 +108,17 @@ it("a cold duplicate burst and its queued replays inspect no peer labels or neig
   expect(cold.every(receipt => receipt.queueEntryId === cold[0]!.queueEntryId)).toBe(true);
   expect(cold[0]).toMatchObject({ state: "accepted", result: { queueStatus: "queued" } });
   expect(labelReads).toBe(0);
+  expect(ownerIdReads).toBe(threads.length);
   neighborIdReads = 0;
   const { result: warm, writes } = await measureSqliteWrites(burst);
   for (const receipt of warm) expect(receipt).toEqual(cold[0]);
   expect(submitTurn).toHaveBeenCalledTimes(1);
   expect(writes.commits).toBe(0);
   expect(resolveThread).toHaveBeenCalledTimes(2 * retries);
+  // Claimed IDs can coincide across providers in an aggregate listing.
+  expect(await registry.resolveThread(ref)).toBe(threads[3]);
+  expect(await registry.resolveThread({ threadId: ref.threadId })).toBe(threads[0]);
+  expect(ownerIdReads).toBe(threads.length);
   expect(visiblePeers).not.toHaveBeenCalled();
   expect({ labelReads, copiedEntries, neighborIdReads, queuedInputReads }).toEqual({
     labelReads: 0, copiedEntries: 0, neighborIdReads: 0, queuedInputReads: 0,
@@ -117,6 +134,14 @@ it("a cold duplicate burst and its queued replays inspect no peer labels or neig
   const terminal = await measureSqliteWrites(burst);
   expect(terminal.writes.commits).toBe(0);
   for (const receipt of terminal.result) expect(receipt).toEqual(missing);
+
+  // Even a settled receipt requires fresh ownership evidence. A replacement
+  // list containing this ID on a different backend cannot authorize the replay.
+  snapshot.expiresAt = 0;
+  threadListCache.set("other-backend", { ...snapshot, expiresAt: Infinity, threads: [{ ...threads[3]!, source: "claude" }] });
+  const refresh = vi.spyOn(registry, "listThreads").mockResolvedValue([]);
+  await expect(viewer.submitDurableTurnRequest("device", request, target)).rejects.toMatchObject({ code: "request_destination_unavailable" });
+  expect(refresh).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ backend: ref.backend, forceRefresh: true }));
   expect(submitTurn).toHaveBeenCalledTimes(1);
 });
 

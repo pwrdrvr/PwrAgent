@@ -1179,7 +1179,11 @@ export class DesktopBackendRegistry {
   private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
-  private readonly workspaceThreadRowsById = new WeakMap<AppServerThreadSummary[], Map<string, AppServerThreadSummary>>();
+  private readonly threadListRowIndexes = new WeakMap<AppServerThreadSummary[], {
+    visited: number;
+    firstById: Map<string, AppServerThreadSummary>;
+    byBackend: Map<AppServerBackendKind, Map<string, AppServerThreadSummary>>;
+  }>();
   private threadListCacheRevision = 0;
   private createdThreadDirectoryVisibility = new Map<
     string,
@@ -4609,13 +4613,14 @@ export class DesktopBackendRegistry {
       enrichDirectories: false,
       forceRefresh: true,
     });
-    const thread = threads.find((thread) => thread.id === threadId);
+    const thread = this.findThreadListRow(threads, threadId);
     if (thread || (params.backend && params.backend !== "codex")
       || !this.retainedOwnerThreadStorage?.list().some(row => row.id === threadId)) return thread;
     // A retained identity can be archived. Consult native archive authority
     // through the same read policy rather than treating its metadata as active.
-    return (await this.listThreads({ backend: "codex", archived: true, enrichDirectories: false,
-      callerReason: "thread-id-lookup", forceRefresh: true })).find(row => row.id === threadId);
+    const archived = await this.listThreads({ backend: "codex", archived: true, enrichDirectories: false,
+      callerReason: "thread-id-lookup", forceRefresh: true });
+    return this.findThreadListRow(archived, threadId);
   }
 
   /**
@@ -4716,6 +4721,37 @@ export class DesktopBackendRegistry {
     };
   }
 
+  // Concurrent readers share the provider's listing. Its replacement has a new
+  // array identity, so the index cannot extend the cache's ownership proof.
+  private findThreadListRow(
+    threads: AppServerThreadSummary[],
+    threadId: string,
+    backend?: AppServerBackendKind,
+  ): AppServerThreadSummary | undefined {
+    let index = this.threadListRowIndexes.get(threads);
+    if (!index) {
+      index = { visited: 0, firstById: new Map(), byBackend: new Map() };
+      this.threadListRowIndexes.set(threads, index);
+    }
+    const found = backend ? index.byBackend.get(backend)?.get(threadId) : index.firstById.get(threadId);
+    if (found) return found;
+    // Stop at the first match even for a new list. Later lookups resume the
+    // scan and retain the first row for each ID and each (backend, ID) pair.
+    while (index.visited < threads.length) {
+      const row = threads[index.visited++]!;
+      const id = row.id;
+      let byId = index.byBackend.get(row.source);
+      if (!byId) {
+        byId = new Map();
+        index.byBackend.set(row.source, byId);
+      }
+      if (!byId.has(id)) byId.set(id, row);
+      if (!index.firstById.has(id)) index.firstById.set(id, row);
+      if (id === threadId && (!backend || row.source === backend)) return row;
+    }
+    return undefined;
+  }
+
   private findThreadListCachedSummary(
     params: {
       backend?: AppServerBackendKind;
@@ -4731,11 +4767,7 @@ export class DesktopBackendRegistry {
       if (now !== undefined && (state.expiresAt ?? 0) <= now) {
         continue;
       }
-      const cached = state.threads?.find(
-        (thread) =>
-          (!params.backend || thread.source === params.backend)
-          && thread.id === params.threadId,
-      );
+      const cached = state.threads && this.findThreadListRow(state.threads, params.threadId, params.backend);
       if (cached) {
         return cached;
       }
@@ -20004,19 +20036,7 @@ export class DesktopBackendRegistry {
       archived: false,
       callerReason,
     })
-      .then((threads) => {
-        // Concurrent cold lookups share one listing. Index that result once
-        // and let a refreshed listing build an index of its own rows.
-        let byId = this.workspaceThreadRowsById.get(threads);
-        if (!byId) {
-          byId = new Map();
-          for (const thread of threads) {
-            if (!byId.has(thread.id)) byId.set(thread.id, thread);
-          }
-          this.workspaceThreadRowsById.set(threads, byId);
-        }
-        return byId.get(params.threadId);
-      })
+      .then((threads) => this.findThreadListRow(threads, params.threadId))
       .catch(() => undefined);
   }
 
