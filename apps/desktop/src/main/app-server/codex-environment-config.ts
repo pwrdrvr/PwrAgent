@@ -29,6 +29,12 @@ type ParserContext =
   | "action"
   | `${"setup" | "cleanup"}.${EnvironmentPlatform}`;
 
+// Leave capacity in libuv's default pool for turn admission and other I/O.
+const MAX_RUNNING_ENVIRONMENT_READS = 2;
+const ENVIRONMENT_READ_TIMEOUT_MS = 3_000;
+const queuedEnvironmentReads = new Set<() => void>();
+let runningEnvironmentReads = 0;
+
 export async function listCodexEnvironmentOptions(
   directoryPath?: string,
   platform: NodeJS.Platform = process.platform,
@@ -42,12 +48,61 @@ export async function listCodexEnvironmentOptions(
     ".codex",
     "environments",
   );
+  const deadline = performance.now() + ENVIRONMENT_READ_TIMEOUT_MS;
+  const timeoutError = () => Object.assign(
+    new Error(`Timed out reading Codex environments in ${environmentsDir}. Check the drive or network mount and retry.`),
+    { code: "ETIMEDOUT", path: environmentsDir },
+  );
+  const checkDeadline = () => {
+    if (performance.now() >= deadline) throw timeoutError();
+  };
+
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      queuedEnvironmentReads.delete(start);
+      reject(timeoutError());
+    }, ENVIRONMENT_READ_TIMEOUT_MS);
+    const start = () => {
+      runningEnvironmentReads++;
+      void readEnvironmentOptions(environmentsDir, platform, checkDeadline)
+        .then((options) => {
+          checkDeadline();
+          return options;
+        })
+        .finally(() => {
+          clearTimeout(timer);
+          // A deadline releases the caller, but only native completion releases
+          // the slot. A timed-out read also stops before its next filesystem call.
+          runningEnvironmentReads--;
+          const next = queuedEnvironmentReads.values().next().value;
+          if (next) {
+            queuedEnvironmentReads.delete(next);
+            next();
+          }
+        })
+        .then(resolve, reject);
+    };
+    if (runningEnvironmentReads < MAX_RUNNING_ENVIRONMENT_READS) {
+      start();
+    } else {
+      queuedEnvironmentReads.add(start);
+    }
+  });
+}
+
+async function readEnvironmentOptions(
+  environmentsDir: string,
+  platform: NodeJS.Platform,
+  checkDeadline: () => void,
+): Promise<CodexEnvironmentOption[]> {
+  checkDeadline();
   let entries: string[];
   try {
     const directoryStat = await stat(environmentsDir);
     if (!directoryStat.isDirectory()) {
       return [];
     }
+    checkDeadline();
     entries = await readdir(environmentsDir);
   } catch (error) {
     const errorCode = (error as NodeJS.ErrnoException).code;
@@ -64,11 +119,13 @@ export async function listCodexEnvironmentOptions(
     }
 
     const sourcePath = path.join(environmentsDir, entry);
+    checkDeadline();
     const fileStat = await stat(sourcePath);
     if (!fileStat.isFile()) {
       continue;
     }
 
+    checkDeadline();
     const source = await readFile(sourcePath, "utf8");
     const parsed = parseCodexEnvironmentToml(source, sourcePath);
     const fallbackId = path.basename(entry, ".toml");

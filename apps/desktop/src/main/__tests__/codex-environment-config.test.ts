@@ -11,6 +11,19 @@ import {
 } from "../app-server/codex-environment-config";
 
 describe("codex environment config", () => {
+  it("returns empty options for a missing directory and propagates TOML errors", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-discovery-errors-"));
+    const environmentsDir = path.join(root, ".codex", "environments");
+    try {
+      await expect(listCodexEnvironmentOptions(root)).resolves.toEqual([]);
+      await mkdir(environmentsDir, { recursive: true });
+      await writeFile(path.join(environmentsDir, "broken.toml"), "invalid toml\n");
+      await expect(listCodexEnvironmentOptions(root)).rejects.toThrow("Invalid Codex environment TOML");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["darwin", "linux", "win32"] as const)("selects the checked-in environment for %s", async (platform) => {
     const [option] = await listCodexEnvironmentOptions(path.resolve(import.meta.dirname, "../../../../.."), platform);
     expect(option.actions).toHaveLength(7);

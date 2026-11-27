@@ -5019,6 +5019,8 @@ export class DesktopBackendRegistry {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
     };
+    // Turn admission needs workspace metadata before its own filesystem I/O.
+    const enrichEnvironmentOptions = params.callerReason !== "turn-cwd";
     if (
       params.backend === "claude"
       || params.backend === "codex"
@@ -5030,10 +5032,12 @@ export class DesktopBackendRegistry {
         diagnostics,
         displayMetadataObservationSequence,
       );
-      const threads = this.inheritIncompleteThreadList(
-        await this.withThreadEnvironmentOptions(listed.threads),
-        listed.threads,
-      );
+      const threads = enrichEnvironmentOptions
+        ? this.inheritIncompleteThreadList(
+          await this.withThreadEnvironmentOptions(listed.threads),
+          listed.threads,
+        )
+        : listed.threads;
       this.rememberThreadListContexts(
         threads,
         displayMetadataObservationSequence,
@@ -5058,7 +5062,9 @@ export class DesktopBackendRegistry {
         skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
       }),
       this.listAllInstalledAcpThreads(params.filter, params.archived)
-        .then((threads) => this.withThreadEnvironmentOptions(threads)),
+        .then((threads) => enrichEnvironmentOptions
+          ? this.withThreadEnvironmentOptions(threads)
+          : threads),
       this.listThreads({ ...params, backend: "claude" }),
     ]);
 
@@ -6218,10 +6224,8 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Attaches the environments defined in each thread's workspace. Every
-   * provider listing passes through here, whatever its backend: when each
-   * backend's list did this itself, the Claude list never did, and its
-   * threads showed an environment's Run chip with no Environment picker.
+   * Attaches the environments defined in each thread's workspace so navigation
+   * can show the Environment picker alongside Run across all backends.
    */
   private async withThreadEnvironmentOptions(
     threads: AppServerThreadSummary[],
@@ -18590,6 +18594,8 @@ export class DesktopBackendRegistry {
       backend: params.backend ?? "all",
       codexDirectoryBackfill,
       enrichDirectories: params.enrichDirectories === true,
+      // A CWD lookup must never join a pending environment-enriched list.
+      enrichEnvironmentOptions: params.callerReason !== "turn-cwd",
       revalidateDirectories: includesCodex && params.enrichDirectories === true && params.forceRefresh === true,
       filter: params.filter?.trim() ?? "",
       limit: params.limit,
