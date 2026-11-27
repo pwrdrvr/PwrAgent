@@ -3762,7 +3762,8 @@ describe("Claude SDK backend", () => {
       yield { type: "assistant", parent_tool_use_id: "tool-agent", message: {
         id: "sub", content: [{ type: "text", text: "Reading the SDK." }],
       } } as SDKMessage;
-      yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+      // A progress frame's description is what the worker is doing now.
+      yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent", description: "Searching for query(",
         usage: { total_tokens: 10, tool_uses: 3, duration_ms: 5 }, last_tool_name: "Grep" } as SDKMessage;
       await agentDone.promise;
       yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
@@ -3789,6 +3790,14 @@ describe("Claude SDK backend", () => {
     }]));
     expect(f.backend.backgroundTaskThreadIds()).toEqual([threadId]);
     expect(f.backend.activeTaskCount(threadId)).toBe(1);
+    // That line is published live and never recorded: the card keeps its task.
+    const activityEvents = () => f.events
+      .filter((event) => event.notification.method === "thread/subAgentActivity/updated")
+      .map((event) => event.notification.params as { threadId: string; activities: unknown[] });
+    await vi.waitFor(() => expect(activityEvents().at(-1)).toEqual({
+      threadId, activities: [{ monitorId: "claude-native:agent-1", activity: "Searching for query(" }],
+    }));
+    expect(f.subAgentRecords.flatMap((record) => record.subAgents)).toHaveLength(1);
     expect(f.subAgentRecords.every((record) => record.threadId === threadId)).toBe(true);
     expect(f.events.filter((event) => event.notification.method === "thread/backgroundTasks/updated")
       .flatMap((event) => (event.notification.params as { tasks: unknown[] }).tasks)).toEqual([]);
@@ -3798,12 +3807,75 @@ describe("Claude SDK backend", () => {
     expect(f.subAgentRecords.flatMap((record) => record.subAgents).at(-1)).toMatchObject({
       monitorId: "claude-native:agent-1", status: "cancelled", lastMessage: "Stopped",
     });
+    // An ended sub-agent is doing nothing now.
+    expect(activityEvents().at(-1)).toEqual({ threadId, activities: [], cleared: ["claude-native:agent-1"] });
     expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
     expect(f.backend.listWaitingTasks(threadId)).toEqual([]);
     expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
     expect(f.events.find((event) => event.notification.method === "item/completed"
       && (event.notification.params.item as { id?: string }).id === "tool-agent")?.notification.params)
       .toMatchObject({ turnId: started.turnId, item: { status: "cancelled" } });
+  });
+
+  it("sends only the line of the sub-agent that moved on, however many run", async () => {
+    const agentsDone = Promise.withResolvers<void>();
+    const progress = (taskId: string, description: string) => ({ type: "system", subtype: "task_progress", task_id: taskId,
+      tool_use_id: `tool-${taskId}`, description, usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 }, last_tool_name: "Bash" }) as SDKMessage;
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13de" } as SDKMessage;
+      for (const taskId of ["agent-1", "agent-2", "agent-3"]) {
+        yield { type: "system", subtype: "task_started", task_id: taskId, tool_use_id: `tool-${taskId}`, description: `Audit ${taskId}`,
+          task_type: "local_agent", subagent_type: "general-purpose", is_backgrounded: true } as SDKMessage;
+        yield progress(taskId, `Reading ${taskId}.ts`);
+      }
+      yield progress("agent-2", "Running ls src");
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      await agentsDone.promise;
+    });
+    onTestFinished(() => agentsDone.resolve());
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    const activityEvents = () => f.events
+      .filter((event) => event.notification.method === "thread/subAgentActivity/updated")
+      .map((event) => event.notification.params);
+    // One event per line change, each naming that one line.
+    await vi.waitFor(() => expect(activityEvents()).toEqual([
+      { threadId, activities: [{ monitorId: "claude-native:agent-1", activity: "Reading agent-1.ts" }] },
+      { threadId, activities: [{ monitorId: "claude-native:agent-2", activity: "Reading agent-2.ts" }] },
+      { threadId, activities: [{ monitorId: "claude-native:agent-3", activity: "Reading agent-3.ts" }] },
+      { threadId, activities: [{ monitorId: "claude-native:agent-2", activity: "Running ls src" }] },
+    ]));
+    agentsDone.resolve();
+    await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+    expect(activityEvents().at(-1)).toEqual({ threadId, activities: [],
+      cleared: ["claude-native:agent-1", "claude-native:agent-2", "claude-native:agent-3"] });
+  });
+
+  it("keeps a sub-agent's card and task rows when its activity line cannot be published", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13df" } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent-1", description: "Audit agent-1",
+        task_type: "local_agent", subagent_type: "general-purpose", is_backgrounded: true } as SDKMessage;
+      yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent-1", description: "Reading a.ts",
+        usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 }, last_tool_name: "Read" } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent-1",
+        status: "completed", output_file: "", summary: "Audit done" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    // The line is live only; losing it must not cost what is recorded or listed.
+    const backend = f.openBackend({ ...f.backendOptions, emit: async (event) => {
+      if (event.notification.method === "thread/subAgentActivity/updated") throw new Error("renderer gone");
+      await f.backendOptions.emit(event);
+    } });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await vi.waitFor(() => expect(backend.liveSessionThreadIds()).toEqual([]));
+    expect(f.subAgentRecords.flatMap((record) => record.subAgents).at(-1)).toMatchObject({
+      monitorId: "claude-native:agent-1", status: "success",
+    });
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")
+      .map((event) => (event.notification.params as { turn?: { status?: string } }).turn?.status)).toEqual(["completed"]);
   });
 
   it("retries a sub-agent card whose write failed", async () => {

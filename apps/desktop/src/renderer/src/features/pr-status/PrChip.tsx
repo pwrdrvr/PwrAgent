@@ -120,6 +120,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   bridgeCardRef.current.hide = hideTooltip;
   const updateTooltip = tooltipController.update;
   const label = prNumberLabel(pr, props.showRepoPrefix);
+  const repoPrefix = props.showRepoPrefix ? label.slice(0, label.lastIndexOf("#")) : "";
   const presentation = props.statusOverride
     ? { chipState: "unknown" as const, hasFailingChecksStillRunning: false, isConflicting: false, isDraft: false }
     : resolvePrChipPresentation(pr, { withStatusPills: props.withStatusPills });
@@ -414,7 +415,11 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         aria-hidden="true"
         ref={!props.statusOverride && presentation.hasFailingChecksStillRunning ? statusPulseRef : undefined}
       />
-      <span className="pr-chip__label">{label}</span>
+      <span className="pr-chip__label">
+        {/* A long `org/repo` prefix ellipsizes; the number it names stays. */}
+        {repoPrefix ? <span className="pr-chip__repo">{repoPrefix}</span> : null}
+        {label.slice(repoPrefix.length)}
+      </span>
       {queueBadge ? (
         // The chip's name already says it in words (`prStatusLabel`).
         <span

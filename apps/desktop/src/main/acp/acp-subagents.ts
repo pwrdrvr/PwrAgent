@@ -1,6 +1,7 @@
 import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadSubAgentStatus } from "@pwragent/shared/contracts/navigation";
 import { ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX } from "@pwragent/shared/subagent-kind";
+import type { SubAgentActivityLine } from "@pwragent/shared/sub-agent-activity-lines";
 import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import { truncateSubAgentText } from "../app-server/codex-native-subagents.js";
 
@@ -164,6 +165,28 @@ function readContentText(value: unknown): string | undefined {
   return readContentText(record.content) ?? readContentText(record.text) ?? readContentText(record.output);
 }
 
+const ACP_STEP_VERBS: Record<string, string> = {
+  execute: "Running", read: "Reading", edit: "Editing", delete: "Deleting",
+  move: "Moving", search: "Searching", fetch: "Fetching",
+};
+const ACP_STEP_MAX_LENGTH = 240;
+/** A child conversation id, which prefixes a worker's tool-call ids. */
+const ACP_CHILD_CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A worker's tool call as one line, in the words Claude's progress frames use
+ * ("Running ls -la"). Antigravity titles an execute call with the command
+ * itself (captured from Antigravity 1.5.18).
+ */
+function acpStepLine(update: Record<string, unknown>): string | undefined {
+  const title = readTrimmedString(update, "title")?.replace(/\s+/g, " ");
+  if (!title) return undefined;
+  const verb = ACP_STEP_VERBS[readTrimmedString(update, "kind") ?? ""];
+  const line = verb && !title.toLowerCase().startsWith(verb.toLowerCase()) ? `${verb} ${title}` : title;
+  const points = Array.from(line);
+  return points.length > ACP_STEP_MAX_LENGTH ? `${points.slice(0, ACP_STEP_MAX_LENGTH - 1).join("")}…` : line;
+}
+
 function isTerminalStatus(status: ThreadSubAgentStatus): boolean {
   return status === "success" || status === "failure" || status === "cancelled";
 }
@@ -315,6 +338,17 @@ export class AcpSubAgentTracker {
     string,
     { action: "kill" | "kill_all"; conversationIds?: string[] }
   >();
+  /** Each running sub-agent's latest step, by agent id. Never part of a card. */
+  private readonly stepLines = new Map<string, string>();
+  /** The agent whose steps a child conversation reports, for step lines only. */
+  private readonly stepConversations = new Map<string, string>();
+  /**
+   * Agents a child conversation is tied to for step lines. Ties outlive the
+   * agent: dropping one would let a finished worker's late step tie its
+   * conversation to the next untied launch and show under the wrong card.
+   */
+  private readonly stepTiedAgents = new Set<string>();
+  private stepLinesRevision = 0;
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -433,6 +467,7 @@ export class AcpSubAgentTracker {
       const agent = this.agents.get(id);
       if (!agent || isTerminalStatus(agent.status)) {
         this.runningIds.delete(id);
+        if (this.stepLines.delete(id)) this.stepLinesRevision += 1;
         continue;
       }
       this.settleAgent(agent, status, undefined, timestamp);
@@ -737,12 +772,62 @@ export class AcpSubAgentTracker {
     return false;
   }
 
+  /**
+   * Notes the step a sub-agent started, when the update is one of its own
+   * tool calls. Antigravity 1.5.18 relays a worker's tool calls on the parent
+   * session with ids `<child conversation>:<call>` and names no conversation
+   * on the launch, so a new conversation is tied to the launch only while
+   * exactly one running launch is untied; otherwise its steps show no line
+   * rather than another worker's. Returns true when a line changed.
+   */
+  observeStep(update: Record<string, unknown>): boolean {
+    if (readUpdateKind(update) !== "tool_call") return false;
+    const toolCallId = readToolCallId(update);
+    const separator = toolCallId?.lastIndexOf(":") ?? -1;
+    if (!toolCallId || separator < 0) return false;
+    const conversationId = toolCallId.slice(0, separator);
+    // Antigravity names a child conversation by UUID; a parent call id that
+    // merely contains a colon is the parent's own step.
+    if (!ACP_CHILD_CONVERSATION_ID.test(conversationId)) return false;
+    let agentId = this.byConversationId.get(conversationId) ?? this.stepConversations.get(conversationId);
+    if (!agentId) {
+      // Only running launches are candidates: a scan of the running set, not
+      // of every sub-agent the session has had.
+      const untied = [...this.runningIds].filter((id) => {
+        const agent = this.agents.get(id);
+        return agent?.toolCallId && !agent.conversationId && !this.stepTiedAgents.has(id);
+      });
+      if (untied.length !== 1) return false;
+      agentId = untied[0]!;
+      this.stepConversations.set(conversationId, agentId);
+      this.stepTiedAgents.add(agentId);
+    }
+    const line = acpStepLine(update);
+    if (!line || !this.runningIds.has(agentId) || this.stepLines.get(agentId) === line) return false;
+    this.stepLines.set(agentId, line);
+    this.stepLinesRevision += 1;
+    return true;
+  }
+
+  /** Changes whenever a step line starts, changes or ends; publish only then. */
+  get activityRevision(): number {
+    return this.stepLinesRevision;
+  }
+
+  /** What each running sub-agent is doing now, by card. Only running sub-agents hold a line. */
+  subAgentActivities(): SubAgentActivityLine[] {
+    return [...this.stepLines].map(([id, activity]) => ({
+      monitorId: `${ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${id}`, activity,
+    }));
+  }
+
   private settleAgent(
     agent: AcpTrackedSubAgent,
     status: ThreadSubAgentStatus,
     lastMessage: string | undefined,
     timestamp: number,
   ): void {
+    if (this.stepLines.delete(agent.id)) this.stepLinesRevision += 1;
     agent.status = status;
     agent.completedAt = Math.max(timestamp, agent.startedAt);
     if (lastMessage) {

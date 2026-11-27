@@ -794,6 +794,77 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("publishes what a Codex worker is doing from its own steps, without recording them", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [{ id: "thread-parent", source: "codex", title: "Inspect", titleSource: "explicit", linkedDirectories: [] }],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgent = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
+    const events: AgentEvent[] = [];
+    const stopEvents = registry.onEvent((event) => { events.push(event); });
+    const activity = () => events
+      .filter((event) => event.notification.method === "thread/subAgentActivity/updated")
+      .map((event) => event.notification.params);
+    // The captured worker turn (codex-cli 0.169.0): spawned through a
+    // subAgentActivity report, then its own commands under its thread id.
+    const step = async (id: string, command: string, actions: Record<string, unknown>[]) => {
+      await codexClient.emit({ method: "item/started", params: { threadId: "worker-inspect", turnId: "turn-worker",
+        item: { type: "commandExecution", id, command, commandActions: actions, status: "inProgress" } } } as AppServerNotification);
+    };
+    try {
+      await codexClient.emit({ method: "item/completed", params: { threadId: "thread-parent", turnId: "turn-parent",
+        item: { type: "subAgentActivity", id: "activity-started", kind: "started",
+          agentThreadId: "worker-inspect", agentPath: "/root/folder_inspector" } } } as AppServerNotification);
+      upsertSubAgent.mockClear();
+      await codexClient.emit({ method: "turn/started", params: { threadId: "worker-inspect", turn: { id: "turn-worker" } } } as AppServerNotification);
+      await step("call-1", "/bin/zsh -lc 'ls -la'", [{ type: "listFiles", command: "ls -la", path: null }]);
+      await step("call-2", "/bin/zsh -lc 'cat notes.txt'", [{ type: "read", command: "cat notes.txt", name: "notes.txt", path: "/work/notes.txt" }]);
+      await vi.waitFor(() => expect(activity()).toEqual([
+        { threadId: "thread-parent", activities: [{ monitorId: "codex-native:worker-inspect", activity: "Running ls -la" }] },
+        { threadId: "thread-parent", activities: [{ monitorId: "codex-native:worker-inspect", activity: "Reading notes.txt" }] },
+      ]));
+      // A step is live only: no card write.
+      expect(upsertSubAgent).not.toHaveBeenCalled();
+      await codexClient.emit({ method: "turn/completed", params: { threadId: "worker-inspect", turn: { id: "turn-worker", status: "completed" } } } as AppServerNotification);
+      await vi.waitFor(() => expect(activity().at(-1)).toEqual({
+        threadId: "thread-parent", activities: [], cleared: ["codex-native:worker-inspect"],
+      }));
+    } finally {
+      stopEvents();
+      await registry.close();
+    }
+  });
+
+  it("still delivers a Codex worker's own step when its activity line cannot be published", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [{ id: "thread-parent", source: "codex", title: "Inspect", titleSource: "explicit", linkedDirectories: [] }],
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const internals = registry as unknown as { emit: (event: AgentEvent, ...rest: unknown[]) => Promise<void> };
+    const emit = internals.emit.bind(registry);
+    // The activity line is live only; losing it must not cost the step itself.
+    internals.emit = async (event, ...rest) => {
+      if (event.notification.method === "thread/subAgentActivity/updated") throw new Error("renderer gone");
+      await emit(event, ...rest);
+    };
+    const events: AgentEvent[] = [];
+    const stopEvents = registry.onEvent((event) => { events.push(event); });
+    try {
+      await codexClient.emit({ method: "item/completed", params: { threadId: "thread-parent", turnId: "turn-parent",
+        item: { type: "subAgentActivity", id: "activity-started", kind: "started",
+          agentThreadId: "worker-inspect", agentPath: "/root/folder_inspector" } } } as AppServerNotification);
+      await codexClient.emit({ method: "item/started", params: { threadId: "worker-inspect", turnId: "turn-worker",
+        item: { type: "commandExecution", id: "call-1", command: "/bin/zsh -lc 'ls -la'",
+          commandActions: [{ type: "listFiles", command: "ls -la", path: null }], status: "inProgress" } } } as AppServerNotification);
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "item/started"
+        && (event.notification.params as { threadId?: string }).threadId === "worker-inspect")).toBe(true));
+    } finally {
+      stopEvents();
+      await registry.close();
+    }
+  });
+
   it("reads a path-based worker's model from Codex before pricing its usage", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

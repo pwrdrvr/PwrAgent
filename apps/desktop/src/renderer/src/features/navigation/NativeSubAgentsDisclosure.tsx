@@ -1,13 +1,18 @@
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
-import { memo, useState } from "react";
+import { memo, useId, useState } from "react";
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
-import { claudeSubAgentTranscriptThreadIdForMonitor } from "@pwragent/shared/subagent-kind";
+import {
+  CODEX_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+  claudeSubAgentTranscriptThreadIdForMonitor,
+} from "@pwragent/shared/subagent-kind";
 import { SubAgentsIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { useSubAgentActivities } from "../../lib/sub-agent-activity";
+import { SubAgentActivityLine } from "../../components/SubAgentActivityLine";
 
 type NativeSubAgentsDisclosureProps = {
   compact?: boolean;
@@ -63,7 +68,8 @@ export const NativeSubAgentsDisclosure = memo(function NativeSubAgentsDisclosure
       ownerInstanceId: target?.scope === "remote" ? target.instanceId : undefined } : undefined });
   const nativeSubAgents = detail.state?.detail?.thread?.codexNativeSubAgents ?? props.thread.codexNativeSubAgents ?? [];
   const count = props.thread.nativeSubAgentCount ?? nativeSubAgents.length;
-
+  const activities = useSubAgentActivities(desktopApi, threadSummaryIdentityKey(props.thread));
+  const activityIdPrefix = useId();
 
   if (count === 0 && !props.thread.nativeSubAgentGroupPresent) {
     return null;
@@ -139,7 +145,7 @@ export const NativeSubAgentsDisclosure = memo(function NativeSubAgentsDisclosure
           role="list"
           aria-label={`${listHarnessLabel} sub-agents for ${props.thread.title}`}
         >
-          {nativeSubAgents.map((subAgent) => {
+          {nativeSubAgents.map((subAgent, index) => {
             // A Claude row's nickname is its agent type, which most share
             // ("general-purpose"), so the row names its task instead and
             // keeps a type that tells it apart as the role. ACP rows carry
@@ -166,6 +172,14 @@ export const NativeSubAgentsDisclosure = memo(function NativeSubAgentsDisclosure
             const transcriptThreadId = claude
               ? claudeSubAgentTranscriptThreadIdForMonitor(subAgent.threadId, props.thread.id)
               : props.thread.source === "codex" ? subAgent.threadId : undefined;
+            // What a working sub-agent is doing now, keyed by its card. A
+            // Claude or ACP row is its card; a Codex row names the worker
+            // thread its card is named for.
+            const monitorId = props.thread.source === "codex"
+              ? `${CODEX_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${subAgent.threadId}`
+              : subAgent.threadId;
+            const activity = subAgent.threadStatus === "active" ? activities.get(monitorId) : undefined;
+            const activityId = activity ? `${activityIdPrefix}-activity-${index}` : undefined;
             const content = (
               <>
                 {subAgent.threadStatus === "active" ? (
@@ -175,16 +189,29 @@ export const NativeSubAgentsDisclosure = memo(function NativeSubAgentsDisclosure
                     role="img"
                   />
                 ) : null}
-                <span className="native-subagents__agent-label">{label}</span>
-                {role ? (
-                  <span className="native-subagents__agent-role">{role}</span>
-                ) : null}
+                <span className="native-subagents__agent-text">
+                  <span className="native-subagents__agent-line">
+                    <span className="native-subagents__agent-label">{label}</span>
+                    {role ? (
+                      <span className="native-subagents__agent-role">{role}</span>
+                    ) : null}
+                  </span>
+                  {activity ? (
+                    <span className="native-subagents__agent-activity" id={activityId}>
+                      <SubAgentActivityLine activity={activity} />
+                    </span>
+                  ) : null}
+                </span>
               </>
             );
             if (!transcriptThreadId) {
               return (
                 <div key={subAgent.threadId} role="listitem">
-                  <span className="native-subagents__agent native-subagents__agent--static" title={subAgent.title}>
+                  <span
+                    aria-describedby={activityId}
+                    className="native-subagents__agent native-subagents__agent--static"
+                    title={subAgent.title}
+                  >
                     {content}
                   </span>
                 </div>
@@ -193,6 +220,7 @@ export const NativeSubAgentsDisclosure = memo(function NativeSubAgentsDisclosure
             return (
               <div key={subAgent.threadId} role="listitem">
                 <button
+                  aria-describedby={activityId}
                   aria-label={`Open transcript for ${label}`}
                   className="native-subagents__agent"
                   disabled={!openSubAgentTranscriptWindow}
