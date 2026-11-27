@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApplicationsSnapshot } from "@pwragent/shared/contracts/settings";
+import {
+  beginNativeDragInteraction,
+  endNativeDragInteraction,
+} from "../../../lib/native-drag-interaction";
 import { POINTER_AIM_SETTLE_MS } from "../../../lib/pointer-aim";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
@@ -339,6 +343,26 @@ describe("sidebar thread card", () => {
     });
     act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
     expect(card()).toBeNull();
+  });
+
+  // Found in the pin-drag E2E: the dragged row crossed another, whose delayed
+  // card crashed the sidebar mid-drag and cancelled the drop.
+  it("opens no card for a row a sidebar drag passes over", () => {
+    renderSidebar({ threads: [thread("a"), thread("b")] });
+    try {
+      act(() => beginNativeDragInteraction());
+      move(document.querySelector(".sidebar")!, rowTitle("a"));
+      move(rowTitle("a"), rowTitle("b"));
+      act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+      expect(card()).toBeNull();
+      expect(row("b")).toBeInTheDocument();
+    } finally {
+      act(() => endNativeDragInteraction());
+    }
+    // The next hover after the drop opens as usual.
+    move(rowTitle("b"), rowTitle("a"));
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(card()).toHaveTextContent("Thread a");
   });
 
   // Found in a real layout: a pointer that lands on the chip from outside

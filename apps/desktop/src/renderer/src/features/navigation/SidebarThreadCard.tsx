@@ -30,6 +30,7 @@ import {
   type AimPoint,
 } from "../../lib/pointer-aim";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import {
   type BridgedHoverCard,
   cardIsBesideSidebar,
@@ -200,6 +201,8 @@ export const SidebarThreadCardHost = forwardRef<
 
   useImperativeHandle(ref, () => {
     const open = (target: HTMLElement, threadKey: string, delayed: boolean): void => {
+      // A dragged row passes over others; none of them is being asked about.
+      if (isNativeDragInteractionActive()) return;
       const node = content(threadKey, target, undefined);
       if (!node) return;
       setShown({ threadKey, row: target });
