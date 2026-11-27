@@ -394,6 +394,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     terminalCount: props.backgroundTerminals?.terminals?.length ?? 0,
     runs: actionRuns,
     subAgents: props.thread?.subAgents ?? [],
+    activeSubAgents: props.thread?.activeSubAgents,
   });
   const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi, { includeEnded: open && activeTab === "waiting" });
   const pendingWakeCount = pendingWakes.state.status === "ready"

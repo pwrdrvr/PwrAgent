@@ -1,6 +1,7 @@
 import type {
   CodexEnvironmentOption,
   NavigationThreadSummary,
+  ThreadActiveSubAgent,
   ThreadSubAgentSummary,
 } from "@pwragent/shared/contracts/navigation";
 import type {
@@ -15,8 +16,13 @@ import { isTerminalSubAgent } from "./subagent-format";
  * spine's running dot and the Jobs order can be checked without a render.
  */
 
+type JobsSubAgent = Pick<
+  ThreadSubAgentSummary,
+  "monitorId" | "attemptId" | "status" | "completedAt" | "outcome" | "completionSource"
+>;
+
 /** A sub-agent doing work now: not finished, failed, or waiting on input. */
-export function isRunningSubAgent(subAgent: ThreadSubAgentSummary): boolean {
+export function isRunningSubAgent(subAgent: Omit<JobsSubAgent, "monitorId" | "attemptId">): boolean {
   return !isTerminalSubAgent(subAgent)
     && subAgent.status !== "failed"
     && subAgent.status !== "failure"
@@ -27,7 +33,10 @@ export type DetailsJobsInput = {
   /** Agent background commands; a listed one is running. */
   terminalCount: number;
   runs: readonly CodexEnvironmentActionRun[];
-  subAgents: readonly ThreadSubAgentSummary[];
+  /** The full list, when loaded: the navigation summary carries it lazily. */
+  subAgents: readonly JobsSubAgent[];
+  /** The owner's projection of live sub-agents, on every navigation row. */
+  activeSubAgents?: readonly ThreadActiveSubAgent[];
 };
 
 export type DetailsJobsSectionId = "commands" | "subagents" | "scheduled";
@@ -44,7 +53,13 @@ export type DetailsJobsSummary = {
 export function summarizeDetailsJobs(input: DetailsJobsInput): DetailsJobsSummary {
   const runningCommands = input.terminalCount
     + input.runs.filter((run) => run.status === "started").length;
-  const runningSubAgents = input.subAgents.filter(isRunningSubAgent).length;
+  // One entry per monitor attempt. The full summary, where loaded, is the
+  // later word on an attempt the owner also projected as active.
+  const byAttempt = new Map<string, JobsSubAgent>();
+  const attemptKey = (subAgent: JobsSubAgent): string => `${subAgent.monitorId}\0${subAgent.attemptId ?? ""}`;
+  for (const subAgent of input.activeSubAgents ?? []) byAttempt.set(attemptKey(subAgent), subAgent);
+  for (const subAgent of input.subAgents) byAttempt.set(attemptKey(subAgent), subAgent);
+  const runningSubAgents = [...byAttempt.values()].filter(isRunningSubAgent).length;
   const running: Record<DetailsJobsSectionId, number> = {
     commands: runningCommands,
     subagents: runningSubAgents,
