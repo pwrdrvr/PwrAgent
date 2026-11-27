@@ -1175,6 +1175,7 @@ export class DesktopBackendRegistry {
   private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
+  private readonly workspaceThreadRowsById = new WeakMap<AppServerThreadSummary[], Map<string, AppServerThreadSummary>>();
   private threadListCacheRevision = 0;
   private createdThreadDirectoryVisibility = new Map<
     string,
@@ -19924,7 +19925,19 @@ export class DesktopBackendRegistry {
       archived: false,
       callerReason,
     })
-      .then((threads) => threads.find((thread) => thread.id === params.threadId))
+      .then((threads) => {
+        // Concurrent cold lookups share one listing. Index that result once
+        // and let a refreshed listing build an index of its own rows.
+        let byId = this.workspaceThreadRowsById.get(threads);
+        if (!byId) {
+          byId = new Map();
+          for (const thread of threads) {
+            if (!byId.has(thread.id)) byId.set(thread.id, thread);
+          }
+          this.workspaceThreadRowsById.set(threads, byId);
+        }
+        return byId.get(params.threadId);
+      })
       .catch(() => undefined);
   }
 
