@@ -2768,11 +2768,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     limitObservation?: UsageLimitObservation;
     acpCompletion?: AcpUsageTurnCompletion;
   }): Promise<boolean> {
-    if (params.acpCompletion) {
+    const { acpCompletion } = params;
+    if (acpCompletion) {
       return this.stateDb.raw.transaction(() => {
-        const contextChanged = this.persistCompletedAcpContext(params.acpCompletion!);
+        const contextChanged = this.persistCompletedAcpContext(acpCompletion);
         return this.completeThreadUsageTiming(params) || contextChanged;
-      })();
+      }).immediate();
     }
     return this.completeThreadUsageTiming(params);
   }
@@ -2821,7 +2822,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   private persistCompletedAcpContext(completion: AcpUsageTurnCompletion): boolean {
     const { backend, threadId, turnId, completedAt } = completion;
     const turn = this.stateDb.raw.prepare(
-      `SELECT usage_turn_id, provider, final_context_tokens, acp_compaction_before_tokens
+      `SELECT usage_turn_id, provider, model, final_context_tokens, acp_compaction_before_tokens
          FROM thread_usage_turns
         WHERE backend = ? AND thread_id = ? AND turn_id = ? AND parent_thread_id IS NULL
           AND EXISTS (
@@ -2832,6 +2833,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     ).get(backend, threadId, turnId) as {
       usage_turn_id: string;
       provider: string;
+      model: string | null;
       final_context_tokens: number | null;
       acp_compaction_before_tokens: number | null;
     } | undefined;
@@ -2840,7 +2842,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const rememberCompaction = completion.compacted && turn.acp_compaction_before_tokens === null;
     if (!context && !rememberCompaction) return false;
 
-    if (context) this.verifyPendingAcpCompaction(completion, context, turn.provider);
+    if (context) this.verifyPendingAcpCompaction(completion, context, turn);
     const before = rememberCompaction
       ? (completion.context?.finalContextTokens ?? turn.final_context_tokens
         ?? (this.stateDb.raw.prepare(
@@ -2866,21 +2868,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   private verifyPendingAcpCompaction(
     completion: AcpUsageTurnCompletion,
     context: NonNullable<AcpUsageTurnCompletion["context"]>,
-    provider: string,
+    ordinaryTurn: { provider: string; model: string | null },
   ): void {
     const { backend, threadId, turnId } = completion;
     const pending = this.stateDb.raw.prepare(
-      `SELECT turn_id, completed_at, acp_compaction_before_tokens FROM thread_usage_turns
-        WHERE provider = ? AND backend = ? AND thread_id = ? AND parent_thread_id IS NULL
+      `SELECT turn_id, completed_at, acp_compaction_before_tokens, provider, model FROM thread_usage_turns
+        WHERE backend = ? AND thread_id = ? AND parent_thread_id IS NULL
           AND turn_id != ? AND completed_at <= ? AND acp_compaction_before_tokens > 0
         ORDER BY completed_at DESC, observed_at DESC LIMIT 1`,
-    ).get(provider, backend, threadId, turnId, context.firstObservedAt) as {
+    ).get(backend, threadId, turnId, context.firstObservedAt) as {
       turn_id: string;
       completed_at: number;
       acp_compaction_before_tokens: number;
+      provider: string;
+      model: string | null;
     } | undefined;
     if (!pending) return;
-    if (context.firstContextTokens < pending.acp_compaction_before_tokens) {
+    if (pending.provider === ordinaryTurn.provider && pending.model === ordinaryTurn.model
+      && context.firstContextTokens < pending.acp_compaction_before_tokens) {
       this.insertThreadCompaction({
         backend, threadId, turnId: pending.turn_id,
         compactionId: JSON.stringify(["verified-acp", backend, threadId, pending.turn_id]),
@@ -2892,9 +2897,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // receipt so terminal re-emission cannot arm the same compaction again.
     this.stateDb.raw.prepare(
       `UPDATE thread_usage_turns SET acp_compaction_before_tokens = 0
-        WHERE provider = ? AND backend = ? AND thread_id = ? AND parent_thread_id IS NULL
+        WHERE backend = ? AND thread_id = ? AND parent_thread_id IS NULL
           AND turn_id != ? AND completed_at <= ? AND acp_compaction_before_tokens > 0`,
-    ).run(provider, backend, threadId, turnId, context.firstObservedAt);
+    ).run(backend, threadId, turnId, context.firstObservedAt);
   }
 
   /**

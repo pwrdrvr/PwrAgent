@@ -2646,6 +2646,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId: string;
+        /** ACP accepted the stop, and its prompt result can still report usage. */
+        acpPromptSettling?: true;
         turn: {
           id: string;
           /** Attribution only; never a permission or consent source. */

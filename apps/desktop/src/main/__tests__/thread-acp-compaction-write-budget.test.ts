@@ -27,6 +27,140 @@ function owner(store: SqliteOverlayStore) {
 
 type ContextSample = [used: number, source?: "compaction" | "session"];
 
+function acpTurn(registry: ReturnType<typeof owner>, turnId: string, model = "gemini-4-neon") {
+  const emit = (notification: AgentEvent["notification"]) => registry.publishLocalEvent({ backend, notification });
+  const context = (usedTokens: number) => emit({ method: "thread/contextWindow/updated", params: {
+    threadId, turnId, usedTokens, modelContextWindow,
+  } });
+  const usage = () => emit({ method: "thread/tokenUsage/updated", params: {
+    threadId, turnId, model,
+    tokenUsage: { last_token_usage: { input_tokens: 900, output_tokens: 100, total_tokens: 1_000 } },
+  } });
+  return {
+    start: () => emit({ method: "turn/started", params: { threadId, turnId, turn: { id: turnId, startedAt: Date.now() } } }),
+    context,
+    usage,
+    complete: (compacted?: true) => emit({ method: "turn/completed", params: {
+      threadId, turnId, completedAcpCompactionRequest: compacted,
+      turn: { id: turnId, status: "completed", completedAt: Date.now(), output: [] },
+    } }),
+    cancel: (acpPromptSettling?: true) => emit({ method: "turn/cancelled", params: {
+      threadId, turnId, acpPromptSettling,
+      turn: { id: turnId, status: "cancelled", completedAt: Date.now() },
+    } }),
+  };
+}
+
+it.each(["stop-first", "settlement-first"] as const)(
+  "keeps the first ordinary fill through ACP cancellation in %s order",
+  async (order) => {
+    const state = openFreshStateDb(":memory:");
+    const store = new SqliteOverlayStore(state);
+    const registry = owner(store);
+    try {
+      const compact = acpTurn(registry, "compact");
+      await compact.start();
+      await compact.context(470_000);
+      await compact.usage();
+      await compact.complete(true);
+
+      const ordinary = acpTurn(registry, "ordinary");
+      await ordinary.start();
+      await ordinary.context(40_000);
+      if (order === "stop-first") {
+        await ordinary.cancel(true);
+        expect(await store.listThreadCompactions(identity)).toEqual([]);
+      }
+      await ordinary.context(35_000);
+      await ordinary.usage();
+      await ordinary.cancel();
+      if (order === "settlement-first") await ordinary.cancel(true);
+      expect((await store.listThreadCompactions(identity)).map((marker) => marker.turnId)).toEqual(["compact"]);
+      expect((await store.readThreadPricing(identity)).lines.find((line) => line.turnId === "ordinary"))
+        .toMatchObject({ totalTokens: 1_000, peakContextTokens: 40_000, finalContextTokens: 35_000 });
+    } finally {
+      await registry.close();
+      state.close();
+    }
+  },
+);
+
+it.each(["claude-sonnet-5-5", "gemini-4-carbon"])(
+  "retires a compacted ACP turn after the first ordinary fill uses %s",
+  async (model) => {
+    const state = openFreshStateDb(":memory:");
+    const store = new SqliteOverlayStore(state);
+    const registry = owner(store);
+    try {
+      for (const [turnId, used, turnModel] of [
+        ["compact", 470_000, "gemini-4-neon"],
+        ["different-model", 40_000, model],
+        ["original-model", 50_000, "gemini-4-neon"],
+      ] as const) {
+        const turn = acpTurn(registry, turnId, turnModel);
+        await turn.start();
+        await turn.context(used);
+        await turn.usage();
+        await turn.complete(turnId === "compact" ? true : undefined);
+        expect(await store.listThreadCompactions(identity)).toEqual([]);
+      }
+      const lines = (await store.readThreadPricing(identity)).lines;
+      expect(lines.find((line) => line.turnId === "different-model")?.provider)
+        .toBe(model.startsWith("claude") ? "anthropic" : "google");
+    } finally {
+      await registry.close();
+      state.close();
+    }
+  },
+);
+
+it("locks the WAL writer before reading already-flushed ACP completion state", async () => {
+  const fixture = createTempStateDb("acp-shared-profile-completion-");
+  const state = openFreshStateDb(fixture.dbPath);
+  const peer = openFreshStateDb(fixture.dbPath);
+  const store = new SqliteOverlayStore(state);
+  const registry = owner(store);
+  try {
+    const turnId = "ordinary";
+    const turn = acpTurn(registry, turnId);
+    await turn.start();
+    await turn.usage();
+    await registryModules(registry).threadUsageLedger.flushLiveThreadUsageLines();
+    peer.raw.pragma("busy_timeout = 0");
+    const write = peer.raw.prepare("INSERT INTO meta (key, value) VALUES ('peer-usage-test', '1')");
+    let peerError: unknown;
+    let attempted = false;
+    const prepare = state.raw.prepare.bind(state.raw);
+    const interleave = vi.spyOn(state.raw, "prepare").mockImplementation((sql) => {
+      if (sql.includes("SET final_context_tokens")) {
+        attempted = true;
+        try { write.run(); } catch (error) { peerError = error; }
+      }
+      return prepare(sql);
+    });
+    try {
+      await expect(store.completeThreadUsageTurn({
+        ...identity, turnId, completedAt: Date.now(), acpCompletion: {
+          ...identity, turnId, completedAt: Date.now(), context: {
+            firstContextTokens: 40_000, firstObservedAt: Date.now(),
+            finalContextTokens: 40_000, peakContextTokens: 40_000, modelContextWindow,
+          },
+        },
+      })).resolves.toBe(true);
+      expect(attempted).toBe(true);
+      expect(peerError).toMatchObject({ code: "SQLITE_BUSY" });
+      expect(write.run().changes).toBe(1);
+    } finally {
+      interleave.mockRestore();
+    }
+  } finally {
+    await registry.close();
+    peer.close();
+    state.close();
+    removeTempStateDbDir(fixture.tempDir);
+  }
+});
+
 it.each([
   { name: "steered-and-confirmed", steered: true, shrink: true, preflush: false },
   { name: "idle-and-no-shrink", steered: false, shrink: false, preflush: true },

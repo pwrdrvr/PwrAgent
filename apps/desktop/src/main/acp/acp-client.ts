@@ -326,11 +326,16 @@ type AcpRolloutStoreLike = {
 
 type AcpPromptSteerHandoff = {
   nextGeneration: number;
-  isCompactCommand: boolean;
+  compactUsage?: AcpCompactPromptUsage;
   replacementReady: Promise<boolean>;
   confirm?: () => void;
   accept: () => void;
   reject: (error: unknown) => void;
+};
+
+type AcpCompactPromptUsage = {
+  followsOrdinaryPrompt: boolean;
+  pending?: AcpSessionUpdateEvent;
 };
 
 type AcpActiveTurn = {
@@ -340,8 +345,7 @@ type AcpActiveTurn = {
   compacted?: boolean;
   /** The prompt itself is a leading `/compact` slash command. */
   isCompactCommand?: boolean;
-  startedWithCompactCommand?: boolean;
-  pendingCompactUsage?: AcpSessionUpdateEvent;
+  compactUsage?: AcpCompactPromptUsage;
   sentAgentMemory?: boolean;
   sentWorkspaceContext?: boolean;
   cancelBeforePrompt?: () => void;
@@ -1242,6 +1246,9 @@ export class AcpAgentClient {
       params.content,
       session?.availableCommands,
     );
+    const compactUsage: AcpCompactPromptUsage | undefined = isCompactCommand
+      ? { followsOrdinaryPrompt: !activeTurn.isCompactCommand }
+      : undefined;
     const nextGeneration = activeTurn.promptGeneration + 1;
     const messageId = `user:${activeTurn.turnId}:steer:${params.interjectionId}`;
     const displayPrompt = params.prompt ?? params.text;
@@ -1250,9 +1257,12 @@ export class AcpAgentClient {
     let nextPromptSettled = false;
 
     const adoptSteer = (): void => {
-      if (isCompactCommand) {
-        activeTurn.isCompactCommand = true;
+      const outgoingSummary = activeTurn.compactUsage?.pending;
+      if (outgoingSummary) {
+        void this.notifySessionUpdate({ ...outgoingSummary, contextUsageSource: "compaction" });
       }
+      activeTurn.isCompactCommand = isCompactCommand;
+      activeTurn.compactUsage = compactUsage;
       // This receipt describes provider acceptance. The history write can
       // fail after ownership has already moved to the replacement prompt.
       handoff.resolve();
@@ -1299,13 +1309,17 @@ export class AcpAgentClient {
 
     activeTurn.pendingSteerHandoff = {
       nextGeneration,
-      isCompactCommand,
+      compactUsage,
       replacementReady: replacementReady.promise,
       accept: () => {
         replacementReady.resolve(true);
         adoptSteer();
       },
       reject: (error) => {
+        // The original ordinary prompt kept ownership.
+        if (!activeTurn.isCompactCommand && compactUsage?.pending) {
+          void this.notifySessionUpdate(compactUsage.pending);
+        }
         if (!nextPromptSettled && !this.disconnected) {
           void this.cancelSessionOperation(params.sessionId).catch(() => undefined);
         }
@@ -1913,7 +1927,7 @@ export class AcpAgentClient {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
     activeTurn.isCompactCommand = isCompactCommand;
-    activeTurn.startedWithCompactCommand = isCompactCommand;
+    if (isCompactCommand) activeTurn.compactUsage = { followsOrdinaryPrompt: false };
     activeTurn.sentWorkspaceContext = needsWorkspaceContext;
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
@@ -2030,12 +2044,9 @@ export class AcpAgentClient {
         // Cancelled compactions leave history intact. Fold clearing the digest
         // into finishTrackedTurn's idle write so no extra SQLite commit occurs.
         const clearAgentInstructionsDigest = !cancelled && Boolean(activeTurn.isCompactCommand);
-        const compactUsage = activeTurn.pendingCompactUsage;
+        const compactUsage = activeTurn.compactUsage?.pending;
         if (compactUsage) {
-          void this.notifySessionUpdate({
-            ...compactUsage,
-            ...(activeTurn.isCompactCommand ? { contextUsageSource: "compaction" } : {}),
-          });
+          void this.notifySessionUpdate({ ...compactUsage, contextUsageSource: "compaction" });
         }
         if (clearAgentInstructionsDigest) {
           activeTurn.compacted = true;
@@ -2847,17 +2858,19 @@ export class AcpAgentClient {
     if (this.options.backendId === "acp:antigravity" && updateKind === "usage_update") {
       if (fromSessionLoad || !activeTurn?.promptDispatched) {
         event.contextUsageSource = "session";
-      } else if (typeof update.used === "number" && Number.isFinite(update.used)
-        && (activeTurn.isCompactCommand || activeTurn.pendingSteerHandoff?.isCompactCommand)) {
-        // In a steered /compact, the interrupted generation can still report
-        // its ordinary fill. Only the last distinct report is the summary call.
-        const previous = activeTurn.pendingCompactUsage;
-        if (previous && !activeTurn.startedWithCompactCommand
-          && (previous.update.used !== update.used || previous.update.size !== update.size)) {
-          void this.notifySessionUpdate(previous);
+      } else if (typeof update.used === "number" && Number.isFinite(update.used)) {
+        const compactUsage = activeTurn.compactUsage ?? activeTurn.pendingSteerHandoff?.compactUsage;
+        if (compactUsage) {
+          // The ordinary generation can still report its fill around the
+          // handoff. Only the last distinct report belongs to the summary.
+          const previous = compactUsage.pending;
+          if (previous && compactUsage.followsOrdinaryPrompt
+            && (previous.update.used !== update.used || previous.update.size !== update.size)) {
+            void this.notifySessionUpdate(previous);
+          }
+          compactUsage.pending = event;
+          return;
         }
-        activeTurn.pendingCompactUsage = event;
-        return;
       }
     }
     void this.notifySessionUpdate(event);

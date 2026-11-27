@@ -245,7 +245,9 @@ export class ThreadUsageLedger {
     const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
     const completedTurnId = turnIdFromTerminalNotification(event.notification);
     const completedAt = completedAtFromTerminalNotification(event.notification) ?? Date.now();
-    let acpCompletion = completedTurnId && isAcpBackendId(event.backend)
+    const awaitingAcpResult = event.notification.method === "turn/cancelled"
+      && event.notification.params.acpPromptSettling === true;
+    let acpCompletion = completedTurnId && isAcpBackendId(event.backend) && !awaitingAcpResult
       ? this.takeAcpUsageCompletion(event, event.backend, completedTurnId, completedAt)
       : undefined;
     if (completedTurnId) {
@@ -411,7 +413,8 @@ export class ThreadUsageLedger {
     if (source || typeof turnId !== "string" || !turnId
       || typeof usedTokens !== "number" || !Number.isFinite(usedTokens) || usedTokens < 0
       || typeof modelContextWindow !== "number" || !Number.isFinite(modelContextWindow) || modelContextWindow <= 0) return;
-    if (this.recentlyCompletedThreadUsageTurns.get([backend, threadId].join(":"))?.turnId === turnId) return;
+    const recent = this.recentlyCompletedThreadUsageTurns.get([backend, threadId].join(":"));
+    if (recent?.turnId === turnId && !recent.acpPromptSettling) return;
     const key = JSON.stringify([backend, threadId, turnId]);
     const previous = this.acpTurnContexts.get(key);
     this.acpTurnContexts.set(key, {
@@ -4256,10 +4259,17 @@ export class ThreadUsageLedger {
     const startedAt = normalizeNotificationTimestamp(
       turn?.startedAt ?? turn?.started_at,
     );
+    const key = [event.backend, event.notification.params.threadId].join(":");
+    const acpPromptSettling = event.notification.method === "turn/cancelled"
+      && event.notification.params.acpPromptSettling === true;
+    const previous = this.recentlyCompletedThreadUsageTurns.get(key);
+    // The operator stop and provider result can arrive in either order.
+    if (acpPromptSettling && previous?.turnId === turnId && !previous.acpPromptSettling) return;
     this.recentlyCompletedThreadUsageTurns.set(
-      [event.backend, event.notification.params.threadId].join(":"),
+      key,
       {
         turnId,
+        ...(acpPromptSettling ? { acpPromptSettling: true } : {}),
         ...(typeof completedAt === "number" ? { completedAt } : {}),
         ...(typeof startedAt === "number" ? { startedAt } : {}),
       },

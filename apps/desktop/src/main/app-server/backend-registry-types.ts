@@ -1427,6 +1427,7 @@ export type LiveThreadUsageEmitWork = {
 };
 
 export type RecentlyCompletedThreadUsageTurn = {
+  acpPromptSettling?: true;
   completedAt?: number;
   startedAt?: number;
   turnId: string;

@@ -13637,6 +13637,7 @@ export class DesktopBackendRegistry {
         params: {
           threadId: params.threadId,
           turnId: params.turnId,
+          acpPromptSettling: true,
           turn: {
             id: params.turnId,
             status: "cancelled",

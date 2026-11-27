@@ -401,9 +401,10 @@ The ACP adapter distinguishes summary and cached session reports from
 ordinary `thread/contextWindow/updated` observations. The owner folds ordinary
 peak, final, and window values into each turn's existing ledger write. The
 first ordinary fill after a completed compact request settles the candidate.
-If it is smaller, that ordinary turn's completion transaction records one
-boundary against the compact turn. Cached session replays cannot settle a
-candidate, and a fresh owner can settle a candidate saved before restart.
+If it is smaller and uses the same model and billing provider, that turn's
+completion transaction records one boundary against the compact turn.
+Cached session replays cannot settle a candidate, and a fresh owner can
+settle a candidate saved before restart.
 Billing uses the original prompt result. The
 [SQLite write budgets](sqlite-write-volume.md#antigravity-compaction-accounting)
 cover the idle, steered, and restarted paths.

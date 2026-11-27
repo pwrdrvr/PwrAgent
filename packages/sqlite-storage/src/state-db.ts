@@ -2379,7 +2379,7 @@ export class StateDb {
       }
       db.exec(`
         CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_pending_acp_compaction
-          ON thread_usage_turns(provider, backend, thread_id, completed_at DESC, observed_at DESC)
+          ON thread_usage_turns(backend, thread_id, completed_at DESC, observed_at DESC)
           WHERE parent_thread_id IS NULL AND acp_compaction_before_tokens > 0
       `);
       removeUsageActivityIndex(db);

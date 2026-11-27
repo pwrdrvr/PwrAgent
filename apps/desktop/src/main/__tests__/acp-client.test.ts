@@ -435,6 +435,31 @@ describe("AcpAgentClient", () => {
       await vi.waitFor(() => expect(finishes).toHaveLength(2));
       expect(updates.at(-1)).toEqual({ used: 13_383, source: undefined, turnId: "turn-2" });
       expect(finishes[1]?.compacted).toBeUndefined();
+
+      // Replacing /compact must flush its summary and start a clean ordinary generation.
+      await client.startPrompt({ sessionId: "session-1", prompt: "/compact",
+        turnId: "turn-3", isCompactCommand: true });
+      const replacement = client.steerSession({ sessionId: "session-1", text: "Keep gardening.",
+        content: [{ type: "text", text: "Keep gardening." }], interjectionId: "replace-compact" });
+      await vi.waitFor(() => expect(prompts).toHaveLength(5));
+      report(39_000);
+      prompts[3]!.resolve({ stopReason: "end_turn" });
+      // Wait for the detached response's handler to observe the handoff.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      transport.emitSessionUpdate("session-1", {
+        sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Continuing." },
+      });
+      await expect(replacement).resolves.toEqual({ delivery: "currentTurn" });
+      report(15_000);
+      report(16_000);
+      prompts[4]!.resolve({ stopReason: "end_turn" });
+      await vi.waitFor(() => expect(finishes).toHaveLength(3));
+      expect(updates.slice(-3)).toEqual([
+        { used: 39_000, source: "compaction", turnId: "turn-3" },
+        { used: 15_000, source: undefined, turnId: "turn-3" },
+        { used: 16_000, source: undefined, turnId: "turn-3" },
+      ]);
+      expect(finishes[2]?.compacted).toBeUndefined();
     } finally {
       await client.dispose();
     }
