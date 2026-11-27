@@ -9,6 +9,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 import { accessTrigger, chooseAccessStop } from "./fixtures/access-picker";
 import { mastheadAction } from "./fixtures/window-chrome";
 import { openLaunchpadWherePanel } from "./fixtures/launchpad-where";
+import { chooseComposerWorkspaceAction } from "./fixtures/composer-row";
 
 // Navigation keys and stored directory paths are forward-slash canonical on
 // every platform (see `canonicalizeNavigationPath`). `path.join` and
@@ -1193,11 +1194,7 @@ test("local-to-worktree handoff records PwrAgent workspace state without rewriti
       .getByRole("button", { name: "Local handoff thread", exact: true })
       .click();
 
-    const workspaceMode = app.window.getByLabel(/^Workspace mode(?::|$)/);
-    await workspaceMode.click();
-    await app.window
-      .getByRole("menuitem", { name: "Handoff to New Worktree" })
-      .click();
+    await chooseComposerWorkspaceAction(app.window, "Handoff to New Worktree");
 
     const dialog = app.window.getByRole("dialog", { name: "Handoff to New Worktree" });
     await expect(dialog).toBeVisible();

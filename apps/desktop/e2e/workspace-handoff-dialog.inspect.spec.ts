@@ -1,6 +1,7 @@
 import { expect, test } from "./fixtures/electron-test";
 import { createLocalHandoffFixture } from "./fixtures/workspace-handoff-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { chooseComposerWorkspaceAction } from "./fixtures/composer-row";
 
 test.skip(
   process.env.PWRAGENT_E2E_INSPECT !== "1",
@@ -22,9 +23,7 @@ test("opens the local-to-worktree handoff dialog until Electron is closed manual
   try {
     await app.window.getByRole("button", { name: "Local handoff thread" }).click();
 
-    const workspaceMode = app.window.getByLabel(/^Workspace mode(?::|$)/);
-    await workspaceMode.click();
-    await app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
+    await chooseComposerWorkspaceAction(app.window, "Handoff to New Worktree");
 
     const dialog = app.window.getByRole("dialog", { name: "Handoff to New Worktree" });
     await expect(dialog).toBeVisible();
