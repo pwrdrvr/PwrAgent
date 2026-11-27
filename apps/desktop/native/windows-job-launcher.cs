@@ -1,9 +1,53 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 
 public static partial class PwrAgentWindowsJobRunner
 {
+    private const uint DETACHED_PROCESS = 0x00000008;
+    private const uint CREATE_NEW_PROCESS_GROUP = 0x00000200;
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode,
+        ExactSpelling = true, SetLastError = true)]
+    private static extern bool CreateDetachedProcess(
+        string applicationName,
+        StringBuilder commandLine,
+        IntPtr processAttributes,
+        IntPtr threadAttributes,
+        bool inheritHandles,
+        uint creationFlags,
+        IntPtr environment,
+        string currentDirectory,
+        ref STARTUPINFO startupInfo,
+        out PROCESS_INFORMATION processInformation);
+
+    private static int LaunchDetachedProfile(string[] arguments)
+    {
+        if (arguments.Length < 2)
+        {
+            throw new ArgumentException("A detached profile launch requires an executable.");
+        }
+        string executable = arguments[1];
+        string[] profileArguments = new string[arguments.Length - 2];
+        Array.Copy(arguments, 2, profileArguments, 0, profileArguments.Length);
+        STARTUPINFO startupInfo = new STARTUPINFO();
+        startupInfo.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFO));
+        PROCESS_INFORMATION processInformation;
+        // Electron's libuv can pass auxiliary inheritable handles to this helper.
+        // The replacement must receive none of them, even when it outlives the helper.
+        if (!CreateDetachedProcess(executable, BuildCommandLine(executable, profileArguments),
+            IntPtr.Zero, IntPtr.Zero, false, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            IntPtr.Zero, null, ref startupInfo, out processInformation))
+        {
+            ThrowLastWin32Error("CreateProcess for the detached profile");
+        }
+        CloseHandle(processInformation.hThread);
+        CloseHandle(processInformation.hProcess);
+        return 0;
+    }
+
     private static string TakeSetting(string name)
     {
         string key = "PWRAGENT_JOB_WRAPPER_" + name;
@@ -14,6 +58,21 @@ public static partial class PwrAgentWindowsJobRunner
 
     public static int Main(string[] arguments)
     {
+        // An existing Job invocation supplies its executable in the environment.
+        // Its target arguments can begin with any value, including this switch.
+        if (arguments.Length > 0 && arguments[0] == "--detached-profile"
+            && Environment.GetEnvironmentVariable("PWRAGENT_JOB_WRAPPER_EXECUTABLE") == null)
+        {
+            try
+            {
+                return LaunchDetachedProfile(arguments);
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine("PwrAgent detached profile launcher failed: " + exception.Message);
+                return 127;
+            }
+        }
         string status = null;
         long startedAt = 0;
         bool invokingJob = false;

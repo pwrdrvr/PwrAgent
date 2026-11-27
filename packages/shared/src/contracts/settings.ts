@@ -4,7 +4,7 @@ import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { DesktopCheckoutHibernationPolicy } from "../checkout-hibernation-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
-import type { FederationPeerRole, FederationTarget } from "./federation";
+import type { FederationPeerRole, FederationRemoteTarget, FederationTarget } from "./federation";
 import type {
   DesktopHelperModelSettings,
   DesktopTaskMonitorModelChoice,
@@ -2886,6 +2886,11 @@ export type OpenDesktopApplicationRequest = {
 
 export type OpenDesktopApplicationResponse = {
   opened: true;
+};
+
+export type PeerApplicationWorkspaceRequest = {
+  federationTarget: FederationRemoteTarget;
+  targetPath: string;
 };
 
 export type ReadDesktopApplicationsRequest = {

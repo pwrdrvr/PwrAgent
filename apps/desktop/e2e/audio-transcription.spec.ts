@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { DictationApi } from "../src/shared/audio-transcription";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { composerRowButton, startComposerDictation } from "./fixtures/composer-row";
 
 const THREAD_ID = "audio-transcription-fixture";
 const THREAD_TITLE = "Composer dictation";
@@ -117,7 +118,9 @@ test("dictates synthetic microphone audio into the draft without a Codex turn", 
 
     await page.getByRole("button", { name: THREAD_TITLE, exact: true }).click();
     const reply = page.getByRole("textbox", { name: "Reply", exact: true });
-    const start = page.getByRole("button", { name: "Dictate with OpenAI", exact: true });
+    // The row folds dictation into ⋮ when it runs out of room, so this finds
+    // the button drawn or folded; `startComposerDictation` presses it either way.
+    const start = composerRowButton(page, "Dictate with OpenAI");
     await expect(reply).toBeEditable();
     await reply.fill(DRAFT);
     await expect(start).toHaveCount(0);
@@ -169,7 +172,7 @@ test("dictates synthetic microphone audio into the draft without a Codex turn", 
     await exitSettings.click();
     await expect(reply).toHaveText(DRAFT);
 
-    await start.click();
+    await startComposerDictation(page);
     await expect(page.getByRole("button", { name: "Stop dictation", exact: true })).toBeVisible();
     await expect(page.getByLabel("Live transcript")).toHaveText(PARTIAL);
     await expect(reply).toHaveText(DRAFT);
@@ -201,7 +204,7 @@ test("dictates synthetic microphone audio into the draft without a Codex turn", 
       ["Open automations", "Exit Automations"],
     ]) {
       const before = await connection.jsonValue();
-      await start.click();
+      await startComposerDictation(page);
       await expect(page.getByRole("button", { name: "Stop dictation", exact: true })).toBeVisible();
       await expect.poll(async () => (await connection.jsonValue()).bytes).toBeGreaterThan(before.bytes);
       await page.getByRole("button", { name: open, exact: true }).first().click();

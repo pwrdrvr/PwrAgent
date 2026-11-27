@@ -10555,6 +10555,263 @@ button.stack-display__thread,
   height: 16px;
 }
 
+.thread-info-card__skeleton--small {
+  width: 36px;
+  height: 9px;
+}
+
+/* A sidebar row's card (`SidebarThreadCard`): the thread chip card's frame
+   with the row's facts as icon rows and an action block under them, drawn
+   like the project card's targets so the sidebar's cards read as one family.
+   Wider than a chip's card: a branch name and a model with its effort are
+   the facts most worth reading whole. */
+.sidebar-thread-card {
+  width: 312px;
+  padding-bottom: 8px;
+}
+
+.thread-info-card__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.thread-info-card__eyebrow-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__facts {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  margin: 8px -6px 0;
+  font-size: 12px;
+}
+
+/* A fact row spans the grid as a subgrid, so a target row (a button) keeps
+   the icon, value and meta columns of the rows around it. */
+.thread-info-card__fact {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+}
+
+.thread-info-card__fact > svg {
+  color: var(--text-muted);
+}
+
+.thread-info-card__fact--target {
+  cursor: pointer;
+}
+
+.thread-info-card__fact--target:hover {
+  background: var(--accent-soft);
+}
+
+/* The branch row copies its name; the glyph says so on hover or focus. */
+.thread-info-card__copy-hint {
+  opacity: 0;
+}
+
+.thread-info-card__fact--target:hover .thread-info-card__copy-hint,
+.thread-info-card__fact--target:focus-visible .thread-info-card__copy-hint {
+  opacity: 1;
+}
+
+.thread-info-card__fact-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__fact-value--mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.thread-info-card__fact-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.thread-info-card__add {
+  color: var(--success-text);
+}
+
+.thread-info-card__del {
+  color: var(--danger-text);
+}
+
+.thread-info-card__pr-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  vertical-align: 1px;
+}
+
+.thread-info-card__context {
+  margin: 4px 0 2px;
+}
+
+.thread-info-card__context-used {
+  height: 100%;
+  background: var(--text-secondary);
+}
+
+.sidebar-thread-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 10px -4px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sidebar-thread-card__actions-spacer {
+  flex: 1 1 auto;
+}
+
+/* The card's one icon row: open icons left, the thread's own actions right. */
+.sidebar-thread-card__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* Hover is a neutral wash; the accent marks a pressed toggle (Pin). */
+.sidebar-thread-card__icon:hover {
+  background: var(--surface-overlay-hover);
+  color: var(--text-primary);
+}
+
+.sidebar-thread-card__icon.is-on {
+  color: var(--accent-bright);
+}
+
+.sidebar-thread-card__app-icon {
+  flex: 0 0 auto;
+}
+
+/* The AI provider gauge's peek (`ProviderGaugePeek`): each provider's
+   Weekly limit per allowance on the AI providers panel's limit rows,
+   fullest provider first. */
+.provider-peek {
+  width: 290px;
+  padding-bottom: 8px;
+}
+
+.provider-peek__activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: -4px -8px -4px 0;
+  font-size: 11px;
+}
+
+.provider-peek__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-peek__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.provider-peek__scope-name {
+  display: block;
+  margin: 6px 0 0 13px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* One fixed window column, the same for every provider, so every bar
+   shares its left edge and width. "INDIVIDUAL", a cap's label, is the
+   longest word (60px at 10px bold) and keeps the 10px "WEEKLY" had. A stat
+   line too long for the column beside it wraps above the bar, never beside
+   a narrower one. */
+.provider-peek__limit {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  align-items: baseline;
+  margin: 4px 0 0 13px;
+}
+
+.provider-peek__window {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.provider-peek__stat {
+  display: block;
+  grid-column: auto;
+}
+
+/* A 5h row on pace to run out before its reset, or a cap that ran out. */
+.provider-peek__limit.is-warning .provider-peek__window {
+  color: var(--status-warning-text);
+}
+
+/* The panel's own label names the scope and "limit"; the window column
+   above replaces it. */
+.provider-peek__stat dt {
+  display: none;
+}
+
+.provider-peek__none {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .pr-detach-warning-modal {
   position: fixed;
   inset: 0;
@@ -12264,6 +12521,11 @@ button.stack-display__thread,
 .thread-context-menu.thread-context-menu__flyout--start {
   left: auto;
   right: calc(100% + 2px);
+}
+
+/* An app in the thread menu's "Open in…" flyout, with the app's own icon. */
+.thread-context-menu .thread-context-menu__open-in {
+  gap: 8px;
 }
 
 /* A PR row in the thread menu's Copy Pull Request URL flyout: the chip's
@@ -50023,11 +50285,267 @@ button.composer__subthread-source-parent:hover {
   font-size: 12px;
 }
 
+/* One box holds the input, the folders the draft mentions, and the control
+   row, so the composer reads as one block. The box carries the rim, the
+   fill and the focus ring the input used to carry alone. */
+.composer__box {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+
+.composer__box:has(.composer-tiptap-input__editor:focus) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The border stays, unpainted: the input's min-height counts it, and the
+   empty line must sit evenly between its top and bottom padding. */
+.composer__box .composer-tiptap-input {
+  border-color: transparent;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+}
+
+.composer__box .composer-tiptap-input:has(.composer-tiptap-input__editor:focus) {
+  outline: none;
+}
+
+.composer__box:has(.composer-tiptap-input.is-readonly) {
+  border-color: var(--border-strong);
+  background: var(--bg-panel-elevated);
+  box-shadow: inset 2px 0 0 var(--accent-border);
+}
+
+.composer__box .composer-tiptap-input.is-readonly {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The control row: one line at every width. Controls that do not fit fold
+   into ⋮ in a fixed order instead of wrapping (`useComposerRowFold`), and
+   only the model name truncates once everything that can fold has folded.
+   Positioned so a folded control's slot can sit out of the flow. */
 .composer__setup {
+  position: relative;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 6px 6px;
+}
+
+.composer__setup > *,
+.composer__setup .composer__pending-controls > * {
+  flex-shrink: 0;
+}
+
+/* A pane narrower than the controls that never fold: the row wraps, and so
+   does the Send group, so Send stays in the box (`overflows` in
+   composer-control-fold.ts). */
+.composer__setup[data-overflowing] {
+  flex-wrap: wrap;
+}
+
+.composer__setup[data-overflowing] > .composer__actions {
+  flex-wrap: wrap;
+  flex-shrink: 1;
+  min-width: 0;
+  margin-left: auto;
+}
+
+/* The model name and the Where label give way, never the effort meter or
+   the checkout. The fold hook measures what is left of each pill and sets it
+   as the floor, so one pill cannot shrink past it while the other has
+   room. */
+.composer__setup .composer__pending-controls > .model-settings,
+.composer__setup .composer__pending-controls > .composer-where {
+  flex: 0 1 auto;
+  min-width: var(--composer-row-floor, 0px);
+}
+
+.composer__setup .model-settings__pill,
+.composer__setup .composer-where__pill {
+  overflow: hidden;
+}
+
+/* On a new thread the pill also names the provider. It gives way after the
+   model name: it shrinks a tenth as fast. */
+.composer__setup .model-settings__pill-provider {
+  flex: 0 0.1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A control the row can fold. Folded, it stays mounted at its natural size
+   so the row can measure it, but it is out of the flow, invisible and inert
+   (the attribute), and ⋮ lists it instead. */
+.composer__fold-slot {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.composer__fold-slot.is-folded {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ⋮ opened this folded control's own popover. */
+.composer__fold-slot.is-live .reference-picker__pop {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* Secondary controls are ghosts: no rim or fill until hovered. Only the
+   access control and the model pill keep pill rims, because they show
+   state. */
+.composer__setup .composer__toggle,
+.composer__setup .composer__fold-slot .composer-dropdown__button,
+.composer__setup .composer__fold-slot .composer__fixed-value,
+.composer__setup .composer__fold-slot .composer__action-button,
+.composer__setup .composer__fold-slot .composer__application-button {
+  border-color: transparent;
+  background: transparent;
+}
+
+.composer__setup .composer__toggle:hover:not(:disabled):not(.is-active),
+.composer__setup .composer__toggle:focus-visible:not(.is-active),
+.composer__setup .composer__fold-slot .composer-dropdown__button:hover,
+.composer__setup .composer__fold-slot .composer-dropdown--open .composer-dropdown__button,
+.composer__setup .composer__fold-slot .composer__action-button:hover:not(:disabled),
+.composer__setup .composer__fold-slot .composer__application-button:hover {
+  border-color: transparent;
+  background: var(--bg-panel-hover);
+}
+
+.composer__setup .composer__toggle.is-active {
+  border-color: transparent;
+  background: var(--accent-soft);
+}
+
+.composer__setup .composer__toggle.is-project-overridden,
+.composer__setup .composer__toggle.is-active.is-project-overridden,
+.composer__setup .composer__toggle.is-active.is-idle {
+  border-color: transparent;
+  background: transparent;
+}
+
+/* Folders the draft @-mentions, between the input and the control row. */
+.composer__directory-references {
   display: flex;
   flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 8px 4px;
+}
+
+/* The new-thread Where pill: project, checkout and machine behind one
+   chip. Its accent rim marks the one choice a new thread needs before it
+   starts. The label truncates, as the model name does. */
+.composer-where {
+  position: relative;
+  display: inline-flex;
+}
+
+.composer-where__pill {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 26px;
+  box-sizing: border-box;
   align-items: center;
-  gap: 8px 6px;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.composer-where__pill:hover:not(:disabled),
+.composer-where__pill:focus-visible,
+.composer-where__pill.is-open {
+  background: var(--bg-panel-hover);
+}
+
+.composer-where__pill:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.composer-where__pill > svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.composer-where__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-where__label svg {
+  margin: 0 4px 0 0;
+  vertical-align: -2px;
+  color: var(--text-secondary);
+}
+
+.composer-where__sep {
+  margin: 0 6px;
+  color: var(--text-muted);
+}
+
+.composer-where__checkout {
+  color: var(--text-secondary);
+}
+
+.composer-where__panel {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.composer-where__section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.composer-where__section-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.composer-where__branch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .composer__pending-controls {
@@ -50085,13 +50603,14 @@ button.composer__subthread-source-parent:hover {
   gap: 8px;
 }
 
+/* The right-hand tools: application launchers, the environment and command
+   pickers, and ▶. A `[data-composer-row-group]` uses the row's own gap, so
+   the fold measures its controls as if they sat in the row. */
 .composer__application-actions {
-  display: inline-flex;
-  min-width: 0;
-  max-width: 100%;
+  display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
+  margin-left: auto;
 }
 
 .composer__application-button {
@@ -51159,71 +51678,6 @@ button.composer__subthread-source-parent:hover {
   border-color: var(--danger-border);
   background: var(--danger-soft);
   color: var(--danger-text);
-}
-
-/* Split run chip: a play segment (run the selected command) joined to the
-   command picker. One pill outline around both, a hairline divider between.
-   The play segment takes the orange CTA hover so "run" reads as the action. */
-.composer__run-split {
-  display: inline-flex;
-  align-items: stretch;
-  min-width: 0;
-  max-width: 240px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-}
-
-.composer__run-split:hover,
-.composer__run-split:focus-within {
-  border-color: var(--accent-border);
-}
-
-.composer__run-split-play {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  min-height: 26px;
-  padding: 0;
-  border: none;
-  border-right: 1px solid var(--border-subtle);
-  border-radius: 999px 0 0 999px;
-  background: var(--bg-input);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.composer__run-split-play:hover:not(:disabled),
-.composer__run-split-play:focus-visible {
-  background: var(--accent-fill);
-  color: var(--button-text);
-}
-
-.composer__run-split-play:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* The picker reuses ComposerDropdown but drops its own outline — the split
-   container owns the border — and squares off the joined (left) edge. */
-.composer__run-split .composer-dropdown {
-  max-width: 200px;
-}
-
-.composer__run-split .composer-dropdown__button {
-  border: none;
-  border-radius: 0 999px 999px 0;
-  background: var(--bg-input);
-}
-
-.composer__run-split .composer-dropdown__button:hover,
-.composer__run-split .composer-dropdown__button:focus-visible,
-.composer__run-split .composer-dropdown--open .composer-dropdown__button {
-  background: var(--bg-panel-hover);
 }
 
 /* =============================================}
@@ -53770,6 +54224,13 @@ button.stepped-bar__tick:focus-visible {
   color: var(--text-muted);
 }
 
+/* In the thread header the terminal toggle sits with the panel toggles,
+   which are ghosts too. */
+.thread-header .composer__terminal-toggle:not(.is-active) {
+  border-color: transparent;
+  background: transparent;
+}
+
 /* A shell remains alive behind a collapsed integrated terminal panel. */
 .composer__terminal-toggle.is-running {
   color: var(--accent);
@@ -55230,21 +55691,18 @@ button.stepped-bar__tick:focus-visible {
   opacity: 1;
 }
 
-/* Right-aligned trailing controls (`margin-left: auto`) share the wrapped
-   overflow line of `.composer__setup` whenever they fit, and drop flush-right
-   onto the next line otherwise. Left padding adds a subtle gutter so they
-   stay visually distinct from left-hand controls right at the wrap edge. */
+/* The moon and the Send split close the row on the right. They never fold. */
 .composer__actions {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
   justify-content: flex-end;
   margin-left: auto;
-  max-width: 100%;
-  padding-left: 6px;
-  box-sizing: border-box;
+}
+
+.composer__application-actions + .composer__actions {
+  margin-left: 0;
 }
 
 /* Send / Queue / Stop / Cancel ride the footer as chips so they sit flush
@@ -55310,7 +55768,20 @@ button.stepped-bar__tick:focus-visible {
 .composer__actions .composer__send-split-pill .composer__send-submit-button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  min-width: 30px;
+  padding: 0 8px;
+}
+
+/* Send is icon-only. Its label stays its accessible name, and its tooltip
+   says the same (Send, Queue, Start thread). */
+.composer__send-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* Inner zones shed their own chrome; the pill supplies border, radius, and bg. */
@@ -55483,13 +55954,50 @@ button.stepped-bar__tick:focus-visible {
   max-width: calc(100vw - 32px);
 }
 
-.composer__schedule-menu-label {
+.composer__schedule-menu-label,
+.composer-thread-options__section {
   padding: 6px 10px 4px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* A ⋮ command row: the command to choose, and a ▶ that runs it now. */
+.composer-thread-options__command {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.composer-thread-options__command .composer-dropdown__option {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-thread-options__command-run {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.composer-thread-options__command-run:hover:not(:disabled),
+.composer-thread-options__command-run:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.composer-thread-options__command-run:disabled {
+  color: var(--text-muted);
 }
 
 .composer__schedule-menu-separator {

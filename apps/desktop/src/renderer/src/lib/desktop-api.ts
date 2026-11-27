@@ -225,6 +225,7 @@ import type {
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   InterruptTurnRequest,
+  StopThreadRequest,
   InterruptTurnResponse,
   DismissFailedSubAgentsRequest,
   DismissFailedSubAgentsResponse,
@@ -589,6 +590,7 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  PeerApplicationWorkspaceRequest,
   ReadDesktopApplicationsRequest,
   ReadDesktopApplicationsResponse,
   OpenMarkdownFileViewerRequest,
@@ -1568,6 +1570,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   sendScheduledThreadActionNow?: (
     request: ScheduledThreadActionIdRequest,
   ) => Promise<ScheduledThreadActionMutationResponse>;
+  stopThread?: (request: StopThreadRequest) => Promise<void>;
   interruptTurn?: (
     request: InterruptTurnRequest
   ) => Promise<InterruptTurnResponse>;
@@ -1834,6 +1837,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   openApplication?: (
     request: OpenDesktopApplicationRequest
   ) => Promise<OpenDesktopApplicationResponse>;
+  applicationWorkspaceExists?: (request: PeerApplicationWorkspaceRequest) => Promise<boolean>;
   readApplications?: (
     request: ReadDesktopApplicationsRequest
   ) => Promise<ReadDesktopApplicationsResponse>;

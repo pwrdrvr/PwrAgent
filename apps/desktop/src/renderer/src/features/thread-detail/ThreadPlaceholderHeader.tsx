@@ -31,11 +31,6 @@ type ThreadPlaceholderHeaderProps = {
   /** The model chosen, which names a Codex model provider when qualified. */
   model?: string;
   backendLabel?: string;
-  /**
-   * The launchpad's machine chip portals into this slot, beside the
-   * backend chip, where the thread header names the machine afterwards.
-   */
-  machineSlotRef?: (element: HTMLSpanElement | null) => void;
   desktopApi?: DesktopApi;
   projectLabel?: string;
   title: string;
@@ -106,9 +101,6 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
               ) : null}
               <h2 className="thread-header__compact-title">{props.title}</h2>
             </div>
-            {props.machineSlotRef ? (
-              <span className="thread-header__machine" ref={props.machineSlotRef} />
-            ) : null}
             {showBackendLabel ? (
               <span className="chip chip--backend">{props.backendLabel}</span>
             ) : null}

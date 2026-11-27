@@ -1,6 +1,7 @@
 import { buildAgentMemoryContext } from "@pwragent/shared/contracts/agent-memory";
 import { describe, expect, it } from "vitest";
 import {
+  acpReplayPromptTextDigest,
   AcpSessionReplayNormalizer,
   inferAcpReplayTurns,
   readAcpTopicTitle,
@@ -3329,5 +3330,174 @@ describe("AcpSessionReplayNormalizer", () => {
         readAcpTopicTitle(grokReviewSession.liveOnlyUpdates.sessionInfoUpdate),
       ).toBe("Summarize path normalization review findings");
     });
+  });
+
+  it("keeps unmatched provider prompt replay lookups linear in recorded prompt count", () => {
+    const measurePromptReads = (promptCount: number): number => {
+      const normalizer = new AcpSessionReplayNormalizer({ antigravity: true });
+      const rawPrompts = Array.from({ length: promptCount }, (_v, index) => ({
+        receivedAt: 1_000 + index * 100,
+        textDigest: acpReplayPromptTextDigest(`recorded-${index}`),
+        turnId: `turn-${index}`,
+      }));
+      let arrayReads = 0;
+      const proxiedPrompts = new Proxy(rawPrompts, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^\d+$/.test(property)) {
+            arrayReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      normalizer.beginProviderPromptReplay(proxiedPrompts);
+      for (let index = 0; index < promptCount; index += 1) {
+        normalizer.apply({
+          sessionId: "session-1",
+          receivedAt: 9_000_000 + index,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: `unmatched-${index}` },
+          },
+        });
+      }
+      return arrayReads;
+    };
+
+    const smallReads = measurePromptReads(40);
+    const largeReads = measurePromptReads(120);
+    // An O(P^2) linear scan over recorded prompts grows 9x for 3x prompts.
+    expect(largeReads).toBeLessThanOrEqual(smallReads * 4);
+  });
+
+  it("clamps reload-time message timestamps behind subsequent historical tool timestamps", () => {
+    const normalizer = new AcpSessionReplayNormalizer({ antigravity: true });
+    const edit1Ts = Date.parse("2026-11-25T17:17:00Z");
+    const edit2Ts = Date.parse("2026-11-25T17:18:00Z");
+    const edit3Ts = Date.parse("2026-11-25T17:20:00Z");
+    const reloadTs = Date.parse("2026-11-26T01:06:00Z");
+
+    normalizer.apply({
+      sessionId: "b50135af",
+      receivedAt: reloadTs,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "Check submodule counts" },
+      },
+    });
+    normalizer.apply({
+      sessionId: "b50135af",
+      receivedAt: reloadTs,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t1",
+        title: "Edited 1 file",
+        status: "completed",
+        timestamp: edit1Ts,
+      },
+    });
+    normalizer.apply({
+      sessionId: "b50135af",
+      receivedAt: reloadTs,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t2",
+        title: "Edited 3 files",
+        status: "completed",
+        timestamp: edit2Ts,
+      },
+    });
+    normalizer.apply({
+      sessionId: "b50135af",
+      receivedAt: reloadTs,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Tests passed; waiting for lint." },
+      },
+    });
+    normalizer.apply({
+      sessionId: "b50135af",
+      receivedAt: reloadTs,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t3",
+        title: "Edited 1 file",
+        status: "completed",
+        timestamp: edit3Ts,
+      },
+    });
+
+    const replay = inferAcpReplayTurns(normalizer.replay());
+    expect(replay.entries.map((entry) => entry.createdAt)).toEqual([
+      edit1Ts,
+      edit1Ts,
+      edit2Ts,
+      edit3Ts,
+      edit3Ts,
+    ]);
+    expect(replay.messages.map((message) => message.createdAt)).toEqual([
+      edit1Ts,
+      edit3Ts,
+    ]);
+    expect(replay.entries[0]?.turn?.durationMs).toBe(edit3Ts - edit1Ts);
+  });
+
+  it("clamps entry.turn.startedAt and currentTurnStartedAt per turn rather than to Turn 1", () => {
+    const normalizer = new AcpSessionReplayNormalizer({ antigravity: true });
+
+    // Turn 1: historical timestamps 1_000..1_050.
+    normalizer.recordUserPrompt({
+      sessionId: "sess-multi",
+      prompt: "First turn",
+      turnId: "turn-1",
+      receivedAt: 1_000,
+    });
+    normalizer.apply({
+      sessionId: "sess-multi",
+      receivedAt: 1_050,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "First reply" },
+      },
+    });
+    normalizer.recordTurnFinished("turn-1", 1_050);
+
+    // Turn 2: prompt recorded at skewed/reload time 9_000, followed by historical tools at 2_000..2_050.
+    normalizer.recordUserPrompt({
+      sessionId: "sess-multi",
+      prompt: "Second turn",
+      turnId: "turn-2",
+      receivedAt: 9_000,
+    });
+    normalizer.apply({
+      sessionId: "sess-multi",
+      receivedAt: 2_000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t2-tool-1",
+        title: "Edited 1 file",
+        status: "completed",
+        timestamp: 2_000,
+      },
+    });
+    normalizer.apply({
+      sessionId: "sess-multi",
+      receivedAt: 2_050,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Second reply" },
+      },
+    });
+
+    normalizer.endProviderPromptReplay(2_050);
+    const replay = normalizer.replay();
+    const turn2Entries = replay.entries.filter((entry) => entry.turn?.id === "turn-2");
+    expect(turn2Entries).toHaveLength(3);
+    expect(turn2Entries.map((entry) => entry.createdAt)).toEqual([2_000, 2_000, 2_050]);
+    for (const entry of turn2Entries) {
+      // Must clamp to Turn 2's earliest timestamp (2_000), not Turn 1's (1_000) or skewed 9_000.
+      expect(entry.turn?.startedAt).toBe(2_000);
+      expect(entry.turn?.completedAt).toBe(2_050);
+      expect(entry.turn?.durationMs).toBe(50);
+    }
   });
 });

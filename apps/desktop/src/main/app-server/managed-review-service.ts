@@ -2009,12 +2009,7 @@ export class ManagedReviewService {
     parentThreadId: string;
     turnId?: string;
   }): ReviewSubAgentRecord | undefined {
-    return Array.from(this.context.turnState.liveReviewRecords().values()).find(
-      (record) =>
-        record.parentBackend === params.backend
-        && record.parentThreadId === params.parentThreadId
-        && (!params.turnId || record.turnId === params.turnId),
-    );
+    return this.context.turnState.liveReviewForParent(params.backend, params.parentThreadId, params.turnId);
   }
 
   findManagedReviewForChildRequest(params: {

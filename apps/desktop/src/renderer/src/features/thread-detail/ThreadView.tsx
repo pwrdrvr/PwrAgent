@@ -99,6 +99,10 @@ import {
 } from "@pwragent/shared/codex-environment-action-runs";
 import { resolveThreadTerminalCwd } from "@pwragent/shared/thread-terminal";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  resolveRemoteTerminalDisabledReason,
+  threadTerminalRemote,
+} from "../../lib/thread-terminal-request";
 import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import {
   agentEventMatchesThread,
@@ -139,7 +143,7 @@ import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { backendDefaultModel } from "@pwragent/shared/model-defaults";
 import { Composer, type ComposerProps } from "../composer/Composer";
-import { ComposerTerminalToggle } from "../composer/ComposerTerminalToggle";
+import type { ComposerTerminalToggleProps } from "../composer/ComposerTerminalToggle";
 import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
   describeLaunchpadMachineOffline,
@@ -756,6 +760,13 @@ export type ThreadViewProps = {
   >;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
+  /**
+   * The selected thread's configuration (its detail read) has loaded. Until
+   * then the thread is only its sidebar row, which leaves out the
+   * environment and other Details-bound settings.
+   */
+  threadConfigurationReady?: boolean;
+  threadConfigurationPreview?: ComposerProps["threadConfigurationPreview"];
   workspaceActionsBlocked?: boolean;
   /** Opens Settings → Environments on a workspace, from the Environment chip. */
   onEditEnvironments?: (workspacePath: string) => void;
@@ -1546,9 +1557,6 @@ export function ThreadView(props: ThreadViewProps) {
     setComposerSlotLineage(nextSlotLineage);
   }
   const composerSlot = composerSlotKey(nextSlotLineage, composerSlotView);
-  // The launchpad header's slot for the composer's machine chip.
-  const [launchpadMachineSlot, setLaunchpadMachineSlot] =
-    useState<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     const directoryKey =
@@ -2033,22 +2041,9 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadTerminalDisabledReason = resolveRemoteTerminalDisabledReason(
     selectedThread?.federation,
   );
-  // For a remote thread the create request must name the owning instance and
-  // the pane wears its chip — the shell runs there, not on this machine.
   const selectedThreadTerminalRemote = useMemo<
     IntegratedTerminalPaneRemote | undefined
-  >(() => {
-    const federation = selectedThread?.federation;
-    if (!federation || federation.ref.target.scope !== "remote") {
-      return undefined;
-    }
-    return {
-      target: federation.ref.target,
-      instanceId: federation.ref.target.instanceId,
-      instanceLabel: federation.instanceLabel,
-      celestialIcon: federation.celestialIcon,
-    };
-  }, [selectedThread?.federation]);
+  >(() => threadTerminalRemote(selectedThread?.federation), [selectedThread?.federation]);
   const toggleSelectedThreadTerminal = useEventCallback(() => {
     if (!selectedThreadKey) return;
     if (selectedThreadTerminalDisabledReason) return;
@@ -3167,7 +3162,6 @@ export function ThreadView(props: ThreadViewProps) {
           onProviderSelected: props.onProviderSelected,
           launchpad: composerLaunchpad,
           launchpadMachine: props.launchpadMachine,
-          launchpadMachineChipHost: launchpadMachineSlot,
           launchpadComposerScopeKey: props.pendingLaunchpadCreation?.composerScopeKey,
           launchpadMaterializing,
           launchpadError: props.launchpadError,
@@ -3327,16 +3321,9 @@ export function ThreadView(props: ThreadViewProps) {
       ) : workspaceRecoverySlot}
       {/* Second child in both modes, so React matches it by position when
           the slot itself survives. */}
-      {composerReplacedByRecovery ? (
-        <div className="composer__footer">
-          <div className="composer__application-actions" aria-label="Composer tools">
-            {integratedTerminal ? <ComposerTerminalToggle {...integratedTerminal} /> : null}
-          </div>
-        </div>
-      ) : <Composer
+      {composerReplacedByRecovery ? null : <Composer
         backends={props.backends}
         applications={props.applications}
-        integratedTerminal={integratedTerminal}
         codexFastAllowed={props.codexFastAllowed}
         desktopApi={props.desktopApi}
         onShowNotice={props.onShowNotice}
@@ -3358,6 +3345,8 @@ export function ThreadView(props: ThreadViewProps) {
               || launchpadMachineOffline !== undefined
             : props.composerDisabled
         }
+        threadConfigurationReady={composerLaunchpad ? undefined : props.threadConfigurationReady}
+        threadConfigurationPreview={composerLaunchpad ? undefined : props.threadConfigurationPreview}
         unavailableReason={
           composerLaunchpad
             ? launchpadMachineOffline ?? launchpadBackend?.unavailableReason
@@ -3406,8 +3395,8 @@ export function ThreadView(props: ThreadViewProps) {
     contextRailPinned,
     onToggleSidebar,
     onContextRailPinnedChange,
-    setLaunchpadMachineSlot,
     openWorkflowBudgetDialog,
+    integratedTerminal,
     rewind: threadRewindSupport ? {
       disabledReason: rewindDisabledReason
         ?? (hasRewindableMessages ? undefined : "No prompts to rewind to yet"),
@@ -4238,30 +4227,6 @@ function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {
   return thread.projectKey ? [thread.projectKey, ...linkedDirectoryPaths] : linkedDirectoryPaths;
 }
 
-/**
- * Why the remote terminal toggle is inert for a federated thread — or
- * undefined when it can open (always undefined for local threads). Mirrors
- * the owner-side gate: the peer must be connected DIRECTLY and must have
- * granted `remote_pty`.
- */
-function resolveRemoteTerminalDisabledReason(
-  federation: NavigationThreadSummary["federation"],
-): string | undefined {
-  if (!federation) {
-    return undefined;
-  }
-  if (
-    federation.peerStatus !== undefined &&
-    federation.peerStatus !== "connected"
-  ) {
-    return `Remote terminal unavailable: ${federation.instanceLabel} is disconnected.`;
-  }
-  if (!federation.capabilities?.includes("remote_pty")) {
-    return `Remote terminal not granted by ${federation.instanceLabel}.`;
-  }
-  return undefined;
-}
-
 // Pure header projection shared by the thread, launchpad and setup views.
 function renderThreadViewHeader({
   props,
@@ -4273,9 +4238,9 @@ function renderThreadViewHeader({
   contextRailPinned,
   onToggleSidebar,
   onContextRailPinnedChange,
-  setLaunchpadMachineSlot,
   rewind,
   openWorkflowBudgetDialog,
+  integratedTerminal,
 }: {
   props: ThreadViewProps;
   selectedThread: NavigationThreadSummary | undefined;
@@ -4286,9 +4251,9 @@ function renderThreadViewHeader({
   contextRailPinned: boolean;
   onToggleSidebar: () => void;
   onContextRailPinnedChange: (pinned: boolean) => void;
-  setLaunchpadMachineSlot: (element: HTMLSpanElement | null) => void;
   rewind: ComponentProps<typeof ThreadHeader>["rewind"];
   openWorkflowBudgetDialog: () => Promise<void>;
+  integratedTerminal: ComposerTerminalToggleProps | undefined;
 }) {
   const headerChrome = {
     desktopApi: props.desktopApi,
@@ -4382,7 +4347,6 @@ function renderThreadViewHeader({
       // The composer's source row names the parent; the breadcrumb only says
       // what is being made.
       title={composerLaunchpad.parentThreadId ? "New sub-thread" : "New thread"}
-      machineSlotRef={props.launchpadMachine ? setLaunchpadMachineSlot : undefined}
     />
   ) : (
     <ThreadHeader
@@ -4402,6 +4366,7 @@ function renderThreadViewHeader({
       onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
       titleRename={props.titleRename}
       rewind={rewind}
+      integratedTerminal={integratedTerminal}
       workflowBudget={
         selectedThread?.source === "acp:grok"
         && selectedThread.federation?.ref.target.scope !== "remote"

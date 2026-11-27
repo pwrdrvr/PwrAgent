@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { windowsGitJobLauncher } from "../src/main/windows-job-launcher-path";
+import { windowsJobLauncherPath } from "../src/main/windows-job-launcher-path";
 import {
   DEV_SETUP_SCRIPTS,
   ELECTRON_DEV_ENV_KEYS,
@@ -93,7 +93,21 @@ describe("dev launch wrapper", () => {
     vi.mocked(existsSync).mockImplementation((file) => files.has(file));
     try {
       const moduleUrl = pathToFileURL(path.join(desktop, module)).href;
-      expect(windowsGitJobLauncher(moduleUrl)).toBe(path.join(desktop, ".local/windows-job-launcher", launcher));
+      expect(windowsJobLauncherPath(moduleUrl)).toBe(path.join(desktop, ".local/windows-job-launcher", launcher));
+    } finally {
+      vi.mocked(existsSync).mockRestore();
+    }
+  });
+
+  it("uses the Windows launcher rebuilt with the app when a previous dev launcher is present", () => {
+    const desktop = fileURLToPath(new URL("../", import.meta.url));
+    const builtLauncher = path.join(desktop, "out/main/pwragent-windows-job.exe");
+    const previousDevLauncher = path.join(desktop, ".local/windows-job-launcher/pwragent-windows-job.exe");
+    const files = new Set([builtLauncher, previousDevLauncher]);
+    vi.mocked(existsSync).mockImplementation((file) => files.has(file));
+    try {
+      const moduleUrl = pathToFileURL(path.join(desktop, "out/main/chunks/profile.js")).href;
+      expect(windowsJobLauncherPath(moduleUrl)).toBe(builtLauncher);
     } finally {
       vi.mocked(existsSync).mockRestore();
     }

@@ -41,6 +41,21 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("passes the viewer's PR merge deadline from the envelope to the owner", async () => {
+    const now = Date.now();
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES, now: () => now });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner", now: () => now,
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    router.registerConnection({ peerId: "viewer", capabilities: ["turn_control"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    const mergeThreadPullRequestV1 = vi.fn(async () => ({ ok: true, summary: "Merged #1" }));
+    registerFederationBackendHandlers({ router, backend: { mergeThreadPullRequestV1 } as unknown as FederationBackendOperations });
+    const request = { backend: "codex", threadId: "thread", url: "https://github.com/fixture/project/pull/1", method: "squash" } as const;
+
+    await expect(new FederationRemoteBackendClient(rpc).mergeThreadPullRequestV1(request)).resolves.toMatchObject({ ok: true });
+    expect(mergeThreadPullRequestV1).toHaveBeenCalledExactlyOnceWith(request, { deadlineAt: now + 180_000 });
+  });
+
   it("requires file-pull capability for Antigravity skill discovery on the owner", async () => {
     const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
       additionalRequiredCapabilities: additionalFederationBackendCapabilities });
@@ -4564,6 +4579,7 @@ describe("federation backend bridge", () => {
       getWorktreeUnpublishedCommitDiff: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
       renameThread: vi.fn(),
+      applicationWorkspaceExists: vi.fn(),
       readApplications: vi.fn(),
       openApplication: vi.fn(),
       readMessagingPlatformStatuses: vi.fn(),
@@ -5033,6 +5049,7 @@ describe("federation backend bridge", () => {
         materializeDirectoryLaunchpad: vi.fn(),
         handoffThreadWorkspace: vi.fn(),
         renameThread: vi.fn(),
+        applicationWorkspaceExists: vi.fn(),
         readApplications: vi.fn(),
         openApplication: vi.fn(),
         readMessagingPlatformStatuses: vi.fn(),
@@ -5082,6 +5099,7 @@ describe("federation backend bridge", () => {
         threadId: "thread-1",
         renamedAt: 2_000,
       })),
+      applicationWorkspaceExists: vi.fn(async () => true),
       readApplications: vi.fn(async () => ({
         editors: [],
         terminals: [{
@@ -5158,6 +5176,19 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
       envelope: {
+        id: "workspace-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.applicationWorkspaceExists,
+        params: { targetPath: "/remote/repo" },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_075,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
         id: "application-request",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.openApplication,
@@ -5194,6 +5225,7 @@ describe("federation backend bridge", () => {
       threadId: "thread-1",
       name: "Remote title",
     });
+    expect(backend.applicationWorkspaceExists).toHaveBeenCalledExactlyOnceWith("/remote/repo");
     expect(backend.readApplications).toHaveBeenCalledTimes(1);
     expect(backend.openApplication).toHaveBeenCalledWith({
       applicationId: "terminal",
@@ -5217,6 +5249,7 @@ describe("federation backend bridge", () => {
           terminals: [{ id: "terminal" }],
         },
       },
+      { kind: "response", requestId: "workspace-request", result: true },
       {
         kind: "response",
         requestId: "application-request",

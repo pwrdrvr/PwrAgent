@@ -5,7 +5,7 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../desktop-api";
-import { useDesktopApplications } from "../useDesktopApplications";
+import { readPeerApplications, useDesktopApplications } from "../useDesktopApplications";
 
 function applications(params: {
   editorId?: string;
@@ -101,6 +101,39 @@ describe("useDesktopApplications", () => {
     expect(readApplications).toHaveBeenLastCalledWith({
       federationTarget: { scope: "remote", instanceId: "host" },
     });
+  });
+
+  it("revalidates the owner's grant after a disconnect within the discovery cache lifetime", async () => {
+    const readApplications = vi.fn().mockResolvedValueOnce({ applications: applications({ terminalId: "peer-term" }) })
+      .mockRejectedValueOnce(new Error("remote_window revoked"));
+    const desktopApi = { readApplications } as unknown as DesktopApi;
+    const { result, rerender } = renderHook(({ suspended }) =>
+      useDesktopApplications({ desktopApi, remoteInstanceId: "guest", suspended }), { initialProps: { suspended: false } });
+    await waitFor(() => expect(result.current?.terminals[0]?.id).toBe("peer-term"));
+    rerender({ suspended: true });
+    expect(result.current).toBeUndefined();
+    await act(async () => rerender({ suspended: false }));
+    expect(readApplications).toHaveBeenCalledTimes(2);
+    expect(result.current).toBeUndefined();
+  });
+
+  it("shares the reconnect read even after the old connection's timer expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const read = vi.fn(async () => ({ applications: applications({ terminalId: "peer-terminal" }) }));
+      const desktopApi = { readApplications: read } as unknown as DesktopApi;
+      const view = renderHook(({ suspended }) =>
+        useDesktopApplications({ desktopApi, remoteInstanceId: "guest", suspended }), { initialProps: { suspended: false } });
+      await act(async () => { await readPeerApplications(read, "guest"); });
+      vi.advanceTimersByTime(10_000);
+      view.rerender({ suspended: true });
+      await act(async () => view.rerender({ suspended: false }));
+      vi.advanceTimersByTime(20_000);
+      await readPeerApplications(read, "guest");
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses the local settings snapshot when no peer is selected", () => {

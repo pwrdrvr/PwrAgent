@@ -195,7 +195,7 @@ export function StackTag({ thread, pr, member, onOpen }: StackTagProps) {
           if (!thread.stacks?.length && !readCachedStack(stackOwnerInstanceId(thread), member)?.fresh) {
             prefetchSelectedStacks(getDesktopApi()?.getNavigationSelectedDetail, thread);
           }
-          if (sidebarPrCardBridge.enterTrigger(bridge.current)) tooltip.show(event.currentTarget, latest.current);
+          if (sidebarPrCardBridge.enterTrigger(bridge.current, event.currentTarget)) tooltip.show(event.currentTarget, latest.current);
           else tooltip.showAfterDelay(event.currentTarget, () => latest.current);
         }}
         onMouseLeave={() => {

@@ -1179,7 +1179,11 @@ export class DesktopBackendRegistry {
   private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
-  private readonly workspaceThreadRowsById = new WeakMap<AppServerThreadSummary[], Map<string, AppServerThreadSummary>>();
+  private readonly threadListRowIndexes = new WeakMap<AppServerThreadSummary[], {
+    visited: number;
+    firstById: Map<string, AppServerThreadSummary>;
+    byBackend: Map<AppServerBackendKind, Map<string, AppServerThreadSummary>>;
+  }>();
   private threadListCacheRevision = 0;
   private createdThreadDirectoryVisibility = new Map<
     string,
@@ -4616,13 +4620,14 @@ export class DesktopBackendRegistry {
       enrichDirectories: false,
       forceRefresh: true,
     });
-    const thread = threads.find((thread) => thread.id === threadId);
+    const thread = this.findThreadListRow(threads, threadId);
     if (thread || (params.backend && params.backend !== "codex")
       || !this.retainedOwnerThreadStorage?.list().some(row => row.id === threadId)) return thread;
     // A retained identity can be archived. Consult native archive authority
     // through the same read policy rather than treating its metadata as active.
-    return (await this.listThreads({ backend: "codex", archived: true, enrichDirectories: false,
-      callerReason: "thread-id-lookup", forceRefresh: true })).find(row => row.id === threadId);
+    const archived = await this.listThreads({ backend: "codex", archived: true, enrichDirectories: false,
+      callerReason: "thread-id-lookup", forceRefresh: true });
+    return this.findThreadListRow(archived, threadId);
   }
 
   /**
@@ -4723,6 +4728,37 @@ export class DesktopBackendRegistry {
     };
   }
 
+  // Concurrent readers share the provider's listing. Its replacement has a new
+  // array identity, so the index cannot extend the cache's ownership proof.
+  private findThreadListRow(
+    threads: AppServerThreadSummary[],
+    threadId: string,
+    backend?: AppServerBackendKind,
+  ): AppServerThreadSummary | undefined {
+    let index = this.threadListRowIndexes.get(threads);
+    if (!index) {
+      index = { visited: 0, firstById: new Map(), byBackend: new Map() };
+      this.threadListRowIndexes.set(threads, index);
+    }
+    const found = backend ? index.byBackend.get(backend)?.get(threadId) : index.firstById.get(threadId);
+    if (found) return found;
+    // Stop at the first match even for a new list. Later lookups resume the
+    // scan and retain the first row for each ID and each (backend, ID) pair.
+    while (index.visited < threads.length) {
+      const row = threads[index.visited++]!;
+      const id = row.id;
+      let byId = index.byBackend.get(row.source);
+      if (!byId) {
+        byId = new Map();
+        index.byBackend.set(row.source, byId);
+      }
+      if (!byId.has(id)) byId.set(id, row);
+      if (!index.firstById.has(id)) index.firstById.set(id, row);
+      if (id === threadId && (!backend || row.source === backend)) return row;
+    }
+    return undefined;
+  }
+
   private findThreadListCachedSummary(
     params: {
       backend?: AppServerBackendKind;
@@ -4738,11 +4774,7 @@ export class DesktopBackendRegistry {
       if (now !== undefined && (state.expiresAt ?? 0) <= now) {
         continue;
       }
-      const cached = state.threads?.find(
-        (thread) =>
-          (!params.backend || thread.source === params.backend)
-          && thread.id === params.threadId,
-      );
+      const cached = state.threads && this.findThreadListRow(state.threads, params.threadId, params.backend);
       if (cached) {
         return cached;
       }
@@ -11447,6 +11479,10 @@ export class DesktopBackendRegistry {
     }
   }
 
+  hasQueuedTurn(request: ReadQueuedTurnRequest): boolean {
+    return this.threadTurnQueue.hasQueuedEntry(request);
+  }
+
   async readQueuedTurn(
     request: ReadQueuedTurnRequest,
     portable = false,
@@ -11923,33 +11959,8 @@ export class DesktopBackendRegistry {
     if (review) {
       return { ...params, turnId: review.turnId };
     }
-    if (params.backend === "codex") {
-      for (const key of this.context.turnState.executionKeys()) {
-        const parsed = parseThreadTurnKeyBody(key);
-        if (
-          parsed?.threadId === params.threadId &&
-          !parsed.turnId.startsWith("pending:")
-        ) {
-          return {
-            backend: params.backend,
-            threadId: parsed.threadId,
-            turnId: parsed.turnId,
-          };
-        }
-      }
-      return undefined;
-    }
-
-    for (const key of this.context.turnState.registeredTurnKeys()) {
-      const parsed = parseActiveTurnKey(key);
-      if (
-        parsed?.backend === params.backend &&
-        parsed.threadId === params.threadId
-      ) {
-        return parsed;
-      }
-    }
-    return undefined;
+    const turnId = this.context.turnState.activeTurnIdForThread(params);
+    return turnId === undefined ? undefined : { backend: params.backend, threadId: params.threadId, turnId };
   }
 
   isThreadTurnOccupied(params: {
@@ -13833,11 +13844,11 @@ export class DesktopBackendRegistry {
           async () => await this.interruptAcpTurn(target))
       : await this.interruptAcpTurn(target),
     interruptCodex: async (target, routing) => {
-      const requestedKey = buildActiveTurnModeKey(target.threadId, routing.requestedTurnId);
+      const requested = { threadId: target.threadId, turnId: routing.requestedTurnId };
       const activeMode = routing.review
-        ? this.context.turnState.executionMode(requestedKey)
+        ? this.context.turnState.executionMode(requested)
         : this.context.turnState.executionMode({ threadId: target.threadId, turnId: target.turnId })
-          ?? this.context.turnState.executionMode(requestedKey);
+          ?? this.context.turnState.executionMode(requested);
       if (routing.review) {
         const client = activeMode ? this.getClient("codex", activeMode) : this.codexClient;
         return await client.interruptTurn({ threadId: target.threadId, turnId: target.turnId });
@@ -13847,13 +13858,11 @@ export class DesktopBackendRegistry {
         : await this.withCodexThreadClient(target.threadId, async (client) => await client.interruptTurn(target));
     },
     retireCodexTurn: (requested, result) => {
-      const requestedKey = buildActiveTurnModeKey(requested.threadId, requested.turnId);
-      const activeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
-      this.context.turnState.forgetExecution(activeKey);
-      this.context.turnState.forgetReview(activeKey);
-      if (requestedKey !== activeKey) {
-        this.context.turnState.forgetExecution(requestedKey);
-        this.context.turnState.forgetReview(requestedKey);
+      this.context.turnState.forgetExecution(result);
+      this.context.turnState.forgetReview(result);
+      if (requested.threadId !== result.threadId || requested.turnId !== result.turnId) {
+        this.context.turnState.forgetExecution(requested);
+        this.context.turnState.forgetReview(requested);
       }
     },
     reviewInterrupted: (parent, review) => {
@@ -20007,19 +20016,7 @@ export class DesktopBackendRegistry {
       archived: false,
       callerReason,
     })
-      .then((threads) => {
-        // Concurrent cold lookups share one listing. Index that result once
-        // and let a refreshed listing build an index of its own rows.
-        let byId = this.workspaceThreadRowsById.get(threads);
-        if (!byId) {
-          byId = new Map();
-          for (const thread of threads) {
-            if (!byId.has(thread.id)) byId.set(thread.id, thread);
-          }
-          this.workspaceThreadRowsById.set(threads, byId);
-        }
-        return byId.get(params.threadId);
-      })
+      .then((threads) => this.findThreadListRow(threads, params.threadId))
       .catch(() => undefined);
   }
 

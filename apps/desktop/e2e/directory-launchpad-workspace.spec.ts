@@ -8,6 +8,8 @@ import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigatio
 import { launchElectronApp } from "./fixtures/electron-app";
 import { accessTrigger, chooseAccessStop } from "./fixtures/access-picker";
 import { mastheadAction } from "./fixtures/window-chrome";
+import { openLaunchpadWherePanel } from "./fixtures/launchpad-where";
+import { chooseComposerWorkspaceAction } from "./fixtures/composer-row";
 
 // Navigation keys and stored directory paths are forward-slash canonical on
 // every platform (see `canonicalizeNavigationPath`). `path.join` and
@@ -696,6 +698,7 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
     await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
     const settings = app.window.getByLabel("New thread settings");
+    await openLaunchpadWherePanel(app.window);
     const workspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
 
     await expect(workspaceMode).toBeEnabled();
@@ -812,12 +815,14 @@ test("new-thread picker hydrates git status for a newly added directory", async 
     await newThreadButton.click();
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
 
+    await openLaunchpadWherePanel(app.window);
     await app.window.getByRole("button", { name: /^(Project:|Choose a project)/ }).click();
     await app.window.getByRole("button", { name: /Add directory/ }).click();
 
     await expectDirectoryLaunchpadHeader(app, "PickedRepo");
 
     const settings = app.window.getByLabel("New thread settings");
+    await openLaunchpadWherePanel(app.window);
     const workspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
 
     await expect(workspaceMode).toBeEnabled();
@@ -847,12 +852,14 @@ test("new-thread picker starts a newly added directory in local checkout by defa
     await newThreadButton.click();
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
 
+    await openLaunchpadWherePanel(app.window);
     await app.window.getByRole("button", { name: /^(Project:|Choose a project)/ }).click();
     await app.window.getByRole("button", { name: /Add directory/ }).click();
 
     await expectDirectoryLaunchpadHeader(app, "PickedRepo");
 
     const settings = app.window.getByLabel("New thread settings");
+    await openLaunchpadWherePanel(app.window);
     const workspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
     await expect(workspaceMode).toBeEnabled();
     await expect(workspaceMode).toHaveAttribute("data-value", "local");
@@ -903,6 +910,7 @@ test("directory launchpad starts a local thread from an unborn git HEAD", async 
       });
     }, directoryKey);
 
+    await openLaunchpadWherePanel(app.window);
     await expect(app.window.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute(
       "data-value",
       "local",
@@ -1089,6 +1097,7 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       .click();
 
     const settings = app.window.getByLabel("New thread settings");
+    await openLaunchpadWherePanel(app.window);
     const workspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
 
     await selectComposerOption({
@@ -1161,6 +1170,7 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       .click();
     await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
+    await openLaunchpadWherePanel(app.window);
     await expect(settings.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute("data-value", "worktree");
     await expect(settings.getByLabel(/^Base branch(?::|$)/)).toHaveAttribute("data-value", "main");
   } finally {
@@ -1184,11 +1194,7 @@ test("local-to-worktree handoff records PwrAgent workspace state without rewriti
       .getByRole("button", { name: "Local handoff thread", exact: true })
       .click();
 
-    const workspaceMode = app.window.getByLabel(/^Workspace mode(?::|$)/);
-    await workspaceMode.click();
-    await app.window
-      .getByRole("menuitem", { name: "Handoff to New Worktree" })
-      .click();
+    await chooseComposerWorkspaceAction(app.window, "Handoff to New Worktree");
 
     const dialog = app.window.getByRole("dialog", { name: "Handoff to New Worktree" });
     await expect(dialog).toBeVisible();
@@ -1262,6 +1268,7 @@ test("directory launchpad does not duplicate a materialized worktree thread unde
       .click();
 
     const settings = app.window.getByLabel("New thread settings");
+    await openLaunchpadWherePanel(app.window);
     await selectComposerOption({
       select: settings.getByLabel(/^Workspace mode(?::|$)/),
       window: app.window,
@@ -1315,6 +1322,7 @@ test("directory launchpad keeps Tiptap Markdown focus and fenced-code formatting
     await expect(composer.locator("pre")).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
+    await openLaunchpadWherePanel(app.window);
     await selectComposerOption({
       select: settings.getByLabel(/^Workspace mode(?::|$)/),
       window: app.window,
@@ -1353,12 +1361,14 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
     const settings = app.window.getByLabel("New thread settings");
+    await openLaunchpadWherePanel(app.window);
     await expect(settings.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute("data-value", "local");
 
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for OtherRepo" })
       .click();
     await expectDirectoryLaunchpadHeader(app, "OtherRepo");
+    await openLaunchpadWherePanel(app.window);
     const otherWorkspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
     await otherWorkspaceMode.click();
     await expect(app.window.getByRole("option", { name: "New worktree" })).toHaveCount(1);
@@ -1370,6 +1380,7 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
       .click();
     await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
+    await openLaunchpadWherePanel(app.window);
     await expect(settings.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute("data-value", "worktree");
     await expect(settings.getByLabel(/^Base branch(?::|$)/)).toHaveAttribute("data-value", "main");
   } finally {

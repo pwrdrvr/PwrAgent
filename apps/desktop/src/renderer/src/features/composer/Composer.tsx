@@ -1,5 +1,4 @@
 import type { CodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
-import { CodexSkillProfileControl } from "./CodexSkillProfileControl";
 import { useComposerWorkspaceHandoffState } from "./useComposerWorkspaceHandoffState";
 import { useComposerSendPreparation } from "./useComposerSendPreparation";
 import { useComposerScheduleMenu } from "./useComposerScheduleMenu";
@@ -120,6 +119,7 @@ import {
   useQueuedRowReorder,
 } from "./useQueuedRowReorder";
 import { notificationIncludesDraftContent, restoreQueuedMessage } from "./queued-message-content";
+import { PLAN_NOT_APPLIED_TO_STEER, planModeForSend, withPlanMode } from "./composer-plan-mode";
 import {
   Fragment,
   memo,
@@ -128,6 +128,8 @@ import {
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type Ref,
+  type RefObject,
+  type SetStateAction,
   useCallback,
   useEffect,
   useId,
@@ -181,6 +183,7 @@ import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automa
 import { describeAutoFixCoverage } from "./auto-fix-coverage";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
+import { LaunchpadWherePill, LaunchpadWhereSection } from "./LaunchpadWherePill";
 import type { ScheduledThreadAction, ScheduledThreadReviewPayload } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
@@ -213,6 +216,7 @@ import {
 } from "@pwragent/shared/codex-environment-action-runs";
 import { usageLimitProviderForBackend } from "@pwragent/shared/contracts/usage-activity";
 import {
+  ArrowUpIcon,
   BranchIcon,
   CheckIcon,
   ChevronUpIcon,
@@ -244,6 +248,7 @@ import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
+import type { ComposerConfigurationPreview } from "../../lib/useComposerConfigurationPreview";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import { LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
@@ -318,6 +323,13 @@ import {
 } from "../../lib/useFederatedThreadSearch";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
+import { isComposerTierFolded, type ComposerFoldTier } from "./composer-control-fold";
+import { useComposerRowFold } from "./useComposerRowFold";
+import {
+  CodexSkillProfileControl,
+  codexSkillProfileOptions,
+  describeCodexSkillProfileSnapshot,
+} from "./CodexSkillProfileControl";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { AgentPresetDialog } from "./AgentPresetDialog";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -377,10 +389,6 @@ import {
   parseGoalCommand,
   useComposerGoal,
 } from "./ComposerGoal";
-import {
-  ComposerTerminalToggle,
-  type ComposerTerminalToggleProps,
-} from "./ComposerTerminalToggle";
 import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./EnvironmentSetupRow";
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
@@ -518,6 +526,9 @@ export type ComposerProps = {
   /** Threads searchable from the inline `#` reference picker. */
   threads?: NavigationThreadSummary[];
   disabled?: boolean;
+  /** A preview supplies labels for the disabled controls until the owner confirms this selection. */
+  threadConfigurationReady?: boolean;
+  threadConfigurationPreview?: ComposerConfigurationPreview;
   autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
@@ -607,13 +618,6 @@ export type ComposerProps = {
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
-  /**
-   * Where the machine chip renders instead of the settings row. ThreadView
-   * puts it in the title rail, where the thread header names the machine
-   * after creation, so starting a thread neither moves the chip nor changes
-   * the composer's height. `null` while that slot is mounting.
-   */
-  launchpadMachineChipHost?: HTMLElement | null;
   launchpadError?: string;
   launchpadConfigurationError?: string;
   onReloadLaunchpadConfiguration?: () => Promise<void>;
@@ -787,7 +791,6 @@ export type ComposerProps = {
   providerCommands?: ThreadProviderCommand[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
-  integratedTerminal?: ComposerTerminalToggleProps;
   workspaceActionsBlocked?: boolean;
   /** Opens Settings → Environments on this workspace. Omitted, or for a
    *  thread whose environment runs on another machine, the Environment menu
@@ -1011,6 +1014,8 @@ type QueuedTurnDraft = {
   title?: string;
   reviewFix?: boolean;
   input?: AppServerTurnInputItem[];
+  /** Plan mode captured when the message was queued, sent on release. */
+  collaborationMode?: AppServerCollaborationModeRequest;
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
   scheduledSendAt?: number;
@@ -2296,6 +2301,15 @@ function ComposerThreadOptionsMenu(props: {
   tokenMiser?: boolean;
   tokenMiserOverridden?: boolean;
   onTokenMiserChange?: (enabled: boolean | null) => void;
+  /**
+   * The trigger, when the composer anchors a folded control's popover to it.
+   */
+  triggerRef?: RefObject<HTMLButtonElement | null>;
+  /**
+   * Items for the controls the row has folded into ⋮, drawn above the
+   * thread options. `close` shuts the menu before an item acts.
+   */
+  renderFoldedItems?: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [requestedJobMonitorCreation, setRequestedJobMonitorCreation] = useState<boolean>();
@@ -2303,8 +2317,10 @@ function ComposerThreadOptionsMenu(props: {
   const [jobMonitorEnabledDuringTurn, setJobMonitorEnabledDuringTurn] = useState<string>();
   const menuId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const ownTriggerRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = props.triggerRef ?? ownTriggerRef;
   const pointerOpenedMenu = useRef(false);
+  const foldedItems = open ? props.renderFoldedItems?.(() => setOpen(false)) : undefined;
   useMenuNavigation({ open, menuRef, triggerRef, onClose: () => setOpen(false), includeAriaDisabled: true });
   useEffect(() => {
     if (!open) return;
@@ -2314,7 +2330,7 @@ function ComposerThreadOptionsMenu(props: {
     };
     document.addEventListener("pointerdown", dismissOutside);
     return () => document.removeEventListener("pointerdown", dismissOutside);
-  }, [open]);
+  }, [open, triggerRef]);
   const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
     const composerSetup = target.closest<HTMLElement>(".composer__setup");
     if (!composerSetup) {
@@ -2706,6 +2722,15 @@ function ComposerThreadOptionsMenu(props: {
                 {" MCPs"}&hellip;
               </span>
             </button>
+          ) : null}
+          {/* The menu opens above ⋮. Its own switches stay at the top, out of
+              the way, and the controls folded out of the row sit nearest the
+              trigger, the ones used most last. */}
+          {foldedItems ? (
+            <>
+              <div className="composer-dropdown__separator" role="separator" />
+              {foldedItems}
+            </>
           ) : null}
         </div>
       ) : null}
@@ -3477,6 +3502,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 });
 
 function useComposerController(props: ComposerProps) {
+  const configurationReadOnly = Boolean(props.thread) && props.threadConfigurationReady === false;
+  const preview = configurationReadOnly ? props.threadConfigurationPreview : undefined;
+  const controlRuntime = props.thread?.codexEnvironmentRuntime ?? preview?.codexEnvironmentRuntime;
+  const controlSkillProfile = props.thread?.codexSkillProfile ?? preview?.codexSkillProfile;
   const [agentPresetScope, setAgentPresetScope] = useState<string>();
   const [jobMonitorCreationError, setJobMonitorCreationError] = useState<{ scopeKey?: string; message: string }>();
   // These unconditional local hooks keep the original controller lifetime
@@ -3555,6 +3584,10 @@ function useComposerController(props: ComposerProps) {
     scheduleMenuTriggerRef,
     addReferenceMenuOpen,
     setAddReferenceMenuOpen,
+    composerRowFold,
+    threadOptionsTriggerRef,
+    prMenuOpenRequest,
+    setPrMenuOpenRequest,
     setRecentFileReferenceState,
     recentFileReferences,
     scheduleTick,
@@ -3648,6 +3681,7 @@ function useComposerController(props: ComposerProps) {
     setExpandedStripItemKey,
     planModeEnabled,
     setPlanModeEnabled,
+    setPlanModeForScope,
     skillTokens,
     setSkillTokens,
     referenceInspectionCacheRef,
@@ -3876,6 +3910,11 @@ function useComposerController(props: ComposerProps) {
       scheduleMenuTriggerRef,
     } = useComposerScheduleMenu();
     const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
+    // Which control tiers the row has folded into ⋮; see `useComposerRowFold`.
+    const composerRowFold = useComposerRowFold();
+    // Folded controls whose popovers open from ⋮ anchor to its trigger.
+    const threadOptionsTriggerRef = useRef<HTMLButtonElement>(null);
+    const [prMenuOpenRequest, setPrMenuOpenRequest] = useState(0);
     // Recently referenced files for the reference picker's Files tab —
     // loaded lazily from the main process each time the picker opens.
     const [recentFileReferenceState, setRecentFileReferenceState] = useState<{
@@ -4077,7 +4116,20 @@ function useComposerController(props: ComposerProps) {
     // paging walks the same thumbnails the operator sees.
     // Escape-to-close is owned by `ImageLightbox` itself.
     const [expandedStripItemKey, setExpandedStripItemKey] = useState<string>();
-    const [planModeEnabled, setPlanModeEnabled] = useState(false);
+    // Plan is on per scope (see `withPlanMode`). A send that finishes after a
+    // move to another thread changes only its own scope's Plan.
+    const [planModeScopes, setPlanModeScopes] = useState<ReadonlySet<string>>(() => new Set());
+    const planModeEnabled = planModeScopes.has(composerScopeKey);
+    const setPlanModeEnabled = useCallback((next: SetStateAction<boolean>) => {
+      setPlanModeScopes((scopes) => withPlanMode(
+        scopes,
+        composerScopeKey,
+        typeof next === "function" ? next(scopes.has(composerScopeKey)) : next,
+      ));
+    }, [composerScopeKey]);
+    const setPlanModeForScope = useCallback((scopeKey: string, on: boolean) => {
+      setPlanModeScopes((scopes) => withPlanMode(scopes, scopeKey, on));
+    }, []);
     const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
       latestDraftSnapshotRef.current.snapshot.skillTokens
     );
@@ -4285,6 +4337,10 @@ function useComposerController(props: ComposerProps) {
       scheduleMenuTriggerRef,
       addReferenceMenuOpen,
       setAddReferenceMenuOpen,
+      composerRowFold,
+      threadOptionsTriggerRef,
+      prMenuOpenRequest,
+      setPrMenuOpenRequest,
       setRecentFileReferenceState,
       recentFileReferences,
       scheduleTick,
@@ -4378,6 +4434,7 @@ function useComposerController(props: ComposerProps) {
       setExpandedStripItemKey,
       planModeEnabled,
       setPlanModeEnabled,
+      setPlanModeForScope,
       skillTokens,
       setSkillTokens,
       referenceInspectionCacheRef,
@@ -4474,6 +4531,8 @@ function useComposerController(props: ComposerProps) {
     () => serializeDraftWithSkillTokens(draft, skillTokens),
     [draft, skillTokens]
   );
+  // Claude maps Plan to its own read-only plan permission mode.
+  const supportsPlanMode = PLAN_MODE_BACKENDS.has(props.launchpad?.backend ?? props.thread?.source ?? "");
   const codexGoalCommands = (props.launchpad?.backend ?? props.thread?.source) === "codex";
   const localGoalThreadId = codexGoalCommands && filesystemFederationTarget?.scope !== "remote"
     ? props.thread?.id
@@ -8872,15 +8931,11 @@ function useComposerController(props: ComposerProps) {
       return false;
     }
 
-    const collaborationMode =
-      !queued && planModeEnabled && supportsPlanMode
-        ? ({
-            mode: "plan",
-            settings: {
-              developerInstructions: null,
-            },
-          } satisfies AppServerCollaborationModeRequest)
-        : undefined;
+    // A released queue entry carries the mode it was queued with; a fresh
+    // send takes the toggle's.
+    const collaborationMode = queued
+      ? queued.collaborationMode
+      : planModeForSend("turn", planModeEnabled && supportsPlanMode).collaborationMode;
 
     let optimisticMessageId: string | undefined;
     if (!backendQueueSubmission) {
@@ -8896,9 +8951,11 @@ function useComposerController(props: ComposerProps) {
     }
     if (!queued && !backendQueueSubmission) {
       resetComposerDraftAndState(composerScopeKey);
-      if (collaborationMode) {
-        setPlanModeEnabled(false);
-      }
+    }
+    // Plan is used up once this send leaves, whether it starts a turn now or
+    // waits in the owner's queue; a failed send turns it back on below.
+    if (!queued && collaborationMode) {
+      setPlanModeEnabled(false);
     }
 
     try {
@@ -9245,6 +9302,10 @@ function useComposerController(props: ComposerProps) {
     }
 
     queueCurrentDraftInFlightRef.current = true;
+    const plan = planModeForSend(
+      props.thread ? "scheduled" : "local-queue",
+      planModeEnabled && supportsPlanMode,
+    );
     const complete = async (payload: ComposerTurnPayload): Promise<void> => {
       try {
         if (payload.input.length === 0) {
@@ -9271,6 +9332,9 @@ function useComposerController(props: ComposerProps) {
               input: payload.input,
               executionMode: props.thread.executionMode,
               model: selectedModelOption?.id,
+              ...(plan.collaborationMode
+                ? { collaborationMode: plan.collaborationMode }
+                : {}),
               reasoningEffort: supportsReasoning
                 ? selectedReasoningEffort
                 : undefined,
@@ -9292,6 +9356,9 @@ function useComposerController(props: ComposerProps) {
               id: `scheduled-projection:${response.action.id}`,
               scheduledActionId: response.action.id,
               input: payload.input,
+              ...(plan.collaborationMode
+                ? { collaborationMode: plan.collaborationMode }
+                : {}),
               text: canonicalDraft,
               imageAttachments,
               fileAttachments,
@@ -9311,10 +9378,16 @@ function useComposerController(props: ComposerProps) {
           enqueueQueuedTurn({
             id: createQueuedTurnId(),
             input: payload.input,
+            ...(plan.collaborationMode
+              ? { collaborationMode: plan.collaborationMode }
+              : {}),
             text: canonicalDraft,
             imageAttachments,
             fileAttachments,
           });
+        }
+        if (plan.clearPlan) {
+          setPlanModeEnabled(false);
         }
         recordComposerDraftHistory(
           composerScopeKey,
@@ -9547,15 +9620,10 @@ function useComposerController(props: ComposerProps) {
       return;
     }
 
-    const collaborationMode =
-      !reviewTarget && planModeEnabled && supportsPlanMode
-        ? ({
-            mode: "plan",
-            settings: {
-              developerInstructions: null,
-            },
-          } satisfies AppServerCollaborationModeRequest)
-        : undefined;
+    // A review is not a message, so Plan waits for the next one.
+    const collaborationMode = reviewTarget
+      ? undefined
+      : planModeForSend("scheduled", planModeEnabled && supportsPlanMode).collaborationMode;
     const submittedScopeKey = composerScopeKey;
     const submittedSnapshot = beginLaunchpadSubmission(submittedScopeKey);
     setSendError(undefined);
@@ -9783,6 +9851,9 @@ function useComposerController(props: ComposerProps) {
             input: payload.input,
             executionMode: props.thread.executionMode,
             model: selectedModelOption?.id,
+            ...(pending.collaborationMode
+              ? { collaborationMode: pending.collaborationMode }
+              : {}),
             reasoningEffort: supportsReasoning
               ? selectedReasoningEffort
               : undefined,
@@ -10086,9 +10157,12 @@ function useComposerController(props: ComposerProps) {
       return;
     }
 
+    const plan = planModeForSend("steer", planModeEnabled && supportsPlanMode);
     const pending = {
       id: createQueuedTurnId(),
       text: canonicalDraft,
+      // For the new turn the owner starts if the running one has ended.
+      ...(plan.collaborationMode ? { collaborationMode: plan.collaborationMode } : {}),
       imageAttachments,
       fileAttachments,
     };
@@ -10103,6 +10177,12 @@ function useComposerController(props: ComposerProps) {
     );
     const continueSteering = (accepted?: PendingSteerDraft): void => {
       if (accepted) {
+        if (plan.clearPlan) {
+          setPlanModeEnabled(false);
+        }
+        if (plan.notApplied) {
+          showComposerNotice({ title: "Plan mode", message: PLAN_NOT_APPLIED_TO_STEER });
+        }
         void submitPendingSteer(
           accepted,
           expectedTurnId,
@@ -10147,6 +10227,9 @@ function useComposerController(props: ComposerProps) {
           turn: {
             input: queued.input,
             executionMode: thread.executionMode,
+            ...(queued.collaborationMode
+              ? { collaborationMode: queued.collaborationMode }
+              : {}),
           },
         });
         const action = response.action;
@@ -10156,6 +10239,9 @@ function useComposerController(props: ComposerProps) {
             id: `scheduled-projection:${action.id}`,
             scheduledActionId: action.id,
             input: queued.input,
+            ...(queued.collaborationMode
+              ? { collaborationMode: queued.collaborationMode }
+              : {}),
             text: queued.text,
             imageAttachments: queued.imageAttachments,
             fileAttachments: queued.fileAttachments,
@@ -10386,10 +10472,12 @@ function useComposerController(props: ComposerProps) {
       const destination = getLaunchpadComposerDestination(draftStore, scopeKey);
       const snapshot = latestDraftSnapshotRef.current.snapshot;
       const text = canonicalDraft;
+      const plan = planModeForSend("local-queue", planModeEnabled && supportsPlanMode);
       const queued: QueuedTurnDraft = {
         id: createQueuedTurnId(),
         text,
         backendQueuePending: true,
+        ...(plan.collaborationMode ? { collaborationMode: plan.collaborationMode } : {}),
         imageAttachments: snapshot.imageAttachments,
         fileAttachments: snapshot.fileAttachments ?? [],
       };
@@ -10397,6 +10485,9 @@ function useComposerController(props: ComposerProps) {
       // launchpad can become a thread. The destination follows that handoff.
       enqueueQueuedTurnInScope(scopeKey, queued);
       resetComposerDraftAndState(scopeKey);
+      if (plan.clearPlan) {
+        setPlanModeEnabled(false);
+      }
       try {
         const payload = await buildTurnPayload(text, imageAttachments, fileAttachments, skillTokens);
         updateQueuedTurnInScope(destination.scopeKey, queued, (current) => ({
@@ -10519,6 +10610,8 @@ function useComposerController(props: ComposerProps) {
             updateSending(true);
           }
           const queueEntryId = createQueuedTurnId();
+          // Remembered so editing the queued message turns Plan back on.
+          const projectedPlan = planModeForSend("turn", planModeEnabled && supportsPlanMode);
           const backendQueueProjection: QueuedTurnDraft = {
             id: queueEntryId,
             backendQueuePending: true,
@@ -10527,6 +10620,9 @@ function useComposerController(props: ComposerProps) {
             imageAttachments,
             fileAttachments,
             input: payload.input,
+            ...(projectedPlan.collaborationMode
+              ? { collaborationMode: projectedPlan.collaborationMode }
+              : {}),
           };
           enqueueQueuedTurnInScope(
             submittedScopeKey,
@@ -10624,14 +10720,7 @@ function useComposerController(props: ComposerProps) {
     } else {
       payload = payloadOrPromise;
     }
-    const collaborationMode = planModeEnabled && supportsPlanMode
-      ? ({
-          mode: "plan",
-          settings: {
-            developerInstructions: null,
-          },
-        } satisfies AppServerCollaborationModeRequest)
-      : undefined;
+    const collaborationMode = planModeForSend("turn", planModeEnabled && supportsPlanMode).collaborationMode;
 
     if (payload.input.length === 0 || props.disabled) {
       if (submittedLaunchpad) {
@@ -11847,19 +11936,23 @@ function useComposerController(props: ComposerProps) {
     filesystemFederationTarget?.scope,
   ]);
 
-  const runThreadCodexEnvironmentAction = async (): Promise<void> => {
+  // Runs the selected command (the row's ▶), or the one a ⋮ command row's ▶
+  // names, without making it the selection.
+  const runThreadCodexEnvironmentAction = async (
+    chosenAction: (typeof threadCodexEnvironmentActions)[number] | undefined = selectedThreadCodexAction,
+  ): Promise<void> => {
     if (
+      configurationReadOnly ||
       !props.thread ||
       !props.desktopApi?.runCodexEnvironmentAction ||
-      !selectedThreadCodexAction ||
-      !currentThreadEnvActionStartingKey
+      !chosenAction
     ) {
       return;
     }
 
     const thread = props.thread;
-    const action = selectedThreadCodexAction;
-    const startingKey = currentThreadEnvActionStartingKey;
+    const action = chosenAction;
+    const startingKey = { actionId: action.id, backend: thread.source, threadId: thread.id };
     const cwd = workspaceOpenPath;
     setEnvironmentError(undefined);
     props.onPendingStatusChange?.(`Starting ${action.name}`);
@@ -11895,6 +11988,7 @@ function useComposerController(props: ComposerProps) {
     actionId?: string,
   ): Promise<void> => {
     if (
+      configurationReadOnly ||
       !props.thread ||
       !props.desktopApi?.setCodexThreadEnvironment
     ) {
@@ -12060,7 +12154,6 @@ function useComposerController(props: ComposerProps) {
     activeReviewerRecentIndex,
     patchReviewer,
     workspaceLabel,
-    supportsPlanMode,
     supportsSteering,
     supportsInterruptSteer,
     launchpadSubmitting,
@@ -12092,7 +12185,6 @@ function useComposerController(props: ComposerProps) {
     threadCodexEnvironmentActions,
     threadCodexEnvironmentPickerOptions,
     selectedThreadCodexAction,
-    currentThreadEnvActionStartingKey,
     currentThreadEnvActionStarting,
     threadEnvironmentBusy,
     threadEnvironmentValue,
@@ -12131,7 +12223,6 @@ function useComposerController(props: ComposerProps) {
     handleAutocompleteKeyDown,
     composerDisabled,
     launchpadMachine,
-    renderLaunchpadMachineChip,
     composerPlaceholder,
     handleComposerChange,
     handleComposerClick,
@@ -12429,8 +12520,6 @@ function useComposerController(props: ComposerProps) {
       setSendError(undefined);
     };
     const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
-    // Claude maps Plan to its own read-only plan permission mode.
-    const supportsPlanMode = PLAN_MODE_BACKENDS.has(props.launchpad?.backend ?? props.thread?.source ?? "");
     const supportsSteering =
       Boolean(backend?.capabilities.steerTurn) &&
       selectedModelOption?.supportsSteering !== false;
@@ -12611,7 +12700,7 @@ function useComposerController(props: ComposerProps) {
     // sibling, so the button is where it gets named.
     const submitButtonSteerHint =
       submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
-    const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
+    const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint, submitButtonLabel);
     // Mid-turn the send menu also names how this message can meet the running
     // turn. Steer stays listed where the provider or model cannot do it,
     // dimmed with the reason, so the menu explains the gap. Interrupt is
@@ -12702,25 +12791,25 @@ function useComposerController(props: ComposerProps) {
       (environment) => environment.id === props.launchpad?.codexEnvironmentId,
     );
     const threadCodexEnvironmentOptions =
-      props.thread?.codexEnvironmentOptions ?? [];
+      props.thread?.codexEnvironmentOptions ?? preview?.codexEnvironmentOptions ?? [];
     const selectedThreadCodexEnvironmentOption = threadCodexEnvironmentOptions.find(
       (environment) =>
-        environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
+        environment.id === controlRuntime?.environmentId,
     );
     const runtimeThreadCodexEnvironmentActions =
-      props.thread?.codexEnvironmentRuntime?.actions ?? [];
+      controlRuntime?.actions ?? [];
     const threadCodexEnvironmentActions =
       runtimeThreadCodexEnvironmentActions.length > 0
         ? runtimeThreadCodexEnvironmentActions
         : selectedThreadCodexEnvironmentOption?.actions ?? [];
     const selectedThreadCodexEnvironmentForAction =
       selectedThreadCodexEnvironmentOption ??
-      (props.thread?.codexEnvironmentRuntime?.environmentId
+      (controlRuntime?.environmentId
         ? {
-            id: props.thread.codexEnvironmentRuntime.environmentId,
-            name: props.thread.codexEnvironmentRuntime.environmentName
-              ?? props.thread.codexEnvironmentRuntime.environmentId,
-            sourcePath: props.thread.codexEnvironmentRuntime.sourcePath ?? "",
+            id: controlRuntime.environmentId,
+            name: controlRuntime.environmentName
+              ?? controlRuntime.environmentId,
+            sourcePath: controlRuntime.sourcePath ?? "",
             actions: threadCodexEnvironmentActions,
           }
         : undefined);
@@ -12736,13 +12825,13 @@ function useComposerController(props: ComposerProps) {
     const selectedThreadCodexActionId = resolveSelectedCodexEnvironmentActionId({
       environment: selectedThreadCodexEnvironmentForAction,
       actionId:
-        props.thread?.codexEnvironmentRuntime?.environmentId
-          ? props.thread.codexEnvironmentRuntime.selectedActionIdByEnvironmentId?.[
-              props.thread.codexEnvironmentRuntime.environmentId
+        controlRuntime?.environmentId
+          ? controlRuntime.selectedActionIdByEnvironmentId?.[
+              controlRuntime.environmentId
             ]
           : undefined,
       actionIdByEnvironmentId:
-        props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId,
+        controlRuntime?.selectedActionIdByEnvironmentId,
     });
     const selectedThreadCodexAction =
       threadCodexEnvironmentActions.find(
@@ -12794,11 +12883,11 @@ function useComposerController(props: ComposerProps) {
     const threadEnvironmentValue = currentThreadEnvSelecting
       ? currentThreadEnvSelecting.environmentId ?? ""
       : runningThreadEnvSetup?.environmentId
-        ?? props.thread?.codexEnvironmentRuntime?.environmentId
+        ?? controlRuntime?.environmentId
         ?? "";
     const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
     const showPrAutoDispatchToggle = Boolean(
-      props.thread && getPrimaryWorkspaceRepository(props.thread),
+      props.thread && (getPrimaryWorkspaceRepository(props.thread) || preview?.primaryGitRepository),
     );
     const hasAttachedPullRequest = props.thread
       ? hasPrimaryWorkspacePullRequest(props.thread)
@@ -13389,9 +13478,6 @@ function useComposerController(props: ComposerProps) {
     // durable text and attachments while federation reconnects.
     const composerDisabled = false;
     const launchpadMachine = props.launchpadMachine;
-    const launchpadMachineChipHost = props.launchpadMachineChipHost;
-    const renderLaunchpadMachineChip = (chip: ReactNode): ReactNode =>
-      launchpadMachineChipHost ? createPortal(chip, launchpadMachineChipHost) : chip;
     const launchpadRemoteMachineLabel = launchpadMachine?.currentInstanceId
       ? launchpadMachine.targets.find(
         (target) => target.instanceId === launchpadMachine.currentInstanceId,
@@ -13732,7 +13818,6 @@ function useComposerController(props: ComposerProps) {
       activeReviewerRecentIndex,
       patchReviewer,
       workspaceLabel,
-      supportsPlanMode,
       supportsSteering,
       supportsInterruptSteer,
       launchpadSubmitting,
@@ -13764,7 +13849,6 @@ function useComposerController(props: ComposerProps) {
       threadCodexEnvironmentActions,
       threadCodexEnvironmentPickerOptions,
       selectedThreadCodexAction,
-      currentThreadEnvActionStartingKey,
       currentThreadEnvActionStarting,
       threadEnvironmentBusy,
       threadEnvironmentValue,
@@ -13803,7 +13887,6 @@ function useComposerController(props: ComposerProps) {
       handleAutocompleteKeyDown,
       composerDisabled,
       launchpadMachine,
-      renderLaunchpadMachineChip,
       composerPlaceholder,
       handleComposerChange,
       handleComposerClick,
@@ -14258,6 +14341,11 @@ function useComposerController(props: ComposerProps) {
                   const editQueuedTurn = (editable = queued): void => {
                     acknowledgeQueuedFailure(queued);
                     removeQueuedTurnInScope(queuedScopeKey, queued);
+                    // A Plan message comes back with Plan on, so sending it
+                    // again keeps its mode.
+                    if (editable.collaborationMode && supportsPlanMode) {
+                      setPlanModeForScope(queuedScopeKey, true);
+                    }
                     if (activeComposerScopeKeyRef.current !== queuedScopeKey) {
                       const currentDraft = draftStore.get(queuedScopeKey);
                       if (
@@ -15919,42 +16007,532 @@ function useComposerController(props: ComposerProps) {
     };
   }
 
+  /**
+   * A control that folds into ⋮ with `tier` when the row runs out of room
+   * (`useComposerRowFold`). A folded control stays mounted, out of the flow
+   * and inert, so the row can still measure it. `live` keeps a folded
+   * control's own popover usable while ⋮ has opened it.
+   */
+  function renderFoldSlot(
+    tier: ComposerFoldTier | undefined,
+    control: ReactNode,
+    live = false,
+  ): ReactNode {
+    if (tier !== undefined && !composerTierShown(tier)) return null;
+    const folded = tier !== undefined
+      && isComposerTierFolded(tier, composerRowFold.foldedTierCount);
+    return (
+      <span
+        aria-hidden={folded && !live ? true : undefined}
+        className={`composer__fold-slot${folded ? " is-folded" : ""}${folded && live ? " is-live" : ""}`}
+        data-composer-fold={tier}
+        inert={folded && !live}
+      >
+        {configurationReadOnly && (tier === "details" || tier === "run") ? (
+          <fieldset className="composer__pending-controls" disabled>{control}</fieldset>
+        ) : control}
+      </span>
+    );
+  }
+
+  function composerTierFolded(tier: ComposerFoldTier): boolean {
+    return composerTierShown(tier)
+      && isComposerTierFolded(tier, composerRowFold.foldedTierCount);
+  }
+
+  /** A cold selection has no configuration to display. A warm selection can show its preview. */
+  function composerTierShown(tier: ComposerFoldTier): boolean {
+    const configurationPending = configurationReadOnly && !preview;
+    return !configurationPending || (tier !== "details" && tier !== "run");
+  }
+
+  /** The `skillProfile` row of the control row, read by the row and by ⋮. */
+  function composerSkillProfileProps() {
+    return {
+      profiles: props.codexSkillProfiles,
+      selected: launchpadSkillProfile,
+      selectionId: props.launchpad?.codexSkillProfileId,
+      snapshot: controlSkillProfile,
+      disabled: launchpadSubmitting || composerDisabled,
+      onChange: props.launchpad
+        ? (id: string | null) => handleLaunchpadPatch({ codexSkillProfileId: id })
+        : undefined,
+      onEdit: filesystemFederationTarget?.scope !== "remote" ? props.onOpenCodexSkillProfiles : undefined,
+    };
+  }
+
+  /**
+   * ⋮ rows for the controls the row has folded, in fold order. Each one does
+   * what its control does, so nothing is out of reach on a narrow pane.
+   */
+  function renderFoldedComposerItems(close: () => void): ReactNode {
+    // Plain actions come first, then each titled choice (Workspace,
+    // Environment, Command...) as its own group between separators, so an
+    // action never reads as one of the choices above it.
+    const actions: ReactNode[] = [];
+    const groups: ReactNode[][] = [];
+    let commandGroup: ReactNode[] | undefined;
+    const label = (text: string) => (
+      <div className="composer-thread-options__section" key={`label:${text}`} role="presentation">
+        {text}
+      </div>
+    );
+    // A switch (`checked` given) reads as a checkbox item, like ⋮'s others.
+    const action = (key: string, text: string, onSelect: () => void, disabled = false, checked?: boolean) => (
+      <button
+        aria-checked={checked}
+        className="composer-dropdown__option"
+        disabled={disabled}
+        key={key}
+        role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
+        type="button"
+        onClick={() => {
+          close();
+          onSelect();
+        }}
+      >
+        <span aria-hidden="true" className="composer-dropdown__check" />
+        {text}
+      </button>
+    );
+    const configurationAction = (key: string, text: string, onSelect: () => void, disabled = false) =>
+      action(key, text, onSelect, configurationReadOnly || disabled);
+    const choices = (
+      key: string,
+      title: string,
+      options: readonly { label: string; value: string; disabled?: boolean }[],
+      value: string,
+      onSelect: (value: string) => void,
+      disabled = false,
+    ) => [
+      label(title),
+      ...options.map((option) => (
+        <button
+          aria-checked={option.value === value}
+          className="composer-dropdown__option"
+          disabled={configurationReadOnly || disabled || option.disabled}
+          key={`${key}:${option.value}`}
+          role="menuitemradio"
+          type="button"
+          onClick={() => {
+            close();
+            if (option.value !== value) onSelect(option.value);
+          }}
+        >
+          <span aria-hidden="true" className="composer-dropdown__check">
+            {option.value === value ? "✓" : ""}
+          </span>
+          {option.label}
+        </button>
+      )),
+    ];
+
+    if (composerTierFolded("details")) {
+      if (props.thread && props.onPickAndAttachDirectoryToThread) {
+        // The row's control explains in a tooltip why a remote thread can't
+        // add one; a menu row has no tooltip, so it says so itself.
+        actions.push(configurationAction("add-directory", filesystemFederationTarget
+          ? "Add directory… (local instance only)"
+          : "Add directory…", () => {
+          props.onClearPickDirectoryError?.();
+          props.onPickAndAttachDirectoryToThread?.();
+        }, props.pickingDirectory || Boolean(filesystemFederationTarget)));
+      }
+      if (!props.launchpad && workspaceLabel && threadWorkspace) {
+        const workspace: ReactNode[] = [label(`Workspace · ${workspaceLabel}`)];
+        if (threadWorkspace.mode === "worktree") {
+          workspace.push(configurationAction("handoff-worktree", "Handoff to New Worktree",
+            () => openHandoffDialog("worktree-to-worktree"), !canHandoffThreadWorkspace));
+        }
+        workspace.push(configurationAction(
+          "handoff",
+          threadWorkspace.mode === "worktree" ? "Handoff to Local" : "Handoff to New Worktree",
+          () => openHandoffDialog(threadWorkspace.mode === "worktree" ? "worktree-to-local" : "local-to-worktree"),
+          !canHandoffThreadWorkspace,
+        ));
+        workspace.push(configurationAction("move-project", "Move to Project",
+          () => openHandoffDialog("to-project"), !canMoveThreadProject));
+        groups.push(workspace);
+      }
+      if (props.thread && showPrAutoDispatchToggle) {
+        actions.push(configurationAction("pr-automation", "Pull request automation…",
+          () => setPrMenuOpenRequest((current) => current + 1)));
+      }
+      if ((props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length) {
+        groups.push(choices(
+          "service-tier",
+          "Service tier",
+          backend.launchpadOptions.serviceTiers.map((tier) => ({ label: tier, value: tier })),
+          selectedServiceTier ?? "",
+          (serviceTier) => {
+            if (props.launchpad) handleLaunchpadPatch({ serviceTier });
+            else handleThreadModelSettingsPatch({ serviceTier });
+          },
+          launchpadSubmitting,
+        ));
+      }
+      if (controlSkillProfile || props.launchpad?.backend === "codex") {
+        const skillProfile = composerSkillProfileProps();
+        if (skillProfile.snapshot) {
+          const { label: snapshotLabel } = describeCodexSkillProfileSnapshot(skillProfile.snapshot, skillProfile.profiles);
+          groups.push([label(`Skill profile · ${snapshotLabel}`)]);
+        } else {
+          const skillChoices = codexSkillProfileOptions(skillProfile);
+          if (skillChoices) {
+            const skillGroup = choices(
+              "skill-profile",
+              "Skill profile",
+              skillChoices.options,
+              skillProfile.selectionId ?? "",
+              (value) => skillProfile.onChange?.(value || null),
+              skillProfile.disabled,
+            );
+            if (skillProfile.onEdit) {
+              skillGroup.push(configurationAction("skill-profile-edit", "Edit skill profiles…", skillProfile.onEdit));
+            }
+            groups.push(skillGroup);
+          }
+        }
+      }
+      if (props.launchpad && launchpadCodexEnvironmentOptions.length > 0) {
+        groups.push(choices(
+          "environment",
+          "Environment",
+          [
+            { label: "No environment", value: "" },
+            ...launchpadCodexEnvironmentOptions.map((environment) => ({
+              label: environment.name,
+              value: environment.id,
+            })),
+          ],
+          props.launchpad.codexEnvironmentId ?? "",
+          (value) => {
+            const environment = launchpadCodexEnvironmentOptions.find((candidate) => candidate.id === value);
+            handleLaunchpadPatch({
+              codexEnvironmentId: environment?.id,
+              codexEnvironmentExecutionTarget: environment
+                ? props.launchpad?.codexEnvironmentExecutionTarget ?? "local"
+                : undefined,
+              codexEnvironmentActionId: undefined,
+            });
+          },
+          launchpadSubmitting,
+        ));
+      }
+      if (!props.launchpad && threadCodexEnvironmentPickerOptions.length > 0) {
+        groups.push(choices(
+          "environment",
+          "Environment",
+          [
+            { label: "No environment", value: "" },
+            ...threadCodexEnvironmentPickerOptions.map((environment) => ({
+              label: environment.name,
+              value: environment.id,
+              disabled: !threadCodexEnvironmentOptions.includes(environment),
+            })),
+          ],
+          threadEnvironmentValue,
+          (value) => {
+            const environment = threadCodexEnvironmentPickerOptions.find((candidate) => candidate.id === value);
+            const actionId = resolveSelectedCodexEnvironmentActionId({
+              environment,
+              actionIdByEnvironmentId: props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId,
+            });
+            void setThreadCodexEnvironment(value || undefined, actionId);
+          },
+          !props.desktopApi?.setCodexThreadEnvironment,
+        ));
+      }
+      if (props.thread && controlRuntime && threadCodexEnvironmentActions.length > 0) {
+        // Choosing a command sets what the row's ▶ runs; each command's own
+        // ▶ runs it now and leaves that choice alone.
+        const thread = props.thread;
+        const runUnavailable = configurationReadOnly || threadEnvironmentBusy || !props.desktopApi?.runCodexEnvironmentAction;
+        commandGroup = [
+          label("Command"),
+          ...threadCodexEnvironmentActions.map((environmentAction) => {
+            const selected = environmentAction.id === selectedThreadCodexAction?.id;
+            const starting = sameThreadEnvActionStartingKey(threadEnvActionStarting, {
+              actionId: environmentAction.id,
+              backend: thread.source,
+              threadId: thread.id,
+            });
+            return (
+              <div className="composer-thread-options__command" key={`command:${environmentAction.id}`} role="none">
+                <button
+                  aria-checked={selected}
+                  className="composer-dropdown__option"
+                  disabled={runUnavailable}
+                  role="menuitemradio"
+                  type="button"
+                  onClick={() => {
+                    close();
+                    if (!selected) {
+                      void setThreadCodexEnvironment(thread.codexEnvironmentRuntime?.environmentId, environmentAction.id);
+                    }
+                  }}
+                >
+                  <span aria-hidden="true" className="composer-dropdown__check">
+                    {selected ? "✓" : ""}
+                  </span>
+                  {environmentAction.name}
+                </button>
+                <button
+                  aria-label={`Run ${environmentAction.name}`}
+                  className="composer-thread-options__command-run"
+                  disabled={runUnavailable || starting}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    close();
+                    void runThreadCodexEnvironmentAction(environmentAction);
+                  }}
+                >
+                  {starting ? (
+                    <PendingSpinner
+                      pairing="standalone"
+                      standaloneReason="A command's Run button swaps its play glyph for a bare ring; its only text is the aria-label."
+                    />
+                  ) : (
+                    <PlayIcon size={13} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            );
+          }),
+        ];
+      }
+      if (workspaceOpenPath && editorApplication) {
+        actions.push(configurationAction("editor", `Open in ${editorApplication.name}`,
+          () => void openWorkspaceApplication(editorApplication)));
+      }
+      if (workspaceOpenPath && terminalApplication) {
+        actions.push(configurationAction("terminal-app", `Open in ${terminalApplication.name}`,
+          () => void openWorkspaceApplication(terminalApplication)));
+      }
+      if (localPresetLaunchpadForRow()?.agent) {
+        const presetLaunchpad = localPresetLaunchpadForRow()!;
+        actions.push(configurationAction("agent-preset", `Agent · ${presetLaunchpad.agent!.name}…`,
+          () => setAgentPresetScope(presetLaunchpad.directoryKey), launchpadSubmitting));
+      }
+    }
+    if (supportsPlanMode && !planModeEnabled && composerTierFolded("details")) {
+      actions.push(action("plan", "Plan mode", () => setPlanModeEnabled(true), sending, false));
+    }
+    if (composerTierFolded("run") && controlRuntime && !commandGroup) {
+      actions.push(configurationAction(
+        "run",
+        selectedThreadCodexAction ? `Run ${selectedThreadCodexAction.name}` : "Run command",
+        () => void runThreadCodexEnvironmentAction(),
+        currentThreadEnvActionStarting
+          || threadEnvironmentBusy
+          || !selectedThreadCodexAction
+          || !props.desktopApi?.runCodexEnvironmentAction,
+      ));
+    }
+    if (composerTierFolded("dictation") && dictationApi && dictation.phase === "idle" && !preparingSend) {
+      actions.push(action("dictation", dictationLabel, toggleDictation, launchpadSubmitting || forking));
+    }
+    if (composerTierFolded("attach") && composerHasReferencePicker()) {
+      actions.push(action("attach", "Add reference…", () => {
+        setAddReferenceMenuOpen(true);
+        void refreshRecentFileReferences();
+      }, launchpadSubmitting));
+    }
+    // Nearest ⋮ last: the choices, then the actions, then the commands to run.
+    const blocks = [
+      ...groups,
+      ...(actions.length > 0 ? [actions] : []),
+      ...(commandGroup ? [commandGroup] : []),
+    ];
+    return blocks.length > 0
+      ? blocks.flatMap((block, index) => index === 0 ? block : [
+          <div className="composer-dropdown__separator" key={`separator:${index}`} role="separator" />,
+          ...block,
+        ])
+      : undefined;
+  }
+
+  function composerHasReferencePicker(): boolean {
+    return Boolean(props.onPickDirectoryForReference || props.desktopApi?.pickFileFromDisk);
+  }
+
+  function localPresetLaunchpadForRow() {
+    return props.desktopApi?.manageAgentPresets && props.onUpdateLaunchpad
+      && filesystemFederationTarget?.scope !== "remote" ? props.launchpad : undefined;
+  }
+
+  /** "new worktree from main", "local checkout on fix/x" or "same worktree". */
+  function launchpadCheckoutLabel(): string | undefined {
+    if (!props.launchpad) return undefined;
+    if (props.directory?.kind !== "directory" && !isSubthreadLaunchpadKey(props.launchpad.directoryKey)) {
+      return undefined;
+    }
+    if (launchpadWorkspaceValue === "worktree") {
+      const base = normalizeSelectableLaunchpadBranch(props.launchpad.branchName)
+        ?? normalizeSelectableLaunchpadBranch(props.directory?.gitStatus?.currentBranch)
+        ?? props.directory?.gitStatus?.defaultBranch;
+      return base ? `new worktree from ${base}` : "new worktree";
+    }
+    const local = launchpadWorkspaceOptions.find((option) => option.value === "local")?.label;
+    if (local === "Same worktree") return "same worktree";
+    const branch = props.directory?.gitStatus?.currentBranch;
+    return branch ? `local checkout on ${branch}` : "local checkout";
+  }
+
+  function renderLaunchpadWherePill(): ReactNode {
+    if (!props.launchpad) return null;
+    const hasProjectPicker = Boolean(props.onSelectDirectoryFromPicker || props.onPickAndRegisterDirectory);
+    const projectLabel = props.directory?.kind === "directory"
+      ? props.directory.label
+      : props.launchpad.directoryLabel || "No selected project";
+    return (
+      <LaunchpadWherePill
+        checkoutLabel={launchpadCheckoutLabel()}
+        disabled={launchpadSubmitting}
+        projectLabel={projectLabel}
+      >
+        {hasProjectPicker ? (
+          <LaunchpadWhereSection label="Project">
+            <ProjectPicker
+              value={
+                props.directory && props.directory.kind === "directory"
+                  ? props.directory
+                  : undefined
+              }
+              directories={props.directories ?? []}
+              disabled={launchpadSubmitting}
+              nativePickingDisabled={Boolean(filesystemFederationTarget)}
+              pickError={props.pickDirectoryError}
+              picking={props.pickingDirectory}
+              onSelect={(directory) => {
+                props.onClearPickDirectoryError?.();
+                prepareDraftRetarget(
+                  directory.key,
+                  props.launchpad?.federationTarget,
+                );
+                props.onSelectDirectoryFromPicker?.(directory);
+              }}
+              onSelectNoDirectory={
+                props.onSelectNoDirectoryFromPicker
+                  ? () => {
+                      props.onClearPickDirectoryError?.();
+                      props.onSelectNoDirectoryFromPicker?.();
+                    }
+                  : undefined
+              }
+              onPickFromDisk={
+                props.onPickAndRegisterDirectory
+                  ? () => {
+                      props.onClearPickDirectoryError?.();
+                      props.onPickAndRegisterDirectory?.();
+                    }
+                  : undefined
+              }
+            />
+          </LaunchpadWhereSection>
+        ) : null}
+        <LaunchpadWhereSection label="Checkout">
+          <ComposerDropdown
+            ariaLabel="Workspace mode"
+            compact
+            disabled={
+              launchpadSubmitting ||
+              !props.onUpdateLaunchpad ||
+              launchpadWorkspaceOptions.length <= 1
+            }
+            value={launchpadWorkspaceValue}
+            options={launchpadWorkspaceOptions.map((option) => ({
+              label: option.label,
+              value: option.value,
+            }))}
+            tooltip={
+              props.directory?.gitStatus?.worktreeCreationAvailable === false
+                ? props.directory.gitStatus.worktreeCreationUnavailableReason
+                : undefined
+            }
+            onPointerEnter={
+              props.directory?.gitStatus?.worktreeCreationAvailable === false
+              && props.desktopApi?.refreshDirectoryGitStatuses
+                ? () => {
+                    void props.desktopApi?.refreshDirectoryGitStatuses?.({
+                      directoryKeys: [props.launchpad!.directoryKey],
+                      federationTarget: filesystemFederationTarget,
+                      force: true,
+                    });
+                  }
+                : undefined
+            }
+            onChange={(value) => {
+              handleLaunchpadPatch({
+                workMode: value as NavigationLaunchpadDraft["workMode"],
+              });
+            }}
+          />
+          {launchpadWorkspaceValue === "worktree" && launchpadBranchPickerOptions.length > 0 ? (
+            <div className="composer-where__branch">
+              <BranchPicker
+                ariaLabel="Base branch"
+                id="launchpad-branch"
+                disabled={launchpadSubmitting}
+                projectLabel={props.directory?.label}
+                value={
+                  normalizeSelectableLaunchpadBranch(props.launchpad.branchName) ??
+                  normalizeSelectableLaunchpadBranch(props.directory?.gitStatus?.currentBranch) ??
+                  props.directory?.gitStatus?.defaultBranch ??
+                  ""
+                }
+                options={launchpadBranchPickerOptions}
+                onChange={(value) => {
+                  handleLaunchpadPatch({ branchName: value || undefined });
+                }}
+              />
+            </div>
+          ) : null}
+        </LaunchpadWhereSection>
+        {launchpadMachine ? (
+          <LaunchpadWhereSection label="Machine">
+            <LaunchpadMachineChip
+              control={launchpadMachine}
+              disabled={launchpadSubmitting}
+              menuPlacement="below"
+              onRetarget={(instanceId) => {
+                void (async () => {
+                  const sourceScopeKey = latestDraftSnapshotRef.current.scopeKey;
+                  const plan = await launchpadMachine.planRetarget?.(instanceId);
+                  // The peer read can take a while. A draft only follows the
+                  // operator if they are still on the launchpad it came from.
+                  if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
+                    return;
+                  }
+                  // The draft moves to the picked machine's launchpad.
+                  prepareDraftRetarget(
+                    plan.directoryKey,
+                    instanceId ? { scope: "remote", instanceId } : undefined,
+                  );
+                  await plan.open();
+                })();
+              }}
+            />
+          </LaunchpadWhereSection>
+        ) : null}
+      </LaunchpadWherePill>
+    );
+  }
+
   function renderComposerToolbar(): ReactNode {
     const modelSettingsPicker = buildComposerModelSettingsPicker();
-    const localPresetLaunchpad = props.desktopApi?.manageAgentPresets && props.onUpdateLaunchpad
-      && filesystemFederationTarget?.scope !== "remote" ? props.launchpad : undefined;
+    const localPresetLaunchpad = localPresetLaunchpadForRow();
+    const skillProfile = composerSkillProfileProps();
+    const attachFolded = composerTierFolded("attach");
+    // Dictation that is listening never folds: its button is how it ends.
+    const dictationTier: ComposerFoldTier | undefined = dictation.phase === "idle" ? "dictation" : undefined;
     return (
       props.launchpad || props.thread ? (
         <fieldset
           className="composer__pending-controls"
           disabled={preparingSend}
         >
-          {props.launchpad && launchpadMachine && props.launchpadMachineChipHost !== null ? (
-            renderLaunchpadMachineChip(
-              <LaunchpadMachineChip
-                control={launchpadMachine}
-                disabled={launchpadSubmitting}
-                menuPlacement={props.launchpadMachineChipHost ? "below" : undefined}
-                onRetarget={(instanceId) => {
-                  void (async () => {
-                    const sourceScopeKey = latestDraftSnapshotRef.current.scopeKey;
-                    const plan = await launchpadMachine.planRetarget?.(instanceId);
-                    // The peer read can take a while. A draft only follows the
-                    // operator if they are still on the launchpad it came from.
-                    if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
-                      return;
-                    }
-                    // The draft moves to the picked machine's launchpad.
-                    prepareDraftRetarget(
-                      plan.directoryKey,
-                      instanceId ? { scope: "remote", instanceId } : undefined,
-                    );
-                    await plan.open();
-                  })();
-                }}
-              />,
-            )
-          ) : null}
           {props.thread && !props.launchpad && !backend?.launchpadOptions?.models?.length ? (
             // A thread's pill never names its provider, and without a model
             // list the pill (if any) holds only effort, so the provider
@@ -16015,132 +16593,69 @@ function useComposerController(props: ComposerProps) {
             />
           ) : null}
 
-          {props.launchpad &&
-          (props.onSelectDirectoryFromPicker || props.onPickAndRegisterDirectory) ? (
-            // Project picker (issue #223). Only render in the launchpad
-            // surface. Existing threads move through the workspace menu.
-            // The current directory shows as the trigger
-            // value when the launchpad is anchored to an actual
-            // directory; the synthesized "workspace:new-thread"
-            // launchpad reads as "No selected project" instead.
-            <ProjectPicker
-              value={
-                props.directory && props.directory.kind === "directory"
-                  ? props.directory
-                  : undefined
-              }
-              directories={props.directories ?? []}
+          {modelSettingsPicker ? (
+            <ModelSettingsPicker
+              id="composer-model"
               disabled={launchpadSubmitting}
-              nativePickingDisabled={Boolean(filesystemFederationTarget)}
-              pickError={props.pickDirectoryError}
-              picking={props.pickingDirectory}
-              onSelect={(directory) => {
-                props.onClearPickDirectoryError?.();
-                prepareDraftRetarget(
-                  directory.key,
-                  props.launchpad?.federationTarget,
-                );
-                props.onSelectDirectoryFromPicker?.(directory);
-              }}
-              onSelectNoDirectory={
-                props.onSelectNoDirectoryFromPicker
-                  ? () => {
-                      props.onClearPickDirectoryError?.();
-                      props.onSelectNoDirectoryFromPicker?.();
-                    }
-                  : undefined
-              }
-              onPickFromDisk={
-                props.onPickAndRegisterDirectory
-                  ? () => {
-                      props.onClearPickDirectoryError?.();
-                      props.onPickAndRegisterDirectory?.();
-                    }
-                  : undefined
-              }
+              size="composer"
+              testId="composer-model-settings"
+              {...modelSettingsPicker}
             />
           ) : null}
 
-          {props.thread && props.onPickAndAttachDirectoryToThread ? (
-            <>
-              <button
-                className="composer__action-button composer__attach-directory-button"
-                data-tooltip={
-                  filesystemFederationTarget
-                    ? REMOTE_NATIVE_PICKER_TOOLTIP
-                    : undefined
-                }
-                disabled={
-                  props.pickingDirectory || Boolean(filesystemFederationTarget)
-                }
-                title={
-                  filesystemFederationTarget
-                    ? REMOTE_NATIVE_PICKER_TOOLTIP
-                    : undefined
-                }
-                type="button"
-                onClick={() => {
-                  props.onClearPickDirectoryError?.();
-                  props.onPickAndAttachDirectoryToThread?.();
+          {renderLaunchpadWherePill()}
+
+          {(props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length
+            ? renderFoldSlot("details", (
+              <ComposerDropdown
+                id="composer-service-tier"
+                ariaLabel="Service tier"
+                disabled={launchpadSubmitting}
+                value={selectedServiceTier ?? ""}
+                options={backend.launchpadOptions.serviceTiers.map((tier) => ({
+                  label: tier,
+                  value: tier,
+                }))}
+                onChange={(value) => {
+                  const serviceTier = value;
+                  if (props.launchpad) {
+                    handleLaunchpadPatch({ serviceTier });
+                    return;
+                  }
+                  handleThreadModelSettingsPatch({ serviceTier });
                 }}
-              >
-                <FolderIcon size={14} aria-hidden="true" />
-                <span>{props.pickingDirectory ? "Adding" : "Add directory"}</span>
-              </button>
-            </>
-          ) : null}
+              />
+            ))
+            : null}
 
-          {referencedDirectories.map((directory) => (
-            <span
-              key={directory.key}
-              className="composer__directory-reference tooltip-target"
-              data-tooltip={buildDirectoryReferenceTooltip(directory.path ?? "")}
-            >
-              <FolderIcon size={13} aria-hidden="true" />
-              <span className="composer__directory-reference-label">
-                {directory.label}
-              </span>
-            </span>
-          ))}
-
-          {props.launchpad ? (
-            <ComposerDropdown
-              ariaLabel="Workspace mode"
-              compact
+          {props.thread && props.onPickAndAttachDirectoryToThread ? renderFoldSlot("details", (
+            <button
+              className="composer__action-button composer__attach-directory-button"
+              data-tooltip={
+                filesystemFederationTarget
+                  ? REMOTE_NATIVE_PICKER_TOOLTIP
+                  : undefined
+              }
               disabled={
-                launchpadSubmitting ||
-                !props.onUpdateLaunchpad ||
-                launchpadWorkspaceOptions.length <= 1
+                props.pickingDirectory || Boolean(filesystemFederationTarget)
               }
-              value={launchpadWorkspaceValue}
-              options={launchpadWorkspaceOptions.map((option) => ({
-                label: option.label,
-                value: option.value,
-              }))}
-              tooltip={
-                props.directory?.gitStatus?.worktreeCreationAvailable === false
-                  ? props.directory.gitStatus.worktreeCreationUnavailableReason
+              title={
+                filesystemFederationTarget
+                  ? REMOTE_NATIVE_PICKER_TOOLTIP
                   : undefined
               }
-              onPointerEnter={
-                props.directory?.gitStatus?.worktreeCreationAvailable === false
-                && props.desktopApi?.refreshDirectoryGitStatuses
-                  ? () => {
-                      void props.desktopApi?.refreshDirectoryGitStatuses?.({
-                        directoryKeys: [props.launchpad!.directoryKey],
-                        federationTarget: filesystemFederationTarget,
-                        force: true,
-                      });
-                    }
-                  : undefined
-              }
-              onChange={(value) => {
-                handleLaunchpadPatch({
-                  workMode: value as NavigationLaunchpadDraft["workMode"],
-                });
+              type="button"
+              onClick={() => {
+                props.onClearPickDirectoryError?.();
+                props.onPickAndAttachDirectoryToThread?.();
               }}
-            />
-          ) : workspaceLabel && threadWorkspace ? (
+            >
+              <FolderIcon size={14} aria-hidden="true" />
+              <span>{props.pickingDirectory ? "Adding" : "Add directory"}</span>
+            </button>
+          )) : null}
+
+          {!props.launchpad && workspaceLabel && threadWorkspace ? renderFoldSlot("details", (
             <div
               className={`composer-dropdown composer-dropdown--compact${
                 workspaceMenuOpen ? " composer-dropdown--open" : ""
@@ -16212,74 +16727,15 @@ function useComposerController(props: ComposerProps) {
                 </div>
               ) : null}
             </div>
-          ) : null}
+          )) : null}
 
-          {props.launchpad &&
-          launchpadWorkspaceValue === "worktree" &&
-          launchpadBranchPickerOptions.length > 0 ? (
-            <BranchPicker
-              ariaLabel="Base branch"
-              id="launchpad-branch"
-              disabled={launchpadSubmitting}
-              projectLabel={props.directory?.label}
-              value={
-                normalizeSelectableLaunchpadBranch(props.launchpad.branchName) ??
-                normalizeSelectableLaunchpadBranch(props.directory?.gitStatus?.currentBranch) ??
-                props.directory?.gitStatus?.defaultBranch ??
-                ""
-              }
-              options={launchpadBranchPickerOptions}
-              onChange={(value) => {
-                handleLaunchpadPatch({ branchName: value || undefined });
-              }}
-            />
-          ) : null}
+          {controlSkillProfile || props.launchpad?.backend === "codex"
+            ? renderFoldSlot("details", <CodexSkillProfileControl {...skillProfile} />)
+            : null}
 
-          {modelSettingsPicker ? (
-            <ModelSettingsPicker
-              id="composer-model"
-              disabled={launchpadSubmitting}
-              size="composer"
-              testId="composer-model-settings"
-              {...modelSettingsPicker}
-            />
-          ) : null}
-
-          {(props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length ? (
-            <ComposerDropdown
-              id="composer-service-tier"
-              ariaLabel="Service tier"
-              disabled={launchpadSubmitting}
-              value={selectedServiceTier ?? ""}
-              options={backend.launchpadOptions.serviceTiers.map((tier) => ({
-                label: tier,
-                value: tier,
-              }))}
-              onChange={(value) => {
-                const serviceTier = value;
-                if (props.launchpad) {
-                  handleLaunchpadPatch({ serviceTier });
-                  return;
-                }
-                handleThreadModelSettingsPatch({ serviceTier });
-              }}
-            />
-          ) : null}
-
-
-          {threadSkillProfile || props.launchpad?.backend === "codex" ? (
-            <CodexSkillProfileControl
-              profiles={props.codexSkillProfiles}
-              selected={launchpadSkillProfile}
-              selectionId={props.launchpad?.codexSkillProfileId}
-              snapshot={threadSkillProfile}
-              disabled={launchpadSubmitting || composerDisabled}
-              onChange={props.launchpad ? (id) => handleLaunchpadPatch({ codexSkillProfileId: id }) : undefined}
-              onEdit={filesystemFederationTarget?.scope !== "remote" ? props.onOpenCodexSkillProfiles : undefined}
-            />
-          ) : null}
-
-          {supportsPlanMode ? (
+          {/* Plan folds with the Details controls while it is off. Once on,
+              it stays in the row, so the next send's mode is never hidden. */}
+          {supportsPlanMode ? renderFoldSlot(planModeEnabled ? undefined : "details", (
             <button
               type="button"
               className={`composer__toggle tooltip-target${
@@ -16293,14 +16749,16 @@ function useComposerController(props: ComposerProps) {
             >
               <PlanIcon size={15} aria-hidden="true" />
             </button>
-          ) : null}
+          )) : null}
 
-          {props.thread && showPrAutoDispatchToggle ? (
+          {props.thread && showPrAutoDispatchToggle ? renderFoldSlot("details", (
             <ComposerPrMenu
               thread={props.thread}
               desktopApi={props.desktopApi}
               watchMergeBuildsDefault={prMergeBuildWatchDefault}
               primaryPrs={primaryWorkspacePullRequests(props.thread)}
+              anchorRef={threadOptionsTriggerRef}
+              openRequest={prMenuOpenRequest}
               className={`composer__toggle${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""
               }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}${
@@ -16329,10 +16787,14 @@ function useComposerController(props: ComposerProps) {
                   : undefined,
               }}
             />
-          ) : null}
+          )) : null}
 
-          {props.onPickDirectoryForReference ||
-          props.desktopApi?.pickFileFromDisk ? (
+          {localPresetLaunchpad?.agent ? renderFoldSlot("details", (
+            <button className="button button--ghost composer-agent-preset-chip" disabled={launchpadSubmitting} type="button"
+              onClick={() => setAgentPresetScope(localPresetLaunchpad.directoryKey)}>Agent · {localPresetLaunchpad.agent.name}</button>
+          )) : null}
+
+          {composerHasReferencePicker() ? renderFoldSlot("attach", (
             <ReferencePicker
               open={addReferenceMenuOpen}
               onClose={() => setAddReferenceMenuOpen(false)}
@@ -16405,11 +16867,15 @@ function useComposerController(props: ComposerProps) {
                 <PlusIcon size={15} aria-hidden="true" />
               </button>
             </ReferencePicker>
-          ) : null}
+          ), attachFolded && addReferenceMenuOpen) : null}
 
-          {dictationApi && (!preparingSend || dictation.phase === "idle") ? renderDictationButton() : null}
+          {dictationApi && (!preparingSend || dictation.phase === "idle")
+            ? renderFoldSlot(dictationTier, renderDictationButton())
+            : null}
           <ComposerThreadOptionsMenu
             key={composerScopeKey}
+            triggerRef={threadOptionsTriggerRef}
+            renderFoldedItems={renderFoldedComposerItems}
             agentThread={props.thread?.agentChange && !props.thread.agentChange.error
               ? props.thread.agentChange.enabled
               : Boolean(props.launchpad?.agent ?? props.thread?.agent)}
@@ -16483,10 +16949,6 @@ function useComposerController(props: ComposerProps) {
             mcpConnectionCount={props.mcpConnectionCount}
             onShowMcpAccess={props.onShowMcpAccess}
           />
-          {localPresetLaunchpad?.agent ? (
-            <button className="button button--ghost composer-agent-preset-chip" disabled={launchpadSubmitting} type="button"
-              onClick={() => setAgentPresetScope(localPresetLaunchpad.directoryKey)}>Agent · {localPresetLaunchpad.agent.name}</button>
-          ) : null}
           {localPresetLaunchpad && props.desktopApi && agentPresetScope === localPresetLaunchpad.directoryKey ? (
             <AgentPresetDialog key={agentPresetScope} launchpad={localPresetLaunchpad} desktopApi={props.desktopApi}
               onClose={() => setAgentPresetScope(undefined)} onApply={async (values, agentPresetId) => {
@@ -16502,6 +16964,29 @@ function useComposerController(props: ComposerProps) {
         </fieldset>
       ) : null
     );
+  }
+
+  /**
+   * Folders the draft @-mentions. They belong to the message, so they sit
+   * above the control row rather than in it.
+   */
+  function renderComposerDirectoryReferences(): ReactNode {
+    return referencedDirectories.length > 0 ? (
+      <div className="composer__directory-references" aria-label="Referenced folders">
+        {referencedDirectories.map((directory) => (
+          <span
+            key={directory.key}
+            className="composer__directory-reference tooltip-target"
+            data-tooltip={buildDirectoryReferenceTooltip(directory.path ?? "")}
+          >
+            <FolderIcon size={13} aria-hidden="true" />
+            <span className="composer__directory-reference-label">
+              {directory.label}
+            </span>
+          </span>
+        ))}
+      </div>
+    ) : null;
   }
 
   function renderDictationButton(): ReactNode {
@@ -16525,13 +17010,15 @@ function useComposerController(props: ComposerProps) {
     const hasApplicationActions = Boolean(
       launchpadCodexEnvironmentOptions.length > 0
       || threadCodexEnvironmentOptions.length > 0
-      || props.thread?.codexEnvironmentRuntime
-      || (workspaceOpenPath && (editorApplication || terminalApplication))
-      || (props.thread && !props.launchpad && props.integratedTerminal),
+      || controlRuntime
+      || (workspaceOpenPath && (editorApplication || terminalApplication)),
     );
     return (
       <div
         className={hasSetup ? "composer__setup" : "composer__footer"}
+        data-folded-tiers={hasSetup ? composerRowFold.foldedTierCount : undefined}
+        data-overflowing={hasSetup && composerRowFold.overflows ? "" : undefined}
+        ref={hasSetup ? composerRowFold.rowRef : undefined}
         aria-label={
           props.launchpad
             ? "New thread settings"
@@ -16542,12 +17029,26 @@ function useComposerController(props: ComposerProps) {
       >
         {renderComposerToolbar()}
         {hasApplicationActions ? (
-          <div className="composer__application-actions" aria-label="Composer tools">
+          <div className="composer__application-actions" aria-label="Composer tools" data-composer-row-group="">
             <fieldset
               className="composer__pending-controls composer__pending-controls--dim"
               disabled={preparingSend}
             >
-            {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
+            {workspaceOpenPath && editorApplication ? renderFoldSlot("details", (
+              <ComposerApplicationButton
+                application={editorApplication}
+                label={editorApplication.name}
+                onOpen={openWorkspaceApplication}
+              />
+            )) : null}
+            {workspaceOpenPath && terminalApplication ? renderFoldSlot("details", (
+              <ComposerApplicationButton
+                application={terminalApplication}
+                label={terminalApplication.name}
+                onOpen={openWorkspaceApplication}
+              />
+            )) : null}
+            {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? renderFoldSlot("details", (
               <ComposerDropdown
                 ariaLabel="Environment"
                 busy={
@@ -16580,9 +17081,9 @@ function useComposerController(props: ComposerProps) {
                   });
                 }}
               />
-            ) : null}
+            )) : null}
 
-            {!props.launchpad && threadCodexEnvironmentPickerOptions.length > 0 ? (
+            {!props.launchpad && threadCodexEnvironmentPickerOptions.length > 0 ? renderFoldSlot("details", (
               <ComposerDropdown
                 ariaLabel="Environment"
                 busy={threadEnvironmentBusy}
@@ -16620,92 +17121,68 @@ function useComposerController(props: ComposerProps) {
                   void setThreadCodexEnvironment(value || undefined, actionId);
                 }}
               />
-            ) : null}
+            )) : null}
 
-            {props.thread?.codexEnvironmentRuntime ? (
-              // Split chip (issue #240 follow-up): the left segment runs the
-              // selected command (orange CTA hover); the right segment is the
-              // command picker. Click left to run, right to choose.
-              <div className="composer__run-split">
-                <button
-                  aria-busy={currentThreadEnvActionStarting || undefined}
-                  aria-label="Run"
-                  className="composer__run-split-play tooltip-target"
-                  data-tooltip={
-                    selectedThreadCodexAction
-                      ? `Run ${selectedThreadCodexAction.name}`
-                      : "Run command"
-                  }
-                  disabled={
-                    currentThreadEnvActionStarting ||
-                    threadEnvironmentBusy ||
-                    !selectedThreadCodexAction ||
-                    !props.desktopApi?.runCodexEnvironmentAction
-                  }
-                  type="button"
-                  onClick={() => {
-                    void runThreadCodexEnvironmentAction();
-                  }}
-                >
-                  {currentThreadEnvActionStarting ? (
-                    <PendingSpinner
-                      pairing="standalone"
-                      standaloneReason="The Run button swaps its play glyph for a bare ring; its only text is the aria-label."
-                    />
-                  ) : (
-                    <PlayIcon size={13} aria-hidden="true" />
-                  )}
-                </button>
-                <ComposerDropdown
-                  ariaLabel="Environment command"
-                  compact
-                  disabled={
-                    threadEnvironmentBusy ||
-                    threadCodexEnvironmentActions.length === 0 ||
-                    !props.desktopApi?.runCodexEnvironmentAction
-                  }
-                  value={selectedThreadCodexAction?.id ?? ""}
-                  options={
-                    threadCodexEnvironmentActions.length > 0
-                      ? threadCodexEnvironmentActions.map((action) => ({
-                          label: action.name,
-                          value: action.id,
-                        }))
-                      : [{ label: "No commands", value: "" }]
-                  }
-                  onChange={(value) => {
-                    void setThreadCodexEnvironment(
-                      props.thread?.codexEnvironmentRuntime?.environmentId,
-                      value || undefined,
-                    );
-                  }}
-                />
-              </div>
-            ) : null}
+            {controlRuntime ? renderFoldSlot("details", (
+              // The command the ▶ beside the moon runs. Choosing one here
+              // only selects it.
+              <ComposerDropdown
+                ariaLabel="Environment command"
+                compact
+                disabled={
+                  threadEnvironmentBusy ||
+                  threadCodexEnvironmentActions.length === 0 ||
+                  !props.desktopApi?.runCodexEnvironmentAction
+                }
+                value={selectedThreadCodexAction?.id ?? ""}
+                options={
+                  threadCodexEnvironmentActions.length > 0
+                    ? threadCodexEnvironmentActions.map((action) => ({
+                        label: action.name,
+                        value: action.id,
+                      }))
+                    : [{ label: "No commands", value: "" }]
+                }
+                onChange={(value) => {
+                  void setThreadCodexEnvironment(
+                    props.thread?.codexEnvironmentRuntime?.environmentId,
+                    value || undefined,
+                  );
+                }}
+              />
+            )) : null}
 
-            </fieldset>
-            {/* Panel visibility stays interactive through send preparation. */}
-            {props.thread && !props.launchpad && props.integratedTerminal ? (
-              <ComposerTerminalToggle {...props.integratedTerminal} />
-            ) : null}
-            <fieldset
-              className="composer__pending-controls composer__pending-controls--dim"
-              disabled={preparingSend}
-            >
-            {workspaceOpenPath && editorApplication ? (
-              <ComposerApplicationButton
-                application={editorApplication}
-                label={editorApplication.name}
-                onOpen={openWorkspaceApplication}
-              />
-            ) : null}
-            {workspaceOpenPath && terminalApplication ? (
-              <ComposerApplicationButton
-                application={terminalApplication}
-                label={terminalApplication.name}
-                onOpen={openWorkspaceApplication}
-              />
-            ) : null}
+            {controlRuntime ? renderFoldSlot("run", (
+              <button
+                aria-busy={currentThreadEnvActionStarting || undefined}
+                aria-label="Run"
+                className="composer__toggle composer__run-button tooltip-target"
+                data-tooltip={
+                  selectedThreadCodexAction
+                    ? `Run ${selectedThreadCodexAction.name}`
+                    : "Run command"
+                }
+                disabled={
+                  currentThreadEnvActionStarting ||
+                  threadEnvironmentBusy ||
+                  !selectedThreadCodexAction ||
+                  !props.desktopApi?.runCodexEnvironmentAction
+                }
+                type="button"
+                onClick={() => {
+                  void runThreadCodexEnvironmentAction();
+                }}
+              >
+                {currentThreadEnvActionStarting ? (
+                  <PendingSpinner
+                    pairing="standalone"
+                    standaloneReason="The Run button swaps its play glyph for a bare ring; its only text is the aria-label."
+                  />
+                ) : (
+                  <PlayIcon size={13} aria-hidden="true" />
+                )}
+              </button>
+            )) : null}
             </fieldset>
           </div>
         ) : null}
@@ -16860,6 +17337,7 @@ function useComposerController(props: ComposerProps) {
                   </span>
                 </button>
               ) : null}
+              {/* Icon-only: the label is its accessible name and tooltip. */}
               <button
                 {...submitTooltip.buttonProps}
                 className="button composer__send-submit-button"
@@ -16868,8 +17346,10 @@ function useComposerController(props: ComposerProps) {
               >
                 {preparingSend ? (
                   <PendingSpinner pairing="paired" size="sm" />
-                ) : null}
-                {submitButtonLabel}
+                ) : (
+                  <ArrowUpIcon aria-hidden="true" size={14} />
+                )}
+                <span className="composer__send-label">{submitButtonLabel}</span>
               </button>
               {submitTooltip.tooltipNode}
             </div>
@@ -17492,6 +17972,11 @@ function useComposerController(props: ComposerProps) {
           </p>
         ) : null}
 
+        </fieldset>
+        {/* One box: the input, the folders the draft mentions, and the
+            control row. */}
+        <div className="composer__box">
+        <fieldset className="composer__pending-controls" disabled={preparingSend}>
         <div className="composer__input-wrap" ref={inputWrapRef}>
           {isReviewComposerOpen ? (
             renderComposerReviewConfig()
@@ -17557,10 +18042,13 @@ function useComposerController(props: ComposerProps) {
 
           {renderComposerAutocomplete()}
         </div>
-
-        {renderComposerWorkspaceHandoff()}
+        {renderComposerDirectoryReferences()}
         </fieldset>
         {renderComposerFooter()}
+        </div>
+        <fieldset className="composer__pending-controls" disabled={preparingSend}>
+        {renderComposerWorkspaceHandoff()}
+        </fieldset>
 
         {props.unavailableReason ? (
          <p className="composer__meta composer__meta--error">

@@ -153,3 +153,91 @@ it("uses the catalog trunk and resolves unnumbered lower layers from the same re
     },
   ), { examples: [["release", false, false], ["release", true, true]] });
 });
+
+const auditRepository = { provider: "github" as const, host: "github.com", owner: "fixture", repo: "project" };
+const auditBase = (ref: string) => ({ ref, repo: { default_branch: "main" } });
+const auditSha = (number: number) => number.toString(16).padStart(40, "0");
+const auditHead = (number: number) => ({ ref: `layer-${number}`, sha: auditSha(number), repo: { full_name: "fixture/project" } });
+const auditDate = (day: number) => new Date(Date.UTC(2026, 0, day)).toISOString();
+
+function catalogEvidence(numberedLayers: readonly (readonly boolean[])[], open?: number) {
+  const child = Math.max(...numberedLayers.map((layers) => layers.length)) + 1;
+  const catalogs = numberedLayers.map((numbered) => ({
+    schemaVersion: 1 as const,
+    repository: "github.com:fixture/project",
+    stacks: [{ trunk: { branch: "main" }, branches: [
+      ...numbered.map((hasNumber, index) => ({
+        branch: `layer-${index + 1}`,
+        ...(hasNumber ? { pullRequest: { number: index + 1 } } : {}),
+      })),
+      { branch: `layer-${child}`, pullRequest: { number: child } },
+    ] }],
+  }));
+  const routes: string[] = [];
+  const guard = assertGithubStackMergeAllowed(auditRepository, child, catalogs, async (route) => {
+    routes.push(route);
+    if (route === `/pulls/${child}`) return { head: auditHead(child), base: auditBase("main") };
+    if (route.startsWith("/pulls/")) return { merged: Number(route.slice(7)) !== open };
+    const branch = new URLSearchParams(route.split("?")[1]).get("head");
+    const number = Number(branch?.split("-").at(-1));
+    if (number > 0 && number < child) return [{
+      number, head: auditHead(number), base: auditBase("main"),
+      state: number === open ? "open" : "closed", merged_at: number === open ? null : auditDate(5),
+    }];
+    throw new Error(`Unexpected route ${route}`);
+  }, async () => { throw new Error("Expected the catalog to supply the stack."); });
+  return { guard, routes };
+}
+
+function historicalEvidence(size: number) {
+  const child = size + 1;
+  const history = Array.from({ length: size }, (_, index) => {
+    const number = size - index;
+    return {
+      previousRefName: auditHead(number).ref,
+      currentRefName: number === 1 ? "main" : auditHead(number - 1).ref,
+      createdAt: auditDate(5 + index),
+    };
+  });
+  const routes: string[] = [];
+  const guard = assertGithubStackMergeAllowed(auditRepository, child, [], async (route) => {
+    routes.push(route);
+    if (route === `/pulls/${child}`) return {
+      head: auditHead(child), base: auditBase("main"), created_at: auditDate(2),
+    };
+    if (route.startsWith("/compare/")) {
+      const [ancestor, descendant] = route.slice(9).split("?")[0]!.split("...");
+      const mergedChild = Number.parseInt(ancestor!, 16) - 100;
+      const parent = Number.parseInt(descendant!, 16);
+      if (mergedChild !== parent + 1) throw new Error(`Unexpected ancestry edge ${route}`);
+      return { merge_base_commit: { sha: ancestor } };
+    }
+    const branch = new URLSearchParams(route.split("?")[1]).get("head");
+    const number = Number(branch?.split("-").at(-1));
+    if (number > 0 && number < child) return [{
+      number, head: auditHead(number), base: auditBase(number === 1 ? "main" : auditHead(number - 1).ref),
+      state: "closed", created_at: auditDate(1), merged_at: auditDate(5 + size - number), merge_commit_sha: auditSha(100 + number),
+    }];
+    throw new Error(`Unexpected route ${route}`);
+  }, async () => ({ repository: { pullRequest: { baseRefName: "main", headRefOid: auditSha(child),
+    timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: history },
+  } } }));
+  return { guard, routes };
+}
+
+it("shares lower-layer evidence across separate clones of the same repository", async () => {
+  const { guard, routes } = catalogEvidence([[false, true], [false, true]]);
+  await expect(guard).resolves.toBe("main");
+  expect(routes.filter((route) => route.startsWith("/pulls?"))).toHaveLength(1);
+  expect(routes.filter((route) => route === "/pulls/1")).toHaveLength(1);
+  expect(routes.filter((route) => route === "/pulls/2")).toHaveLength(1);
+
+  const divergent = catalogEvidence([[false], [false, true]], 2);
+  await expect(divergent.guard).rejects.toMatchObject({ code: "stack_parent_open", message: expect.stringContaining("#2") });
+});
+
+it("only compares an immutable ancestry edge once when former bases share lower layers", async () => {
+  const { guard, routes } = historicalEvidence(3);
+  await expect(guard).resolves.toBe("main");
+  expect(routes.filter((route) => route.startsWith("/compare/"))).toHaveLength(2);
+});

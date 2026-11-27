@@ -162,6 +162,7 @@ import {
   type DesktopConfigBootstrapState,
 } from "./features/settings/useDesktopConfigBootstrap";
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
+import { useOpenThreadContextReader } from "./features/thread-detail/useOpenThreadContextReader";
 import {
   DEFAULT_CONTEXT_TAB,
   DEFAULT_ACTION_RUNS_DOCK,
@@ -185,7 +186,7 @@ import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useSidebarOwnerBackends } from "./lib/useSidebarOwnerBackends";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
-import { useDesktopApplications } from "./lib/useDesktopApplications";
+import { remoteApplicationInstanceIdFor, useDesktopApplications } from "./lib/useDesktopApplications";
 import { useEventCallback } from "./lib/useEventCallback";
 import {
   readRendererFederationLabel,
@@ -1789,25 +1790,7 @@ function DesktopAppShell(props: {
     threadViewVisible: mainView === "thread",
     localFederationInstanceId: liveFederationHealth?.instanceId,
   });
-  // Handed to the sidebar, which hands them to memoized thread rows. Inline
-  // arrows here were a new function on every render of this component, and a
-  // row's `memo` cannot bail out past one.
-  const detachThreadPullRequest = useEventCallback(
-    async (thread: NavigationThreadSummary, pr: PrSummary) => {
-      if (!desktopApi?.detachThreadPullRequest) return;
-      await desktopApi.detachThreadPullRequest({
-        backend: thread.source,
-        // Remote threads detach on their owning instance; without
-        // the target the write lands in the viewer's overlay store
-        // and reverts on the next remote snapshot.
-        federationTarget: thread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: thread.id,
-        pr,
-      });
-      await navigation.refresh?.("action/pr-detach");
-    },
-  );
+  const sidebarThreadActions = useSidebarThreadActions(desktopApi, showAppNotice, navigation.refresh);
   const unbindMessagingBinding = useEventCallback(
     async (
       _thread: NavigationThreadSummary,
@@ -1960,20 +1943,11 @@ function DesktopAppShell(props: {
   );
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
-  const selectedLaunchpadFederationTarget =
-    navigation.selectedLaunchpad?.federationTarget;
-  const navigationFederationTarget = navigation.federationTarget;
-  const remoteApplicationInstanceId =
-    selectedThreadFederationTarget
-    && isRemoteFederationTarget(selectedThreadFederationTarget)
-      ? selectedThreadFederationTarget.instanceId
-      : selectedLaunchpadFederationTarget
-        && isRemoteFederationTarget(selectedLaunchpadFederationTarget)
-        ? selectedLaunchpadFederationTarget.instanceId
-      : navigationFederationTarget
-        && isRemoteFederationTarget(navigationFederationTarget)
-        ? navigationFederationTarget.instanceId
-        : readRendererFederationTarget()?.instanceId;
+  const remoteApplicationInstanceId = remoteApplicationInstanceIdFor([
+    selectedThreadFederationTarget,
+    navigation.selectedLaunchpad?.federationTarget,
+    navigation.federationTarget,
+  ]);
   const activeFederationTarget = useMemo(
     () => remoteApplicationInstanceId
       ? { scope: "remote" as const, instanceId: remoteApplicationInstanceId }
@@ -3190,6 +3164,7 @@ function DesktopAppShell(props: {
     suspended: remoteReadsSuspended,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
+  const readOpenThreadContext = useOpenThreadContextReader(navigation.selectedThread, session.contextWindow);
   const skills = useThreadSkills({
     desktopApi,
     launchpad: navigation.selectedLaunchpad,
@@ -4295,6 +4270,8 @@ function DesktopAppShell(props: {
         launchpadConfigurationReady: navigation.selectedLaunchpadConfigurationReady,
         launchpadConfigurationError: navigation.selectedLaunchpadConfigurationError,
         onReloadLaunchpadConfiguration: navigation.refreshSelectedLaunchpadConfiguration,
+        threadConfigurationReady: navigation.selectedThreadDetailReady,
+        threadConfigurationPreview: navigation.composerConfigurationPreview,
         composerDisabled:
           !navigation.selectedThread ||
           !navigation.selectedThreadConfigurationReady ||
@@ -4770,6 +4747,7 @@ function DesktopAppShell(props: {
             approvalRequestThreadKeys={session.approvalRequestThreadKeys}
             inputRequestThreadKeys={session.inputRequestThreadKeys}
             terminalThreadKeys={terminalThreadKeys}
+            onOpenThreadTerminal={terminals.openPanel}
             queuedMessageThreadKeys={queuedMessageThreadKeys}
             draftThreadKeys={draftThreadKeys}
             unassignedThreadDraftCount={unassignedThreadDraftCount}
@@ -4807,6 +4785,8 @@ function DesktopAppShell(props: {
             }}
             newThreadFederationTargets={newThreadFederationTargets}
             localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
+            localApplications={settings.snapshot?.applications}
+            readOpenThreadContext={readOpenThreadContext}
             platform={desktopApi?.platform}
             onRevealPath={revealProjectPath}
             checkFederationTargetProject={checkFederationTargetProject}
@@ -4934,6 +4914,7 @@ function DesktopAppShell(props: {
               }
               await navigation.refresh("action/remote-pin-remove");
             }}
+            onStopThread={sidebarThreadActions.stopThread}
             onArchiveThread={navigation.archiveThread}
             onArchiveThreads={navigation.archiveThreads}
             onArchiveDirectories={desktopApi?.removeNavigationDirectory ? navigation.archiveDirectories : undefined}
@@ -4982,7 +4963,7 @@ function DesktopAppShell(props: {
               : (repository) => openSettingsSection("git", encodeForgeRulesRoute(repository))}
             onPrefetchPullRequests={pullRequests.prefetch}
             onPrefetchGitWorkingState={gitWorkingState.prefetch}
-            onDetachPullRequest={detachThreadPullRequest}
+            onDetachPullRequest={sidebarThreadActions.detachPullRequest}
             onUnbindMessagingBinding={unbindMessagingBinding}
             onCopyThreadDiagnostics={
               desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
@@ -5385,6 +5366,49 @@ function DesktopAppShell(props: {
   }
 
   return renderAppLayout();
+}
+
+// Stable handlers let memoized thread rows keep their props across shell renders.
+function useSidebarThreadActions(
+  desktopApi: DesktopApi | undefined,
+  showAppNotice: (notice: AppNoticeToastNotice) => void,
+  refreshNavigation: ReturnType<typeof useThreadNavigation>["refresh"],
+) {
+  const stopThread = useEventCallback(async (thread: NavigationThreadSummary) => {
+    try {
+      await desktopApi?.stopThread?.({
+        backend: thread.source,
+        threadId: thread.id,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+      });
+    } catch (error) {
+      showAppNotice({
+        id: `stop-thread:${threadSummaryIdentityKey(thread)}`,
+        title: "Couldn't stop the turn",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  const detachPullRequest = useEventCallback(
+    async (thread: NavigationThreadSummary, pr: PrSummary) => {
+      if (!desktopApi?.detachThreadPullRequest) return;
+      await desktopApi.detachThreadPullRequest({
+        backend: thread.source,
+        // Remote threads detach on their owning instance; without
+        // the target the write lands in the viewer's overlay store
+        // and reverts on the next remote snapshot.
+        federationTarget: thread.federation?.ref.target ??
+          readRendererFederationTarget(),
+        threadId: thread.id,
+        pr,
+      });
+      await refreshNavigation?.("action/pr-detach");
+    },
+  );
+  return {
+    stopThread: desktopApi?.stopThread ? stopThread : undefined,
+    detachPullRequest,
+  };
 }
 
 function isSettingsSection(

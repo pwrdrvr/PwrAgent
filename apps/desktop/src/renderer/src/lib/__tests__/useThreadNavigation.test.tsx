@@ -270,6 +270,9 @@ describe("useThreadNavigation", () => {
       expect(handoffThreadWorkspace).toHaveBeenCalledOnce();
       await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(true));
       expect(result.current.selectedThreadConfigurationReady).toBe(false);
+      // The thread's detail is still loaded: only the handoff is pending, so
+      // the composer keeps drawing its configuration-bound controls.
+      expect(result.current.selectedThreadDetailReady).toBe(true);
       expect(result.current.selectedThread?.linkedDirectories[0]?.path).toBe("/repo");
       await act(async () => { releaseDetail(); });
       await waitFor(() => expect(result.current.selectedWorkspaceHandoffPending).toBe(false));

@@ -387,7 +387,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
       }}
       onMouseEnter={(event) => {
         // Another sidebar card is up: swap to this one at once.
-        if (cardActions && sidebarPrCardBridge.enterTrigger(bridgeCardRef.current)) {
+        if (cardActions && sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, event.currentTarget)) {
           tooltipController.show(event.currentTarget, latestCardRef.current);
           return;
         }

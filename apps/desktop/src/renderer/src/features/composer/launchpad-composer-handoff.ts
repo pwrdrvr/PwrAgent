@@ -235,6 +235,9 @@ export function handoffLaunchpadComposer(
             reasoningEffort: thread.reasoningEffort,
             serviceTier: thread.serviceTier,
             fastMode: thread.fastMode,
+            // Queued with Plan on: the turn this starts, if the first one has
+            // ended, plans too.
+            ...(entry.collaborationMode ? { collaborationMode: entry.collaborationMode } : {}),
           },
         },
       });

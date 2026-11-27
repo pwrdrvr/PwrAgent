@@ -11,7 +11,10 @@ When the reserve is empty, the preflight can also spend from the shared PR
 request budget. The owner selects this route when it executes the operator's merge.
 Polling, automated merge offers and agent forge tools keep using the shared
 budget, including agent tool calls that require an approval. Both routes honor
-the forge client's provider cooldown and concurrency limit.
+the forge client's provider cooldown and concurrency limit. When all three
+slots are active, requests wait in arrival order. A queued request checks
+provider availability and cooldown again before spending a token. Each forge
+admission queue holds up to 32 waiting requests.
 
 ## Pull-Request Status Source of Truth
 

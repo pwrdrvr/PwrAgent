@@ -126,8 +126,7 @@ export async function readGithubStackParents(input: {
     });
   };
   let comparisons = 0;
-  const includesCommit = async (ancestor: string, descendant: string): Promise<boolean> => {
-    if (ancestor === descendant) return true;
+  const compare = async (ancestor: string, descendant: string): Promise<boolean> => {
     if (++comparisons > 2 * BASE_LIMIT) throw incomplete(number);
     try {
       const comparison = await get(`/compare/${ancestor}...${encodeURIComponent(descendant)}?per_page=1`) as { merge_base_commit?: { sha?: string } };
@@ -136,6 +135,18 @@ export async function readGithubStackParents(input: {
       if (!(error instanceof ForgeReadError) || error.code !== "not_found") throw error;
       return false;
     }
+  };
+  // Former bases can converge on the same lower layers. Reuse comparisons
+  // between immutable commits. A named trunk ref may move during the check.
+  const comparedCommits = new Map<string, boolean>();
+  const includesCommit = async (ancestor: string, descendant: string): Promise<boolean> => {
+    if (ancestor === descendant) return true;
+    const pair = `${ancestor}...${descendant}`;
+    const cached = comparedCommits.get(pair);
+    if (cached !== undefined) return cached;
+    const included = await compare(ancestor, descendant);
+    comparedCommits.set(pair, included);
+    return included;
   };
   const followMerge = async (intermediate: GithubStackPull, seen: Set<number>): Promise<void> => {
     const target = intermediate.base?.ref;
@@ -149,7 +160,7 @@ export async function readGithubStackParents(input: {
     const candidates = await candidatesFor(target, [{ branch: target, since: mergedAt, until: mergedAt }]);
     const lower = candidates.length === 1 ? candidates[0] : undefined;
     if (!lower) {
-      if (!(await includesCommit(commit, trunk))) unresolved = true;
+      if (!(await compare(commit, trunk))) unresolved = true;
       return;
     }
     const tip = lower.head?.sha;

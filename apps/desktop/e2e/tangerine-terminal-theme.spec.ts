@@ -144,8 +144,9 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     const primaryButton = app.window.locator(".composer__send-split-pill").first();
     const composerInput = app.window.getByRole("textbox", { name: "Reply", exact: true });
     // The editor fills its scroller edge to edge, which clipped all of its
-    // own outline, so the box around it draws the ring.
-    const composerBox = app.window.locator(".composer-tiptap-input", {
+    // own outline, so the box around it draws the ring: the composer box
+    // that holds the input and its control row.
+    const composerBox = app.window.locator(".composer__box", {
       has: composerInput,
     });
     const sendButton = app.window.getByRole("button", { name: "Send" });

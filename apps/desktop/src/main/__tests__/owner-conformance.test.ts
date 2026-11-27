@@ -1,4 +1,5 @@
 import { openClaudeOwnerCliReleases, type ClaudeOwnerCliReleases } from "./helpers/claude-owner-cli-releases";
+import { checkOwnerParity, prepareOwnerParity, withAmbientShellCanary } from "./helpers/owner-parity";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
 import { execFileSync } from "node:child_process";
@@ -14,7 +15,7 @@ import { beforeAll, describe, expect, inject, it, vi } from "vitest";
 import type { OwnerFixtures } from "../../test-setup/owner-conformance-fixtures";
 import type { AgentEvent, InterruptTurnRequest } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import type { FederationCapability } from "@pwragent/shared/contracts/federation";
+import { FEDERATION_INVITE_VERSION, type FederationCapability } from "@pwragent/shared/contracts/federation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import {
@@ -23,6 +24,7 @@ import {
   registerFederationBackendHandlers,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
+import { encodeFederationInvite } from "../federation/federation-enrollment";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import {
   DesktopFederationRuntime,
@@ -183,7 +185,7 @@ async function startDesktopOwner(
     dispatch: (request, scope) => backend.startTurn({ ...request, messageOrigin: authenticateMessageOrigin({
       messageOrigin: request.messageOrigin, sourceInstanceId: JSON.parse(scope)[1], resolveSourceInstance: () => undefined,
     }) }),
-    isQueued: async receipt => { await backend.readQueuedTurn(receipt); return true; },
+    isQueued: async receipt => registry.hasQueuedTurn(receipt),
     steer: request => backend.controlActiveTurn!({ ...request, operation: "steer" }),
   });
   registerFederationBackendHandlers({ router, backend, durableTurnRequests });
@@ -202,10 +204,21 @@ async function startDesktopOwner(
   };
 }
 
+function durableViewer(host: OwnerHost, capabilities: FederationCapability[]): DesktopFederationRuntime {
+  const router = new FederationRouter({ localInstanceId: "viewer" });
+  router.registerConnection({ peerId: host.ownerInstanceId, capabilities, sendEnvelope: () => {} });
+  const runtime = new DesktopFederationRuntime();
+  Object.assign(runtime, {
+    router, remoteBackend: () => host.client,
+    visiblePeers: () => [{ id: host.ownerInstanceId, label: host.name, role: "client", status: "connected", capabilities }],
+  });
+  return runtime;
+}
+
 /** The Outpost daemon on its Codex fixture, enrolled through a real invite. */
 async function startOutpostOwner(
   hostKind: "desktop" | "headless" = "headless",
-  options: Pick<NonNullable<Parameters<typeof startOutpostDaemon>[0]>, "env" | "waitForCodexCommand" | "beforeFailedStartupClose"> = {},
+  options: Pick<NonNullable<Parameters<typeof startOutpostDaemon>[0]>, "env" | "signal" | "waitForCodexCommand" | "beforeFailedStartupClose"> = {},
 ): Promise<OwnerHost & Pick<OutpostViewer, "waitForEvent">> {
   const outpost = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, hostKind, ...options });
   outpost.subscribe(EVENT_CLASSES);
@@ -214,6 +227,8 @@ async function startOutpostOwner(
       .trim().split("\n").map(line => JSON.parse(line)).filter(item => item.method === "turn/steer").length,
     events: outpost.events, workspace: outpost.workspace, waitForEvent: outpost.waitForEvent, close: outpost.close };
 }
+
+const parityOwnerStarters = [startDesktopOwner, startOutpostOwner];
 
 /**
  * Waits until the owner has sent nothing for a while, so each event is
@@ -660,26 +675,35 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await host.close(); vi.unstubAllEnvs(); }
   });
 
-  it("both registered owners keep stable explicit retries separate from changed acceptance", async () => {
-    for (const host of [await startDesktopOwner(), await startOutpostOwner()]) {
-      try {
-        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
-        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-        const request = { ...identity, queueEntryId: "same-caller-identity", delivery: "new_turn" as const,
-          input: [{ type: "text" as const, text: "Original acceptance" }] };
-        const accepted = await host.client.startTurn(request);
-        const snapshot = await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! });
-        const retry = await host.client.startTurn(request);
-        expect(retry.queueEntryId).toBe(accepted.queueEntryId);
-        await expect(host.client.startTurn({ ...request, input: [{ type: "text", text: "Different acceptance" }] })).rejects.toThrow();
-        expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).toEqual(snapshot);
-        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([accepted.queueEntryId]);
-        expect(await host.client.cancelQueuedTurn({ queueEntryId: accepted.queueEntryId! })).toMatchObject({ cancelled: true });
-        await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).rejects.toThrow();
-        expect(host.providerSteerCount()).toBe(0);
-        await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
-      } finally { await host.close(); }
-    }
+  const explicitRetryTest = it.extend("ownerParity", ({ signal, onTestFinished }) =>
+    prepareOwnerParity({ signal, onTestFinished }, [
+      () => startDesktopOwner(),
+      (startupSignal) => startOutpostOwner("headless", { signal: startupSignal, waitForCodexCommand: true }),
+    ], (run) => withAmbientShellCanary(signal, run)));
+  explicitRetryTest.beforeEach(async ({ ownerParity }) => {
+    // This case waits for cold boot, enrollment and Codex command selection
+    // before its RPC deadline starts.
+    await ownerParity?.ready;
+  });
+
+  explicitRetryTest("both registered owners keep stable explicit retries separate from changed acceptance", async ({ ownerParity }) => {
+    await ownerParity.check(async (host) => {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      const request = { ...identity, queueEntryId: "same-caller-identity", delivery: "new_turn" as const,
+        input: [{ type: "text" as const, text: "Original acceptance" }] };
+      const accepted = await host.client.startTurn(request);
+      const snapshot = await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! });
+      const retry = await host.client.startTurn(request);
+      expect(retry.queueEntryId).toBe(accepted.queueEntryId);
+      await expect(host.client.startTurn({ ...request, input: [{ type: "text", text: "Different acceptance" }] })).rejects.toThrow();
+      expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).toEqual(snapshot);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([accepted.queueEntryId]);
+      expect(await host.client.cancelQueuedTurn({ queueEntryId: accepted.queueEntryId! })).toMatchObject({ cancelled: true });
+      await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).rejects.toThrow();
+      expect(host.providerSteerCount()).toBe(0);
+      await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+    });
   });
 
   it("scheduled stable identities cannot be replaced by an ordinary explicit admission", async () => {
@@ -799,9 +823,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       const ref = { backend: "codex" as const, threadId: created.threadId };
       const active = await host.client.startTurn({ ...ref, input: [{ type: "text", text: "slow" }] });
       const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
-      const runtime = Object.assign(new DesktopFederationRuntime(), {
-        connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_turn_requests_v1"] }], remoteBackend: () => host.client,
-      });
+      const runtime = durableViewer(host, ["turn_control", "durable_turn_requests_v1"]);
       const request: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
         request: { ...ref, input: [{ type: "text", text: "Immutable durable neighbor" }] } };
       request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, request)).digest("hex");
@@ -1580,10 +1602,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
         const waiting = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "Invented waiting input" }] });
         const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
-        const runtime = Object.assign(new DesktopFederationRuntime(), {
-          connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_steer_requests_v1"] }],
-          remoteBackend: () => host.client,
-        });
+        const runtime = durableViewer(host, ["turn_control", "durable_steer_requests_v1"]);
         const value = (text: string, id: string = randomUUID()): SubmitDurableSteerRequest => {
           const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id, createdAt: Date.now(), payloadHash: "" },
             request: { backend: "codex", threadId: identity.threadId, expectedTurnId: active.turnId, input: [{ type: "text", text }] } };
@@ -1636,45 +1655,37 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     });
   });
 
-  it("the existing durable federation runtime caller shares one acceptance through queue cancellation and terminal reconciliation on both owners", async () => {
-    const desktop = await startDesktopOwner();
-    let outpost: OwnerHost | undefined;
-    try {
-      outpost = await startOutpostOwner();
-      for (const host of [desktop, outpost]) {
-        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
-        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-        const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
-        const runtime = Object.assign(new DesktopFederationRuntime(), {
-          connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_turn_requests_v1"] }],
-          remoteBackend: () => host.client,
-        });
-        const submission = (text: string): SubmitDurableTurnRequest => {
-          const value: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" }, request: { backend: "codex", threadId: identity.threadId, input: [{ type: "text", text }] } };
-          value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, value)).digest("hex");
-          return value;
-        };
-        const request = submission("Invented durable queued input");
-        const receipts = await Promise.all(Array.from({ length: 8 }, () => runtime.submitDurableTurnRequest("mobile:device", request, target)));
-        const receipt = receipts[0]!;
-        expect(receipts.every(result => result.queueEntryId === receipt.queueEntryId)).toBe(true);
-        expect(receipt).toMatchObject({ state: "accepted", result: { queueStatus: "queued", queueEntryId: receipt.queueEntryId } });
-        const lookup = { ...identity, id: request.clientRequest.id };
-        expect(await runtime.getDurableTurnRequest("other-device", lookup, target)).toBeNull();
-        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([receipt.queueEntryId]);
-        await host.client.cancelQueuedTurn({ queueEntryId: receipt.queueEntryId });
-        await vi.waitFor(async () => {
-          expect(await runtime.getDurableTurnRequest("mobile:device", lookup, target)).toMatchObject({ state: "completed", outcome: "cancelled" });
-        });
-        expect(await runtime.submitDurableTurnRequest("mobile:device", request, target)).toMatchObject({ state: "completed", outcome: "cancelled" });
-        const changed = submission("Invented fresh durable input"), replacement = await runtime.submitDurableTurnRequest("mobile:device", changed, target);
-        expect(replacement.queueEntryId).not.toBe(receipt.queueEntryId);
-        await host.client.interruptTurn(active);
-        await vi.waitFor(async () => {
-          expect(await runtime.getDurableTurnRequest("mobile:device", { ...identity, id: changed.clientRequest.id }, target)).toMatchObject({ state: "completed", outcome: "completed", result: { queueStatus: "started" } });
-        });
-      }
-    } finally { await outpost?.close(); await desktop.close(); }
+  it("the existing durable federation runtime caller shares one acceptance through queue cancellation and terminal reconciliation on both owners", async (context) => {
+    await checkOwnerParity(context, parityOwnerStarters, async (host) => {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
+      const runtime = durableViewer(host, ["turn_control", "durable_turn_requests_v1"]);
+      const submission = (text: string): SubmitDurableTurnRequest => {
+        const value: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" }, request: { backend: "codex", threadId: identity.threadId, input: [{ type: "text", text }] } };
+        value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, value)).digest("hex");
+        return value;
+      };
+      const request = submission("Invented durable queued input");
+      const receipts = await Promise.all(Array.from({ length: 8 }, () => runtime.submitDurableTurnRequest("mobile:device", request, target)));
+      const receipt = receipts[0]!;
+      expect(receipts.every(result => result.queueEntryId === receipt.queueEntryId)).toBe(true);
+      expect(receipt).toMatchObject({ state: "accepted", result: { queueStatus: "queued", queueEntryId: receipt.queueEntryId } });
+      const lookup = { ...identity, id: request.clientRequest.id };
+      expect(await runtime.getDurableTurnRequest("other-device", lookup, target)).toBeNull();
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([receipt.queueEntryId]);
+      await host.client.cancelQueuedTurn({ queueEntryId: receipt.queueEntryId });
+      await vi.waitFor(async () => {
+        expect(await runtime.getDurableTurnRequest("mobile:device", lookup, target)).toMatchObject({ state: "completed", outcome: "cancelled" });
+      });
+      expect(await runtime.submitDurableTurnRequest("mobile:device", request, target)).toMatchObject({ state: "completed", outcome: "cancelled" });
+      const changed = submission("Invented fresh durable input"), replacement = await runtime.submitDurableTurnRequest("mobile:device", changed, target);
+      expect(replacement.queueEntryId).not.toBe(receipt.queueEntryId);
+      await host.client.interruptTurn(active);
+      await vi.waitFor(async () => {
+        expect(await runtime.getDurableTurnRequest("mobile:device", { ...identity, id: changed.clientRequest.id }, target)).toMatchObject({ state: "completed", outcome: "completed", result: { queueStatus: "started" } });
+      });
+    });
   });
 
   it("the enrolled Outpost enforces durable feature and nested messaging grants before receipt admission", async () => {
@@ -1871,10 +1882,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
         const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
         const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
-        const runtime = Object.assign(new DesktopFederationRuntime(), {
-          connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_turn_requests_v1", "thread_navigation"] }],
-          remoteBackend: () => host.client,
-        });
+        const runtime = durableViewer(host, ["turn_control", "durable_turn_requests_v1", "thread_navigation"]);
         const request: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
           request: { backend: "codex", threadId: identity.threadId, input: [{ type: "text", text: "Immutable durable neighbor" }] } };
         request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, request)).digest("hex");
@@ -2967,6 +2975,44 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         await rm(directory, { recursive: true, force: true });
       }
     }
+  });
+
+  it("joins the daemon when startup is aborted during viewer enrollment", async ({ onTestFinished }) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pa-conformance-abort-"));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const gateway = await openCodexGate();
+    let starting: ReturnType<typeof startOutpostDaemon> | undefined;
+    onTestFinished(async () => {
+      await gateway.close();
+      await starting?.then((owner) => owner.close(), () => undefined);
+    });
+    const marker = path.join(directory, "profile-root");
+    const invite = encodeFederationInvite({
+      version: FEDERATION_INVITE_VERSION, token: "fixture-token", gatewayInstanceId: "fixture-gateway",
+      gatewayPublicKeyPem: "", gatewayNoisePublicKey: "", gatewayUrl: `ws://127.0.0.1:${gateway.port}`,
+      expiresAt: Date.now() + 60_000,
+    });
+    await mkdir(path.join(directory, "bin"));
+    await writeFile(path.join(directory, "bin", "pwragent.js"), `
+      if (process.argv[2] === "serve") {
+        require("node:fs").writeFileSync(${JSON.stringify(marker)}, process.env.PWRAGENT_HOME);
+        console.log('{"ready":true}');
+        setInterval(() => {}, 1000);
+      } else {
+        console.log(${JSON.stringify(JSON.stringify({ invite }))});
+      }
+    `);
+    const startup = new AbortController();
+    starting = startOutpostDaemon({ packageRoot: directory, signal: startup.signal });
+    const outcome = starting.catch((error: unknown) => error);
+    const [socket] = await gateway.held;
+    const closed = once(socket, "close");
+    socket.resume();
+    const failure = new Error("Sibling owner could not start");
+    startup.abort(failure);
+    expect(await outcome).toBe(failure);
+    await closed;
+    expect(existsSync(readFileSync(marker, "utf8"))).toBe(false);
   });
 
   // Keep each publication order across the real Outpost boundary. The registry

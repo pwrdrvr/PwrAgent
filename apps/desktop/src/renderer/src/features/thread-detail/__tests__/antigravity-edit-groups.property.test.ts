@@ -133,4 +133,57 @@ describe("Antigravity edit groups", () => {
       expect(render(input)).toEqual(expected.map((entry) => ({ type: "entry", entry })));
     }));
   });
+
+  it("preserves historical Antigravity edit group references across active-turn streaming deltas", () => {
+    const historical: AppServerThreadEntry[] = [];
+    for (let turn = 0; turn < 6; turn += 1) {
+      const turnId = `turn-${turn}`;
+      historical.push(
+        {
+          ...edit(`edit-${turn}-a`, "/work/notes.md", turnId),
+          turn: { id: turnId, status: "completed", durationMs: 30_000 },
+        },
+        {
+          ...edit(`edit-${turn}-b`, "/work/notes.md", turnId),
+          turn: { id: turnId, status: "completed", durationMs: 30_000 },
+        },
+        {
+          type: "message",
+          id: `assistant-${turn}`,
+          role: "assistant",
+          text: `Completed turn ${turn}`,
+          turn: { id: turnId, status: "completed", durationMs: 30_000 },
+        },
+      );
+    }
+
+    const firstRender = render([
+      ...historical,
+      {
+        type: "message",
+        id: "streaming-assistant",
+        role: "assistant",
+        text: "Delta 1",
+        turn: { id: "turn-active", status: "in_progress" },
+      },
+    ]);
+    const secondRender = render([
+      ...historical,
+      {
+        type: "message",
+        id: "streaming-assistant",
+        role: "assistant",
+        text: "Delta 1 + Delta 2",
+        turn: { id: "turn-active", status: "in_progress" },
+      },
+    ]);
+
+    const firstGroups = firstRender.filter((item) => item.type === "workPhaseGroup");
+    const secondGroups = secondRender.filter((item) => item.type === "workPhaseGroup");
+    expect(firstGroups).toHaveLength(6);
+    expect(secondGroups).toHaveLength(6);
+    for (let index = 0; index < firstGroups.length; index += 1) {
+      expect(secondGroups[index]!.entries[0]).toBe(firstGroups[index]!.entries[0]);
+    }
+  });
 });

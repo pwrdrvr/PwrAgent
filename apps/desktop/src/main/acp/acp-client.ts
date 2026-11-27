@@ -1873,17 +1873,28 @@ export class AcpAgentClient {
     if (replayPrompts && providerNormalizer) {
       providerNormalizer.beginProviderPromptReplay(replayPrompts);
     }
+    let loadSucceeded = false;
     try {
       await runLoad(hydratedMetadata);
+      loadSucceeded = true;
     } catch (error) {
       if (useFreshProviderNormalizer && fallbackNormalizer) {
         this.normalizers.set(metadata.sessionId, fallbackNormalizer);
       }
       throw error;
     } finally {
-      providerNormalizer?.endProviderPromptReplay(
-        this.sessionLoadReplays.get(protocolSessionId)?.lastTimestampedTranscriptAt,
-      );
+      if (loadSucceeded) {
+        const loadedNormalizer =
+          providerNormalizer
+          ?? (useFreshProviderNormalizer ? this.normalizers.get(metadata.sessionId) : undefined);
+        loadedNormalizer?.endProviderPromptReplay(
+          this.sessionLoadReplays.get(protocolSessionId)?.lastTimestampedTranscriptAt,
+        );
+      } else {
+        // Clear any replay overlay state on the discarded fresh provider
+        // normalizer without touching a restored fallbackNormalizer.
+        providerNormalizer?.endProviderPromptReplay(undefined);
+      }
     }
     const sessionLoadReplay = this.sessionLoadReplays.get(protocolSessionId);
     const providerReplayedUsableHistory =
@@ -2806,10 +2817,15 @@ export class AcpAgentClient {
     const previousActiveAssistantId = activeTurn
       ? normalizer.readActiveAssistantMessageId()
       : undefined;
+    const loadReplayTimestamp =
+      fromSessionLoad && readAcpUpdateTimestamp(update) === undefined
+        ? loadState?.lastTimestampedTranscriptAt
+          ?? this.sessionLoadReplays.get(protocolSessionId)?.lastTimestampedTranscriptAt
+        : undefined;
     const replay = normalizer.apply({
       sessionId,
       update,
-      receivedAt,
+      receivedAt: loadReplayTimestamp ?? receivedAt,
       deferTurnCompletion:
         (updateKind === "turn_finished" || updateKind === "turn_completed")
         && activeTurn !== undefined,

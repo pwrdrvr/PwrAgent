@@ -5,6 +5,7 @@ import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation"
 import {
   type OpenDesktopApplicationRequest,
   type OpenDesktopApplicationResponse,
+  type PeerApplicationWorkspaceRequest,
   type ReadDesktopApplicationsRequest,
   type ReadDesktopApplicationsResponse,
   type OpenMarkdownFileViewerRequest,
@@ -29,6 +30,7 @@ import {
   type OpenToolOutputIncidentExplorerWindowResponse,
 } from "@pwragent/shared/contracts/tool-output-incidents";
 import {
+  APPLICATION_WORKSPACE_EXISTS_CHANNEL,
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
@@ -234,6 +236,13 @@ export function registerApplicationIpcHandlers(): void {
       }
     },
   );
+  ipcMain.removeHandler(APPLICATION_WORKSPACE_EXISTS_CHANNEL);
+  ipcMain.handle(
+    APPLICATION_WORKSPACE_EXISTS_CHANNEL,
+    async (_event, request: PeerApplicationWorkspaceRequest) => await getDesktopFederationRuntime()
+      .remoteBackend(request.federationTarget)
+      .applicationWorkspaceExists(request.targetPath),
+  );
   ipcMain.removeHandler(APPLICATIONS_READ_CHANNEL);
   ipcMain.handle(
     APPLICATIONS_READ_CHANNEL,
@@ -344,6 +353,7 @@ export function registerApplicationIpcHandlers(): void {
 }
 
 export function disposeApplicationIpcHandlers(): void {
+  ipcMain.removeHandler(APPLICATION_WORKSPACE_EXISTS_CHANNEL);
   ipcMain.removeHandler(TRANSCRIPT_FILES_RESOLVE_CHANNEL);
   ipcMain.removeHandler(APPLICATION_OPEN_CHANNEL);
   ipcMain.removeHandler(PATH_OPEN_CHANNEL);

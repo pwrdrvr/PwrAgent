@@ -44,8 +44,11 @@ export function formatQueueButtonTooltip(): string {
  * Names the steer chord on a Queue button while `enabled`. Spread
  * `buttonProps` on the button and render `tooltipNode` beside it. A turn
  * that ends under the pointer takes the hint down with it.
+ *
+ * An icon-only button passes its `label`, which the tooltip shows whenever
+ * there is no chord to name.
  */
-export function useQueueSteerTooltip(enabled: boolean): {
+export function useQueueSteerTooltip(enabled: boolean, label?: string): {
   buttonProps: {
     "aria-describedby": string | undefined;
     onBlur: () => void;
@@ -64,11 +67,14 @@ export function useQueueSteerTooltip(enabled: boolean): {
   const showHint = useCallback(
     (event: { currentTarget: HTMLElement }) => {
       if (enabled) show(event.currentTarget, formatQueueButtonTooltip());
+      else if (label) show(event.currentTarget, label);
     },
-    [enabled, show],
+    [enabled, label, show],
   );
   return {
     buttonProps: {
+      // The label tooltip repeats the accessible name, so only the chord
+      // hint describes the button.
       "aria-describedby": enabled && visible ? tooltipId : undefined,
       onBlur: hide,
       onFocus: showHint,

@@ -4,11 +4,12 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runNativeFixtureCommand } from "../src/test-setup/native-helper-fixture";
-import { appendNativeOracleTiming, profileNativeBuild } from "./native-relay-oracle-profile.mjs";
+import { appendNativeOracleTiming, profileNativeBuild, timeNativeOraclePhase } from "./native-relay-oracle-profile.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
+const require = createRequire(import.meta.url);
 const fixtures = [];
 const pendingBuilds = [];
 afterEach(async () => {
@@ -54,9 +55,10 @@ int ${entry}(${parameters}) {
 `);
   }
   let attempt = 0;
+  const buildOptions = (options) => ({ outputRoot: root, reuse: process.platform !== "win32", ...options });
   const program = (options = {}, profile = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE) => {
     const label = { root, attempt: ++attempt };
-    const build = `buildMcpIpcRelay(${JSON.stringify({ outputRoot: root, reuse: process.platform !== "win32", ...options })})`;
+    const build = `buildMcpIpcRelay(${JSON.stringify(buildOptions(options))})`;
     return `import { buildMcpIpcRelay } from ${JSON.stringify(pathToFileURL(builder).href)};
       ${profile ? `import { profileNativeBuild } from ${JSON.stringify(new URL("./native-relay-oracle-profile.mjs", import.meta.url).href)};` : ""}
       console.log(JSON.stringify(${profile ? `profileNativeBuild(${JSON.stringify(label)}, () => ${build})` : build}));`;
@@ -68,7 +70,12 @@ int ${entry}(${parameters}) {
     try { return parseOutput(execFileSync(process.execPath, args, { encoding: "utf8", env, stdio: "pipe" })); }
     finally { appendNativeOracleTiming({ kind: "build-process", label: { root, attempt }, ms: performance.now() - started }); }
   };
-  return { root, builder, source, header, build, command };
+  // This path reuses the loaded module while its source and environment stay fixed.
+  const buildInProcess = (options, profile) => {
+    const { buildMcpIpcRelay } = require(builder);
+    return profileNativeBuild({ root, attempt: ++attempt }, () => buildMcpIpcRelay(buildOptions(options)), profile);
+  };
+  return { root, builder, source, header, build, buildInProcess, command };
 }
 
 // MSVC prints source/linker diagnostics before the child's final JSON line.
@@ -76,10 +83,9 @@ function parseOutput(stdout) {
   return JSON.parse(stdout.trim().split(/\r?\n/).at(-1));
 }
 
-function observe(output) {
-  const started = performance.now();
-  try { return execFileSync(output, ["--build-oracle"], { encoding: "utf8" }).trim(); }
-  finally { appendNativeOracleTiming({ kind: "run-helper", output, ms: performance.now() - started }); }
+function observe(output, profile) {
+  return timeNativeOraclePhase({ kind: "run-helper", output },
+    () => execFileSync(output, ["--build-oracle"], { encoding: "utf8" }).trim(), profile);
 }
 
 function machine(output) {
@@ -130,20 +136,36 @@ it("inspects each native Mach-O input once while preserving emitted code and cac
 });
 
 it("emitted native code follows source, included headers and compiler flags at the same output path", () => {
-  const f = fixture();
-  const output = f.build();
+  // Each POSIX mutation needs a real cached build, but the peer verifier and
+  // its SDK headers are covered separately in this file.
+  const f = process.platform === "win32" ? fixture() : fixture(`#include "maintenance-lock.h"
+int puts(const char *);
+#ifndef BUILD_ORACLE_FLAG
+#define BUILD_ORACLE_FLAG 1
+#endif
+#define BUILD_ORACLE_STRING_VALUE(x) #x
+#define BUILD_ORACLE_STRING(x) BUILD_ORACLE_STRING_VALUE(x)
+int main(void) {
+  puts("source-one " BUILD_ORACLE_HEADER " flag-" BUILD_ORACLE_STRING(BUILD_ORACLE_FLAG));
+  return 0;
+}
+`);
+  const build = process.platform === "win32" ? f.build : f.buildInProcess;
+  if (process.platform !== "win32") writeFileSync(f.header, '#define BUILD_ORACLE_HEADER "header-one"\n');
+  const output = build();
   expect(machine(output)).toBe(process.arch);
   expect(observe(output)).toBe("source-one header-one flag-1");
   writeFileSync(f.header, readFileSync(f.header, "utf8").replace('"header-one"', '"header-two"'));
-  expect(f.build()).toBe(output);
+  expect(build()).toBe(output);
   expect(observe(output)).toBe("source-one header-two flag-1");
   writeFileSync(f.source, readFileSync(f.source, "utf8").replace('"source-one ', '"source-two '));
-  f.build();
+  expect(build()).toBe(output);
   expect(observe(output)).toBe("source-two header-two flag-1");
   const flag = process.platform === "win32" ? "/DBUILD_ORACLE_FLAG=2" : "-DBUILD_ORACLE_FLAG=2";
   const oldFlag = process.platform === "win32" ? '"/O2"' : '"-O2"';
   writeFileSync(f.builder, readFileSync(f.builder, "utf8").replace(oldFlag, `${oldFlag}, ${JSON.stringify(flag)}`));
-  f.build();
+  // A fresh process loads the edited compiler command at the same module path.
+  expect(f.build()).toBe(output);
   expect(observe(output)).toBe("source-two header-two flag-2");
 });
 
@@ -261,65 +283,71 @@ it("only the active owner can replace or invalidate a shared native output", () 
   } finally { rmSync(lock, { recursive: true, force: true }); }
 });
 
-it("invalidates linked input identity even when library size and mtime are restored", () => {
-  if (process.platform === "win32") {
-    const f = fixture();
-    const output = f.build({ reuse: true });
-    expect(existsSync(`${output}.build.json`)).toBe(false);
-    expect(observe(output)).toBe("source-one header-one flag-1");
-    return;
-  }
-  const f = fixture(`int puts(const char *);
+describe("linked archive identity", () => {
+  const profile = process.env.PWRAGENT_NATIVE_ORACLE_LINKED_INPUT_PROFILE || process.env.PWRAGENT_NATIVE_ORACLE_PROFILE;
+  let linkedArchive;
+
+  beforeEach(() => {
+    if (process.platform === "win32") return;
+    // Prepare a real archive under the fixture hook's budget. A cold archiver
+    // can consume the entire deadline for the two relay builds and assertions.
+    const f = fixture(`int puts(const char *);
 const char *oracle_library_value(void);
 int main(void) {
   puts(oracle_library_value());
   return 0;
 }
 `);
-  const library = join(f.root, "library");
-  mkdirSync(library);
-  const object = join(library, "value.o");
-  const archive = join(library, "libvalue.a");
-  const started = performance.now();
-  try {
-    execFileSync("cc", ["-x", "c", "-c", "-", "-o", object,
-      ...(process.platform === "darwin" ? ["-mmacosx-version-min=12.0"] : []),
-    ], {
-      input: 'const char *oracle_library_value(void) { return "lib-one"; }\n', stdio: "pipe",
-    });
-    execFileSync("ar", ["rcs", archive, object], { stdio: "pipe" });
-  } finally {
-    appendNativeOracleTiming({ kind: "archive-setup", label: { root: f.root }, ms: performance.now() - started });
-  }
-  // Use a whole-second timestamp so utimesSync can restore it exactly.
-  utimesSync(archive, 1, 1);
-  writeFileSync(f.builder, readFileSync(f.builder, "utf8").replace('source, "-o", output', `source, ${JSON.stringify(`-Wl,${archive}`)}, "-o", output`));
-  // Load the isolated production builder once. This case keeps the same
-  // environment throughout and needs no Node subprocess for either build.
-  const { buildMcpIpcRelay } = createRequire(import.meta.url)(f.builder);
-  let attempt = 0;
-  const build = () => profileNativeBuild({ root: f.root, attempt: ++attempt },
-    () => buildMcpIpcRelay({ outputRoot: f.root, reuse: true }));
-  const output = build();
-  const inputs = JSON.parse(readFileSync(`${output}.build.json`, "utf8")).inputs;
-  expect(inputs.some((input) => input.path === archive)).toBe(true);
-  expect(observe(output)).toBe("lib-one");
-  const original = statSync(archive, { bigint: true });
-  // Change the one object string in place. Its length and the archive layout
-  // stay fixed, and there is no second compiler or archiver invocation.
-  const bytes = readFileSync(archive);
-  const offset = bytes.indexOf("lib-one\0");
-  expect(offset).toBeGreaterThanOrEqual(0);
-  expect(bytes.indexOf("lib-one\0", offset + 1)).toBe(-1);
-  bytes.write("lib-two", offset);
-  writeFileSync(archive, bytes);
-  utimesSync(archive, 1, 1);
-  const updated = statSync(archive, { bigint: true });
-  expect(updated.ino).toBe(original.ino);
-  expect(updated.size).toBe(original.size);
-  expect(updated.mtimeNs).toBe(original.mtimeNs);
-  expect(build()).toBe(output);
-  expect(observe(output)).toBe("lib-two");
+    const library = join(f.root, "library");
+    mkdirSync(library);
+    const object = join(library, "value.o");
+    const archive = join(library, "libvalue.a");
+    const label = { root: f.root };
+    timeNativeOraclePhase({ kind: "archive-setup", label, command: "cc -c" },
+      () => execFileSync("cc", ["-x", "c", "-c", "-", "-o", object,
+        ...(process.platform === "darwin" ? ["-mmacosx-version-min=12.0"] : []),
+      ], {
+        input: 'const char *oracle_library_value(void) { return "lib-one"; }\n', stdio: "pipe",
+      }), profile);
+    timeNativeOraclePhase({ kind: "archive-setup", label, command: "ar" },
+      () => execFileSync("ar", ["rcs", archive, object], { stdio: "pipe" }), profile);
+    // Use a whole-second timestamp so utimesSync can restore it exactly.
+    utimesSync(archive, 1, 1);
+    writeFileSync(f.builder, readFileSync(f.builder, "utf8").replace('source, "-o", output', `source, ${JSON.stringify(`-Wl,${archive}`)}, "-o", output`));
+    linkedArchive = { f, archive };
+  });
+
+  it("invalidates linked input identity even when library size and mtime are restored", () => {
+    if (process.platform === "win32") {
+      const f = fixture();
+      const output = f.build({ reuse: true });
+      expect(existsSync(`${output}.build.json`)).toBe(false);
+      expect(observe(output)).toBe("source-one header-one flag-1");
+      return;
+    }
+    const { f, archive } = linkedArchive;
+    const build = () => f.buildInProcess({ reuse: true }, profile);
+    const output = build();
+    const inputs = JSON.parse(readFileSync(`${output}.build.json`, "utf8")).inputs;
+    expect(inputs.some((input) => input.path === archive)).toBe(true);
+    expect(observe(output, profile)).toBe("lib-one");
+    const original = statSync(archive, { bigint: true });
+    // Change the one object string in place. Its length and the archive layout
+    // stay fixed, and there is no second compiler or archiver invocation.
+    const bytes = readFileSync(archive);
+    const offset = bytes.indexOf("lib-one\0");
+    expect(offset).toBeGreaterThanOrEqual(0);
+    expect(bytes.indexOf("lib-one\0", offset + 1)).toBe(-1);
+    bytes.write("lib-two", offset);
+    writeFileSync(archive, bytes);
+    utimesSync(archive, 1, 1);
+    const updated = statSync(archive, { bigint: true });
+    expect(updated.ino).toBe(original.ino);
+    expect(updated.size).toBe(original.size);
+    expect(updated.mtimeNs).toBe(original.mtimeNs);
+    expect(build()).toBe(output);
+    expect(observe(output, profile)).toBe("lib-two");
+  });
 });
 
 it("removes an installed Outpost helper after a failed POSIX rebuild and rejects Windows", () => {

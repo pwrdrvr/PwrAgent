@@ -426,6 +426,8 @@ jobs:
         timeout-minutes: 10
         env:
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/unit-first.json
+          # Keep the linked-input relay oracle's first-attempt phases with the retry reports.
+          PWRAGENT_NATIVE_ORACLE_LINKED_INPUT_PROFILE: ${{ github.workspace }}/.local/ci/retry/native-relay-first.jsonl
           PWRAGENT_DEV_SQLITE_WRITE_METRICS: ${{ github.event_name == 'pull_request' && '1' || '' }}
           PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE: ${{ github.event_name == 'pull_request' && format('{0}/.local/ci/sqlite-writes/first.jsonl', github.workspace) || '' }}
         run: >-

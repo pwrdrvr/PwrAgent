@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createRequire } from "node:module";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, aroundEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { startHeadlessHost } from "../headless";
 import type { SqliteWriteDelta, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import type { StateDb } from "../state/state-db";
@@ -61,7 +61,6 @@ let activeFixture: Promise<void> | undefined;
 function runFixture(
   spelling: PathSpelling,
   signal: AbortSignal,
-  onFinished: (join: () => Promise<void>) => void,
   run: (root: string) => Promise<void>,
 ): Promise<void> {
   signal.throwIfAborted();
@@ -86,24 +85,26 @@ function runFixture(
     }
   }).finally(() => { activeFixture = undefined; });
   activeFixture = work;
-  // Vitest times out the await of the test callback. Join the underlying
-  // work and its teardown before the next case gets the clock and env.
-  onFinished(async () => {
-    try {
-      await work;
-    } catch (error) {
-      // The callback already reports its own error. On timeout, still report
-      // any distinct failure that happened while draining the fixture.
-      if (signal.aborted && error !== signal.reason) throw error;
-    }
-  });
   return work;
+}
+
+async function joinTestWork(work: Promise<void>, signal: AbortSignal): Promise<void> {
+  // Vitest times out the await of the test callback. Join the underlying
+  // work and its shutdown before releasing the clock and environment.
+  try {
+    await work;
+  } catch (error) {
+    // The callback already reports its own error. On timeout, still report
+    // any distinct failure that happened while draining the fixture.
+    if (signal.aborted && error !== signal.reason) throw error;
+  }
 }
 
 // One build serves every case; each case runs its own copy, so each still
 // evaluates a fresh owner module graph. Building per case cost ~150 ms each.
 let buildRoot: string | undefined;
 let builtBundle: string;
+let migratedDb: string;
 // Node reads no source map without --enable-source-maps; skipping them saves
 // copying 22 MB of the bundle's 34 MB into every case.
 const bundleCopy = { recursive: true, filter: (source: string) => !source.endsWith(".map") };
@@ -124,7 +125,15 @@ beforeAll(async () => {
   // a host, and each case requires its own copy at another path.
   try {
     enterFixture(buildRoot);
-    createRequire(import.meta.url)(path.join(builtBundle, "dist/index.js"));
+    const owner = createRequire(import.meta.url)(path.join(builtBundle, "dist/index.js")) as Runtime;
+    // Each case starts with the same empty schema and owns its database copy.
+    migratedDb = path.join(buildRoot, "schema.db");
+    const db = owner.StateDb.open(migratedDb);
+    try {
+      db.raw.pragma("wal_checkpoint(TRUNCATE)");
+    } finally {
+      db.close();
+    }
   } finally {
     leaveFixture();
   }
@@ -134,20 +143,25 @@ afterAll(() => {
   if (buildRoot) fs.rmSync(buildRoot, { recursive: true, force: true });
 });
 
-async function assertLifecycleBudget(root: string, signal: AbortSignal): Promise<void> {
+function prepareLifecycle(root: string) {
   const directory = path.join(root, "bundle");
-  let runtime: Runtime | undefined;
+  fs.cpSync(builtBundle, directory, bundleCopy);
+  const owner = createRequire(import.meta.url)(path.join(directory, "dist/index.js")) as Runtime;
+  const dbPath = path.join(root, "profiles/t/state/state.db");
+  fs.copyFileSync(migratedDb, dbPath);
+  return { owner, dbPath };
+}
+
+async function assertLifecycleBudget(
+  { owner, dbPath }: ReturnType<typeof prepareLifecycle>,
+  signal: AbortSignal,
+): Promise<void> {
   let boot: SqliteWriteDelta | undefined;
   let idle: SqliteWriteDelta | undefined;
   let shutdown: SqliteWriteDelta | undefined;
   let loadedAfterBoot: string[] = [];
   try {
-    fs.cpSync(builtBundle, directory, bundleCopy);
-    const owner = runtime = createRequire(import.meta.url)(path.join(directory, "dist/index.js")) as Runtime;
-    // Schema creation is fixture setup; every owner lifecycle write is measured.
-    const dbPath = path.join(root, "profiles/t/state/state.db");
-    const db = owner.StateDb.open(dbPath);
-    db.close();
+    signal.throwIfAborted();
     owner.resetSqliteWriteMetrics();
     const { writes } = await owner.measureSqliteWrites(async () => {
       const started = await owner.measureSqliteWrites(async () => {
@@ -215,13 +229,36 @@ async function assertLifecycleBudget(root: string, signal: AbortSignal): Promise
       throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify({ lifecycle: writes.tables, boot: boot!.tables, idle: idle!.tables, shutdown: shutdown!.tables }, null, 2)}`, { cause: error });
     }
   } finally {
-    await runtime?.shutdownHeadlessHost("idle-budget-cleanup");
+    await owner.shutdownHeadlessHost("idle-budget-cleanup");
   }
 }
 
 const spellings: PathSpelling[] = process.platform === "win32" ? ["canonical"] : ["canonical", "symlink"];
-it.for(spellings)("the built Node owner's boot, one idle hour and shutdown stay within the lifecycle write budget (%s path)", (spelling, { signal, onTestFinished }) => {
-  return runFixture(spelling, signal, onTestFinished, root => assertLifecycleBudget(root, signal));
+describe.for(spellings)("built Node owner (%s path)", spelling => {
+  let fixtureRoot: string;
+  let prepared: ReturnType<typeof prepareLifecycle>;
+  let lifecycle: Promise<void> | undefined;
+
+  beforeEach(() => {
+    // The timed hook checks elapsed time even if cold bundle evaluation
+    // blocks the event loop past the deadline.
+    prepared = prepareLifecycle(fixtureRoot);
+  });
+
+  aroundEach((runTest, { signal }) => runFixture(spelling, signal, async root => {
+    fixtureRoot = root;
+    lifecycle = undefined;
+    try {
+      await runTest();
+    } finally {
+      if (lifecycle) await joinTestWork(lifecycle, signal);
+    }
+  }));
+
+  it("boot, one idle hour and shutdown stay within the lifecycle write budget", ({ signal }) => {
+    lifecycle = assertLifecycleBudget(prepared, signal);
+    return lifecycle;
+  });
 });
 
 it("keeps the clock and environment owned while a timed-out case drains", async ({ signal, onTestFinished }) => {
@@ -230,28 +267,28 @@ it("keeps the clock and environment owned while a timed-out case drains", async 
   const entered = Promise.withResolvers<string>();
   const release = Promise.withResolvers<void>();
   const outerHome = process.env.PWRAGENT_HOME;
-  let join!: () => Promise<void>;
-  const outcome = runFixture("canonical", controller.signal, finish => { join = finish; }, async root => {
+  const work = runFixture("canonical", controller.signal, async root => {
     entered.resolve(root);
     await release.promise;
     controller.signal.throwIfAborted();
-  }).catch((error: unknown) => {
+  });
+  const outcome = work.catch((error: unknown) => {
     entered.reject(error);
     return error;
   });
   onTestFinished(async () => {
     release.resolve();
-    await join();
+    await joinTestWork(work, controller.signal);
   });
 
   const root = await entered.promise;
   controller.abort(timeout);
   let joined = false;
-  const drained = join().then(() => { joined = true; });
+  const drained = joinTestWork(work, controller.signal).then(() => { joined = true; });
   try {
     await Promise.resolve();
     expect(joined).toBe(false);
-    expect(() => runFixture("canonical", signal, onTestFinished, async () => {})).toThrow("previous idle-budget fixture");
+    expect(() => runFixture("canonical", signal, async () => {})).toThrow("previous idle-budget fixture");
     expect(process.env.PWRAGENT_HOME).toBe(root);
     expect(vi.isFakeTimers()).toBe(true);
   } finally {
@@ -260,7 +297,7 @@ it("keeps the clock and environment owned while a timed-out case drains", async 
   }
 
   expect(await outcome).toBe(timeout);
-  await runFixture("canonical", signal, onTestFinished, async successorRoot => {
+  await runFixture("canonical", signal, async successorRoot => {
     expect(process.env.PWRAGENT_HOME).toBe(successorRoot);
     expect(vi.isFakeTimers()).toBe(true);
   });

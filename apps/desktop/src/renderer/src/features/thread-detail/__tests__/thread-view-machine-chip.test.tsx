@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -42,7 +42,7 @@ const machine: LaunchpadMachineControl = {
 };
 
 describe("ThreadView machine chip", () => {
-  it("puts the launchpad's machine picker in the title rail, not the composer", () => {
+  it("puts the launchpad's machine picker in the composer's Where panel", () => {
     render(
       <ThreadView
         {...baseProps}
@@ -58,13 +58,13 @@ describe("ThreadView machine chip", () => {
       />,
     );
 
-    const picker = screen.getByRole("button", { name: /^Machine(?::|$)/ });
+    expect(screen.queryByRole("button", { name: /^Machine(?::|$)/ })).toBeNull();
+    const settings = screen.getByLabelText("New thread settings");
+    fireEvent.click(within(settings).getByRole("button", { name: /^Where: Example/ }));
+    const panel = screen.getByRole("dialog", { name: "Where this thread runs" });
+    const picker = within(panel).getByRole("button", { name: /^Machine(?::|$)/ });
     expect(picker).toHaveTextContent("Harbor");
-    expect(picker.closest(".thread-header__machine")).not.toBeNull();
-    expect(
-      within(screen.getByLabelText("New thread settings"))
-        .queryByRole("button", { name: /^Machine(?::|$)/ }),
-    ).toBeNull();
+    expect(document.querySelector(".thread-header__machine")).toBeNull();
   });
 
   it("names the thread's machine in the same place", () => {

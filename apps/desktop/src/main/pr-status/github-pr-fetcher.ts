@@ -60,6 +60,7 @@ type GithubMergeOptions = {
   thread?: ThreadPullRequestMergeTarget;
   assertCanMerge?: (url: string) => void;
   checkStackOrder?: boolean;
+  deadlineAt?: number;
   /**
    * The open lower layers of the PR's GitHub stack that the operator saw and
    * chose to merge with it. GitHub's asynchronous merge lands them all; any
@@ -344,10 +345,24 @@ export class GithubPrFetcher {
    * method does not apply, and the summary says it was queued.
    */
   async mergePullRequest(params: GithubMergeOptions): Promise<ThreadPullRequestMergeResult> {
+    const deadlineAt = params.deadlineAt;
+    const signal = deadlineAt === undefined
+      ? undefined
+      : AbortSignal.timeout(Math.max(0, Math.min(2_147_483_647, deadlineAt - Date.now())));
+    const assertWithinDeadline = () => {
+      if (signal?.aborted || (deadlineAt !== undefined && Date.now() >= deadlineAt)) {
+        throw new ForgeReadError("timed_out", "Merge request deadline expired.");
+      }
+    };
+    assertWithinDeadline();
     const command = await this.resolveGhCommand();
-    const run = async (args: string[], timeout = 30_000) => await this.runGhCommand(command, args, {
-      ...(params.cwd ? { cwd: params.cwd } : {}), timeout,
-    });
+    assertWithinDeadline();
+    const run = async (args: string[], timeout = 30_000) => {
+      // Covers direct merges, queue mutations, and native-stack merges even
+      // when a prior read completed before the timer callback ran.
+      assertWithinDeadline();
+      return await this.runGhCommand(command, args, { ...(params.cwd ? { cwd: params.cwd } : {}), timeout });
+    };
     let reference = parsePullRequestReferenceUrl(params.pullRequest);
     if (!reference) {
       const result = await run(["pr", "view", params.pullRequest, "--json", "url", "--jq", ".url"]);
@@ -356,20 +371,26 @@ export class GithubPrFetcher {
     }
     params.assertCanMerge?.(reference.url);
     const identified = reference;
-    const merge = () => this.mergeIdentifiedPullRequest(identified, params, run);
-    return params.thread && observeThreadMerge ? await observeThreadMerge(params.thread, identified.url, merge) : await merge();
+    const merge = () => this.mergeIdentifiedPullRequest(identified, params, run, signal);
+    try {
+      return params.thread && observeThreadMerge ? await observeThreadMerge(params.thread, identified.url, merge) : await merge();
+    } catch (error) {
+      assertWithinDeadline();
+      throw error;
+    }
   }
 
   private async mergeIdentifiedPullRequest(
     reference: PullRequestReferenceIdentity,
     params: GithubMergeOptions,
     run: (args: string[], timeout?: number) => Promise<{ stdout: string; stderr?: string }>,
+    signal?: AbortSignal,
   ): Promise<ThreadPullRequestMergeResult> {
     let checked: GithubStackMergeCheck | undefined;
     let mergeTarget = params.pullRequest;
     if (params.checkStackOrder) {
       try {
-        checked = await this.checkStackOrder(reference, params, run);
+        checked = await this.checkStackOrder(reference, params, run, signal);
       } catch (error) {
         if (!(error instanceof ForgeReadError) || error.code !== "pull_request_redirected") throw error;
         const result = await run(["pr", "view", reference.url, "--json", "url", "--jq", ".url"]);
@@ -379,7 +400,7 @@ export class GithubPrFetcher {
         params.assertCanMerge?.(canonical.url);
         reference = canonical;
         mergeTarget = canonical.url;
-        checked = await this.checkStackOrder(reference, params, run);
+        checked = await this.checkStackOrder(reference, params, run, signal);
       }
     }
     const checkedBase = checked?.base;
@@ -402,7 +423,7 @@ export class GithubPrFetcher {
       // A stack GitHub keeps, unseen by the order check (which a caller may
       // skip): still never land the layers below with this one.
       if (GITHUB_ASYNC_MERGE_REQUIRED.test(detail)) {
-        const get = this.githubGet(reference, run);
+        const get = this.githubGet(reference, run, signal);
         const pull = await get(`/pulls/${reference.number}`) as GithubStackPull;
         // The order check passed at one base; a stack GitHub formed since may have retargeted it.
         if (checkedBase !== undefined) assertStackMergeBaseUnchanged(checkedBase, pull?.base?.ref);
@@ -537,12 +558,13 @@ export class GithubPrFetcher {
   private githubGet(
     reference: PullRequestReferenceIdentity,
     run: (args: string[]) => Promise<{ stdout: string }>,
+    signal?: AbortSignal,
   ): (route: string) => Promise<unknown> {
     const endpoint = `repos/${encodeURIComponent(reference.org)}/${encodeURIComponent(reference.repo)}`;
     const repository = { provider: "github" as const, host: reference.provider, owner: reference.org, repo: reference.repo };
     const transport = stackTransport;
     return async (route) => {
-      if (transport) return await transport.requestGithubForOperatorMergePreflight(repository, { path: endpoint + route });
+      if (transport) return await transport.requestGithubForOperatorMergePreflight(repository, { path: endpoint + route }, signal);
       const response = await run(["api", "--hostname", reference.provider, endpoint + route]);
       return JSON.parse(response.stdout);
     };
@@ -552,16 +574,17 @@ export class GithubPrFetcher {
     reference: PullRequestReferenceIdentity,
     params: GithubMergeOptions,
     run: (args: string[]) => Promise<{ stdout: string }>,
+    signal?: AbortSignal,
   ): Promise<GithubStackMergeCheck> {
     const cwd = params.cwd;
-    const catalogs = cwd ? (await readStackClones([cwd])).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : []) : [];
+    const catalogs = cwd ? (await readStackClones([cwd], { signal })).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : []) : [];
     const repository = { provider: "github" as const, host: reference.provider, owner: reference.org, repo: reference.repo };
     const transport = stackTransport;
-    return await checkGithubStackMerge(repository, reference.number, catalogs, this.githubGet(reference, run), async (query, variables) => {
+    return await checkGithubStackMerge(repository, reference.number, catalogs, this.githubGet(reference, run, signal), async (query, variables) => {
       if (transport) {
         return (await transport.requestGithubForOperatorMergePreflight(repository, {
           graphql: true, path: "", body: { query, variables },
-        }) as { data?: unknown }).data;
+        }, signal) as { data?: unknown }).data;
       }
       try {
         const response = await run(["api", "graphql", "--hostname", reference.provider, "-f", `query=${query}`,

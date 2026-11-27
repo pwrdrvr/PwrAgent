@@ -23,6 +23,45 @@ export type ThreadReplayPageHooks = {
   onUnresolvedCursor?: () => void;
 };
 
+type ReplayPagingIndex = {
+  indexById: Map<string, number>;
+  firstTurnlessIndex: number;
+  firstIndexByTurnId: Map<string, number>;
+};
+
+const replayPagingIndexes = new WeakMap<AppServerThreadEntry[], ReplayPagingIndex>();
+
+function getReplayPagingIndex(entries: AppServerThreadEntry[]): ReplayPagingIndex {
+  const cached = replayPagingIndexes.get(entries);
+  if (cached) {
+    return cached;
+  }
+  const indexById = new Map<string, number>();
+  const firstIndexByTurnId = new Map<string, number>();
+  let firstTurnlessIndex = -1;
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    if (!indexById.has(entry.id)) {
+      indexById.set(entry.id, index);
+    }
+    const turnId = entry.turn?.id;
+    if (!turnId) {
+      if (firstTurnlessIndex === -1) {
+        firstTurnlessIndex = index;
+      }
+    } else if (!firstIndexByTurnId.has(turnId)) {
+      firstIndexByTurnId.set(turnId, index);
+    }
+  }
+  const built: ReplayPagingIndex = {
+    indexById,
+    firstTurnlessIndex,
+    firstIndexByTurnId,
+  };
+  replayPagingIndexes.set(entries, built);
+  return built;
+}
+
 export function pageThreadReplay(
   replay: AppServerThreadReplay,
   options: ThreadReplayPageOptions,
@@ -46,13 +85,15 @@ export function pageThreadReplay(
     return replay;
   }
 
+  const pagingIndex = getReplayPagingIndex(replay.entries);
+
   // Presence, not truthiness: an empty-string cursor is a cursor that resolves
   // to nothing, and reading it as "no cursor" would hand the newest page to a
   // caller asking for older history — the failure the guard below exists to
   // prevent. Federation casts a peer's params straight to this request shape,
   // so the value is not ours to trust.
   const beforeIndex = options.before !== undefined
-    ? replay.entries.findIndex((entry) => entry.id === options.before)
+    ? (pagingIndex.indexById.get(options.before) ?? -1)
     : replay.entries.length;
   if (beforeIndex < 0) {
     // The cursor names an entry this replay does not contain, so no page can
@@ -80,7 +121,7 @@ export function pageThreadReplay(
     options.limit === undefined ? undefined : Math.max(0, Math.floor(options.limit));
   const startIndex = limit === undefined
     ? 0
-    : findTurnPageStartIndex(replay.entries, beforeIndex, limit);
+    : findTurnPageStartIndex(replay.entries, beforeIndex, limit, pagingIndex);
   const entries = replay.entries.slice(startIndex, beforeIndex);
   return replayWithEntries(
     replay,
@@ -93,6 +134,7 @@ function findTurnPageStartIndex(
   entries: AppServerThreadEntry[],
   endIndex: number,
   limit: number,
+  pagingIndex: ReplayPagingIndex,
 ): number {
   if (limit === 0) {
     return endIndex;
@@ -102,10 +144,8 @@ function findTurnPageStartIndex(
   // only part of a logical turn. Mixing both paging strategies can then split
   // that turn or turn a bounded request into the entire replay, so preserve
   // entry-count paging unless every entry in scope has a turn ID.
-  for (let index = 0; index < endIndex; index += 1) {
-    if (!entries[index]?.turn?.id) {
-      return Math.max(0, endIndex - limit);
-    }
+  if (pagingIndex.firstTurnlessIndex !== -1 && pagingIndex.firstTurnlessIndex < endIndex) {
+    return Math.max(0, endIndex - limit);
   }
 
   const turnIds = new Set<string>();
@@ -130,10 +170,10 @@ function findTurnPageStartIndex(
     return 0;
   }
 
-  const firstTurnEntryIndex = entries.findIndex(
-    (entry, index) => index < endIndex && entry.turn?.id === oldestRetainedTurnId,
-  );
-  return firstTurnEntryIndex >= 0 ? firstTurnEntryIndex : 0;
+  const firstTurnEntryIndex = pagingIndex.firstIndexByTurnId.get(oldestRetainedTurnId);
+  return firstTurnEntryIndex !== undefined && firstTurnEntryIndex < endIndex
+    ? firstTurnEntryIndex
+    : 0;
 }
 
 /**

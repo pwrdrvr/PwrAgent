@@ -17,11 +17,11 @@ export class PrStatusTokenBucket {
     return Math.floor(this.refilled(now));
   }
 
-  tryTake(now = Date.now()): boolean {
+  tryTake(now = Date.now(), minimumRemaining = 0): boolean {
     this.tokens = this.refilled(now);
     this.updatedAt = now;
 
-    if (this.tokens < 1) {
+    if (this.tokens < 1 + minimumRemaining) {
       return false;
     }
 

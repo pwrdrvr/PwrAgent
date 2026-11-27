@@ -118,9 +118,11 @@ import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
 import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import type { DesktopApi } from "./desktop-api";
 import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } from "./useNavigationDirectoryDisclosure";
+import { type ComposerConfigurationPreview, useComposerConfigurationPreview } from "./useComposerConfigurationPreview";
 import { useNavigationSelectedDetail } from "./useNavigationSelectedDetail";
 import {
   navigationIdentityFromThreadKey,
+  navigationIdentityKey,
   navigationPageErrorKind,
   navigationSelectionAuthorizesComposer,
   navigationThreadSelectionKey,
@@ -2556,27 +2558,23 @@ function applyThreadCodexEnvironmentUpdate(
     return snapshot;
   }
 
-  let changed = false;
-  const threads = loadedThreadRows(snapshot).map((thread) => {
-    if (thread.source !== params.backend
-      || thread.id !== params.threadId
-      || !federationTargetsEqual(thread.federation?.ref.target, params.federationTarget)) {
-      return thread;
-    }
-
-    changed = true;
-    return {
-      ...thread,
-      codexEnvironmentRuntime: params.codexEnvironmentRuntime,
-    };
-  });
-
-  return changed
-    ? {
-        ...snapshot,
-        threadRows: indexLoadedThreadRows(threads),
-      }
-    : snapshot;
+  const { backend, federationTarget, threadId, codexEnvironmentRuntime } = params;
+  // Local rows can have either an ordinary identity or an explicit local target.
+  const keys = federationTarget?.scope === "remote"
+    ? [federatedThreadIdentityKey({ backend, threadId, target: federationTarget })]
+    : [
+        buildThreadIdentityKey(backend, threadId),
+        federatedThreadIdentityKey({ backend, threadId, target: { scope: "local" } }),
+      ];
+  let threadRows: Map<string, NavigationPresentedThread> | undefined;
+  for (const key of keys) {
+    const row = snapshot.threadRows.get(key);
+    if (!row || row.codexEnvironmentRuntime === codexEnvironmentRuntime
+      || row.source !== backend || row.id !== threadId || !federationTargetsEqual(row.federation?.ref.target, federationTarget)) continue;
+    threadRows ??= new Map(snapshot.threadRows);
+    threadRows.set(key, { ...row, codexEnvironmentRuntime });
+  }
+  return threadRows ? { ...snapshot, threadRows } : snapshot;
 }
 
 function applyThreadExecutionModeUpdate(
@@ -3433,6 +3431,9 @@ export function useThreadNavigation(
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
   selectedThreadConfigurationReady: boolean;
+  composerConfigurationPreview?: ComposerConfigurationPreview;
+  /** The current selection has an authorized owner configuration. */
+  selectedThreadDetailReady: boolean;
   selectedWorkspaceHandoffPending: boolean;
   selectedThreadConfigurationError?: string;
   /** The owner reports the selected thread archived: history only, no composer. */
@@ -4080,6 +4081,7 @@ export function useThreadNavigation(
   const selectedIdentity = useMemo(() => selectedItemKey && !isPendingThreadStartSelectionKey(selectedItemKey)
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined, [selectedItemKey, rendererFederationTarget]);
+  const composerPreviews = useMemo(() => desktopApi ? new Map<string, ComposerConfigurationPreview>() : undefined, [desktopApi]);
   const selectedDetail = useNavigationSelectedDetail({
     collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "rewindLog", "launchedThreadLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
     desktopApi, enabled: enabled && viewVisible,
@@ -5366,17 +5368,26 @@ export function useThreadNavigation(
           threadId: string;
           codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
         };
-        setState((current) => ({
-          ...current,
-          rows: applyThreadCodexEnvironmentUpdate(current.rows, {
+        if (composerPreviews?.size) {
+          const key = navigationIdentityKey({ backend: event.backend, threadId,
+            ownerInstanceId: event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined });
+          const preview = composerPreviews.get(key);
+          if (preview && preview.codexEnvironmentRuntime !== codexEnvironmentRuntime) {
+            composerPreviews.set(key, { ...preview, codexEnvironmentRuntime });
+          }
+        }
+        setState((current) => {
+          const rows = applyThreadCodexEnvironmentUpdate(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
             codexEnvironmentRuntime,
-          }),
-        }));
+          });
+          return rows === current.rows ? current : { ...current, rows };
+        });
         setOptimisticThread((current) =>
-          current && agentEventMatchesThread(event, current, threadId)
+          current && current.codexEnvironmentRuntime !== codexEnvironmentRuntime
+            && agentEventMatchesThread(event, current, threadId)
             ? { ...current, codexEnvironmentRuntime }
             : current
         );
@@ -5795,6 +5806,7 @@ export function useThreadNavigation(
     state.rows,
     invalidateNavigation,
     deferNestedArchiveRemoval,
+    composerPreviews,
     updateArchivedThreadKey,
     noteDirectoryPatch,
     noteThreadReactionPatch,
@@ -6146,8 +6158,10 @@ export function useThreadNavigation(
       setPendingWorkspaceHandoff(undefined);
     }
   }, [pendingWorkspaceHandoff, selectedThreadKey, selectedWorkspaceHandoffPending]);
+  const composerConfigurationPreview = useComposerConfigurationPreview(composerPreviews, selectedDetail.identityKey, selectedDetail.state, selectedRow);
+  const selectedThreadDetailReady = navigationSelectionAuthorizesComposer(selectedDetail.state);
   const selectedThreadConfigurationReady =
-    navigationSelectionAuthorizesComposer(selectedDetail.state)
+    selectedThreadDetailReady
     && !selectedWorkspaceHandoffPending;
   const selectedThread = useMemo(() => {
     const authoritativeThread = selectedDetail.state?.detail?.thread;
@@ -10975,6 +10989,8 @@ export function useThreadNavigation(
     selectedLaunchpad,
     selectedThread,
     selectedThreadConfigurationReady,
+    selectedThreadDetailReady,
+    composerConfigurationPreview,
     selectedWorkspaceHandoffPending,
     // An archived thread keeps its history; the archived card stands in for
     // its composer, so archival is not reported as an error.

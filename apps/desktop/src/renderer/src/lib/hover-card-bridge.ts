@@ -1,7 +1,17 @@
 import { HOVER_TRANSITION_GRACE_MS } from "./useHoverTransitionGrace";
 
 /** A hover card the bridge can close. */
-export type BridgedHoverCard = { hide: () => void; isPinned?: () => boolean };
+export type BridgedHoverCard = {
+  hide: () => void;
+  isPinned?: () => boolean;
+  /**
+   * Whether `trigger` lies inside what this card is about, such as a PR chip
+   * on the thread row whose card is up. The pointer crosses those on its way
+   * to the card, so entering one neither closes this card nor opens its own
+   * at once; its own card still opens after the usual hover delay.
+   */
+  holds?: (trigger: Element) => boolean;
+};
 
 type Timers = {
   set: (callback: () => void, ms: number) => number;
@@ -26,6 +36,7 @@ const windowTimers: Timers = {
  */
 export class HoverCardBridge {
   private visible: BridgedHoverCard | undefined;
+  private delayed: BridgedHoverCard | undefined;
   private graceTimer: number | undefined;
 
   constructor(
@@ -35,17 +46,27 @@ export class HoverCardBridge {
 
   /**
    * The pointer entered `card`'s chip. True when it should show at once:
-   * a card was already visible, this one included.
+   * a card was already visible, this one included. `trigger` is the chip,
+   * which the visible card may hold (`BridgedHoverCard.holds`).
    */
-  enterTrigger(card: BridgedHoverCard): boolean {
+  enterTrigger(card: BridgedHoverCard, trigger?: Element): boolean {
     const current = this.visible;
     if (!current || (current !== card && current.isPinned?.())) return false;
+    if (current !== card && trigger && current.holds?.(trigger)) return false;
     this.cancelGrace();
     if (current !== card) {
       this.visible = undefined;
       current.hide();
     }
     return true;
+  }
+
+  /**
+   * `card` waits out its hover delay. A card that shows meanwhile (a chip's,
+   * on the way to it) is where the pointer rests: it cancels `card`.
+   */
+  delaying(card: BridgedHoverCard): void {
+    this.delayed = card;
   }
 
   hasPinnedCard(): boolean {
@@ -63,6 +84,9 @@ export class HoverCardBridge {
     this.cancelGrace();
     this.visible = card;
     current?.hide();
+    const delayed = this.delayed;
+    this.delayed = undefined;
+    if (delayed && delayed !== card) delayed.hide();
   }
 
   /** `card` closed for its own reasons (blur, scroll, Escape). */

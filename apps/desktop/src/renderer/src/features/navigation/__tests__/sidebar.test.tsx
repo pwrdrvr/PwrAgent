@@ -12136,7 +12136,8 @@ describe("Sidebar menus from the keyboard", () => {
   const openThreadActions = (
     actions = screen.getByRole("button", { name: "Open thread actions" }),
   ): HTMLElement => {
-    actions.focus();
+    // A row card a Tab opened closes as focus leaves its row.
+    act(() => actions.focus());
     act(() => actions.click());
     return actions;
   };

@@ -78,12 +78,11 @@ describe("ThreadView with a missing worktree", () => {
 
     expect(screen.getByRole("region", { name: /worktree is gone/ })).toBeInTheDocument();
     expect(container.querySelector(".composer")).toBeNull();
+    // The terminal stays reachable from the thread header.
     const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
-    expect(toggle.closest(".composer__footer .composer__application-actions")).not.toBeNull();
+    expect(toggle.closest(".thread-header")).not.toBeNull();
     expect(toggle).toBeEnabled();
-    // The card and the footer that stands in for the composer share its column.
     expect(inComposerColumn(container.querySelector(".missing-worktree-card"))).toBe(true);
-    expect(inComposerColumn(toggle.closest(".composer__footer"))).toBe(true);
   });
 
   it("keeps the composer during a live turn so the turn can still be stopped", () => {

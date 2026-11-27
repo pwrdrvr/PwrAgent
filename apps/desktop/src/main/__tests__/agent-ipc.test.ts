@@ -156,6 +156,7 @@ const registry = {
     disposition: "updated" as const,
     paused: request.paused,
   })),
+  controlActiveTurn: vi.fn(async () => ({ ok: true })),
   interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -285,6 +286,7 @@ const federationMock = vi.hoisted(() => {
       threadId: request.threadId,
       queued: true as const,
     })),
+    controlActiveTurn: vi.fn(async () => ({ ok: true })),
     interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -727,6 +729,36 @@ describe("agent ipc", () => {
       })).rejects.toThrow(QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE);
       expect(federationMock.remoteBackend.setQueuedTurnPaused).not.toHaveBeenCalled();
       expect(registry.setQueuedTurnPaused).not.toHaveBeenCalled();
+    } finally {
+      disposeAgentIpcHandlers();
+    }
+  });
+
+  it.each([
+    { sender: 1, explicitOwner: undefined, expectedOwner: undefined },
+    { sender: 1, explicitOwner: "pinned-peer", expectedOwner: "pinned-peer" },
+    { sender: 2, explicitOwner: undefined, expectedOwner: "peer-1" },
+  ])("stops the active turn on its owner ($expectedOwner) by thread identity", async ({ sender, explicitOwner, expectedOwner }) => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = createAgentIpcHarness();
+    const { AGENT_STOP_THREAD_CHANNEL } = await import("../../shared/ipc");
+    registerAgentIpcHandlers();
+    try {
+      registry.controlActiveTurn.mockClear();
+      federationMock.remoteBackend.controlActiveTurn.mockClear();
+      await handlers.get(AGENT_STOP_THREAD_CHANNEL)!({ sender: { id: sender } }, {
+        backend: "codex",
+        threadId: "shared-id",
+        ...(explicitOwner ? { federationTarget: { scope: "remote", instanceId: explicitOwner } } : {}),
+      });
+      const peerStop = federationMock.remoteBackend.controlActiveTurn;
+      const localStop = registry.controlActiveTurn;
+      expect(expectedOwner ? peerStop : localStop).toHaveBeenCalledExactlyOnceWith({
+        backend: "codex", threadId: "shared-id", operation: "stop", requestId: expect.any(String),
+      });
+      expect(expectedOwner ? localStop : peerStop).not.toHaveBeenCalled();
+      if (expectedOwner) {
+        expect(federationMock.runtime.remoteBackend).toHaveBeenCalledExactlyOnceWith({ scope: "remote", instanceId: expectedOwner });
+      }
     } finally {
       disposeAgentIpcHandlers();
     }

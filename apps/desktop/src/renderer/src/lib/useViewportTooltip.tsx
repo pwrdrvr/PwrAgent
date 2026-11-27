@@ -996,6 +996,8 @@ export function useViewportTooltip(options: {
       if (targetRef.current === target) {
         return;
       }
+      // As `show` refuses one: a sidebar drag owns the pointer until it ends.
+      if (isNativeDragInteractionActive()) return;
       clearHoverDelay();
       if (!rememberTarget(target)) {
         setDelayPending(false);
@@ -1032,6 +1034,12 @@ export function useViewportTooltip(options: {
     const unsubscribeNativeDrag = subscribeNativeDragInteraction((active) => {
       if (active) hide();
     });
+    // The subscription reports a drag already under way at once, and that
+    // hide clears the anchor this effect is about to observe.
+    if (!targetRectRef.current) {
+      unsubscribeNativeDrag();
+      return;
+    }
     const onScroll = (event: Event): void => {
       if (anchorLostWhileHeldRef.current) return;
       const scrollTarget = event.target;

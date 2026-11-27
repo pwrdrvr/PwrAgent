@@ -1,6 +1,16 @@
 import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared/token-usage-pricing";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { BranchIcon } from "../../icons";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  ActivityIcon,
+  BranchIcon,
+  CommitIcon,
+  CopyIcon,
+  FolderIcon,
+  PricingIcon,
+  PullRequestIcon,
+  ServerIcon,
+  WorktreeIcon,
+} from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
@@ -13,13 +23,16 @@ import {
   type ResolvedThreadLink,
 } from "../../lib/thread-links";
 import { formatRelativeTime } from "../navigation/thread-time";
+import { prStatusLabel, resolveChipState, resolveLifecycleState } from "../pr-status/pr-chip-state";
 import {
+  formatCompactTokens,
   readThreadInfoCost,
   readThreadInfoRow,
   threadInfoFacts,
   threadInfoOwner,
   type ThreadInfoCost,
   type ThreadInfoFacts,
+  type ThreadInfoRowFacts,
 } from "./thread-info";
 
 export type ThreadInfo = {
@@ -100,6 +113,15 @@ export function ThreadInfoCard(props: {
   label: string;
   info: ThreadInfo;
   now?: number;
+  /**
+   * A sidebar row's card: the row's facts as icon rows in place of the
+   * chip card's sections, then `actions`. The branch and PR rows are
+   * pointer targets when their handlers are given.
+   */
+  row?: ThreadInfoRowFacts;
+  actions?: ReactNode;
+  onCopyBranch?: () => void;
+  onOpenPullRequest?: () => void;
 }) {
   const { link, info } = props;
   const now = props.now ?? Date.now();
@@ -130,6 +152,25 @@ export function ThreadInfoCard(props: {
     : "Idle";
   const model = facts?.model;
   const cost = info.cost;
+
+  if (props.row) {
+    return (
+      <ThreadInfoRowLayout
+        row={props.row}
+        title={title}
+        dot={dot}
+        phase={phase}
+        since={facts?.updatedAt
+          ? facts.running && !facts.ownerOffline ? "now" : sinceLabel(facts.updatedAt, now)
+          : undefined}
+        subAgentWorking={facts?.subAgentWorking === true && !facts.ownerOffline}
+        cost={cost}
+        actions={props.actions}
+        onCopyBranch={props.onCopyBranch}
+        onOpenPullRequest={props.onOpenPullRequest}
+      />
+    );
+  }
 
   return (
     <>
@@ -247,5 +288,170 @@ export function ThreadInfoCard(props: {
         </div>
       ) : null}
     </>
+  );
+}
+
+function ThreadInfoRowLayout(props: {
+  row: ThreadInfoRowFacts;
+  title: string;
+  dot: string;
+  phase?: string;
+  since?: string;
+  subAgentWorking: boolean;
+  cost: ThreadInfo["cost"];
+  actions?: ReactNode;
+  onCopyBranch?: () => void;
+  onOpenPullRequest?: () => void;
+}) {
+  const { row, cost } = props;
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
+  const [primary, ...attached] = row.folders;
+  const phase = props.phase ? props.phase[0].toUpperCase() + props.phase.slice(1) : undefined;
+  const eyebrow = [phase, row.backendLabel, props.subAgentWorking ? "sub-agent working" : undefined]
+    .filter(Boolean)
+    .join(" · ");
+  const pr = row.pr;
+  const prState = pr ? resolveLifecycleState(pr.pr) : undefined;
+  const BranchGlyph = row.branch?.kind === "worktree" ? WorktreeIcon : BranchIcon;
+  // This thread's own spend beside its model; the chip card has the family.
+  const costLabel = cost.state === "ready"
+    ? `${formatTokenUsageMicrosAsUsd(cost.ownMicros)}${cost.partial ? "+" : ""}`
+    : undefined;
+  return (
+    <>
+      <div className="pr-status-card__header">
+        <span className="thread-info-card__eyebrow">
+          <span aria-hidden="true" className={`thread-info-card__dot thread-info-card__dot--${props.dot}`} />
+          <span className="thread-info-card__eyebrow-text">{eyebrow}</span>
+        </span>
+        {props.since ? <span className="pr-status-card__phase">{props.since}</span> : null}
+      </div>
+      <div className="pr-status-card__title">{props.title}</div>
+      <div className="thread-info-card__facts">
+        {primary ? (
+          <div className="thread-info-card__fact">
+            <FolderIcon aria-hidden="true" size={13} />
+            <span className="thread-info-card__fact-value">
+              {primary.label}
+              {attached.length ? <span className="thread-info-card__aside"> + {attached[0].label}</span> : null}
+            </span>
+            <span className="thread-info-card__fact-meta">
+              {row.folders.length === 1 ? "1 folder" : `${row.folders.length} folders`}
+            </span>
+          </div>
+        ) : null}
+        <div className="thread-info-card__fact">
+          <ServerIcon aria-hidden="true" size={13} />
+          <span className="thread-info-card__fact-value">{row.machine.label}</span>
+          <span className="thread-info-card__fact-meta">{row.machine.local ? "this machine" : "peer"}</span>
+        </div>
+        {row.branch ? (
+          <FactTarget
+            label={`Copy branch name ${row.branch.name}`}
+            onActivate={props.onCopyBranch ? () => {
+              props.onCopyBranch?.();
+              setCopied(true);
+              window.clearTimeout(copiedTimer.current);
+              copiedTimer.current = window.setTimeout(() => setCopied(false), 1200);
+            } : undefined}
+          >
+            <BranchGlyph aria-hidden="true" size={13} />
+            <span className="thread-info-card__fact-value thread-info-card__fact-value--mono">{row.branch.name}</span>
+            <span className="thread-info-card__fact-meta">
+              {copied ? "Copied" : (
+                <>
+                  {row.branch.kind}
+                  {/* Shown on hover or focus: the row copies the name. */}
+                  {props.onCopyBranch ? (
+                    <CopyIcon aria-hidden="true" className="thread-info-card__copy-hint" size={11} />
+                  ) : null}
+                </>
+              )}
+            </span>
+          </FactTarget>
+        ) : null}
+        {row.ahead || row.dirty ? (
+          <div className="thread-info-card__fact">
+            <CommitIcon aria-hidden="true" size={13} />
+            <span className="thread-info-card__fact-value">
+              {row.ahead
+                ? `${row.ahead.count} ahead${row.ahead.base ? ` of ${row.ahead.base}` : ""}`
+                : "Uncommitted changes"}
+            </span>
+            {row.dirty ? (
+              <span className="thread-info-card__fact-meta">
+                <span className="thread-info-card__add">+{row.dirty.additions.toLocaleString()}</span>
+                {" "}
+                <span className="thread-info-card__del">−{row.dirty.deletions.toLocaleString()}</span>
+              </span>
+            ) : <span />}
+          </div>
+        ) : null}
+        {pr ? (
+          <FactTarget
+            label={pr.more > 0
+              ? `Show ${pr.more + 1} pull requests, #${pr.pr.number} leading`
+              : `Open pull request #${pr.pr.number}`}
+            onActivate={props.onOpenPullRequest}
+          >
+            <PullRequestIcon aria-hidden="true" size={13} />
+            <span className="thread-info-card__fact-value">
+              <span
+                aria-hidden="true"
+                className={`thread-info-card__pr-dot pr-status-card__dot--${resolveChipState(pr.pr)}`}
+              />
+              #{pr.pr.number}
+              {pr.more > 0 ? (
+                <span className="thread-info-card__aside"> +{pr.more}</span>
+              ) : ` · ${prStatusLabel(pr.pr)}`}
+            </span>
+            <span className="thread-info-card__fact-meta">{prState}</span>
+          </FactTarget>
+        ) : null}
+        {row.model ? (
+          <div className="thread-info-card__fact">
+            <PricingIcon aria-hidden="true" size={13} />
+            <span className="thread-info-card__fact-value">{row.model}</span>
+            <span className="thread-info-card__fact-meta">
+              {cost.state === "loading" ? <span className="thread-info-card__skeleton thread-info-card__skeleton--small" /> : costLabel}
+            </span>
+          </div>
+        ) : null}
+        {row.context ? (
+          <div className="thread-info-card__fact">
+            <ActivityIcon aria-hidden="true" size={13} />
+            <span className="thread-info-card__fact-value">
+              Context {formatCompactTokens(row.context.totalTokens)} of {formatCompactTokens(row.context.modelContextWindow)}
+              <span aria-hidden="true" className="thread-info-card__share thread-info-card__context">
+                <span
+                  className="thread-info-card__context-used"
+                  style={{ width: `${Math.max(0, Math.min(100, row.context.usedPercent))}%` }}
+                />
+              </span>
+            </span>
+            <span className="thread-info-card__fact-meta">{Math.round(row.context.usedPercent)}%</span>
+          </div>
+        ) : null}
+      </div>
+      {props.actions}
+    </>
+  );
+}
+
+/** A fact row that is also a pointer shortcut, like the card's actions. */
+function FactTarget(props: { label: string; onActivate?: () => void; children: ReactNode }) {
+  if (!props.onActivate) return <div className="thread-info-card__fact">{props.children}</div>;
+  return (
+    <button
+      aria-label={props.label}
+      className="thread-info-card__fact thread-info-card__fact--target"
+      tabIndex={-1}
+      type="button"
+      onClick={props.onActivate}
+    >
+      {props.children}
+    </button>
   );
 }

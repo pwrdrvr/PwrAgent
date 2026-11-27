@@ -21,9 +21,9 @@ export function splitProjectPath(path: string): ProjectPathParts {
 
 /** What the OS calls its file manager, as a "Show in …" action. */
 export function revealInFileManagerLabel(platform: string | undefined): string {
-  if (platform === "win32") return "Show in Explorer";
+  if (platform === "win32") return "Show in File Explorer";
   if (platform === "darwin") return "Show in Finder";
-  return "Show in File Manager";
+  return "Show in Files";
 }
 
 /** How the card names the machine the window runs on. */

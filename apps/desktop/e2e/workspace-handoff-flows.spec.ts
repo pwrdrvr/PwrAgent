@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { chooseComposerWorkspaceAction } from "./fixtures/composer-row";
 
 type WorktreeEntry = {
   branch?: string;
@@ -206,8 +207,7 @@ async function createHandoffFixture(testId: string): Promise<HandoffFixture> {
 
 async function openLocalHandoffDialog(page: Page, title: string) {
   await page.getByRole("button", { name: title, exact: true }).click();
-  await page.getByLabel(/^Workspace mode(?::|$)/).click();
-  await page.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
+  await chooseComposerWorkspaceAction(page, "Handoff to New Worktree");
   const dialog = page.getByRole("dialog", { name: "Handoff to New Worktree" });
   await expect(dialog).toBeVisible();
   return dialog;
@@ -231,8 +231,7 @@ async function chooseLeaveLocalBranch(page: Page, optionLabel: string) {
 }
 
 async function handoffBackToLocal(page: Page) {
-  await page.getByLabel(/^Workspace mode(?::|$)/).click();
-  await page.getByRole("menuitem", { name: "Handoff to Local" }).click();
+  await chooseComposerWorkspaceAction(page, "Handoff to Local");
   const dialog = page.getByRole("dialog", { name: "Handoff to Local" });
   await expect(dialog).toBeVisible();
   // These flows carry WIP back on the worktree's branch; the dialog
@@ -360,8 +359,7 @@ test.describe("workspace handoff git flows", () => {
       await writeFile(path.join(fixture.repoDir, "local-wip.txt"), "local only\n", "utf8");
       await writeFile(path.join(worktree.path, "worktree-wip.txt"), "worktree only\n", "utf8");
 
-      await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
-      await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
+      await chooseComposerWorkspaceAction(app.window, "Handoff to Local");
       const returnDialog = app.window.getByRole("dialog", { name: "Handoff to Local" });
       await expect(returnDialog).toBeVisible();
       await returnDialog.getByRole("radio", { name: /^Move .+ to Local/ }).click();

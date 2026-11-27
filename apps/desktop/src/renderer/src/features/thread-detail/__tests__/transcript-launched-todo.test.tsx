@@ -152,6 +152,23 @@ describe("TranscriptLaunchedTodo in TranscriptList", () => {
     expect(screen.getByRole("button", { name: "Open thread Updated Eval Title" })).toBeInTheDocument();
   });
 
+  it("uses the current launch callback and withdraws the chip action when it is removed", () => {
+    const todo = startedTodo();
+    const entries: AppServerThreadEntry[] = [{ type: "message", id: "prompt", role: "user", text: "Start a thread", createdAt: 1_000 }];
+    const props = { entries, launchedTodos: [todo], loading: false, loadingMore: false, onLoadOlder: async () => undefined };
+    const previous = vi.fn();
+    const current = vi.fn();
+    const view = render(<TranscriptList {...props} onOpenLaunchedTodoThread={previous} />);
+    const chip = screen.getByRole("button", { name: /^Open thread / });
+
+    view.rerender(<TranscriptList {...props} onOpenLaunchedTodoThread={current} />);
+    fireEvent.click(chip);
+    expect(current).toHaveBeenCalledWith(todo);
+    expect(previous).not.toHaveBeenCalled();
+    view.rerender(<TranscriptList {...props} />);
+    expect(screen.queryByRole("button", { name: /^Open thread / })).not.toBeInTheDocument();
+  });
+
   it("shows a ThreadInfoCard hover card on keyboard focus of the ThreadChip", async () => {
     render(
       <ThreadLinkProvider

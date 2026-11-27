@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -56,10 +57,13 @@ export async function startOutpostDaemon(options: {
   hostKind?: "desktop" | "headless";
   fixturePreload?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
   waitForCodexCommand?: boolean;
   /** Releases caller-owned startup barriers before waiting for the daemon to exit. */
   beforeFailedStartupClose?: () => Promise<void>;
 } = {}): Promise<OutpostDaemon> {
+  const { signal } = options;
+  signal?.throwIfAborted();
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
   // root inside the checkout makes that depend on where the checkout lives,
@@ -78,7 +82,11 @@ export async function startOutpostDaemon(options: {
   const workspaceInput = options.workspaceKind === "symlink" ? path.join(root, "alias") : workspace;
   if (options.workspaceKind === "symlink") symlinkSync(workspace, workspaceInput, "dir");
   writeOutpostGatewayConfig(root);
-  const env: NodeJS.ProcessEnv = { ...process.env, ...options.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
+  // The owner's -ilc probe still captures an environment. Its shell runs the
+  // probe against the fixture's inherited PATH without sourcing login files.
+  const shell = path.join(root, "fixture-login-shell");
+  writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o700 });
+  const env: NodeJS.ProcessEnv = { ...process.env, SHELL: shell, ...options.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
   const packageRoot = options.packageRoot ?? path.join(root, "owner-package");
   const guard = options.fixturePreload ?? (options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind));
   if (guard) env.NODE_OPTIONS = `--require=${JSON.stringify(guard)}`;
@@ -89,7 +97,9 @@ export async function startOutpostDaemon(options: {
   let errors = "";
   daemon.stdout.on("data", (chunk) => { output += String(chunk); });
   daemon.stderr.on("data", (chunk) => { errors += String(chunk); });
-  const exited = new Promise<void>((resolve) => daemon.once("exit", () => resolve()));
+  let spawnError: Error | undefined;
+  daemon.once("error", (error) => { spawnError = error; });
+  const exited = new Promise<void>((resolve) => daemon.once("close", () => resolve()));
   const connections = new Set<Awaited<ReturnType<typeof connectFederationClient>>>();
   const close = async () => {
     for (const connection of connections) connection.close();
@@ -98,12 +108,21 @@ export async function startOutpostDaemon(options: {
     await exited;
     if (!options.profileRoot) rmSync(root, { recursive: true, force: true });
   };
+  const runCli = async (command: string, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    const request = promisify(execFile)(process.execPath, [cli, command], { env, signal });
+    const closed = new Promise<void>((resolve) => request.child.once("close", () => resolve()));
+    try { return await request; }
+    finally { await closed; }
+  };
   // Grants belong to an enrolled viewer. Independent viewers share one owner.
-  const enrollViewer = async (capabilities: FederationCapability[]): Promise<OutpostViewer> => {
+  const enrollViewer = async (capabilities: FederationCapability[], signal?: AbortSignal): Promise<OutpostViewer> => {
     // The gateway binds the port it advertises (configured as 0 above), so
     // no port is ever chosen here and released for the daemon to take.
-    const issued = await promisify(execFile)(process.execPath, [cli, "federation-invite"], { env });
+    const issued = await runCli("federation-invite", signal);
+    signal?.throwIfAborted();
     const invite = decodeFederationInvite(JSON.parse(issued.stdout).invite);
+    const gateway = new URL(invite.gatewayUrl);
     const identity = generateFederationIdentityKeyPair();
     const viewerId = randomUUID();
     const events: AgentEvent[] = [];
@@ -114,6 +133,9 @@ export async function startOutpostDaemon(options: {
       gatewayInstanceId: invite.gatewayInstanceId, gatewayPublicKeyPem: invite.gatewayPublicKeyPem,
       gatewayNoisePublicKey: Buffer.from(invite.gatewayNoisePublicKey!, "base64"), noiseStatic: generateNoiseStaticKeyPair(),
       capabilities, deferReceiving: true,
+      // This fixture advertises a loopback ws:// endpoint. Owning its TCP
+      // socket makes a stalled upgrade or handshake cancellable as well.
+      createSocket: signal && (() => createConnection({ host: gateway.hostname, port: Number(gateway.port), signal })),
       onEnvelope: (envelope) => {
         if (envelope.kind === "notification" && envelope.method === "backend.event") {
           const event = envelope.params as AgentEvent;
@@ -156,19 +178,24 @@ export async function startOutpostDaemon(options: {
   };
   try {
     for (let attempt = 0; !output.includes('"ready":true'); attempt++) {
-      if (daemon.exitCode !== null || attempt >= 200) throw new Error(`Outpost startup failed (${daemon.exitCode}): ${errors} ${output.slice(-3000)}`);
-      await delay(20);
+      if (spawnError) throw spawnError;
+      if (daemon.exitCode !== null || daemon.signalCode !== null || attempt >= 200) {
+        throw new Error(`Outpost startup failed (${daemon.exitCode ?? daemon.signalCode}): ${errors} ${output.slice(-3000)}`);
+      }
+      await delay(20, undefined, { signal });
     }
-    const viewer = await enrollViewer(options.capabilities ?? OUTPOST_VIEWER_CAPABILITIES);
+    const viewer = await enrollViewer(options.capabilities ?? OUTPOST_VIEWER_CAPABILITIES, signal);
     if (options.waitForCodexCommand) {
       // Serving RPCs and enrolling a viewer can finish while a cold profile
       // selects its Codex executable. Status awaits the owner's selection.
-      await promisify(execFile)(process.execPath, [cli, "status"], { env });
+      await runCli("status", signal);
     }
+    signal?.throwIfAborted();
     return { ...viewer, workspace, cli, env, enrollViewer, close };
   } catch (error) {
     try { await options.beforeFailedStartupClose?.(); }
     finally { await close(); }
+    signal?.throwIfAborted();
     throw error;
   }
 }
