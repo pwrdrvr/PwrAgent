@@ -420,7 +420,7 @@ describe("composer controls layout", () => {
     expect(planSlot()).toHaveClass("is-folded");
 
     fireEvent.click(within(setup).getByRole("button", { name: "Thread options" }));
-    fireEvent.click(within(screen.getByRole("menu", { name: "Thread options" })).getByRole("menuitem", { name: "Plan mode" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Thread options" })).getByRole("menuitemcheckbox", { name: "Plan mode", checked: false }));
     // Refolded before a frame could paint: Plan now takes ▶'s room.
     await act(async () => {
       for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();

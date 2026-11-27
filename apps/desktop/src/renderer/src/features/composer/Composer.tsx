@@ -128,6 +128,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type Ref,
   type RefObject,
+  type SetStateAction,
   useCallback,
   useEffect,
   useId,
@@ -4111,7 +4112,20 @@ function useComposerController(props: ComposerProps) {
     // paging walks the same thumbnails the operator sees.
     // Escape-to-close is owned by `ImageLightbox` itself.
     const [expandedStripItemKey, setExpandedStripItemKey] = useState<string>();
-    const [planModeEnabled, setPlanModeEnabled] = useState(false);
+    // Plan is on for the scope it was turned on in. One composer serves every
+    // thread it moves between, so a bare flag would carry Plan into the next
+    // thread's send. A send that finishes after a move clears only its own
+    // scope's Plan.
+    const [planModeScopeKey, setPlanModeScopeKey] = useState<string>();
+    const planModeEnabled = planModeScopeKey === composerScopeKey;
+    const setPlanModeEnabled = useCallback((next: SetStateAction<boolean>) => {
+      setPlanModeScopeKey((current) => {
+        const enabled = current === composerScopeKey;
+        const nextEnabled = typeof next === "function" ? next(enabled) : next;
+        if (nextEnabled) return composerScopeKey;
+        return enabled ? undefined : current;
+      });
+    }, [composerScopeKey]);
     const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
       latestDraftSnapshotRef.current.snapshot.skillTokens
     );
@@ -16023,12 +16037,14 @@ function useComposerController(props: ComposerProps) {
         {text}
       </div>
     );
-    const action = (key: string, text: string, onSelect: () => void, disabled = false) => (
+    // A switch (`checked` given) reads as a checkbox item, like ⋮'s others.
+    const action = (key: string, text: string, onSelect: () => void, disabled = false, checked?: boolean) => (
       <button
+        aria-checked={checked}
         className="composer-dropdown__option"
         disabled={disabled}
         key={key}
-        role="menuitem"
+        role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
         type="button"
         onClick={() => {
           close();
@@ -16261,7 +16277,7 @@ function useComposerController(props: ComposerProps) {
       }
     }
     if (supportsPlanMode && !planModeEnabled && composerTierFolded("details")) {
-      actions.push(action("plan", "Plan mode", () => setPlanModeEnabled(true), sending));
+      actions.push(action("plan", "Plan mode", () => setPlanModeEnabled(true), sending, false));
     }
     if (composerTierFolded("run") && controlRuntime && !commandGroup) {
       actions.push(configurationAction(

@@ -160,7 +160,7 @@ export async function enableComposerPlanMode(page: Page): Promise<void> {
   const toggle = composerRowButton(page, name);
   if (await isComposerTierFolded(page, "details", toggle)) {
     const menu = await openComposerThreadOptions(page);
-    await menu.getByRole("menuitem", { name, exact: true }).click();
+    await menu.getByRole("menuitemcheckbox", { name, exact: true }).click();
     await expect(menu).toBeHidden();
   } else {
     await composerRow(page).getByRole("button", { name, exact: true }).click();

@@ -30034,6 +30034,39 @@ describe("Composer", () => {
     expect(screen.queryByLabelText("Plan mode")).toBeNull();
   });
 
+  it("keeps Plan with the thread it was turned on in when the composer moves to another", async () => {
+    // One composer serves every thread it moves between; Plan turned on in
+    // thread 1 must not plan thread 2's next turn.
+    const startTurn = vi.fn().mockResolvedValue({ backend: "codex", threadId: "thread-2", turnId: "turn-1" });
+    const thread = (id: string) => ({
+      id, title: id, titleSource: "explicit" as const,
+      source: "codex" as const, executionMode: "default" as const,
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const composer = (id: string) => (
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        skills={[]}
+        thread={thread(id)}
+      />
+    );
+    const { rerender } = render(composer("thread-1"));
+    fireEvent.click(screen.getByLabelText("Plan mode"));
+    expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "true");
+
+    rerender(composer("thread-2"));
+    expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false");
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Just do it" } });
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    expect(startTurn.mock.calls[0]![0].collaborationMode).toBeUndefined();
+
+    rerender(composer("thread-1"));
+    expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "true");
+  });
+
   describe("permission-mode queue indicator", () => {
     function baseQueuedThread(overrides: {
       executionMode?: "default" | "full-access";
