@@ -130,10 +130,25 @@ function isScheduledReset(
 const seriesKey = (limit: UsageLimitReading) =>
   JSON.stringify([limit.windowKey ?? "", limit.limitId ?? "", limit.windowKey ? "" : limit.name]);
 
+/**
+ * Each account's series by key, built on first lookup. Every limit row looks
+ * its series up, and the pace read filters series by the current limits, so
+ * a scan per lookup made one render quadratic in the account's limits. An
+ * account's `series` array is never mutated after it is built.
+ */
+const seriesByKey = new WeakMap<readonly LimitSeries[], ReadonlyMap<string, LimitSeries>>();
+
 /** The recorded series for one current limit reading, if the account has one. */
 export function limitSeriesFor(account: LimitAccount | undefined, limit: UsageLimitReading): LimitSeries | undefined {
-  const key = seriesKey(limit);
-  return account?.series.find((series) => series.key === key);
+  if (!account) return undefined;
+  let index = seriesByKey.get(account.series);
+  if (!index) {
+    const built = new Map<string, LimitSeries>();
+    // The first series with a key wins, as a scan would find it.
+    for (const series of account.series) if (!built.has(series.key)) built.set(series.key, series);
+    seriesByKey.set(account.series, index = built);
+  }
+  return index.get(seriesKey(limit));
 }
 
 /**
@@ -345,9 +360,18 @@ function describeSeries(provider: string, key: string, reading: UsageLimitReadin
     latest, windowStart, pacePerHour };
 }
 
+/** Each account's "since reset" series, chosen once: every limit row asks. */
+const sinceResetByAccount = new WeakMap<readonly LimitSeries[], { series: LimitSeries | undefined }>();
+
 /** The limit a "since reset" window follows: the longest one the account has. */
 export function sinceResetSeries(account: LimitAccount | undefined): LimitSeries | undefined {
   if (!account) return undefined;
+  let chosen = sinceResetByAccount.get(account.series);
+  if (!chosen) sinceResetByAccount.set(account.series, chosen = { series: chooseSinceResetSeries(account) });
+  return chosen.series;
+}
+
+function chooseSinceResetSeries(account: LimitAccount): LimitSeries | undefined {
   return account.series.find((series) => series.windowKey === "individual")
     ?? account.series.find((series) => series.windowKey === "secondary")
     ?? account.series.find((series) => series.limitId === CLAUDE_WEEKLY_LIMIT_ID)
