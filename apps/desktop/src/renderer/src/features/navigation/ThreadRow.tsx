@@ -1309,7 +1309,7 @@ export function needsRepoPrefix(
   return prs.some((pr) => `${pr.org}/${pr.repo}` !== firstKey);
 }
 
-function defaultOpenPullRequest(url: string): void {
+export function defaultOpenPullRequest(url: string): void {
   if (typeof window === "undefined") {
     return;
   }

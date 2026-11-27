@@ -15,6 +15,10 @@ import {
   useViewportTooltip,
 } from "../useViewportTooltip";
 import { anchorRectsMatch, observeTooltipAnchor } from "../observe-tooltip-anchor";
+import {
+  beginNativeDragInteraction,
+  endNativeDragInteraction,
+} from "../native-drag-interaction";
 
 afterEach(() => {
   cleanup();
@@ -364,6 +368,27 @@ describe("useViewportTooltip", () => {
     act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
 
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  // A row's delayed card started under a sidebar drag crashed the whole
+  // sidebar: the drag subscription's hide cleared the anchor it then observed.
+  it("starts no delayed tooltip during a sidebar drag", () => {
+    vi.useFakeTimers();
+    render(<DelayedTooltipFixture />);
+
+    try {
+      act(() => beginNativeDragInteraction());
+      fireEvent.mouseEnter(screen.getByRole("button"));
+      act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    } finally {
+      act(() => endNativeDragInteraction());
+    }
+
+    fireEvent.mouseLeave(screen.getByRole("button"));
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
   });
 
   it("shows a delayed tooltip when its accessibility relationship is added", async () => {

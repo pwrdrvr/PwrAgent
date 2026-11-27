@@ -66,6 +66,7 @@ import type {
 } from "../thread-todos/thread-todos-view";
 import { PrActivityPanel } from "./context-panels/PrActivityPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
+import { useProviderGaugePeek } from "./context-panels/ProviderGaugePeek";
 import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
 import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
 import { useThreadPrWatches } from "../pr-watches/useThreadPrWatchIndicators";
@@ -716,6 +717,33 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     setPickedTab(id);
     showContextTab(id);
   };
+  // Hovering the provider gauge peeks at usage without opening the rail.
+  const providerPeek = useProviderGaugePeek({
+    backends: props.backends,
+    desktopApi: props.desktopApi,
+    onOpenPanel: () => selectTab("providers"),
+  });
+  // The gauge peeks unless the AI providers panel is already showing, where
+  // it keeps its tab tooltip. On the collapsed rail the peek stands in for
+  // the hover reveal, which resumes if the pointer moves on up the spine.
+  const enterGauge = (event: MouseEvent<HTMLElement>, tooltipText: string): void => {
+    if (open && activeRailTab === "providers") {
+      railTooltip.showAfterDelay(event.currentTarget, tooltipText);
+      return;
+    }
+    clearRevealTimer();
+    providerPeek.enter(event.currentTarget);
+  };
+  const leaveGauge = (event: MouseEvent<HTMLElement>): void => {
+    railTooltip.hide();
+    providerPeek.leave();
+    // React reports a leave to outside the window, or to anything it does
+    // not render, with `window` as the related target: not a Node.
+    const next = event.relatedTarget;
+    if (!open && next instanceof Node && railRef.current?.contains(next)) {
+      revealRailAfterHoverIntent({ x: event.clientX, y: event.clientY });
+    }
+  };
 
   const resizeRail = (nextWidth: number): void => {
     const clampedWidth = Math.min(RAIL_MAX_WIDTH, Math.max(RAIL_MIN_WIDTH, nextWidth));
@@ -851,6 +879,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       </div>
 
       {railTooltip.tooltipNode}
+      {providerPeek.node}
     </aside>
   );
 
@@ -894,8 +923,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         // The rail's one tooltip, shared with its panels' controls: a tab's
         // explanation is replaced, never joined, when a panel control raises
         // its own. A second tooltip system here left both on screen.
-        onMouseEnter={(event) => railTooltip.showAfterDelay(event.currentTarget, tooltipText)}
-        onMouseLeave={railTooltip.hide}
+        onMouseEnter={(event) => tab.id === "providers" ? enterGauge(event, tooltipText) : railTooltip.showAfterDelay(event.currentTarget, tooltipText)}
+        onMouseLeave={(event) => tab.id === "providers" ? leaveGauge(event) : railTooltip.hide()}
         onFocus={(event) => railTooltip.show(event.currentTarget, tooltipText)}
         onBlur={railTooltip.hide}
         onClick={() => selectTab(tab.id)}

@@ -6,6 +6,13 @@ import { type FederationRemoteTarget } from "@pwragent/shared/contracts/federati
 import { type ReadThreadFamilyPricingResponse } from "@pwragent/shared/thread-family-pricing";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkRow } from "../../lib/thread-link-rows";
+import {
+  buildPullRequestStatusKey,
+  type NavigationThreadSummary,
+  type PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { getThreadNamedBranch, getThreadPrimaryDirectory } from "../../lib/subthread-launchpads";
+import { resolvePrOverflow } from "../pr-status/pr-rollup";
 export { readThreadInfoRow } from "../../lib/thread-link-rows";
 
 /** What a thread's hover card shows, from a loaded row or an owner's row. */
@@ -119,4 +126,78 @@ export function readThreadInfoCost(
 
 export function clearThreadInfoCostCache(): void {
   costCache.clear();
+}
+
+/**
+ * What a sidebar row's card shows beyond a chip's card: the row's own
+ * folders, machine, branch, Git state, lead PR and model, as icon rows.
+ * Everything comes from the navigation row the sidebar already holds; the
+ * context bar only from the open thread, which is the only one with a
+ * reading today.
+ */
+export type ThreadInfoRowFacts = {
+  backendLabel: string;
+  folders: readonly { label: string; path: string; kind: "local" | "worktree" }[];
+  machine: { label: string; local: boolean };
+  branch?: { name: string; kind: "local" | "worktree" };
+  ahead?: { count: number; base?: string };
+  dirty?: { additions: number; deletions: number };
+  pr?: { pr: PrSummary; more: number };
+  model?: string;
+  context?: ThreadInfoContext;
+};
+
+export type ThreadInfoContext = {
+  totalTokens: number;
+  modelContextWindow: number;
+  usedPercent: number;
+};
+
+export function threadInfoRowFacts(
+  thread: NavigationThreadSummary,
+  options: {
+    backendLabel: string;
+    machine: ThreadInfoRowFacts["machine"];
+    context?: ThreadInfoContext;
+  },
+): ThreadInfoRowFacts {
+  const primary = getThreadPrimaryDirectory(thread);
+  const folders = primary
+    ? [primary, ...thread.linkedDirectories.filter((directory) => directory !== primary)]
+    : [];
+  const branchName = getThreadNamedBranch(thread);
+  const git = thread.gitWorkingState;
+  const ahead = git?.baseAheadCommitCount ?? 0;
+  const prs = thread.prs ?? [];
+  const lead = (thread.stackLeadPrKey
+    ? prs.find((pr) => buildPullRequestStatusKey(pr) === thread.stackLeadPrKey)
+    : undefined) ?? resolvePrOverflow(prs)?.lead ?? prs[0];
+  const model = thread.model
+    ? [thread.model, thread.reasoningEffort, thread.fastMode ? "Fast" : undefined].filter(Boolean).join(" · ")
+    : undefined;
+  return {
+    backendLabel: options.backendLabel,
+    folders: folders.map((directory) => ({
+      label: directory.label,
+      path: directory.worktreePath ?? directory.path,
+      kind: directory.kind,
+    })),
+    machine: options.machine,
+    ...(branchName ? { branch: { name: branchName, kind: primary?.kind ?? "local" } } : {}),
+    ...(ahead > 0 ? { ahead: { count: ahead, ...(git?.baseBranch ? { base: git.baseBranch } : {}) } } : {}),
+    ...(git && (git.dirtyAdditions > 0 || git.dirtyDeletions > 0)
+      ? { dirty: { additions: git.dirtyAdditions, deletions: git.dirtyDeletions } }
+      : {}),
+    ...(lead ? { pr: { pr: lead, more: prs.length - 1 } } : {}),
+    ...(model ? { model } : {}),
+    ...(options.context && options.context.modelContextWindow > 0 ? { context: options.context } : {}),
+  };
+}
+
+/** Token counts at card density: 212k, 1.2M. */
+export function formatCompactTokens(value: number): string {
+  // 999,600 rounds to a thousand thousands: that is 1M, not 1000k.
+  if (value >= 999_500) return `${Math.round(value / 100_000) / 10}M`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
+  return String(value);
 }
