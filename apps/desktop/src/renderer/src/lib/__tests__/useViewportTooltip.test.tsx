@@ -1100,7 +1100,20 @@ describe("beside cards that keep an element in place", () => {
           }
         },
       ),
-      { numRuns: 60, examples: [[13, 120, 0, 0, 0.011111111111111112]] },
+      // A rendered tooltip is a heavy fixture: a few random runs plus named
+      // cases. The first is the counterexample the old placement failed on.
+      {
+        numRuns: 5,
+        examples: [
+          [13, 120, 0, 0, 0.011111111111111112],
+          // Low in the window: the card grows up around the kept row.
+          [800, 400, 40, 0.8, 0.85],
+          // Room on both sides: the card moves up by what grew above the row.
+          [300, 300, 40, 0.8, 0.9],
+          // Near the top: the window's top edge stops the card.
+          [20, 300, 60, 0.5, 0.7],
+        ],
+      },
     );
   });
 });

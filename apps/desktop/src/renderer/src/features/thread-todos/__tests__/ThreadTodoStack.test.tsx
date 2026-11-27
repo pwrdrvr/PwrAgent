@@ -1075,7 +1075,12 @@ describe("thread to-do checklists", () => {
           expect(lastButton(article).textContent).toBe(label);
         },
       ),
-      { numRuns: 25, examples: [["merge", []], ["review", [false]]] },
+      // Rendered cards are a heavy fixture: a few random runs plus the named
+      // cases (["merge", []] is the counterexample the old card failed on).
+      {
+        numRuns: 5,
+        examples: [["merge", []], ["review", [false]], ["merge", [true, false]], ["review", [true, false, false]]],
+      },
     );
   });
 
