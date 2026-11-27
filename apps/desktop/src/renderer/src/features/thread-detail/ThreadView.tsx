@@ -139,7 +139,7 @@ import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { backendDefaultModel } from "@pwragent/shared/model-defaults";
 import { Composer, type ComposerProps } from "../composer/Composer";
-import { ComposerTerminalToggle } from "../composer/ComposerTerminalToggle";
+import type { ComposerTerminalToggleProps } from "../composer/ComposerTerminalToggle";
 import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
   describeLaunchpadMachineOffline,
@@ -756,6 +756,12 @@ export type ThreadViewProps = {
   >;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
+  /**
+   * The selected thread's configuration (its detail read) has loaded. Until
+   * then the thread is only its sidebar row, which leaves out the
+   * environment and other Details-bound settings.
+   */
+  threadConfigurationReady?: boolean;
   workspaceActionsBlocked?: boolean;
   /** Opens Settings → Environments on a workspace, from the Environment chip. */
   onEditEnvironments?: (workspacePath: string) => void;
@@ -1546,9 +1552,6 @@ export function ThreadView(props: ThreadViewProps) {
     setComposerSlotLineage(nextSlotLineage);
   }
   const composerSlot = composerSlotKey(nextSlotLineage, composerSlotView);
-  // The launchpad header's slot for the composer's machine chip.
-  const [launchpadMachineSlot, setLaunchpadMachineSlot] =
-    useState<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     const directoryKey =
@@ -3167,7 +3170,6 @@ export function ThreadView(props: ThreadViewProps) {
           onProviderSelected: props.onProviderSelected,
           launchpad: composerLaunchpad,
           launchpadMachine: props.launchpadMachine,
-          launchpadMachineChipHost: launchpadMachineSlot,
           launchpadComposerScopeKey: props.pendingLaunchpadCreation?.composerScopeKey,
           launchpadMaterializing,
           launchpadError: props.launchpadError,
@@ -3327,16 +3329,9 @@ export function ThreadView(props: ThreadViewProps) {
       ) : workspaceRecoverySlot}
       {/* Second child in both modes, so React matches it by position when
           the slot itself survives. */}
-      {composerReplacedByRecovery ? (
-        <div className="composer__footer">
-          <div className="composer__application-actions" aria-label="Composer tools">
-            {integratedTerminal ? <ComposerTerminalToggle {...integratedTerminal} /> : null}
-          </div>
-        </div>
-      ) : <Composer
+      {composerReplacedByRecovery ? null : <Composer
         backends={props.backends}
         applications={props.applications}
-        integratedTerminal={integratedTerminal}
         codexFastAllowed={props.codexFastAllowed}
         desktopApi={props.desktopApi}
         onShowNotice={props.onShowNotice}
@@ -3358,6 +3353,7 @@ export function ThreadView(props: ThreadViewProps) {
               || launchpadMachineOffline !== undefined
             : props.composerDisabled
         }
+        threadConfigurationReady={composerLaunchpad ? undefined : props.threadConfigurationReady}
         unavailableReason={
           composerLaunchpad
             ? launchpadMachineOffline ?? launchpadBackend?.unavailableReason
@@ -3406,8 +3402,8 @@ export function ThreadView(props: ThreadViewProps) {
     contextRailPinned,
     onToggleSidebar,
     onContextRailPinnedChange,
-    setLaunchpadMachineSlot,
     openWorkflowBudgetDialog,
+    integratedTerminal,
     rewind: threadRewindSupport ? {
       disabledReason: rewindDisabledReason
         ?? (hasRewindableMessages ? undefined : "No prompts to rewind to yet"),
@@ -4273,9 +4269,9 @@ function renderThreadViewHeader({
   contextRailPinned,
   onToggleSidebar,
   onContextRailPinnedChange,
-  setLaunchpadMachineSlot,
   rewind,
   openWorkflowBudgetDialog,
+  integratedTerminal,
 }: {
   props: ThreadViewProps;
   selectedThread: NavigationThreadSummary | undefined;
@@ -4286,9 +4282,9 @@ function renderThreadViewHeader({
   contextRailPinned: boolean;
   onToggleSidebar: () => void;
   onContextRailPinnedChange: (pinned: boolean) => void;
-  setLaunchpadMachineSlot: (element: HTMLSpanElement | null) => void;
   rewind: ComponentProps<typeof ThreadHeader>["rewind"];
   openWorkflowBudgetDialog: () => Promise<void>;
+  integratedTerminal: ComposerTerminalToggleProps | undefined;
 }) {
   const headerChrome = {
     desktopApi: props.desktopApi,
@@ -4382,7 +4378,6 @@ function renderThreadViewHeader({
       // The composer's source row names the parent; the breadcrumb only says
       // what is being made.
       title={composerLaunchpad.parentThreadId ? "New sub-thread" : "New thread"}
-      machineSlotRef={props.launchpadMachine ? setLaunchpadMachineSlot : undefined}
     />
   ) : (
     <ThreadHeader
@@ -4402,6 +4397,7 @@ function renderThreadViewHeader({
       onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
       titleRename={props.titleRename}
       rewind={rewind}
+      integratedTerminal={integratedTerminal}
       workflowBudget={
         selectedThread?.source === "acp:grok"
         && selectedThread.federation?.ref.target.scope !== "remote"

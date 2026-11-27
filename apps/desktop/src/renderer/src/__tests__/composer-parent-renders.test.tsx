@@ -137,22 +137,19 @@ it("does not rerender the memoized composer on unrelated shell updates", async (
   expect(probe.renders - before).toBe(0);
 });
 
-it("uses the selected thread and current panel state through a retained terminal toggle", async () => {
+it("toggles the selected thread's terminal from the header", async () => {
   await setup();
-  const toggleTerminal = probe.props!.integratedTerminal!.onToggle;
   fireEvent.click(screen.getByRole("button", { name: "Second fixture" }));
   await waitFor(() => expect(probe.props?.thread?.id).toBe("thread-b"));
-  expect(probe.props!.integratedTerminal!.onToggle).toBe(toggleTerminal);
 
-  await act(async () => { toggleTerminal(); });
+  fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
   const panel = await screen.findByTestId("terminal-probe");
   expect(panel).toHaveAttribute("data-thread-key", "codex:thread-b");
   expect(panel).toBeVisible();
-  expect(probe.props!.integratedTerminal!.open).toBe(true);
+  expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute("aria-pressed", "true");
 
-  await act(async () => { toggleTerminal(); });
+  fireEvent.click(screen.getByRole("button", { name: "Hide integrated terminal" }));
   expect(panel).not.toBeVisible();
-  expect(probe.props!.integratedTerminal!.open).toBe(false);
 });
 
 it("uses the newly selected thread in retained callbacks and respects abort", async () => {

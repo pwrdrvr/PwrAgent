@@ -53,6 +53,26 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
+const environmentThread: NavigationThreadSummary = {
+  id: "thread-env",
+  title: "Environment thread",
+  titleSource: "explicit",
+  source: "codex",
+  executionMode: "default",
+  linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }],
+  inbox: { inInbox: false },
+  codexEnvironmentRuntime: { environmentId: "demo", environmentName: "Demo", executionTarget: "local" },
+  codexEnvironmentOptions: [{
+    id: "demo",
+    name: "Demo",
+    sourcePath: "/repo/demo/environment.toml",
+    actions: [
+      { id: "work", name: "Work", command: "pnpm dev" },
+      { id: "test", name: "Test", command: "pnpm test" },
+    ],
+  }],
+};
+
 beforeAll(() => {
   const emptyRect = { bottom: 0, height: 0, left: 0, right: 0, toJSON: () => ({}), top: 0, width: 0, x: 0, y: 0 } as DOMRect;
   const textPrototype = Text.prototype as Text & {
@@ -67,10 +87,75 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  document.head.querySelector("style[data-test-row-css]")?.remove();
 });
 
+/**
+ * Lays the row out the way app.css does for the parts the fold reads, and
+ * gives every control a fixed width, so the measuring hook runs as it does in
+ * the window. jsdom has no layout of its own.
+ */
+function installRowLayout(rowWidth: number) {
+  const style = document.createElement("style");
+  style.dataset.testRowCss = "";
+  style.textContent = `
+    .composer__setup { display: flex; column-gap: 4px; }
+    .composer__pending-controls { display: contents; }
+    .composer__fold-slot.is-folded { position: absolute; }
+  `;
+  document.head.append(style);
+  vi.stubGlobal("ResizeObserver", class {
+    observe() {}
+    disconnect() {}
+  });
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("composer__setup") ? rowWidth : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const width = this.dataset.composerFold === "details"
+      ? 120
+      : this.classList.contains("model-settings")
+        ? 150
+        : this.classList.contains("composer__actions")
+          ? 90
+          : 28;
+    return { bottom: 26, height: 26, left: 0, right: width, top: 0, width, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+  });
+}
+
+async function settleFold() {
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+}
+
 describe("composer controls layout", () => {
-  it("shares one .composer__setup container between launchpad settings and send actions", () => {
+  it("draws the input and one control row inside the same box", () => {
+    const { container } = render(
+      <Composer
+        backends={[backendSummary()]}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={environmentThread}
+      />,
+    );
+
+    const box = container.querySelector(".composer__box");
+    const setup = container.querySelector(".composer__setup");
+    expect(box).not.toBeNull();
+    expect(box?.querySelector(".composer-tiptap-input")).not.toBeNull();
+    expect(setup?.parentElement).toBe(box);
+    expect(container.querySelector(".composer__actions")?.parentElement).toBe(setup);
+    // Send is icon-only; its label is still its name.
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send.querySelector("svg")).not.toBeNull();
+    expect(container.querySelector(".composer__toggle[aria-label='Plan mode']")).toBeNull();
+  });
+
+  it("merges project, checkout and machine into one Where pill on a new thread", () => {
     const launchpad: NavigationLaunchpadDraft = {
       directoryKey: "workspace:new-thread",
       directoryKind: "workspace",
@@ -96,18 +181,19 @@ describe("composer controls layout", () => {
       />,
     );
 
-    const setup = container.querySelector(".composer__setup");
-    const actions = container.querySelector(".composer__actions");
-    expect(setup).not.toBeNull();
-    expect(actions).not.toBeNull();
-    expect(actions?.parentElement).toBe(setup);
-    expect(container.querySelector(".composer__footer")).toBeNull();
-    expect(container.querySelector(".composer__footer-spacer")).toBeNull();
-    expect(within(setup as HTMLElement).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-    expect(within(setup as HTMLElement).getByRole("button", { name: "Start thread" })).toBeInTheDocument();
+    const setup = container.querySelector(".composer__setup") as HTMLElement;
+    const where = within(setup).getByRole("button", { name: /^Where: No selected project/ });
+    expect(within(setup).queryByRole("button", { name: "Choose a project" })).toBeNull();
+    expect(within(setup).queryByRole("button", { name: /^Workspace mode/ })).toBeNull();
+    fireEvent.click(where);
+    const panel = screen.getByRole("dialog", { name: "Where this thread runs" });
+    expect(within(panel).getByRole("button", { name: "Choose a project" })).toBeInTheDocument();
+    expect(within(panel).getByLabelText(/^Workspace mode/)).toBeInTheDocument();
+    expect(within(setup).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(within(setup).getByRole("button", { name: "Start thread" })).toBeInTheDocument();
   });
 
-  it("keeps Composer tools and send actions inside .composer__setup while preserving pending-send enablement", async () => {
+  it("keeps the row's tools and send actions while preserving pending-send enablement", async () => {
     const check = createDeferred<boolean>();
     const thread: NavigationThreadSummary = {
       id: "thread-1",
@@ -124,10 +210,6 @@ describe("composer controls layout", () => {
         backends={[backendSummary()]}
         desktopApi={{ startTurn: vi.fn() }}
         disabled={false}
-        integratedTerminal={{
-          open: false,
-          onToggle: vi.fn(),
-        }}
         onBeforeStartTurn={() => check.promise}
         onSetExecutionMode={async () => undefined}
         skills={[]}
@@ -136,19 +218,13 @@ describe("composer controls layout", () => {
     );
 
     const setup = container.querySelector(".composer__setup");
-    const tools = screen.getByLabelText("Composer tools");
-    const actions = container.querySelector(".composer__actions");
-    expect(setup).not.toBeNull();
-    expect(tools.parentElement).toBe(setup);
-    expect(actions?.parentElement).toBe(setup);
+    expect(container.querySelector(".composer__actions")?.parentElement).toBe(setup);
 
-    // Trigger preparingSend and confirm setup controls disable while Cancel and terminal toggle stay enabled.
     const input = screen.getByRole("textbox", { name: "Reply" });
     fireEvent.change(input, { target: { value: "Check pending send" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
-    expect(within(tools).getByRole("button")).toBeEnabled();
     expect(screen.getByTestId("composer-model-settings")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Thread options" })).toBeDisabled();
 
@@ -157,5 +233,117 @@ describe("composer controls layout", () => {
     });
     expect(screen.getByTestId("composer-model-settings")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Thread options" })).toBeEnabled();
+  });
+
+  it("folds the Details-bound controls and then ▶ into ⋮ on a narrow row, keeping the pinned ones", async () => {
+    // Access 28 + model 150 + attach 28 + ⋮ 28 + the Send group 90, with
+    // four 4px gaps, is 340. The Details-bound controls (120px each) and ▶
+    // do not fit beside them.
+    installRowLayout(345);
+    const runCodexEnvironmentAction = vi.fn<NonNullable<DesktopApi["runCodexEnvironmentAction"]>>();
+    const setCodexThreadEnvironment = vi.fn<NonNullable<DesktopApi["setCodexThreadEnvironment"]>>();
+    const { container } = render(
+      <Composer
+        backends={[backendSummary()]}
+        desktopApi={{ pickFileFromDisk: vi.fn(), runCodexEnvironmentAction, setCodexThreadEnvironment }}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={environmentThread}
+      />,
+    );
+    await settleFold();
+
+    const setup = container.querySelector(".composer__setup") as HTMLElement;
+    // No dictation here, so folding ends at ▶: attach still fits.
+    expect(setup.dataset.foldedTiers).toBe("2");
+    for (const slot of setup.querySelectorAll<HTMLElement>("[data-composer-fold='details'], [data-composer-fold='run']")) {
+      expect(slot).toHaveClass("is-folded");
+      expect(slot).toHaveAttribute("inert");
+    }
+    expect(within(setup).getByTestId("composer-model-settings")).toBeVisible();
+    expect(within(setup).getByRole("button", { name: "Add reference" })).toBeInTheDocument();
+    expect(within(setup).getByRole("button", { name: "Send" })).toBeInTheDocument();
+
+    fireEvent.click(within(setup).getByRole("button", { name: "Thread options" }));
+    const menu = screen.getByRole("menu", { name: "Thread options" });
+    expect(within(menu).getByRole("menuitemradio", { name: /Demo/ })).toHaveAttribute("aria-checked", "true");
+    expect(within(menu).getByRole("menuitemradio", { name: /Work/ })).toHaveAttribute("aria-checked", "true");
+    expect(within(menu).getByRole("menuitemradio", { name: /Test/ })).toHaveAttribute("aria-checked", "false");
+    // Each command has its own ▶, so ⋮ needs no separate Run item.
+    expect(within(menu).getAllByRole("menuitem", { name: "Run Work" })).toHaveLength(1);
+    // Attach still fits, so ⋮ does not repeat it.
+    expect(within(menu).queryByRole("menuitem", { name: "Add reference…" })).toBeNull();
+    // The menu opens above ⋮: its own switches stay on top, and what folded
+    // out of the row sits below them, nearest the trigger.
+    const agentThread = within(menu).getByRole("menuitemcheckbox", { name: /Agent thread/ });
+    const environment = within(menu).getByRole("menuitemradio", { name: /Demo/ });
+    expect(agentThread.compareDocumentPosition(environment) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // ▶ beside Test runs Test without making it the row's command.
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Run Test" }));
+    });
+    expect(runCodexEnvironmentAction).toHaveBeenCalledWith(expect.objectContaining({ actionId: "test", threadId: "thread-env" }));
+    expect(setCodexThreadEnvironment).not.toHaveBeenCalled();
+  });
+
+  it("draws the Details-bound controls and ▶ only once the thread's configuration has loaded", async () => {
+    installRowLayout(345);
+    const props = {
+      backends: [backendSummary()],
+      desktopApi: { runCodexEnvironmentAction: vi.fn(), setCodexThreadEnvironment: vi.fn() },
+      disabled: false,
+      onSetExecutionMode: async () => undefined,
+      skills: [],
+      thread: environmentThread,
+    };
+    // Opening a thread shows its sidebar row first. Whatever that row says
+    // about the environment, the row must not draw these controls from it
+    // and then refold them when the thread's configuration arrives.
+    const { container, rerender } = render(<Composer {...props} threadConfigurationReady={false} />);
+    await settleFold();
+    const setup = container.querySelector(".composer__setup") as HTMLElement;
+    expect(setup.querySelector("[data-composer-fold='details'], [data-composer-fold='run']")).toBeNull();
+    expect(setup.dataset.foldedTiers).toBe("0");
+    fireEvent.click(within(setup).getByRole("button", { name: "Thread options" }));
+    const pendingMenu = screen.getByRole("menu", { name: "Thread options" });
+    expect(within(pendingMenu).queryByRole("menuitemradio", { name: /Demo/ })).toBeNull();
+    fireEvent.keyDown(pendingMenu, { key: "Escape" });
+
+    rerender(<Composer {...props} threadConfigurationReady />);
+    // Folded before a frame could paint: only microtasks run here, as they
+    // do between a commit and the browser's next paint.
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+    const folded = setup.dataset.foldedTiers;
+    for (const slot of setup.querySelectorAll("[data-composer-fold='details']")) {
+      expect(slot).toHaveClass("is-folded");
+    }
+    // A frame later nothing has moved: the row drew its final layout once.
+    await settleFold();
+    expect(setup.dataset.foldedTiers).toBe(folded);
+  });
+
+  it("keeps every control in the row when it fits", async () => {
+    installRowLayout(2000);
+    const { container } = render(
+      <Composer
+        backends={[backendSummary()]}
+        desktopApi={{ runCodexEnvironmentAction: vi.fn(), setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={environmentThread}
+      />,
+    );
+    await settleFold();
+
+    const setup = container.querySelector(".composer__setup") as HTMLElement;
+    expect(setup.dataset.foldedTiers).toBe("0");
+    expect(setup.querySelector(".composer__fold-slot.is-folded")).toBeNull();
+    fireEvent.click(within(setup).getByRole("button", { name: "Thread options" }));
+    expect(within(screen.getByRole("menu", { name: "Thread options" })).queryByRole("menuitem", { name: "Run Work" })).toBeNull();
   });
 });

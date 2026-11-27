@@ -3433,6 +3433,12 @@ export function useThreadNavigation(
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
   selectedThreadConfigurationReady: boolean;
+  /**
+   * The selected thread's detail read has loaded, so `selectedThread` is no
+   * longer only its sidebar row. Unlike `selectedThreadConfigurationReady`,
+   * a workspace handoff in flight does not clear it.
+   */
+  selectedThreadDetailReady: boolean;
   selectedWorkspaceHandoffPending: boolean;
   selectedThreadConfigurationError?: string;
   /** The owner reports the selected thread archived: history only, no composer. */
@@ -6146,8 +6152,9 @@ export function useThreadNavigation(
       setPendingWorkspaceHandoff(undefined);
     }
   }, [pendingWorkspaceHandoff, selectedThreadKey, selectedWorkspaceHandoffPending]);
+  const selectedThreadDetailReady = navigationSelectionAuthorizesComposer(selectedDetail.state);
   const selectedThreadConfigurationReady =
-    navigationSelectionAuthorizesComposer(selectedDetail.state)
+    selectedThreadDetailReady
     && !selectedWorkspaceHandoffPending;
   const selectedThread = useMemo(() => {
     const authoritativeThread = selectedDetail.state?.detail?.thread;
@@ -10975,6 +10982,7 @@ export function useThreadNavigation(
     selectedLaunchpad,
     selectedThread,
     selectedThreadConfigurationReady,
+    selectedThreadDetailReady,
     selectedWorkspaceHandoffPending,
     // An archived thread keeps its history; the archived card stands in for
     // its composer, so archival is not reported as an error.

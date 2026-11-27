@@ -29,6 +29,10 @@ import { projectCrumbFit } from "./project-crumb-fit";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { InlineRenameInput } from "../navigation/InlineRenameInput";
 import { threadSupportsRename } from "../navigation/thread-action-hotkeys";
+import {
+  ComposerTerminalToggle,
+  type ComposerTerminalToggleProps,
+} from "../composer/ComposerTerminalToggle";
 
 type ThreadHeaderLayoutControls = {
   sidebarOpen: boolean;
@@ -75,6 +79,8 @@ type ThreadHeaderProps = {
    * is skipped to avoid a duplicate control + a second hotkey listener.
    */
   layout?: ThreadHeaderLayoutControls;
+  /** Shows and hides this thread's integrated terminal panel. */
+  integratedTerminal?: ComposerTerminalToggleProps;
   /**
    * Star Map mission-control toggle, rendered left of the MSG chip on
    * macOS/Linux; on Windows the AppTitleBar owns it, so this is skipped
@@ -340,6 +346,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             </button>
           ) : null}
           {workflowBudgetTooltip.tooltipNode}
+          {/* Thread-scoped, so it stays here on every platform, beside the
+              rail toggle where the header has one. */}
+          {props.integratedTerminal ? (
+            <ComposerTerminalToggle {...props.integratedTerminal} />
+          ) : null}
           {props.layout && !hasAppTitleBar ? (
             <PanelToggleButtons
               sidebarOpen={props.layout.sidebarOpen}

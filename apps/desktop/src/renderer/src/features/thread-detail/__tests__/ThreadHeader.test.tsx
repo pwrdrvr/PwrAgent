@@ -206,10 +206,12 @@ describe("ThreadHeader", () => {
     );
   });
 
-  it("leaves the integrated terminal control to the composer", () => {
+  it("puts the integrated terminal toggle beside the rail toggle", () => {
+    const onToggle = vi.fn();
     render(
       <ThreadHeader
         thread={thread}
+        integratedTerminal={{ open: false, onToggle }}
         layout={{
           railOpen: true,
           sidebarOpen: true,
@@ -218,6 +220,15 @@ describe("ThreadHeader", () => {
         }}
       />,
     );
+
+    const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
+    expect(toggle.nextElementSibling).toHaveClass("panel-toggle");
+    fireEvent.click(toggle);
+    expect(onToggle).toHaveBeenCalledOnce();
+  });
+
+  it("has no terminal toggle where the view has no terminal", () => {
+    render(<ThreadHeader thread={thread} />);
 
     expect(screen.queryByRole("button", { name: /integrated terminal/i })).toBeNull();
   });

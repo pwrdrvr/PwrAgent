@@ -2213,8 +2213,8 @@ describe("ThreadView", () => {
     );
 
     const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
-    expect(toggle.closest(".composer__application-actions")).not.toBeNull();
-    expect(document.querySelector(".thread-header")?.querySelector('[aria-label="Open integrated terminal"]')).toBeNull();
+    expect(toggle.closest(".thread-header")).not.toBeNull();
+    expect(document.querySelector(".composer")?.querySelector('[aria-label="Open integrated terminal"]')).toBeNull();
     expect(toggle).not.toHaveAttribute("aria-disabled");
     fireEvent.click(toggle);
 
@@ -2448,8 +2448,8 @@ describe("ThreadView", () => {
     );
 
     const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
-    expect(toggle.closest(".composer__application-actions")).not.toBeNull();
-    expect(document.querySelector(".thread-header")?.querySelector('[aria-label="Open integrated terminal"]')).toBeNull();
+    expect(toggle.closest(".thread-header")).not.toBeNull();
+    expect(document.querySelector(".composer")?.querySelector('[aria-label="Open integrated terminal"]')).toBeNull();
     expect(toggle).not.toHaveAttribute("aria-disabled");
     fireEvent.click(toggle);
 
@@ -3628,7 +3628,7 @@ describe("ThreadView", () => {
     expect(screen.getByRole("button", { name: "Start sub-thread" })).toBeInTheDocument();
     const input = screen.getByRole("textbox", { name: "New thread" });
     expect(input).toHaveAttribute("data-placeholder", "Start a sub-thread of Issue 193 Markdown attachments");
-    expect(screen.getAllByText("main").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /^Where: .*new worktree from main$/ })).toBeInTheDocument();
     expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
 
     fireEvent.click(within(source).getByRole("button", { name: "Open Issue 193 Markdown attachments" }));
@@ -3647,8 +3647,7 @@ describe("ThreadView", () => {
       .toHaveAttribute("data-placeholder", "Start a new thread in PwrAgnt");
     // Detach keeps the settings. With no git status probed yet, the parent
     // link was what offered a new worktree; the launchpad still is one.
-    expect(screen.getAllByText("New worktree").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("main").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /^Where: .*new worktree from main$/ })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus());
   });
 
@@ -3695,7 +3694,7 @@ describe("ThreadView", () => {
       />
     );
 
-    expect(screen.getByText("Same worktree")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Where: PwrAgnt, same worktree" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "New sub-thread" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Sub-thread source" }))
       .toHaveTextContent("Issue 193 Markdown attachments");
