@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { buildMcpIpcRelay } from "./build-mcp-ipc-relay.mjs";
+import { buildMcpStdioRelay } from "./build-mcp-stdio-relay.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -36,10 +37,12 @@ async function runNativePrototype() {
   const scratch = await mkdtemp(join(scratchRoot, "windows-codex-mcp-"));
   try {
     const native = buildMcpIpcRelay({ outputRoot: scratch, identityTest: true });
+    const relay = buildMcpStdioRelay({ outputRoot: scratch });
     const runner = join(scratch, "prototype.cjs");
     await buildPrototypeHarness(runner);
     const codex = process.argv[2];
     const result = spawnSync(process.execPath, [runner, native, ...(codex ? [resolve(codex)] : [])], {
+      env: { ...process.env, PWRAGENT_TEST_MCP_STDIO_RELAY: relay },
       stdio: "inherit", windowsHide: true, timeout: 85_000,
     });
     if (result.error) throw result.error;

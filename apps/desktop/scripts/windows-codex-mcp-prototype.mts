@@ -49,8 +49,10 @@ function bridge(runtime: ChildProcess): Duplex {
   return stream;
 }
 
-function fixtureOwner(runtime: ChildProcess, channel: Duplex, helper: string, endpoint: string) {
+function fixtureOwner(runtime: ChildProcess, channel: Duplex, endpoint: string) {
   assert(runtime.pid);
+  const relay = process.env.PWRAGENT_TEST_MCP_STDIO_RELAY;
+  assert(relay, "the fixture requires the built Rust stdio relay");
   const grants = new Set<string>();
   let acceptConnection: CodexIpcConnection;
   let activeThread: string | undefined;
@@ -71,9 +73,9 @@ function fixtureOwner(runtime: ChildProcess, channel: Duplex, helper: string, en
         configuration: async (token) => {
           grants.add(token);
           return {
-            command: helper, args: ["--codex-stdio", endpoint], env: {
+            command: relay, args: ["--codex-stdio", endpoint], env: {
               [CODEX_AGENT_TOOL_GRANT]: token,
-              PWRAGENT_CODEX_PROTOTYPE_SERVER_PID: String(runtime.pid),
+              PWRAGENT_CODEX_MCP_SERVER_PID: String(runtime.pid),
             },
           };
         },
@@ -138,7 +140,7 @@ async function proofOracle(helper: string, cwd: string) {
   const runtime = launch(helper, endpoint, process.execPath, [__filename, "--relay-fixture"], cwd, process.env);
   const closed = once(runtime, "exit");
   const channel = bridge(runtime);
-  const owner = fixtureOwner(runtime, channel, helper, endpoint);
+  const owner = fixtureOwner(runtime, channel, endpoint);
   try {
     const registered = await owner.server.registerCodexClient({ backend: "codex", threadId: "fixture-thread" });
     // Accept cannot begin until the debugger has processed the root startup.
@@ -147,7 +149,7 @@ async function proofOracle(helper: string, cwd: string) {
     const duplicate = launch(helper, endpoint, process.execPath, ["-e", "process.exit(0)"], cwd, process.env);
     const [duplicateCode] = await once(duplicate, "exit");
     assert.notEqual(duplicateCode, 0, "an occupied pipe must reject a second listener");
-    const unowned = spawn(helper, registered.server.args, { env: { ...process.env, ...registered.server.env },
+    const unowned = spawn(registered.server.command, registered.server.args, { env: { ...process.env, ...registered.server.env },
       stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
     let unownedBytes = 0;
     unowned.stdout.on("data", (chunk: Buffer) => { unownedBytes += chunk.length; });
@@ -233,7 +235,7 @@ async function realCodex(helper: string, codex: string, cwd: string) {
   const runtime = launch(helper, endpoint, codex, ["app-server", "--listen", "stdio://"], cwd,
     { ...process.env, CODEX_HOME: codexHome, OPENAI_API_KEY: undefined });
   const closed = once(runtime, "exit");
-  const owner = fixtureOwner(runtime, bridge(runtime), helper, endpoint);
+  const owner = fixtureOwner(runtime, bridge(runtime), endpoint);
   try {
     const appServer = rpc(runtime);
     await appServer.request("initialize", { clientInfo: { name: "pwragent-windows-prototype", version: "1" }, capabilities: { experimentalApi: true } });

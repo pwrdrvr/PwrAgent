@@ -296,19 +296,3 @@ static int codex_windows_supervisor(const wchar_t *pipe, const wchar_t *executab
   /* DEBUG_PROCESS defaults to terminating debuggees when this debugger exits. */
   return 0;
 }
-
-static void codex_answer_handle_challenge(HANDLE pipe) {
-  wchar_t expected[32];
-  DWORD size = GetEnvironmentVariableW(L"PWRAGENT_CODEX_PROTOTYPE_SERVER_PID", expected, _countof(expected));
-  ULONG pid = 0;
-  if (!size || size >= _countof(expected) || !GetNamedPipeServerProcessId(pipe, &pid)
-    || _wcstoui64(expected, NULL, 10) != pid) fail("unexpected Codex prototype listener process");
-  HANDLE stop = CreateEventW(NULL, TRUE, FALSE, NULL);
-  uint64_t remote = 0;
-  DWORD count;
-  if (!stop || !codex_overlapped(pipe, stop, TRUE, &remote, sizeof(remote), &count, CODEX_PROOF_TIMEOUT)
-    || count != sizeof(remote) || remote > UINTPTR_MAX || !SetEvent((HANDLE)(uintptr_t)remote))
-    fail("cannot prove connected Codex relay process");
-  CloseHandle((HANDLE)(uintptr_t)remote);
-  CloseHandle(stop);
-}
