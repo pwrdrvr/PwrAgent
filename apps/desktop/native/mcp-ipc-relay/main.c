@@ -69,20 +69,13 @@ static void verify_pipe_identity(HANDLE pipe) {
   CloseHandle(process);
 }
 
-static HANDLE verified_pipe_with_wait(const wchar_t *path, DWORD busy_timeout) {
+static HANDLE verified_pipe(const wchar_t *path) {
   if (wcsncmp(path, L"\\\\.\\pipe\\", 9) || !path[9]
     || wcspbrk(path + 9, L"\\/:?*\"<>|")) fail("expected a local Windows pipe name");
   // SECURITY_IDENTIFICATION prevents the server impersonating this client.
-  ULONGLONG deadline = GetTickCount64() + busy_timeout;
-  HANDLE pipe;
-  for (;;) {
-    pipe = CreateFileW(path, GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
-      0, NULL, OPEN_EXISTING,
-      FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
-    if (pipe != INVALID_HANDLE_VALUE || GetLastError() != ERROR_PIPE_BUSY || !busy_timeout) break;
-    ULONGLONG now = GetTickCount64();
-    if (now >= deadline || !WaitNamedPipeW(path, (DWORD)(deadline - now))) break;
-  }
+  HANDLE pipe = CreateFileW(path, GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
+    0, NULL, OPEN_EXISTING,
+    FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
   if (pipe == INVALID_HANDLE_VALUE) fail("cannot open local pipe");
   if (GetFileType(pipe) != FILE_TYPE_PIPE) fail("endpoint is not a pipe");
   verify_pipe_identity(pipe);
@@ -143,7 +136,7 @@ int wmain(int argc, wchar_t **argv) {
     return MoveFileExW(argv[2], argv[3], MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ? 0 : 1;
   if (argc >= 3 && !wcscmp(argv[1], L"--maintenance-allocation")) return maintenance_allocation(argc - 2, argv + 2);
   if (argc != 2) fail("expected one endpoint");
-  HANDLE pipe = verified_pipe_with_wait(argv[1], 0);
+  HANDLE pipe = verified_pipe(argv[1]);
   HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
   DWORD written;
   if (!WriteFile(output, "\1", 1, &written, NULL) || written != 1) fail("parent closed");

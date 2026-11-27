@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/windows-codex-mcp-prototype.yml'
       - 'apps/desktop/native/mcp-ipc-relay/**'
+      - 'apps/desktop/native/mcp-stdio-relay/**'
+      - 'apps/desktop/scripts/build-mcp-stdio-relay.mjs'
       - 'apps/desktop/scripts/*windows-codex-mcp-prototype.*'
       - 'apps/desktop/src/main/agent-tools/codex-agent-tool-ipc.ts'
       - 'apps/desktop/src/main/agent-tools/agent-tool-mcp-server.ts'
@@ -54,3 +56,6 @@ jobs:
       - name: Verify protected pipe admission with synthetic and real Codex
         shell: pwsh
         run: node apps/desktop/scripts/run-windows-codex-mcp-prototype.mjs $env:PWRAGENT_WINDOWS_PROTOTYPE_CODEX
+
+      - name: Run native Rust relay unit tests
+        run: cargo test --locked --manifest-path apps/desktop/native/mcp-stdio-relay/Cargo.toml
