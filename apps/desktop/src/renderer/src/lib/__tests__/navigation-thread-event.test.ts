@@ -90,13 +90,17 @@ it("patches a hibernated checkout, its row mark, and Keep it awake from one even
   } as never)).toBe(thread);
 });
 
-it("replaces a stale missing-worktree warning when the owner retries that checkout", () => {
-  const missing = { worktreePath: "/wt", repositoryPath: "/repo", repositoryAvailable: true };
+it.each([
+  ["/wt", "/wt"],
+  ["C:/worktrees/wt", "C:\\worktrees\\wt"],
+  ["//share/worktrees/wt", "\\\\share\\worktrees\\wt"],
+])("replaces a stale warning when the owner retries %s at %s", (missingPath, restoredPath) => {
+  const missing = { worktreePath: missingPath, repositoryPath: "/repo", repositoryAvailable: true };
   const thread: NavigationThreadSummary = {
     id: "thread", source: "codex", title: "Build", titleSource: "explicit",
     linkedDirectories: [], inbox: { inInbox: true }, workspaceMissing: missing,
   };
-  const workspace = { worktreePath: "/wt", repositoryPath: "/repo", hibernatedAt: 1, restoring: true };
+  const workspace = { worktreePath: restoredPath, repositoryPath: "/repo", hibernatedAt: 1, restoring: true };
   const other = applyCheckoutHibernationUpdate(thread, { threadId: thread.id,
     workspace: { ...workspace, worktreePath: "/unrelated" } });
   expect(other.workspaceMissing).toEqual(missing);

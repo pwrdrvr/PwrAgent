@@ -660,6 +660,7 @@ import {
 } from "./thread-working-state-refresh-policy";
 import type { AcpAvailableCommandsStorage } from "@pwragent/owner-core/acp-storage";
 import { WorktreeArchiveService } from "./worktree-archive-service";
+import { checkWorktreeDirectory } from "./worktree-directory-probe";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 
 import { CheckoutPathOwners } from "./checkout-path-owners";
@@ -19940,11 +19941,19 @@ export class DesktopBackendRegistry {
     if (worktree) {
       // Hibernation has already had a chance to restore. Check the actual
       // turn cwd before announcing a start or letting Codex resume into it.
-      const available = await stat(cwd).then((entry) => entry.isDirectory(), (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
-        throw error;
-      });
-      if (!available) throw new Error(`The thread's worktree is missing. Open the thread to recover its workspace: ${cwd}`);
+      const status = await checkWorktreeDirectory(cwd);
+      switch (status) {
+        case "missing":
+          throw new Error(`The thread's worktree is missing. Open the thread to recover its workspace: ${cwd}`);
+        case "not-directory":
+          throw new Error(`A file blocks the thread's worktree path. Open the thread to recover its workspace: ${cwd}`);
+        case "not-responding":
+          throw new Error(`The thread's worktree is not responding. Check the drive or network mount and retry: ${cwd}`);
+        case "busy":
+          throw new Error("Worktree checks are busy. Try again shortly.");
+        case "unavailable":
+          throw new Error(`Could not access the thread's worktree. Check its permissions and retry: ${cwd}`);
+      }
     }
     return cwd;
   }

@@ -2,6 +2,7 @@ import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation
 import { normalizeRenamedTitleSource } from "@pwragent/shared/contracts/normalized-app-server";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { formatFilesystemPath } from "@pwragent/shared/path-display";
 import { resolveThreadWorkingStatePath } from "./thread-working-state-path";
 import { agentEventMatchesThread, federationTargetsEqual } from "./federated-thread-events";
 
@@ -26,7 +27,8 @@ export function applyCheckoutHibernationUpdate<T extends NavigationThreadSummary
   let next = thread;
   if (params.workspace !== undefined) {
     const { workspaceHibernated: _previous, checkoutHibernated: _mark, ...rest } = next;
-    if (params.workspace?.restoring && rest.workspaceMissing?.worktreePath === params.workspace.worktreePath) {
+    if (params.workspace?.restoring && rest.workspaceMissing
+      && formatFilesystemPath(rest.workspaceMissing.worktreePath) === formatFilesystemPath(params.workspace.worktreePath)) {
       delete rest.workspaceMissing;
     }
     // A restore in progress is still the hibernated checkout until it ends.

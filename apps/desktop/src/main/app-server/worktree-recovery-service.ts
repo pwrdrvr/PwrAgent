@@ -64,7 +64,9 @@ async function pathKind(target: string): Promise<"missing" | "empty-dir" | "occu
     if (!info.isDirectory()) return "occupied";
     return (await readdir(target)).length === 0 ? "empty-dir" : "occupied";
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return "missing";
+    if (code === "ENOTDIR") return "occupied";
     throw error;
   }
 }

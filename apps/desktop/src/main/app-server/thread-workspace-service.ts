@@ -106,6 +106,7 @@ import { WorktreeArchiveService } from "./worktree-archive-service";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { readWorktreeLockAt, WorktreeLockedError } from "./worktree-volume-lock";
 import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
+import { checkWorktreeDirectory } from "./worktree-directory-probe";
 import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
 import { getMainLogger } from "../log";
 import {
@@ -132,7 +133,6 @@ import {
   CLAUDE_WORKSPACE_MOVE_FAILED_WARNING,
   CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
   isCodexMissingThreadError,
-  pathExists,
   threadOrchestrationFailure,
 } from "./backend-registry-runtime-helpers";
 import { executionModeSettings } from "./execution-mode-settings";
@@ -755,14 +755,19 @@ export class ThreadWorkspaceService {
       }
       const { directory } = await this.resolveRecoveryWorktree(request);
       const repositoryPath = directory.path;
-      if (!(await pathExists(repositoryPath))) {
+      const repositoryStatus = await checkWorktreeDirectory(repositoryPath);
+      if (repositoryStatus === "missing" || repositoryStatus === "not-directory") {
         throw new Error(`The main checkout is gone too: ${repositoryPath}`);
+      }
+      if (repositoryStatus !== "available") {
+        throw new Error(`Could not check the main checkout. Try again when it is accessible: ${repositoryPath}`);
       }
       const worktreePath = directory.worktreePath ?? request.worktreePath;
       const warnings: string[] = [];
       let archivedWorktree: MoveThreadToMainCheckoutResponse["archivedWorktree"];
       let keptWorktree: MoveThreadToMainCheckoutResponse["keptWorktree"];
-      if (await pathExists(worktreePath)) {
+      const worktreeStatus = await checkWorktreeDirectory(worktreePath);
+      if (worktreeStatus === "available") {
         if (directory.worktreeOwnership === "external") {
           warnings.push("The worktree was created outside PwrAgent, so it was left on disk.");
         } else {
@@ -781,12 +786,16 @@ export class ThreadWorkspaceService {
             keptWorktree = { reason: "worktree-locked", worktreePath, lockReason: error.lockReason };
           }
         }
-      } else {
+      } else if (worktreeStatus === "missing") {
         // Git's record of a deleted folder keeps its branch checked out.
         await this.host().worktreeRecoveryService.releaseMissingWorktree({ repositoryPath, worktreePath })
           .catch((error: unknown) => {
             warnings.push(error instanceof Error ? error.message : String(error));
           });
+      } else if (worktreeStatus === "not-directory") {
+        warnings.push("A file blocks the worktree path and was left in place.");
+      } else {
+        throw new Error(`Could not check the thread's worktree. Try again when it is accessible: ${worktreePath}`);
       }
 
       const branch = await readCurrentGitBranch(repositoryPath).catch(() => undefined);

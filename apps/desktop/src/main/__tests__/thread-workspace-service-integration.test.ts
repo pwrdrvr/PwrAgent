@@ -7718,6 +7718,29 @@ describe("DesktopBackendRegistry workspace recovery", () => {
     }
   });
 
+  it.each([false, true])("moves to the main checkout while keeping an obstructing file (ancestor: %s)", async (ancestor) => {
+    const { root, repo, worktree } = await mainCheckout();
+    const file = ancestor ? path.dirname(worktree) : worktree;
+    const archive = vi.fn();
+    const { registry, codexClient } = registryFor(worktreeThread(repo, worktree), {
+      recovery: { releaseMissingWorktree: vi.fn(async () => true) },
+      archive: { archive },
+    });
+    try {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, "keep");
+      await expect(registry.moveThreadToMainCheckout({
+        backend: "codex", threadId: "thread-1", worktreePath: worktree,
+      })).resolves.toMatchObject({ repositoryPath: repo });
+      expect(archive).not.toHaveBeenCalled();
+      expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({ threadId: "thread-1", cwd: repo });
+      expect(await readFile(file, "utf8")).toBe("keep");
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("archives a present worktree with a checkpoint when the thread keeps Local's branch", async () => {
     const { root, repo, worktree } = await mainCheckout();
     await mkdir(worktree, { recursive: true });

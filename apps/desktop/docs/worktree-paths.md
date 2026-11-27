@@ -52,6 +52,10 @@ ignores the key and uses the home folder.
   folder itself; the renderer cannot name a path. Worktree creation uses the same check, and a check
   joins a stat still running for that folder, so a hung mount never ties up more than one libuv
   threadpool thread.
+- Before a Codex turn starts, the owner checks its resolved worktree directory.
+  Recovery views share this check. Callers wait up to three seconds, and
+  repeated checks of a path share a probe. At most two filesystem probes run
+  at once, with their slots held until the filesystem actually responds.
 - Codex threads keep `$CODEX_HOME/worktrees` unless **Use for Codex threads too**
   (`base_directory_includes_codex = true`) is on. Codex Desktop lists an owner-marked worktree
   (`codex-thread.json` in its Git directory) only under `$CODEX_HOME/worktrees` (#164), so it does not
