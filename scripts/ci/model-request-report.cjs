@@ -102,8 +102,8 @@ function renderComment({ current, baseline, source, baselineRun, exactBase, runU
   const withinBudget = current.results.every(({ observed, ceilings }) =>
     METRIC_KEYS.every((key) => observed[key] <= ceilings[key]));
   lines.push(withinBudget
-    ? "✅ All outbound model request measurements stayed within their ceilings."
-    : "❌ Outbound model requests exceeded one or more ceilings.", "");
+    ? "✅ Default outbound model requests stayed within their ceilings."
+    : "❌ Default outbound model requests exceeded one or more ceilings.", "");
   if (!baseline) {
     lines.push("> A successful, usable `main` baseline is unavailable. CI still checks the PR ceilings.", "");
   } else if (!exactBase) {
@@ -136,6 +136,8 @@ function renderComment({ current, baseline, source, baselineRun, exactBase, runU
     if (changes.length) lines.push("**Ceiling changes**", "", ...changes, "");
   }
   lines.push("Real agent processes sent these HTTP request bodies to local fake model endpoints. Totals include auxiliary model calls. The breakdown measures JSON fields in the largest request of each turn.",
+    "",
+    `The \`model-request-mcp-results\` artifact in the [CI run](${runUrl(source.id)}) contains measurements for the large MCP catalog.`,
     "", `Baseline ${baseline ? `[\`${baselineRun.sha.slice(0, 7)}\`](${runUrl(baselineRun.id)})` : "unavailable"} · PR ${sourceLink} · Source CI ${source.conclusion}`);
   return lines.join("\n");
 }

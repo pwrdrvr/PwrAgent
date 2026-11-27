@@ -381,6 +381,7 @@ jobs:
           PWRAGENT_MODEL_BENCH_CODEX: ${{ steps.model-runtimes.outputs.directory }}/node_modules/.bin/codex
           PWRAGENT_MODEL_BENCH_AGY: ${{ steps.model-runtimes.outputs.directory }}/agy
           PWRAGENT_MODEL_BENCH_RESULT: ${{ runner.temp }}/model-request-result.json
+          PWRAGENT_MODEL_BENCH_MCP_RESULT: ${{ runner.temp }}/model-request-mcp-result.json
         run: >-
           pnpm test apps/desktop/src/main/__tests__/model-request-size.test.ts
           scripts/ci/model-request-report.property.test.mjs scripts/ci/model-request-report.test.mjs --maxWorkers=2
@@ -391,6 +392,16 @@ jobs:
         with:
           name: model-request-results
           path: ${{ runner.temp }}/model-request-result.json
+          if-no-files-found: ${{ steps.model-request.outcome == 'success' && 'error' || 'ignore' }}
+          overwrite: true
+          retention-days: 30
+
+      - name: Upload large MCP catalog measurements
+        if: ${{ !cancelled() && (steps.model-request.outcome == 'success' || steps.model-request.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: model-request-mcp-results
+          path: ${{ runner.temp }}/model-request-mcp-result.json
           if-no-files-found: ${{ steps.model-request.outcome == 'success' && 'error' || 'ignore' }}
           overwrite: true
           retention-days: 30

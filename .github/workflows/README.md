@@ -99,17 +99,26 @@ bytes cover system fields and system or developer messages. Instructions
 embedded in a user message count toward input and history. The totals include
 auxiliary model calls, such as Antigravity's title-generation call.
 
-The job uploads `model-request-results` even when a ceiling fails.
-The publisher on `main` updates one comment per PR into `main`. It uses the
-successful push for the recorded PR base when available and otherwise uses a
-recent successful `main` push with measurements. Docs-only PRs that skip Lint
-do not produce measurements.
+The same job configures three fake MCP connections with 80 tools each and
+checks the first turn and follow-up again for each provider. It fails on
+excess total bytes, tool bytes, or model calls. It also fails if Codex, Claude,
+or Antigravity in gateway mode adds fixture tool schemas before discovery.
+Antigravity's stdio fallback has a separate ceiling that accounts for eager
+tool schemas.
+
+The job uploads `model-request-results` for the default case and
+`model-request-mcp-results` for the large catalog even when a ceiling fails.
+The publisher on `main` compares the default case in one comment per PR into
+`main`. It uses the successful push for the recorded PR base when available
+and otherwise uses a recent successful `main` push with measurements. Docs-only
+PRs that skip Lint do not produce measurements.
 
 For a local run, set `PWRAGENT_MODEL_BENCH_CODEX` and `PWRAGENT_MODEL_BENCH_AGY`
 to the pinned executables in an OS temp directory, then run
 `pnpm test apps/desktop/src/main/__tests__/model-request-size.test.ts --maxWorkers=2`.
 The benchmark uses the workspace's pinned Claude SDK binary. Set
-`PWRAGENT_MODEL_BENCH_RESULT` to an output file to export the numeric results.
+`PWRAGENT_MODEL_BENCH_RESULT` or `PWRAGENT_MODEL_BENCH_MCP_RESULT` to output files
+to export the respective numeric results.
 
 Set `PWRAGENT_MODEL_BENCH_COMPARISON` to a new local file to also capture a
 fresh turn and follow-up through PwrAgent and a fresh turn directly from each

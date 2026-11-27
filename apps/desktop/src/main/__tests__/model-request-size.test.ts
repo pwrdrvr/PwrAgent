@@ -1,13 +1,15 @@
 import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { chmod, copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { MANAGED_ANTIGRAVITY_ENV } from "../acp/antigravity-runtime-retention";
+import type { BackendRegistryMcpConnectionService } from "../app-server/backend-registry-types";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { resolveBundledClaudeExecutable } from "../claude/claude-bundled-executable";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
@@ -164,12 +166,65 @@ async function startModelEndpoint(provider: Provider) {
 
 type Comparison = { cwd: string; mode: "desktop" | "cli" };
 type Capture = { metrics: TurnMetrics; requests: Sample[] };
+type BenchmarkOptions = { comparison?: Comparison; largeMcpCatalog?: boolean };
+
+const catalogMarker = "full-model-request-mcp-catalog-fixture";
+const toolsPerConnection = 80;
+const mcpServerPath = fileURLToPath(new URL("./fixtures/model-request-mcp-server.cjs", import.meta.url));
+
+async function createLargeMcpCatalog(home: string) {
+  const catalogs = await Promise.all(["inventory", "reviews", "support"].map(async (id) => {
+    const tools = Array.from({ length: toolsPerConnection }, (_, index) => ({
+      name: `fixture_${id}_lookup_${index}`,
+      description: `Look up synthetic ${id} records of type ${index}.`,
+      inputSchema: {
+        type: "object" as const,
+        properties: Object.fromEntries(Array.from({ length: 16 }, (_, field) => [`field_${field}`, {
+          type: "string", description: `${catalogMarker}: field ${field} for ${id} lookup ${index}`,
+        }])),
+        additionalProperties: false,
+      },
+    }));
+    const catalogPath = path.join(home, `${id}.json`);
+    const listingLog = path.join(home, `${id}.listed`);
+    await writeFile(catalogPath, JSON.stringify(tools));
+    return { id, tools, catalogPath, listingLog };
+  }));
+
+  const catalogFor = (id: string) => {
+    const catalog = catalogs.find((candidate) => candidate.id === id);
+    if (!catalog) throw new Error(`Unexpected benchmark MCP connection ${id}`);
+    return catalog;
+  };
+  const service: BackendRegistryMcpConnectionService = {
+    listConnections: async () => catalogs.map(({ id }) => ({
+      id, displayName: id, serverUrl: `https://${id}.example.test/mcp`, kind: "remote",
+      authMode: "oauth", enabled: true, configured: true, state: "ready", selectForNewThreads: false,
+      createdAt: 0, updatedAt: 0,
+    })),
+    registerBridge: async (id) => {
+      const { catalogPath, listingLog } = catalogFor(id);
+      return {
+        server: { name: id, command: process.execPath, args: [mcpServerPath, catalogPath, listingLog], env: {} },
+        bindThread: () => {}, revoke: () => {},
+      };
+    },
+    requestGatewayToolOperation: async ({ connectionId, operation }) => {
+      if (operation !== "gateway/tools/list") throw new Error(`Unexpected benchmark MCP operation ${operation}`);
+      const { tools } = catalogFor(connectionId);
+      return tools.map((definition) => ({
+        connectionId, serverName: connectionId, toolName: definition.name, schemaRevision: "fixture", definition,
+      }));
+    },
+  };
+  return { catalogs, connectionIds: catalogs.map(({ id }) => id), service };
+}
 
 async function captureModelRequests(
   provider: Provider,
   codexExecutable: string,
   antigravityExecutable: string,
-  comparison?: Comparison,
+  { comparison, largeMcpCatalog }: BenchmarkOptions = {},
 ): Promise<Capture[]> {
   const home = await mkdtemp(path.join(os.tmpdir(), "pwragent-model-request-"));
   const cwd = comparison?.cwd ?? home;
@@ -244,8 +299,10 @@ async function captureModelRequests(
       command: codexExecutable, env, directoryResolver: async () => [],
       resolveCommand: async () => ({ command: codexExecutable, source: "config" }),
     });
+    const mcp = largeMcpCatalog ? await createLargeMcpCatalog(home) : undefined;
     registry = createDesktopBackendRegistry({
       codexClient, overlayStore: new SqliteOverlayStore(db), messagingStore: null,
+      mcpConnectionService: mcp?.service ?? null,
       threadTitleGenerationService: null, discoverLocalAcpAgents: async () => [],
       acpAgentStore, acpSessionStore: new AcpSessionStore(db),
       createAcpTransport: (agent) => {
@@ -272,6 +329,7 @@ async function captureModelRequests(
     });
     const { threadId } = await registry.startThread({
       backend: provider, cwd, ...codexPolicy,
+      ...(mcp ? { mcpConnectionIds: mcp.connectionIds } : {}),
       ...(provider === "codex" ? { model: codexModel } : provider === "claude" ? { model: "sonnet" } : {}),
       ...(comparison ? {} : { agent: { name: "Checkout test fixture", instructions } }),
     });
@@ -284,7 +342,23 @@ async function captureModelRequests(
       return { metrics: turnMetrics(requests, text, comparison ? undefined : instructions), requests };
     }
     const first = await measureTurn(0, initialPrompt);
-    return [first, await measureTurn(1, nextPrompt)];
+    const next = await measureTurn(1, nextPrompt);
+    if (mcp) {
+      const acpReport = provider === antigravity
+        ? await registry.describeThreadMcpConnections({ backend: provider, threadId }) : undefined;
+      if (acpReport?.managedConnectionsViaGateway) {
+        expect(acpReport.connections.map(({ connectionId }) => connectionId)).toEqual(mcp.connectionIds);
+        expect(first.requests.some(({ body }) => JSON.stringify(body).includes("search_mcp_tools")),
+          "the model must be able to search the configured connections").toBe(true);
+        expect.soft([first, next].some(hasFullMcpSchemas), "Antigravity gateway exposed a full MCP schema").toBe(false);
+      } else {
+        for (const { id, listingLog } of mcp.catalogs) {
+          const listings = await readFile(listingLog, "utf8").catch(() => "");
+          expect(listings.trim().split("\n"), `${provider} lists the ${id} fixture over MCP`).toContain(String(toolsPerConnection));
+        }
+      }
+    }
+    return [first, next];
   } finally {
     try {
       await registry?.close();
@@ -316,9 +390,22 @@ const ceilings: Record<Provider, Metrics> = {
   },
 };
 
+const mcpCeilings = {
+  codex: { firstBytes: 60_000, nextBytes: 62_000, firstToolBytes: 19_000, nextToolBytes: 19_000 },
+  claude: { firstBytes: 90_000, nextBytes: 92_000, firstToolBytes: 45_000, nextToolBytes: 45_000 },
+  // The pinned Antigravity runtime uses stdio MCP and advertises a subset of
+  // the catalog up front. Budget that path separately until it can defer tools.
+  [antigravity]: { firstBytes: 125_000, nextBytes: 124_000, firstToolBytes: 100_000, nextToolBytes: 100_000 },
+} satisfies Record<Provider, Pick<Metrics, "firstBytes" | "nextBytes" | "firstToolBytes" | "nextToolBytes">>;
+
+function hasFullMcpSchemas({ requests }: Capture): boolean {
+  return requests.some(({ body }) => JSON.stringify(body).includes(catalogMarker));
+}
+
 const codexExecutable = process.env.PWRAGENT_MODEL_BENCH_CODEX;
 const antigravityExecutable = process.env.PWRAGENT_MODEL_BENCH_AGY;
 const artifactPath = process.env.PWRAGENT_MODEL_BENCH_RESULT;
+const mcpArtifactPath = process.env.PWRAGENT_MODEL_BENCH_MCP_RESULT;
 it.runIf(Boolean(artifactPath || (codexExecutable && antigravityExecutable)))(
   "keeps outbound model requests bounded on first turns and follow-ups",
   async () => {
@@ -346,7 +433,37 @@ it.runIf(Boolean(artifactPath || (codexExecutable && antigravityExecutable)))(
   80_000,
 );
 
-
+it.runIf(Boolean(artifactPath || mcpArtifactPath || (codexExecutable && antigravityExecutable)))(
+  "keeps first turns and follow-ups bounded with 240 configured MCP tools",
+  async () => {
+    if (!codexExecutable || !antigravityExecutable) throw new Error("Set both pinned agent executable paths.");
+    const results = [];
+    for (const provider of providers) {
+      const captures = await captureModelRequests(provider, codexExecutable, antigravityExecutable, { largeMcpCatalog: true });
+      const [first, next] = captures.map(({ metrics }) => metrics);
+      const { firstCalls, nextCalls } = ceilings[provider];
+      const limits = { ...mcpCeilings[provider], firstCalls, nextCalls };
+      const fullSchemasAdvertised = captures.map(hasFullMcpSchemas);
+      const observed = {
+        firstBytes: first!.bytes, firstToolBytes: first!.toolBytes, firstCalls: first!.calls,
+        nextBytes: next!.bytes, nextToolBytes: next!.toolBytes, nextCalls: next!.calls,
+      };
+      results.push({ provider, first, next, ceilings: limits, fullSchemasAdvertised });
+      for (const key of Object.keys(limits) as Array<keyof typeof limits>) {
+        expect.soft(observed[key], `${provider} large MCP catalog ${key}`).toBeLessThanOrEqual(limits[key]);
+      }
+      for (const [index, advertised] of fullSchemasAdvertised.entries()) {
+        if (provider !== antigravity) {
+          expect.soft(advertised, `${provider} sent a full MCP schema on turn ${index + 1}`).toBe(false);
+        }
+      }
+    }
+    if (mcpArtifactPath) {
+      await writeFile(mcpArtifactPath, JSON.stringify({ version: 1, results }) + "\n");
+    }
+  },
+  80_000,
+);
 const comparisonPath = process.env.PWRAGENT_MODEL_BENCH_COMPARISON;
 it.runIf(Boolean(comparisonPath))("compares Desktop first turns and follow-ups with fresh CLI turns", async () => {
   if (!codexExecutable || !antigravityExecutable) throw new Error("Set both pinned agent executable paths.");
@@ -355,8 +472,8 @@ it.runIf(Boolean(comparisonPath))("compares Desktop first turns and follow-ups w
     await writeFile(path.join(cwd, "checkout.test.ts"), "// Synthetic checkout test for the model request comparison.\n");
     const results = [];
     for (const provider of providers) {
-      const [desktop, desktopFollowUp] = await captureModelRequests(provider, codexExecutable, antigravityExecutable, { cwd, mode: "desktop" });
-      const [cli] = await captureModelRequests(provider, codexExecutable, antigravityExecutable, { cwd, mode: "cli" });
+      const [desktop, desktopFollowUp] = await captureModelRequests(provider, codexExecutable, antigravityExecutable, { comparison: { cwd, mode: "desktop" } });
+      const [cli] = await captureModelRequests(provider, codexExecutable, antigravityExecutable, { comparison: { cwd, mode: "cli" } });
       const modelFor = (capture: Capture) => {
         const mainRequest = capture.requests.find(({ bytes }) => bytes === capture.metrics.primaryBytes)!;
         return mainRequest.body.model ?? mainRequest.route;
