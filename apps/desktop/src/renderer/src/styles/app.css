@@ -52366,7 +52366,7 @@ button.composer__subthread-source-parent:hover {
   flex: 1 1 auto;
 }
 
-.model-settings__effort-track {
+.stepped-bar__track {
   display: grid;
   gap: 3px;
   height: 22px;
@@ -52378,41 +52378,41 @@ button.composer__subthread-source-parent:hover {
   user-select: none;
 }
 
-.model-settings__effort-track:focus-visible {
+.stepped-bar__track:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
-.model-settings__effort-track[aria-disabled="true"] {
+.stepped-bar__track[aria-disabled="true"] {
   cursor: default;
   opacity: 0.45;
 }
 
-.model-settings__effort-stop {
+.stepped-bar__stop {
   border-radius: 2px;
   background: var(--border-strong);
   transition: background-color 80ms ease;
 }
 
-.model-settings__effort-stop.is-on {
+.stepped-bar__stop.is-on {
   background: var(--accent);
 }
 
-.model-settings__effort-stop.is-hover {
+.stepped-bar__stop.is-hover {
   background: var(--accent-border);
 }
 
-.model-settings__effort-track.is-unset .model-settings__effort-stop {
+.stepped-bar__track.is-unset .stepped-bar__stop {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
-.model-settings__effort-ticks {
+.stepped-bar__ticks {
   display: grid;
   gap: 3px;
 }
 
-.model-settings__effort-ticks span {
+.stepped-bar__tick {
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -52422,9 +52422,43 @@ button.composer__subthread-source-parent:hover {
   white-space: nowrap;
 }
 
-.model-settings__effort-ticks span.is-on {
+.stepped-bar__tick.is-on {
   color: var(--accent-bright);
   font-weight: 700;
+}
+
+/* The choice is the one that needs the Full Access warning: the filled
+   segments take the accent's warning weight. */
+.stepped-bar__track.is-hot .stepped-bar__stop.is-on {
+  background: var(--accent);
+}
+
+/* A stop that cannot be chosen keeps its place on the scale as an outline,
+   whatever the chosen level; its reason shows on hover. */
+.stepped-bar__track .stepped-bar__stop.is-disabled {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  cursor: not-allowed;
+}
+
+/* Its tick is a focusable button, so the reason is reachable by keyboard. */
+button.stepped-bar__tick {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  cursor: help;
+}
+
+.stepped-bar__tick--disabled {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+button.stepped-bar__tick:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 /* ---- speed ---- */
@@ -52607,6 +52641,232 @@ button.composer__subthread-source-parent:hover {
 .composer__toggle:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* ---- access picker ----
+   The composer's access control: a 30px shield whose fill rises with the
+   level, opening the stepped level bar above it. Full Access keeps the
+   solid accent fill the old pill had, the one warning in the row. */
+.access-picker {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.access-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.access-picker__trigger:hover:not(:disabled),
+.access-picker__trigger:focus-visible,
+.access-picker--open .access-picker__trigger {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.access-picker__trigger:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.access-picker__trigger:disabled {
+  cursor: default;
+}
+
+.access-picker__trigger--empty {
+  color: var(--text-muted);
+}
+
+.access-picker__trigger.access-picker__trigger--auto {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.access-picker__trigger.access-picker__trigger--danger {
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill);
+  color: var(--button-text);
+}
+
+.access-picker__trigger--danger:hover:not(:disabled),
+.access-picker__trigger--danger:focus-visible,
+.access-picker--open .access-picker__trigger--danger {
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill-strong);
+  color: var(--button-text);
+}
+
+.access-shield__fill {
+  opacity: 0.9;
+}
+
+.access-picker__panel {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 330px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  white-space: normal;
+}
+
+.access-picker__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  padding: 6px 10px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.access-picker__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.access-picker__scope {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.access-picker__label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.access-picker__label-value {
+  margin-left: auto;
+  color: var(--accent-bright);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.access-picker__level {
+  padding: 0 10px 8px;
+}
+
+/* Access levels fill neutral; the accent is kept for Full Access. */
+.access-picker__level .stepped-bar__stop.is-on {
+  background: var(--text-secondary);
+}
+
+.access-picker__level .stepped-bar__track.is-hot .stepped-bar__stop.is-on {
+  background: var(--accent);
+}
+
+.access-picker__level .stepped-bar__stop.is-hover {
+  background: var(--border-subtle);
+  box-shadow: inset 0 0 0 1px var(--text-muted);
+}
+
+.access-picker__description {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.access-picker__description p {
+  margin: 0;
+}
+
+.access-picker__description p + p {
+  margin-top: 4px;
+}
+
+.access-picker__description b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.access-picker__description--hot {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.access-picker__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.access-picker__allow,
+.access-picker__cancel {
+  min-height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.access-picker__allow {
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill);
+  color: var(--button-text);
+  font-weight: 600;
+}
+
+.access-picker__allow:hover:not(:disabled) {
+  background: var(--accent-fill-strong);
+}
+
+.access-picker__cancel:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.access-picker__allow:focus-visible,
+.access-picker__cancel:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.access-picker__allow:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .composer__toggle.is-active {
