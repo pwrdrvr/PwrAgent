@@ -1842,6 +1842,23 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("advertises bounded shell capture on stock Codex only when the profile and thread allow it", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = createDesktopBackendRegistry({
+      codexClient, overlayStore: createOverlayStoreMock(),
+      resolveTokenMiserEnabled: () => false, resolveTokenMiserBoundedCommands: () => true,
+    });
+    try {
+      for (const enabled of [true, false]) {
+        await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd, tokenMiserEnabled: enabled });
+        const names = pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name);
+        expect(names.includes("capture_token_miser_command")).toBe(enabled);
+        expect(names).not.toContain("read_token_miser_output");
+        expect(codexClient.lastStartThreadParams?.config).toBeUndefined();
+      }
+    } finally { await registry.close(); }
+  });
+
   it("keeps Token Miser available for per-thread opt-in when its default is off", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = createDesktopBackendRegistry({

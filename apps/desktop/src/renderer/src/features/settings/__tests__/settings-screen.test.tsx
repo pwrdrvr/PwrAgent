@@ -5144,6 +5144,18 @@ describe("SettingsScreen", () => {
     await waitFor(() => expect(within(folderLine).getByRole("status")).toBeEmptyDOMElement());
   });
 
+  it("saves a bounded-command helper with stock Codex while managed Token Miser is off", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    const settings = createSettingsState(snapshot);
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={settings} onClose={() => undefined} />);
+    const choices = screen.getByRole("radiogroup", { name: "Helper for ambiguous command output" });
+    expect(within(choices).getByRole("radio", { name: "Local rules only" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(choices).getByRole("radio", { name: "Decision model" }));
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserBoundedHelper: "decision" } }));
+  });
+
   it("lets an available Token Miser experiment default threads on or off", async () => {
     const snapshot = createSnapshot();
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };

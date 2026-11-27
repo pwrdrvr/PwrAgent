@@ -1,5 +1,6 @@
 import { formatFilesystemPath } from "@pwragent/shared/path-display";
 import {
+  type BoundedCommandHelperMode,
   type DesktopSettingsConfigPatch,
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
@@ -12,6 +13,7 @@ import {
   useManagedRuntimeProgress,
 } from "./ManagedRuntimeProgress";
 import {
+  SegmentedField,
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
@@ -122,6 +124,8 @@ export function ExperimentalSettings(props: {
   const tokenMiserEnabled =
     props.snapshot.experimental.tokenMiserEnabled ??
     DEFAULT_TOKEN_MISER_ENABLED;
+  const boundedCommands = props.snapshot.experimental.tokenMiserBoundedCommands ?? DEFAULT_TOKEN_MISER_ENABLED;
+  const boundedHelper = props.snapshot.experimental.tokenMiserBoundedHelper ?? { value: "deterministic", source: "default" } as const;
   const tokenMiserFocusedSummariesEnabled =
     props.snapshot.experimental.tokenMiserFocusedSummariesEnabled ??
     { value: false, source: "default" as const };
@@ -255,7 +259,7 @@ export function ExperimentalSettings(props: {
       <SettingsSection
         eyebrow="Experimental"
         title="Token Miser"
-        description="Keep accidental walls of Codex tool output out of the parent thread while preserving the exact result for targeted retrieval."
+        description="Keep large command results available for retrieval and send bounded output to the parent thread."
         chip={
           tokenMiserWriteTarget === true
             ? "Installing"
@@ -264,7 +268,7 @@ export function ExperimentalSettings(props: {
               : tokenMiserInert
                 ? "Not running"
                 : !tokenMiserEnabled.value
-                  ? "Off"
+                  ? boundedCommands.value ? "Command capture" : "Off"
                   : tokenMiserSwitchPending
                     ? "Waiting for idle"
                     : tokenMiserStarting
@@ -303,12 +307,33 @@ export function ExperimentalSettings(props: {
             }}
           />
           <ToggleField
+            checked={boundedCommands.value}
+            disabled={props.saving}
+            label="Capture foreground command output"
+            sub="Offer approved Git diffs and focused tests with exact log retrieval on Codex, Claude and Antigravity."
+            source={sourceBadge(boundedCommands)}
+            onChange={(enabled) => props.onWriteConfig({ experimental: { tokenMiserBoundedCommands: enabled } })}
+          />
+          <SegmentedField<BoundedCommandHelperMode>
+            value={boundedHelper.value}
+            disabled={props.saving || !boundedCommands.value}
+            label="Helper for ambiguous command output"
+            sub="Repetitive progress is reduced locally. Codex uses your Token Miser helper. Decision model uses Defaults → Decisions and may incur per-call charges."
+            options={[
+              { label: "Local rules only", value: "deterministic" },
+              { label: "Codex helper", value: "codex" },
+              { label: "Decision model", value: "decision" },
+            ]}
+            source={sourceBadge(boundedHelper)}
+            onChange={(helper) => props.onWriteConfig({ experimental: { tokenMiserBoundedHelper: helper } })}
+          />
+          <ToggleField
             checked={tokenMiserDefaultEnabled.value}
-            disabled={props.saving || !tokenMiserEnabled.value}
+            disabled={props.saving || (!tokenMiserEnabled.value && !boundedCommands.value)}
             label="Enable on threads by default"
             switchQualifier="Token Miser"
             sub="Threads without an explicit override inherit this setting. Individual threads can still turn Token Miser on or off from the composer menu."
-            help="On preserves the original Token Miser behavior: every Codex thread uses it unless opted out. Off makes Token Miser available as a per-thread opt-in."
+            help="This default applies to the Token Miser features enabled above. Threads with a saved preference keep their own setting."
             source={sourceBadge(tokenMiserDefaultEnabled)}
             onChange={(enabled) => {
               return props.onTokenMiserDefaultEnabledChange(enabled);

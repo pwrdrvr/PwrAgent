@@ -668,7 +668,7 @@ describe("TokenMiserService", () => {
     async (scenario) => {
       const store = await createStore();
       store.startTurn("thread-1", "turn-1");
-      const delivery = await store.prepareToolDefinitionDelivery({
+      const delivery = await store.prepareOwnerTextDelivery({
         threadId: "thread-1", turnId: "turn-1", visibleText: "schema".repeat(500),
       });
       let output = delivery!.text;

@@ -76,6 +76,7 @@ import { getTokenMiserBridgeDescriptorPath, TokenMiserHookBridge } from "../toke
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import { TOKEN_MISER_DIAGNOSTICS_DIRNAME } from "../token-miser/token-miser-types";
 import { TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
+import { boundedCommandHelper } from "../token-miser/bounded-command-helper";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { AgentToolMcpServer } from "../agent-tools/agent-tool-mcp-server";
 import { createScratchProjectDirectory as defaultCreateScratchProjectDirectory } from "./scratch-projects";
@@ -416,6 +417,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     options?.acpSessionIdleCloseMs ?? ACP_SESSION_IDLE_CLOSE_MS;
   const codexThreadIdleUnsubscribeMs =
     options?.codexThreadIdleUnsubscribeMs ?? CODEX_THREAD_IDLE_UNSUBSCRIBE_MS;
+  const resolveTokenMiserBoundedCommands = options?.resolveTokenMiserBoundedCommands ?? (() => {
+    try {
+      return (settingsService ?? getDesktopSettingsService()).resolveTokenMiserBoundedCommands();
+    } catch {
+      return false;
+    }
+  });
   const resolveTokenMiserEnabledFn = options?.resolveTokenMiserEnabled ?? (() => {
     try {
       return (
@@ -978,7 +986,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       : options?.agentToolMcpServer ??
         new AgentToolMcpServer({
           resolveCallContext: (context) =>
-            ports.resolveAgentToolMcpCallContext(context),
+            ports.resolveAgentToolMcpCallContext(context, "invoke"),
           resolveCatalogs: async (context) => context.managedReview
             ? [{ id: "managed_review", router: managedReviewLedgerRouter }]
             : context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
@@ -1010,6 +1018,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               threadOrchestrationHandler: ports.threadOrchestrationHandler,
               tokenMiserStore: ports.tokenMiserStore,
               tokenMiserFocused: ports.tokenMiserService?.focused,
+              boundedCommandCapture: ["acp:antigravity", "claude", "codex"].includes(context.backend) && ports.resolveTokenMiserBoundedCommands()
+                ? ports.boundedCommandCapture : undefined,
               starMapHandler: ports.starMapHandler,
               threadTodoHandler: ports.threadTodoHandler,
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
@@ -1024,10 +1034,12 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
           isToolAdvertised: async (name, context) => isAgentToolAdvertisedLocally(name)
+            && (name !== "capture_token_miser_command" || !context.threadId
+              || ports.boundedCommandsEnabled(await ports.resolveTokenMiserThreadOverride(context.backend, context.threadId)))
             && (name !== "create_monitor_delegation" || !context.threadId
               || await ports.isJobMonitorCreationEnabled({ backend: context.backend, threadId: context.threadId }))
             && (name !== "manage_pwragent" || await ports.canManagePwrAgent(
-              await ports.resolveAgentToolMcpCallContext(context) ?? context, true)),
+              ports.resolveAgentToolMcpCallContext(context, "catalog") ?? context, true)),
           resolveToolResultReminder: (context) =>
             ports.takeAcpMonitorJobSuggestion(context),
         });
@@ -1038,7 +1050,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         (createsLiveCodexClient
           ? new AgentToolMcpServer({
               resolveCallContext: (context) =>
-                ports.resolveAgentToolMcpCallContext(context),
+                ports.resolveAgentToolMcpCallContext(context, "invoke"),
               authorizeToolCall: refuseUnlistedPdfTool,
               isToolAdvertised: isAgentToolAdvertisedLocally,
               resolveCatalogs: () => [
@@ -1760,6 +1772,14 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolveCodexFastAllowedFn,
     resolvePdfAnalysisEnabledFn,
     acpSessionIdleCloseMs,
+    resolveTokenMiserBoundedCommands,
+    resolveBoundedCommandHelper: () => {
+      try {
+        return boundedCommandHelper(settingsService ?? getDesktopSettingsService(), codexClient);
+      } catch {
+        return undefined;
+      }
+    },
     resolveTokenMiserEnabledFn,
     resolveTokenMiserDefaultEnabledFn,
     resolveTokenMiserPollingReviewsEnabledFn,

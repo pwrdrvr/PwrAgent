@@ -10,6 +10,14 @@ import {
 } from "./helpers/backend-registry-fixture";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { StateDb } from "../state/state-db";
+import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { expect, it, vi } from "vitest";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import type { AgentToolMcpRegistration } from "../agent-tools/agent-tool-mcp-server";
@@ -17,7 +25,7 @@ import { createDesktopBackendRegistry } from "../app-server/backend-registry-wir
 
 const threadId = "shared-provider-session-id";
 
-function createAcpMcpFixture() {
+function createAcpMcpFixture(tokenMiser = false, store?: SqliteOverlayStore) {
   const agentCapabilities = { loadSession: true, mcp: { http: true } };
   const providers = (["antigravity", "grok"] as const).map((name) => {
     const backend = `acp:${name}` as const;
@@ -42,9 +50,12 @@ function createAcpMcpFixture() {
     };
     return { agent, backend, transport, prompts, mcp: new McpClient({ name, version: "1.0.0" }) };
   });
+  const overlayStore = store ?? createOverlayStoreMock();
   const registry = createDesktopBackendRegistry({
     codexClient: new MockBackendClient({ threads: [] }),
-    overlayStore: createOverlayStoreMock(),
+    overlayStore,
+    resolveTokenMiserEnabled: () => false,
+    resolveTokenMiserBoundedCommands: () => tokenMiser,
     acpAgentStore: createAcpAgentStoreMock(providers.map(({ agent }) => agent)),
     acpSessionStore: createAcpSessionStoreMock([]),
     createAcpTransport: (agent) => providers.find(({ backend }) => backend === agent.backendId)!.transport,
@@ -87,6 +98,64 @@ function expectInactive(result: Awaited<ReturnType<typeof readSource>>) {
   });
 }
 
+it.skipIf(process.platform === "win32")("requires a fresh owner decision before issuing each native capture command", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "capture-approval-"));
+  const db = StateDb.open(path.join(dir, "state.db"));
+  const store = new SqliteOverlayStore(db);
+  const fixture = createAcpMcpFixture(true, store);
+  const { registry, providers: [provider] } = fixture;
+  const target = { backend: provider.backend, threadId };
+  try {
+    await fixture.connect(provider);
+    await store.setThreadTokenMiser({ ...target, enabled: true });
+    const turn = await registry.startTurn({ ...target, input: [{ type: "text", text: "Inspect the diff." }] }, "desktop");
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
+    const decide = async (action: "decline" | "accept" | "cancel") => {
+      const call = provider.mcp.callTool({ name: "call_pwragent_tool", arguments: {
+        toolName: "capture_token_miser_command", arguments: { command: "git diff" },
+      } });
+      const request = await vi.waitFor(() => {
+        const pending = registry.getPendingRequestForThread(target);
+        expect(pending?.params.message).toContain("git diff");
+        return pending!;
+      });
+      expect(request.params.turnId).toBe(turn.turnId);
+      expect(request.method).toBe("mcpServer/elicitation/request");
+      await registry.submitServerRequest({ ...turn, requestId: request.params.requestId, response: { action, content: null, _meta: null } });
+      const result = await call;
+      expect(JSON.stringify(result.content)).toContain(action === "accept" ? "objectId" : "declined");
+      return result.structuredContent;
+    };
+    await decide("decline");
+    const { result: prepared, writes } = await measureSqliteWrites(() => decide("accept"));
+    expectSqliteWriteBudget({ scenario: "bounded-command-retention-approval", writes,
+      note: "One owner-approved ACP command capture, from MCP preparation through receipt of the native command." });
+    await decide("cancel");
+    if (!prepared || typeof prepared !== "object" || !("command" in prepared) || typeof prepared.command !== "string"
+      || !("objectId" in prepared) || typeof prepared.objectId !== "string") throw new Error("Missing command or capture ID.");
+    const { command: native, objectId } = prepared;
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await writeFile(path.join(dir, "headers.css"), "thead { position: sticky }\n");
+    execFileSync("git", ["add", "headers.css"], { cwd: dir });
+    await writeFile(path.join(dir, "headers.css"), "thead { position: static }\n");
+    const call = { toolCallId: "native", name: "run_command", kind: "execute", rawInput: { CommandLine: native } };
+    provider.transport.emitSessionUpdate(threadId, { ...call, sessionUpdate: "tool_call", status: "in_progress" });
+    const receipt = execFileSync("/bin/sh", ["-c", native], { cwd: dir, encoding: "utf8" });
+    provider.transport.emitSessionUpdate(threadId, { ...call, sessionUpdate: "tool_call_update", status: "completed",
+      content: [{ type: "content", content: { type: "text", text: receipt } }] });
+    await vi.waitFor(async () => {
+      const summary = await provider.mcp.callTool({ name: "call_pwragent_tool", arguments: {
+        toolName: "capture_token_miser_command", arguments: { objectId },
+      } });
+      expect(JSON.stringify(summary.content)).toContain("+thead { position: static }");
+    });
+  } finally {
+    await fixture.close();
+    db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 it("admits ACP MCP calls during their own prompt and rejects them after completion", async () => {
   const fixture = createAcpMcpFixture();
   const { registry, providers: [antigravity, grok] } = fixture;
@@ -97,9 +166,7 @@ it("admits ACP MCP calls during their own prompt and rejects them after completi
     for (const provider of fixture.providers) {
       await fixture.connect(provider);
       expect((await provider.mcp.listTools()).tools).toContainEqual(expect.objectContaining({ name: "get_current_turn_input_source" }));
-      expect(resolutionWarnings()).toContainEqual([
-        "MCP active turn resolution failed", expect.objectContaining({ backend: provider.backend, threadId, matchingTurnCount: 0 }),
-      ]);
+      expect(resolutionWarnings()).toEqual([]);
     }
     expect(callRejections()).toEqual([]);
     const idleWarningCount = resolutionWarnings().length;
@@ -123,6 +190,9 @@ it("admits ACP MCP calls during their own prompt and rejects them after completi
       provider.prompts[0].resolve({ stopReason: "end_turn" });
       expect(await ended).toBe("turn/completed");
       expectInactive(await readSource(provider.mcp));
+      expect(resolutionWarnings()).toContainEqual([
+        "MCP active turn resolution failed", expect.objectContaining({ backend: provider.backend, threadId, matchingTurnCount: 0 }),
+      ]);
       expect(callRejections()).toContainEqual([
         "MCP tool rejected: no unique active turn", expect.objectContaining({ backend: provider.backend, threadId }),
       ]);

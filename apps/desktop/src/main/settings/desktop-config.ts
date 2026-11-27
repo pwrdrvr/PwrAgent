@@ -89,6 +89,7 @@ import type {
   DesktopOnboardingCompletedSource,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
+  BoundedCommandHelperMode,
   DesktopSettingsConfigPatch,
   DesktopSpendAlertPolicy,
   DesktopTextSize,
@@ -235,6 +236,8 @@ export type DesktopSettingsConfig = {
     threadPricingDisplayCodexCredits?: boolean;
     tokenMiserEnabled?: boolean;
     tokenMiserDefaultEnabled?: boolean;
+    tokenMiserBoundedCommands?: boolean;
+    tokenMiserBoundedHelper?: BoundedCommandHelperMode;
     codexToolDiscovery?: boolean;
     researchEnabled?: boolean;
     resourceCheckoutsEnabled?: boolean;
@@ -1159,6 +1162,14 @@ export function desktopSettingsPatchToEdits(
       ["experimental", "token_miser_enabled"],
       patch.experimental.tokenMiserEnabled,
     );
+  }
+  if (patch.experimental?.tokenMiserBoundedCommands !== undefined) {
+    set(["experimental", "token_miser_bounded_commands"], patch.experimental.tokenMiserBoundedCommands);
+  }
+  if (patch.experimental?.tokenMiserBoundedHelper !== undefined) {
+    const helper = readBoundedCommandHelper(patch.experimental.tokenMiserBoundedHelper);
+    if (!helper) throw new Error("Unknown bounded command helper.");
+    set(["experimental", "token_miser_bounded_helper"], helper);
   }
   if (patch.experimental?.tokenMiserFocusedSummariesEnabled !== undefined) {
     set(
@@ -2721,6 +2732,8 @@ function normalizeDesktopConfig(
         readBoolean(experimental?.token_miser_diagnostics_enabled),
       tokenMiserPollingReviewsEnabled:
         readBoolean(experimental?.token_miser_polling_reviews_enabled),
+      tokenMiserBoundedHelper: readBoundedCommandHelper(experimental?.token_miser_bounded_helper),
+      tokenMiserBoundedCommands: readBoolean(experimental?.token_miser_bounded_commands),
       tokenMiserDefaultEnabled:
         readBoolean(experimental?.token_miser_default_enabled),
       codexToolDiscovery: readBoolean(experimental?.codex_tool_discovery),
@@ -3630,6 +3643,10 @@ function isDesktopChatReplyComposer(
     || value === "tiptap-wysiwyg-markdown-chips"
     || value === "custom-widget-chips"
   );
+}
+
+function readBoundedCommandHelper(value: unknown): BoundedCommandHelperMode | undefined {
+  return value === "deterministic" || value === "decision" || value === "codex" ? value : undefined;
 }
 
 function readToolUpdateMode(

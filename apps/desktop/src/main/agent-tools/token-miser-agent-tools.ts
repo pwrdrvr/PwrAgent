@@ -1,3 +1,5 @@
+import { boundedCommandTools } from "./bounded-command-tool";
+import type { BoundedCommandCapture } from "../token-miser/bounded-command";
 import { retrievalSuccess } from "./token-miser-delivery";
 import { buildFocusedTokenMiserTools } from "./token-miser-focused-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
@@ -12,11 +14,13 @@ import type { TokenMiserGroupBatchOperation } from "../token-miser/token-miser-s
 export function buildTokenMiserToolDefinitions(
   store?: TokenMiserStore,
   focused?: TokenMiserFocusedSummaries,
+  capture?: BoundedCommandCapture,
 ): AgentToolDefinition[] {
   if (!store) {
-    return [];
+    return boundedCommandTools(capture);
   }
   return [
+    ...boundedCommandTools(capture, store),
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "search_token_miser_output",

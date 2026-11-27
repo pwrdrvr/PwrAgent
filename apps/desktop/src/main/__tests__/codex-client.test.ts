@@ -14304,6 +14304,31 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("interrupts only the cancelled structured helper and unsubscribes it", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    MockTransport.threadStartResult = { thread: { id: "capture-helper" }, instructionSources: [] };
+    MockTransport.turnStartResult = { turn: { id: "capture-turn" } };
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const controller = new AbortController();
+    try {
+      const result = client.generateStructuredObject({
+        helper: "token_miser_evaluation", signal: controller.signal, disableExecution: true,
+        prompt: "Select an excerpt.", schema: { type: "object" }, isMatch: () => false, timeoutMs: 2_000,
+      });
+      const transport = await waitForLatestTransportRequest("turn/start");
+      controller.abort();
+      await expect(result).resolves.toMatchObject({ status: "failed" });
+      const cleanup = transport.sentMessages.map((message) => JSON.parse(message))
+        .filter((item) => item.method === "turn/interrupt" || item.method === "thread/unsubscribe");
+      expect(cleanup.map(({ method, params }) => [method, params])).toEqual([
+        ["turn/interrupt", { threadId: "capture-helper", turnId: "capture-turn" }],
+        ["thread/unsubscribe", { threadId: "capture-helper" }],
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it.each(["structured", "title"])("lets turnTimeoutMs bound %s turn/start, which can carry the answer", async (kind) => {
     // `turn/start` returns the finished structured record on some servers
     // (the immediate-record branch exists for exactly that), so bounding it

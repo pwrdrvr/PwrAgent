@@ -56,6 +56,7 @@ import type { ThreadSearchService } from "../thread-search/thread-search-service
 import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
 import type { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
+import type { BoundedCommandHelper } from "../token-miser/bounded-command-helper";
 import type { TokenMiserHookBridge } from "../token-miser/token-miser-hook-bridge";
 import type { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import type { TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
@@ -179,6 +180,7 @@ export type DesktopBackendRegistryOptions = {
   /** Test seam: the timer of the retry after a failed provider read. */
   codexProviderCatalogRetryTimer?: CodexProviderCatalogRetryTimer;
   resolvePdfAnalysisEnabled?: () => boolean;
+  resolveTokenMiserBoundedCommands?: () => boolean;
   resolveTokenMiserEnabled?: () => boolean;
   resolveTokenMiserPollingReviewsEnabled?: () => boolean;
   /** Test seam: how long an ACP session idles before it is closed. */
@@ -275,6 +277,8 @@ export interface RegistryDependencies {
   resolveCodexFastAllowedFn: () => boolean;
   resolvePdfAnalysisEnabledFn: () => boolean;
   acpSessionIdleCloseMs: number;
+  resolveTokenMiserBoundedCommands: () => boolean;
+  resolveBoundedCommandHelper: () => BoundedCommandHelper | undefined;
   resolveTokenMiserEnabledFn: () => boolean;
   resolveTokenMiserDefaultEnabledFn: () => boolean;
   resolveTokenMiserPollingReviewsEnabledFn: () => boolean;

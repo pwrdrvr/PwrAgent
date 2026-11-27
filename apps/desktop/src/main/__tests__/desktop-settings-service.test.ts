@@ -1955,6 +1955,37 @@ describe("DesktopSettingsService", () => {
       return { ensureManaged, service };
     }
 
+    it("keeps the stock command for a profile opting in only to bounded shell output", async () => {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      fs.writeFileSync(configPath, "[experimental]\ntoken_miser_bounded_commands = true\n");
+      const ensureManaged = vi.fn(async () => managedRuntime());
+      const service = new DesktopSettingsService({
+        configPath, env: {}, secretStore: new MemoryDesktopSecretStore(), ensureManagedCodexRuntime: ensureManaged,
+        codexDiscoveryCoordinator: {
+          invalidate: vi.fn(), resolve: vi.fn(),
+          discover: async () => ({
+            candidates: [{ command: "/path/codex", source: "path", executable: true, selected: true, version: "0.169.0" }],
+            selectedCommand: "/path/codex",
+          }),
+        },
+      });
+      expect(service.resolveTokenMiserBoundedCommands()).toBe(true);
+      expect(service.resolveTokenMiserBoundedHelper()).toBe("deterministic");
+      for (const helper of ["decision", "codex", "deterministic"] as const) {
+        await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedHelper: helper } });
+        expect(service.resolveTokenMiserBoundedHelper()).toBe(helper);
+        expect((await service.readSettingsProjection()).experimental.tokenMiserBoundedHelper).toEqual({ value: helper, source: "config" });
+      }
+      await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedCommands: false } });
+      expect(service.resolveTokenMiserBoundedCommands()).toBe(false);
+      await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedCommands: true } });
+      expect(service.resolveTokenMiserEnabled()).toBe(false);
+      expect(service.resolveManagedCodexEnabled()).toBe(false);
+      await service.refreshCodexDiscovery(issueProviderDiscoveryPermit("settings-user-action"));
+      await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: "/path/codex" });
+      expect(ensureManaged).not.toHaveBeenCalled();
+    });
+
     it("downloads and selects the build without Token Miser", async () => {
       const configPath = path.join(createTempRoot(), "config.toml");
       const { ensureManaged, service } = buildService(configPath);

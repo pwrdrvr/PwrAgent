@@ -19,7 +19,7 @@ describe("TokenMiserStore", () => {
     const store = await createStore();
     store.startTurn("thread-owner", "turn-1");
     const changes = store.stateDb.raw.prepare("SELECT total_changes() AS count").get();
-    const delivery = await store.prepareToolDefinitionDelivery({
+    const delivery = await store.prepareOwnerTextDelivery({
       threadId: "thread-owner", turnId: "turn-1", visibleText: '{"inputSchema":{"type":"object"}}',
     });
     expect(delivery).toBeDefined();
@@ -34,10 +34,10 @@ describe("TokenMiserStore", () => {
     expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: altered })).toEqual([{ text: altered, retrieval: false }]);
     expect(await store.confirmModelVisibleRetrievals({ threadId: "thread-owner", output: text })).toBe(0);
     expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: text })).toEqual([{ text, retrieval: false }]);
-    const stale = await store.prepareToolDefinitionDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "schema" });
+    const stale = await store.prepareOwnerTextDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "schema" });
     store.startTurn("thread-owner", "turn-2");
     expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: stale!.text })).toEqual([{ text: stale!.text, retrieval: false }]);
-    expect(await store.prepareToolDefinitionDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "stale" })).toBeUndefined();
+    expect(await store.prepareOwnerTextDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "stale" })).toBeUndefined();
     expect(store.stateDb.raw.prepare("SELECT total_changes() AS count").get()).toEqual(changes);
   });
 

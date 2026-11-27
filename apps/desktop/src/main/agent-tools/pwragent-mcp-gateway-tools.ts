@@ -109,7 +109,7 @@ export function buildMcpGatewayToolDefinitions(service?: McpGatewayToolService, 
         const visibleText = JSON.stringify(result);
         const protect = store && context.backend === "codex" && context.turnId;
         const delivery = protect
-          ? await store.prepareToolDefinitionDelivery({ threadId: context.threadId, turnId: protect, visibleText })
+          ? await store.prepareOwnerTextDelivery({ threadId: context.threadId, turnId: protect, visibleText })
           : undefined;
         if (protect && !delivery) return agentToolFailure({ code: "schema_delivery_unavailable", message: "Exact schema delivery is unavailable for this turn. Retry discovery." });
         return { ok: true, data: result, contentItems: [{ type: "inputText", text: delivery?.text ?? visibleText }] };

@@ -884,7 +884,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     const second = await tokenMiserStore.store({
       ...entry, objectId: randomUUID(), toolUseId: "second-gate", output: "xxxx",
     });
-    const catalog = await tokenMiserStore.prepareToolDefinitionDelivery({ threadId: entry.threadId, turnId: entry.turnId, visibleText: "schemas" });
+    const catalog = await tokenMiserStore.prepareOwnerTextDelivery({ threadId: entry.threadId, turnId: entry.turnId, visibleText: "schemas" });
     await tokenMiserStore.confirmModelVisibleRetrievals({ threadId: entry.threadId, output: catalog!.text });
     const another = await tokenMiserStore.prepareRetrievalDelivery({ objectId: second.objectId, threadId: entry.threadId, visibleText: "xxxx" });
     await tokenMiserStore.confirmModelVisibleRetrievals({ threadId: entry.threadId, output: another!.text });

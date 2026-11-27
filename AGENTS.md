@@ -29,6 +29,8 @@ Read the task-specific references below before doing the work they cover. They c
 - Give `sed` an explicit file and line range; it does not use an ignore file. Use the minimum context needed for the next decision.
 - Do not combine content-producing reads and searches with `&&`: their standard output becomes one tool result.
 - For an intentionally broad scan, redirect all output to an ignored `.local/` log. Report the exact command, exit state, matching file and result counts, failures and warnings, then return only a bounded tail or the fields needed next.
+- For native file reads, locate the symbol and request its line range. Start Git inspection with `git diff --stat`, then open the relevant hunks.
+- Run the smallest test target that exercises the change. For verbose commands, archive both output streams, preserve the original exit status, and return failing test names and the relevant error block. When available, `capture_token_miser_command` provides an exact-output handle for supported foreground commands.
 - Do not use tool-result truncation as an output budget.
 
 ## Ownership and Data Boundaries

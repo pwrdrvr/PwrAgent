@@ -126,7 +126,16 @@ type PendingRetrievalDelivery = {
   visibleTextOffset: number;
   kind?: "summary" | "source";
   wrappedText: string;
+  allowJsonString?: boolean;
 };
+
+function deliveryTextForms(pending: PendingRetrievalDelivery): string[] {
+  // text({ objectId, summary }) encodes the entire summary as a JSON string.
+  // Only the exact issued value, including both receipts, is eligible.
+  return pending.allowJsonString
+    ? [pending.wrappedText, JSON.stringify(pending.wrappedText)]
+    : [pending.wrappedText];
+}
 
 export type TokenMiserUsageSummary = {
   interceptionCount: number;
@@ -647,14 +656,15 @@ export class TokenMiserStore {
     return this.prepareExactDelivery({ ...params, generation, turnId: metadata.turnId });
   }
 
-  /** Host-owned tool schemas must survive reduction, without charging a retrieval.
-   * Callers supply generated catalog text, never arbitrary agent-provided output.
+  /** Host-issued schemas and bounded command excerpts can pass through Code Mode together.
+   * Issue only for an owner-produced result after its normal policy and identity checks.
    * The receipt is ephemeral; issuing or consuming it makes no SQLite writes.
    */
-  async prepareToolDefinitionDelivery(params: {
+  async prepareOwnerTextDelivery(params: {
     threadId: string;
     turnId: string;
     visibleText: string;
+    allowJsonString?: boolean;
   }): Promise<TokenMiserRetrievalDelivery | undefined> {
     if (!this.isCurrentTurn(params.threadId, params.turnId) || await this.isArchived(params.threadId)) return undefined;
     const generation = await this.readRetentionGeneration(params.threadId);
@@ -667,6 +677,7 @@ export class TokenMiserStore {
     threadId: string;
     turnId: string;
     visibleText: string;
+    allowJsonString?: boolean;
     kind?: "summary" | "source";
     generation: string;
   }): TokenMiserRetrievalDelivery | undefined {
@@ -689,6 +700,7 @@ export class TokenMiserStore {
       visibleTextOffset: begin.length + 1,
       kind: params.kind,
       wrappedText,
+      allowJsonString: params.allowJsonString,
     }))) return undefined;
     this.pendingRetrievalDeliveries.set(deliveryId, { createdAt: now, threadId: params.threadId, turnId: params.turnId });
     return { deliveryId, text: wrappedText };
@@ -714,10 +726,12 @@ export class TokenMiserStore {
         const pending = JSON.parse(text) as PendingRetrievalDelivery;
         if (pending.generation !== generation) return [];
         const matches: Array<{ start: number; end: number }> = [];
-        let start = params.output.indexOf(pending.wrappedText);
-        while (start >= 0) {
-          matches.push({ start, end: start + pending.wrappedText.length });
-          start = params.output.indexOf(pending.wrappedText, start + pending.wrappedText.length);
+        for (const form of deliveryTextForms(pending)) {
+          let start = params.output.indexOf(form);
+          while (start >= 0) {
+            matches.push({ start, end: start + form.length });
+            start = params.output.indexOf(form, start + form.length);
+          }
         }
         return matches;
       })
@@ -758,7 +772,11 @@ export class TokenMiserStore {
           return [];
         }
         const pending = JSON.parse(text) as PendingRetrievalDelivery;
-        return [{ deliveryId, outputOffset: params.output.indexOf(pending.wrappedText), pending }];
+        for (const form of deliveryTextForms(pending)) {
+          const outputOffset = params.output.indexOf(form);
+          if (outputOffset >= 0) return [{ deliveryId, outputOffset, pending }];
+        }
+        return [];
       })
       .filter((candidate) => candidate.outputOffset >= 0)
       .sort((left, right) => left.outputOffset - right.outputOffset);
@@ -770,7 +788,7 @@ export class TokenMiserStore {
     for (const { deliveryId, outputOffset, pending } of candidates) {
       this.abandonRetrievalDelivery(deliveryId);
       if (pending.generation !== generation) continue;
-      // Catalog delivery is protected transport, not retrieval of a saved result.
+      // Host-issued text has no managed-output ledger charge.
       if (!pending.objectId) continue;
       let visibleCharacters = 0;
       let occurrence = outputOffset;
