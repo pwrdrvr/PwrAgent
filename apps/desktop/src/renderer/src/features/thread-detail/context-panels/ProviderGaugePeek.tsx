@@ -6,6 +6,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   describeRateLimitRow,
   formatBackendPlanType,
+  isCreditsRateLimit,
   isIndividualRateLimit,
   selectVisibleRateLimits,
   type BackendRateLimitSummary,
@@ -61,6 +62,11 @@ export type ProviderPeekEntry = {
   backend: BackendSummary;
   /** Its caps at risk; the latch decides, as for a 5h row. */
   caps: ProviderPeekCap[];
+  /**
+   * Its credit balance, as the AI providers panel shows it: what a turn
+   * spends once a window runs out.
+   */
+  credits?: BackendRateLimitSummary;
   scopes: ProviderPeekScope[];
   /** The fullest shown allowance or cap, which orders the providers. */
   usedPercent?: number;
@@ -144,6 +150,7 @@ export function providerPeekEntries(
     .filter((backend) => backend.available)
     .map((backend, order) => {
       const { scopes, caps } = providerPeekScopes(backend, now);
+      const credits = selectVisibleRateLimits(backend).find(isCreditsRateLimit);
       const percents = [
         ...caps.map((cap) => cap.usedPercent),
         ...scopes.flatMap((scope) => scope.usedPercent === undefined ? [] : [scope.usedPercent]),
@@ -151,7 +158,13 @@ export function providerPeekEntries(
       const usedPercent = percents.length ? Math.max(...percents) : undefined;
       return {
         order,
-        entry: { backend, caps, scopes, ...(usedPercent === undefined ? {} : { usedPercent }) } satisfies ProviderPeekEntry,
+        entry: {
+          backend,
+          caps,
+          ...(credits ? { credits } : {}),
+          scopes,
+          ...(usedPercent === undefined ? {} : { usedPercent }),
+        } satisfies ProviderPeekEntry,
       };
     });
   return entries
@@ -291,14 +304,15 @@ export function ProviderGaugePeekCard(props: {
       </div>
       {entries.length ? (
         <ul className="provider-peek__list">
-          {entries.map(({ backend, caps, scopes }) => (
+          {entries.map(({ backend, caps, credits, scopes }) => (
             <li key={backend.kind} className="provider-peek__provider">
               <span className="provider-peek__name">
                 <span aria-hidden="true" className="backend-status-list__dot" />
                 {backend.label}
               </span>
-              {/* The provider's own cap leads while at risk: it binds every scope. */}
-              {caps.length ? (
+              {/* The provider's own cap leads while at risk: it binds every
+                  scope. Its credit balance follows, as on the panel. */}
+              {caps.length || credits ? (
                 <div className="provider-peek__scope">
                   {caps.map((cap) => (
                     <PeekLimitRow
@@ -310,6 +324,7 @@ export function ProviderGaugePeekCard(props: {
                       warning={cap.usedPercent >= 100}
                     />
                   ))}
+                  {credits ? <PeekLimitRow window="Credits" limit={credits} now={now} account={undefined} /> : null}
                 </div>
               ) : null}
               {scopes.length ? scopes.map((entry) => {
@@ -335,7 +350,7 @@ export function ProviderGaugePeekCard(props: {
                     ) : null}
                   </div>
                 );
-              }) : (
+              }) : credits ? null : (
                 <span className="provider-peek__none">
                   {backend.account?.planType
                     ? `${formatBackendPlanType(backend, backend.account.planType)} · no limits reported`

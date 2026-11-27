@@ -211,9 +211,9 @@ describe("ProviderStatusPanel", () => {
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Available")).toBeInTheDocument();
     expect(valueFor("Account")).toHaveTextContent("you@example.com");
-    // Codex sends the plan id in lowercase; credits share the plan's line.
-    expect(valueFor("Plan")).toHaveTextContent(/^Pro · 100 credits$/);
-    expect(screen.queryByText("Credits", { selector: "dt" })).not.toBeInTheDocument();
+    // Codex sends the plan id in lowercase; the balance has its own row.
+    expect(valueFor("Plan")).toHaveTextContent(/^Pro$/);
+    expect(valueFor("Credits")).toHaveTextContent(/^100$/);
     // Limits read "% used" as the Usage Activity window does, Weekly first,
     // and a single-scope provider has no scope subheader.
     expect([...document.querySelectorAll<HTMLElement>(".provider-limits__row")].map((row) => row.dataset.window))
@@ -306,13 +306,37 @@ describe("ProviderStatusPanel", () => {
   it("identifies a Free plan even without an account email", () => {
     render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { type: "chatgpt", planType: "free", requiresOpenaiAuth: true } }]} />);
     expect(valueFor("Account")).toHaveTextContent(/^ChatGPT account$/);
-    expect(valueFor("Plan")).toHaveTextContent(/^Free · 100 credits$/);
+    expect(valueFor("Plan")).toHaveTextContent(/^Free$/);
+    expect(valueFor("Credits")).toHaveTextContent(/^100$/);
   });
 
   it("keeps a credit balance off a Plan line that names no plan", () => {
     render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { type: "apiKey", requiresOpenaiAuth: true } }]} />);
     expect(valueFor("Plan")).toHaveTextContent(/^API billing$/);
-    expect(valueFor("Credits")).toHaveTextContent(/^100 credits$/);
+    expect(valueFor("Credits")).toHaveTextContent(/^100$/);
+  });
+
+  it("shows the balance on its own row while the Weekly window is out", () => {
+    const out = {
+      ...codexBackend,
+      rateLimits: [
+        { name: "Weekly limit", usedPercent: 100, windowMinutes: 10_080 },
+        { name: "Credits", limitId: "credits", windowKey: "credits" as const, hasCredits: true, remaining: 29_093 },
+      ],
+    };
+    render(<ProviderStatusPanel backends={[out]} />);
+    expect(valueFor("Plan")).toHaveTextContent(/^Pro$/);
+    expect(valueFor("Credits")).toHaveTextContent(/^29,093$/);
+    expect(limitValue("Weekly")).toHaveTextContent(/^100% used/);
+  });
+
+  it("names an unlimited balance in its own row", () => {
+    const unlimited = {
+      ...codexBackend,
+      rateLimits: [{ name: "Credits", limitId: "credits", windowKey: "credits" as const, unlimited: true }],
+    };
+    render(<ProviderStatusPanel backends={[unlimited]} />);
+    expect(valueFor("Credits")).toHaveTextContent(/^Unlimited$/);
   });
 
   it("identifies a signed-out account without implying a Free plan", () => {

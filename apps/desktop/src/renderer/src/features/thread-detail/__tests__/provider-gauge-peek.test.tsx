@@ -231,6 +231,52 @@ describe("AI provider gauge peek", () => {
     });
   });
 
+  // The balance a turn spends once a window runs out, shown as the panel shows it.
+  describe("a provider's credit balance", () => {
+    const credits = { name: "Credits", limitId: "credits", windowKey: "credits" as const, hasCredits: true, remaining: 29_093 };
+    const panel = (backends: BackendSummary[]) => (
+      <ThreadContextPanel
+        activeTab="info"
+        backends={backends}
+        pinned={false}
+        thread={thread}
+        onActiveTabChange={vi.fn()}
+      />
+    );
+    const windows = (shown: HTMLElement) =>
+      [...shown.querySelectorAll(".provider-peek__window")].map((node) => node.textContent);
+
+    it("shows beside an exhausted Weekly window", async () => {
+      mockLayout();
+      render(panel([backend("codex", "OpenAI", [
+        { name: "Weekly limit", usedPercent: 100, windowMinutes: 10_080 },
+        credits,
+      ])]));
+      const shown = await openPeek();
+      expect(windows(shown)).toEqual(["Credits", "Weekly"]);
+      const rows = shown.querySelectorAll(".provider-peek__limit");
+      expect(rows[0]).toHaveTextContent("29,093");
+      expect(rows[1]).toHaveTextContent("100% used");
+    });
+
+    it("stands in for limits when it is all the provider reports", async () => {
+      mockLayout();
+      render(panel([backend("codex", "OpenAI", [credits])]));
+      const shown = await openPeek();
+      expect(windows(shown)).toEqual(["Credits"]);
+      expect(shown).not.toHaveTextContent("No limits reported");
+    });
+
+    it("stays out when the provider has no credits", async () => {
+      mockLayout();
+      render(panel([backend("codex", "OpenAI", [
+        { name: "Weekly limit", usedPercent: 40, windowMinutes: 10_080 },
+        { ...credits, hasCredits: false, remaining: 0 },
+      ])]));
+      expect(windows(await openPeek())).toEqual(["Weekly"]);
+    });
+  });
+
   // A Codex business account's Individual limit has no window, so it is no
   // allowance's row; the peek used to lead with it as the fullest limit.
   describe("a provider's Individual cap", () => {
