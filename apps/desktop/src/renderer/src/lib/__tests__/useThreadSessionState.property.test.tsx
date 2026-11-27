@@ -962,3 +962,87 @@ it("keeps a completed tool above the echo of a later repeated send", () => ledge
     ]);
   } finally { clock.mockRestore(); }
 }));
+
+// Seed -1743549395, path "24:5:15:30:23:25:32:30:31:31:31:32:34:34:34:34:35:37:37:37:37".
+// Turn 4's prompt (missed echo) and live tool complete before turns 5-6 land on
+// a newest page that restarts history. The older page returning turns 3-4 must
+// keep turn 4's prompt (ordinal 12) before its tool (ordinal 13) rather than
+// stranding the prompt in `tail` after `loadedHistory`.
+it("keeps a skipped turn's prompt above its tool when an older page returns that turn", () => ledgerLifetime.run(async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("send", 0, false),
+      new LedgerCommand("read", 0, false),
+      new LedgerCommand("start", 0, false),
+      new LedgerCommand("item", 0, true),
+      new LedgerCommand("complete", 0, false),
+      new LedgerCommand("start", 0, false),
+      new LedgerCommand("item", 0, false),
+      new LedgerCommand("older", 0, false),
+      new LedgerCommand("complete", 0, false),
+      new LedgerCommand("start", 0, false),
+    ]);
+  } finally { clock.mockRestore(); }
+}));
+
+// Without a history restart (`previousPageTurnIds` is empty on a brand-new
+// thread), turn 1's assistant message stays in `tail` while its live tool is
+// pruned by a newest page [turn-2, turn-3] racing turn 4. Loading the older
+// page [turn-1/item-0, turn-1/item-1] must retire turn-1/item-0 into
+// `loadedHistory` so turn 1 stays ordered [item-0, item-1].
+it("retires a non-provider-page prefix row from tail when an older page returns the rest of its turn", () => ledgerLifetime.run(async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  const model: Model = { turn: 0, ledger: [] };
+  try {
+    await withLedgerExample(model, async (real) => {
+      await fc.asyncModelRun(() => ({ model, real }), [
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, false),
+        new LedgerCommand("item", 0, true),
+        new LedgerCommand("complete", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, false),
+        new LedgerCommand("complete", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, false),
+        new LedgerCommand("complete", 0, false),
+        new LedgerCommand("read", 0, false),
+        new LedgerCommand("start", 0, false),
+        new LedgerCommand("item", 0, false),
+        new LedgerCommand("complete", 0, false),
+      ]);
+      await drain(model, real);
+      await new LedgerCommand("older", 0, false).run(model, real);
+      await drain(model, real);
+      assertLedger(model, real);
+      expect(logicalKeys(real.result.current.entries), real.trace.join(" → ")).toEqual(model.ledger.map(key));
+    });
+  } finally { clock.mockRestore(); }
+}));
+
+// Same failure mode without a missed echo and across a multi-page skip: turn 4's
+// echoed prompt and tool complete before turns 5-8 push turn 4 two pages back.
+it("keeps an echoed prompt and tool turn ordered across multi-page history restarts", () => ledgerLifetime.run(async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  try {
+    await runToQuiescence(0, false, [
+      new LedgerCommand("send", 0, false),
+      new LedgerCommand("read", 0, false),
+      new LedgerCommand("start", 1, false),
+      new LedgerCommand("item", 0, true),
+      new LedgerCommand("complete", 0, false),
+      new LedgerCommand("start", 0, false),
+      new LedgerCommand("item", 0, false),
+      new LedgerCommand("older", 0, false),
+      new LedgerCommand("complete", 0, false),
+      new LedgerCommand("start", 0, false),
+      new LedgerCommand("item", 0, false),
+      new LedgerCommand("complete", 0, false),
+      new LedgerCommand("start", 0, false),
+      new LedgerCommand("item", 0, false),
+      new LedgerCommand("complete", 0, false),
+      new LedgerCommand("start", 0, false),
+    ]);
+  } finally { clock.mockRestore(); }
+}));

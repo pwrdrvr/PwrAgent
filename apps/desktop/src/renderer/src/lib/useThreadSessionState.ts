@@ -1073,27 +1073,15 @@ function transcriptTurnIds(entries: AppServerThreadEntry[]): Set<string> {
   return new Set(entries.flatMap((entry) => entry.turn?.id ? [entry.turn.id] : []));
 }
 
-function withoutTranscriptTurns(
-  response: AppServerReadThreadResponse,
-  turnIds: ReadonlySet<string>,
-): AppServerReadThreadResponse {
-  const entries = response.replay.entries.filter((entry) =>
-    !entry.turn?.id || !turnIds.has(entry.turn.id));
-  return {
-    ...response,
-    replay: {
-      ...response.replay,
-      entries,
-      messages: transcriptMessagesForEntries(entries, response.replay.messages),
-    },
-  };
-}
-
 // A tail row can outlive the newest pages as a row seen only on the live
-// stream, under its optimistic or live id: a sent message whose turn no newest
-// page held. When an older page returns that turn, the page row is the same
-// item under its provider id. Adopt that id in place, so the history page
-// drops its copy by id instead of rendering the item twice.
+// stream, under its optimistic/live id or its provider id (for example, a
+// prompt whose sibling tool row was pruned while a newer page settled). When
+// an older page returns that turn, keeping the row in `tail` while the older
+// page inserts the rest of the turn into `loadedHistory` splits and inverts
+// the turn across the history/tail boundary. Retire covered non-provider-page
+// prefix rows from `tail` so the older page keeps the whole turn intact in
+// `loadedHistory`; adopt ids in place only for matched rows after a provider
+// turn.
 function adoptOlderPageIdentities(
   tail: AppServerReadThreadResponse,
   page: AppServerReadThreadResponse,
@@ -1114,57 +1102,91 @@ function adoptOlderPageIdentities(
     const turnId = transcriptEntryTurnId(entry);
     return turnId !== undefined && providerPageTurnIds?.has(turnId) === true;
   });
+  const isBeforeProviderPage = (index: number) =>
+    firstProviderRow !== -1 && index < firstProviderRow;
   const newestPageTurnId = page.replay.entries.findLast((entry) => entry.turn?.id)?.turn?.id;
-  const candidates = tail.replay.entries.filter((entry, index) => {
-    if (pageIds.has(entry.id)) {
-      return false;
-    }
+  const retiredPrefixEntries = new Set<AppServerThreadEntry>();
+  const candidates: AppServerThreadEntry[] = [];
+  const candidatesBySentTurnId = new Map<string, AppServerThreadMessageEntry[]>();
+  tail.replay.entries.forEach((entry, index) => {
     const turnId = transcriptEntryTurnId(entry);
+    const isProviderPageRow =
+      turnId !== undefined && providerPageTurnIds?.has(turnId) === true;
+    if (pageIds.has(entry.id)) {
+      if (turnId !== undefined && !isProviderPageRow && isBeforeProviderPage(index)) {
+        retiredPrefixEntries.add(entry);
+      }
+      return;
+    }
     // A send not yet bound to its turn has no turn at all, but its
     // optimistic id already says no provider page delivered it.
-    return turnId === undefined
+    const isEligibleCandidate = turnId === undefined
       ? entry.id.startsWith("optimistic-") && !hasLoadedHistory && index < firstProviderRow
-      : !providerPageTurnIds?.has(turnId);
+      : !isProviderPageRow;
+    if (!isEligibleCandidate) {
+      return;
+    }
+    candidates.push(entry);
+    if (entry.type === "message") {
+      const sentTurnId = readSentTurnId(entry);
+      if (sentTurnId) {
+        const list = candidatesBySentTurnId.get(sentTurnId);
+        if (list) {
+          list.push(entry);
+        } else {
+          candidatesBySentTurnId.set(sentTurnId, [entry]);
+        }
+      }
+    }
   });
-  if (candidates.length === 0) {
-    return tail;
-  }
-  const matchIndex = createLogicalTranscriptMatchIndex(candidates);
   const matched = new Set<AppServerThreadEntry>();
   const pageEntryByTailEntry = new Map<AppServerThreadEntry, AppServerThreadEntry>();
-  for (const pageEntry of page.replay.entries) {
-    if (tailIds.has(pageEntry.id) || !pageEntry.turn?.id) {
-      continue;
-    }
-    // The send's turn, not its text, identifies a sent message: the send
-    // path may rewrite the text before the owner records it.
-    const sentEcho = pageEntry.type === "message"
-      ? candidates.find((candidate) =>
-          !matched.has(candidate)
-          && candidate.type === "message"
-          && messageEchoesSentTurn(pageEntry, candidate))
-      : undefined;
-    const tailEntry = sentEcho ?? findUniqueLogicalTranscriptRefreshMatch(pageEntry, matchIndex, matched);
-    if (
-      tailEntry
-      && (transcriptEntryTurnId(tailEntry) !== undefined || pageEntry.turn.id === newestPageTurnId)
-    ) {
-      matched.add(tailEntry);
-      pageEntryByTailEntry.set(tailEntry, pageEntry);
+  if (candidates.length > 0) {
+    const matchIndex = createLogicalTranscriptMatchIndex(candidates);
+    for (const pageEntry of page.replay.entries) {
+      if (tailIds.has(pageEntry.id) || !pageEntry.turn?.id) {
+        continue;
+      }
+      // The send's turn, not its text, identifies a sent message: the send
+      // path may rewrite the text before the owner records it.
+      const sentEcho = pageEntry.type === "message"
+        ? candidatesBySentTurnId.get(pageEntry.turn.id)?.find((candidate) =>
+            !matched.has(candidate)
+            && messageEchoesSentTurn(pageEntry, candidate))
+        : undefined;
+      const tailEntry = sentEcho ?? findUniqueLogicalTranscriptRefreshMatch(pageEntry, matchIndex, matched);
+      if (
+        tailEntry
+        && (transcriptEntryTurnId(tailEntry) !== undefined || pageEntry.turn.id === newestPageTurnId)
+      ) {
+        matched.add(tailEntry);
+        pageEntryByTailEntry.set(tailEntry, pageEntry);
+      }
     }
   }
-  if (pageEntryByTailEntry.size === 0) {
+  if (retiredPrefixEntries.size === 0 && pageEntryByTailEntry.size === 0) {
     return tail;
   }
-  // Keep the tail row's live order: a later newest read places a row it does
-  // not hold by its renderer sequence.
-  const entries = tail.replay.entries.map((entry) => {
+  // Retire covered non-provider prefix rows into the older page so turns on
+  // `page` stay contiguous in `loadedHistory`; keep live sequence only for
+  // matched rows that remain in `tail` after a provider turn.
+  const entries: AppServerThreadEntry[] = [];
+  tail.replay.entries.forEach((entry, index) => {
+    if (retiredPrefixEntries.has(entry)) {
+      return;
+    }
     const pageEntry = pageEntryByTailEntry.get(entry);
     if (!pageEntry) {
-      return entry;
+      entries.push(entry);
+      return;
+    }
+    if (isBeforeProviderPage(index)) {
+      return;
     }
     const sequence = readRendererSequence(entry);
-    return sequence === undefined ? pageEntry : withRendererSequence(pageEntry, sequence);
+    entries.push(
+      sequence === undefined ? pageEntry : withRendererSequence(pageEntry, sequence),
+    );
   });
   return {
     ...tail,
@@ -6296,18 +6318,33 @@ export function useThreadSessionState(params: {
           }
           let retainedResponse = current.response;
           if (skipsProviderTurns && retainedResponse) {
-            if (lostRetiredPageBridge) {
-              const versions = liveItemVersionsRef.current.get(targetThreadKey);
-              const entries = retainedResponse.replay.entries.filter((entry) =>
-                (versions?.get(entry.id) ?? 0) > (liveTranscriptVersion ?? 0));
-              retainedResponse = {
-                ...retainedResponse, replay: {
-                  ...retainedResponse.replay, entries, messages: transcriptMessagesForEntries(entries, retainedResponse.replay.messages),
-                },
-              };
-            } else if (previousPageTurnIds) {
-              retainedResponse = withoutTranscriptTurns(retainedResponse, previousPageTurnIds);
-            }
+            const versions = liveItemVersionsRef.current.get(targetThreadKey);
+            const capture = liveTranscriptVersion ?? 0;
+            const entries = retainedResponse.replay.entries.filter((entry) => {
+              const seenAfterRead =
+                (versions?.get(entry.id) ?? 0) > capture
+                || (entry.type === "activity"
+                  && entry.details.some((detail) => (versions?.get(detail.id) ?? 0) > capture));
+              if (seenAfterRead) {
+                return true;
+              }
+              if (lostRetiredPageBridge) {
+                return false;
+              }
+              // History restarted from this page's previousCursor, so pre-read
+              // rows from skipped older turns (not on this page) belong behind
+              // that cursor rather than stranded above this page in `tail`.
+              const turnId = transcriptEntryTurnId(entry);
+              return turnId !== undefined && pageTurnIds.has(turnId);
+            });
+            retainedResponse = {
+              ...retainedResponse,
+              replay: {
+                ...retainedResponse.replay,
+                entries,
+                messages: transcriptMessagesForEntries(entries, retainedResponse.replay.messages),
+              },
+            };
           }
           const preservesLiveRows = lifecycleChangedDuringRead || transcriptChangedDuringRead;
           const responseWithRetainedTail = preserveRetainedTranscriptTail(
@@ -7171,17 +7208,39 @@ export function useThreadSessionState(params: {
         liveContextWindowVersionsRef.current.set(targetThreadKey, previous + 1);
       }
 
+      let eventLiveTranscriptVersion: number | undefined;
+      const recordLiveItemVersion = (id: string) => {
+        if (!retainTranscript) {
+          return;
+        }
+        if (eventLiveTranscriptVersion === undefined) {
+          eventLiveTranscriptVersion =
+            (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
+          liveTranscriptVersionsRef.current.set(
+            targetThreadKey,
+            eventLiveTranscriptVersion,
+          );
+        }
+        let itemVersions = liveItemVersionsRef.current.get(targetThreadKey);
+        if (!itemVersions) {
+          itemVersions = new Map();
+          liveItemVersionsRef.current.set(targetThreadKey, itemVersions);
+        }
+        if (!itemVersions.has(id)) {
+          itemVersions.set(id, eventLiveTranscriptVersion);
+        }
+      };
+
       if (retainTranscript && isTranscriptUpdate) {
-        const liveTranscriptVersion = (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
-        liveTranscriptVersionsRef.current.set(targetThreadKey, liveTranscriptVersion);
+        eventLiveTranscriptVersion =
+          (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
+        liveTranscriptVersionsRef.current.set(
+          targetThreadKey,
+          eventLiveTranscriptVersion,
+        );
         const itemId = liveNotificationItemId(event.notification);
         if (itemId) {
-          let itemVersions = liveItemVersionsRef.current.get(targetThreadKey);
-          if (!itemVersions) {
-            itemVersions = new Map();
-            liveItemVersionsRef.current.set(targetThreadKey, itemVersions);
-          }
-          if (!itemVersions.has(itemId)) itemVersions.set(itemId, liveTranscriptVersion);
+          recordLiveItemVersion(itemId);
         }
       }
 
@@ -7576,6 +7635,12 @@ export function useThreadSessionState(params: {
             fallbackStatus: "in_progress",
           });
           const phase = event.notification.params.phase ?? previousMessage?.phase;
+          const promotedOptimisticMessages = isSamePendingMessage
+            ? []
+            : optimisticMessageEntries(current.optimisticEntries);
+          for (const entry of promotedOptimisticMessages) {
+            recordLiveItemVersion(entry.id);
+          }
           const flushedResponse = isSamePendingMessage
             ? current.response
               : appendPendingAssistantMessage(
@@ -7584,7 +7649,7 @@ export function useThreadSessionState(params: {
                   backend: event.backend,
                   threadId: notificationThreadId,
                 },
-                optimisticMessageEntries(current.optimisticEntries),
+                promotedOptimisticMessages,
                 current.pendingAssistantMessage
               );
           const carriedSequence = readRendererSequence(previousMessage);
@@ -7845,6 +7910,15 @@ export function useThreadSessionState(params: {
                   [taskMonitorUsageEntry]
                 )
               : current.response;
+            const promotedAssistantOptimisticMessages = current.optimisticEntries.filter(
+              (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
+            );
+            for (const entry of promotedAssistantOptimisticMessages) {
+              recordLiveItemVersion(entry.id);
+            }
+            if (taskMonitorUsageEntry) {
+              recordLiveItemVersion(taskMonitorUsageEntry.id);
+            }
             const nextResponse = appendMessageEntries(
               responseWithUsage,
               {
@@ -7852,9 +7926,7 @@ export function useThreadSessionState(params: {
                 threadId: notificationThreadId,
               },
               [
-                ...current.optimisticEntries.filter(
-                  (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
-                ),
+                ...promotedAssistantOptimisticMessages,
                 completedEntry,
               ]
             );
@@ -8198,6 +8270,9 @@ export function useThreadSessionState(params: {
                 syntheticFinalSequence
               )
             );
+          }
+          for (const entry of nextEntries) {
+            recordLiveItemVersion(entry.id);
           }
 
           const promotedFinalMessageId = findPromotableAcpPartialReplyId({
