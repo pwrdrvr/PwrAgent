@@ -41,6 +41,21 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("passes the viewer's PR merge deadline from the envelope to the owner", async () => {
+    const now = Date.now();
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES, now: () => now });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner", now: () => now,
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    router.registerConnection({ peerId: "viewer", capabilities: ["turn_control"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    const mergeThreadPullRequestV1 = vi.fn(async () => ({ ok: true, summary: "Merged #1" }));
+    registerFederationBackendHandlers({ router, backend: { mergeThreadPullRequestV1 } as unknown as FederationBackendOperations });
+    const request = { backend: "codex", threadId: "thread", url: "https://github.com/fixture/project/pull/1", method: "squash" } as const;
+
+    await expect(new FederationRemoteBackendClient(rpc).mergeThreadPullRequestV1(request)).resolves.toMatchObject({ ok: true });
+    expect(mergeThreadPullRequestV1).toHaveBeenCalledExactlyOnceWith(request, { deadlineAt: now + 180_000 });
+  });
+
   it("requires file-pull capability for Antigravity skill discovery on the owner", async () => {
     const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
       additionalRequiredCapabilities: additionalFederationBackendCapabilities });

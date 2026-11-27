@@ -10,6 +10,7 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGlabCommands } from "../settings/glab-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveGitLabReposForDirectory } from "./git-remote";
+import { ForgeReadError } from "./forge-tool-contract";
 import { FORGE_JSON_MAX_BYTES, FORGE_LOG_MAX_BYTES } from "./forge-read-limits";
 import { ForgeRequestQueueFull, ForgeRequestSlots } from "./forge-request-slots";
 import type { GitLabTerminalPayload } from "./pr-terminal-details";
@@ -47,6 +48,14 @@ function readGitLabErrorReason(body: string): string | undefined {
 }
 
 /** Parse only transport metadata; raw CLI errors may contain credentials. */
+function gitLabRetryDeadline(status: number, headers: string): number | undefined {
+  const now = Date.now();
+  const retry = headers.match(/^retry-after:\s*([^\r\n]+)/im)?.[1];
+  const delay = retry && Number.isFinite(Number(retry)) ? now + Number(retry) * 1000 : Date.parse(retry ?? "");
+  const reset = Number(headers.match(/^(?:ratelimit-reset|x-ratelimit-reset):\s*(\d+)/im)?.[1]) * 1000;
+  return status === 429 ? Math.max(now + 60_000, reset || 0, delay || 0) : delay || undefined;
+}
+
 function readApiBody(output: string): string {
   const status = output.match(/^HTTP\/[\d.]+ (\d{3})[^\r\n]*\r?\n/i);
   if (!status) return output;
@@ -54,11 +63,7 @@ function readApiBody(output: string): string {
   const header = boundary ? output.slice(0, boundary.index) : output;
   const code = Number(status[1]);
   if (code >= 400) {
-    const retry = header.match(/^retry-after:\s*([^\r\n]+)/im)?.[1];
-    const delay = retry && Number.isFinite(Number(retry)) ? Date.now() + Number(retry) * 1000 : Date.parse(retry ?? "");
-    const reset = Number(header.match(/^(?:ratelimit-reset|x-ratelimit-reset):\s*(\d+)/im)?.[1]) * 1000;
-    const retryAt = code === 429 ? Math.max(Date.now() + 60_000, reset || 0, delay || 0) : delay || undefined;
-    throw new GitLabReadError(code, retryAt);
+    throw new GitLabReadError(code, gitLabRetryDeadline(code, header));
   }
   return boundary ? output.slice(boundary.index! + boundary[0].length) : output;
 }
@@ -310,6 +315,7 @@ export type GitLabPrFetcherOptions = {
   discover?: () => Promise<DesktopGlabDiscoverySnapshot>;
   run?: (command: string, args: string[]) => Promise<string>;
   resolveRepos?: typeof resolveGitLabReposForDirectory;
+  isEnabled?: () => boolean;
   tryTakeRequestToken?: () => boolean;
   getObservationTimestamp?: () => number;
   /** Attachment uploads only; every other request goes through glab. */
@@ -388,18 +394,25 @@ export class GitLabPrFetcher {
   async writeApi<T>(host: string, endpoint: string, method: GitLabWriteMethod, body: unknown, signal?: AbortSignal): Promise<T> {
     signal?.throwIfAborted();
     if (!/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i.test(host) || host === "github.com") throw new Error("Invalid GitLab hostname.");
+    this.assertEnabled();
+    this.assertCooldownElapsed(host);
     const command = (await this.discover()).selectedCommand;
     if (!command) throw new Error("GitLab CLI is unavailable. Install glab or select its path in Settings → Git.");
     return await this.writeSlots.run(signal, () => this.runWrite<T>(command, host, endpoint, method, body, signal));
   }
 
   private async runWrite<T>(command: string, host: string, endpoint: string, method: GitLabWriteMethod, body: unknown, signal?: AbortSignal): Promise<T> {
-    if (this.options.tryTakeRequestToken && !this.options.tryTakeRequestToken()) throw new Error("PR status refresh budget is temporarily exhausted.");
+    this.assertEnabled();
+    this.assertCooldownElapsed(host);
     let dir: string | undefined;
     try {
       dir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-glab-"));
       const file = path.join(dir, "body.json");
       await fs.writeFile(file, JSON.stringify(body ?? {}), { encoding: "utf8", mode: 0o600 });
+      signal?.throwIfAborted();
+      this.assertEnabled();
+      this.assertCooldownElapsed(host);
+      if (this.options.tryTakeRequestToken?.() === false) throw new GitLabBudgetDeferred();
       const args = ["api", "--hostname", host, "--method", method, "--include", "--header", "Content-Type: application/json", "--input", file, endpoint];
       let stdout = "";
       let answered = true;
@@ -423,8 +436,9 @@ export class GitLabPrFetcher {
       const code = status ? Number(status[1]) : 200;
       if (code >= 400) {
         const header = boundary ? stdout.slice(0, boundary.index) : stdout;
-        const reset = Number(header.match(/^(?:ratelimit-reset|x-ratelimit-reset):\s*(\d+)/im)?.[1]) * 1000;
-        throw new GitLabReadError(code, code === 429 ? Math.max(Date.now() + 60_000, reset || 0) : undefined, readGitLabErrorReason(responseBody));
+        const retryAt = gitLabRetryDeadline(code, header);
+        this.recordCooldown(host, retryAt);
+        throw new GitLabReadError(code, retryAt, readGitLabErrorReason(responseBody));
       }
       return (responseBody.trim() ? JSON.parse(responseBody) : null) as T;
     } finally {
@@ -489,6 +503,8 @@ export class GitLabPrFetcher {
     if (!/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i.test(host) || host === "github.com") {
       throw new Error("Invalid GitLab hostname.");
     }
+    // Sign-in probes are still available in Settings with integration off.
+    if (reportFailure) this.assertEnabled();
     const command = poll?.command ?? (await this.discover()).selectedCommand;
     if (!command) throw new Error("GitLab CLI is unavailable. Install glab or select its path in Settings → Git.");
     signal?.throwIfAborted();
@@ -497,15 +513,16 @@ export class GitLabPrFetcher {
     const key = JSON.stringify([route, endpoint, query, raw, includeHeaders, signal ? ++this.requestSequence : 0]);
     let pending = this.requests.get(key);
     if (!pending) {
-      this.assertReadAllowed(route);
+      this.assertCooldownElapsed(host);
       pending = this.readSlots.run(signal, async () => {
         // A request ahead of this one may have set Retry-After.
-        this.assertReadAllowed(route);
+        if (reportFailure) this.assertEnabled();
+        this.assertCooldownElapsed(host);
         if (poll ? !poll.takeToken() : reportFailure && this.options.tryTakeRequestToken?.() === false) {
           throw new GitLabBudgetDeferred();
         }
         const startedAt = this.options.getObservationTimestamp?.() ?? Date.now();
-        const value = await this.runRead(command, host, endpoint, route, { ...options, includeHeaders });
+        const value = await this.runRead(command, host, endpoint, { ...options, includeHeaders });
         return { value, startedAt };
       }).finally(() => { this.requests.delete(key); });
       this.requests.set(key, pending);
@@ -515,14 +532,27 @@ export class GitLabPrFetcher {
     return value as T;
   }
 
-  private assertReadAllowed(route: string): void {
-    const retryAt = this.retryAt.get(route);
-    if (retryAt === undefined) return;
-    if (retryAt > Date.now()) throw new GitLabReadError(429, retryAt);
-    this.retryAt.delete(route);
+  private assertEnabled(): void {
+    if (this.options.isEnabled?.() === false) {
+      throw new ForgeReadError("provider_disabled", "GitLab is disabled in Settings → Git.");
+    }
   }
 
-  private async runRead(command: string, host: string, endpoint: string, route: string, options: GitLabApiOptions): Promise<unknown> {
+  private assertCooldownElapsed(host: string): void {
+    const key = host.toLowerCase();
+    const retryAt = this.retryAt.get(key);
+    if (retryAt === undefined) return;
+    if (retryAt > Date.now()) throw new GitLabReadError(429, retryAt);
+    this.retryAt.delete(key);
+  }
+
+  private recordCooldown(host: string, retryAt: number | undefined): void {
+    if (retryAt === undefined) return;
+    const key = host.toLowerCase();
+    this.retryAt.set(key, Math.max(this.retryAt.get(key) ?? 0, retryAt));
+  }
+
+  private async runRead(command: string, host: string, endpoint: string, options: GitLabApiOptions): Promise<unknown> {
     const { reportFailure, signal, raw, query, includeHeaders } = options;
     try {
       const args = ["api", "--hostname", host, "--method", query ? "POST" : "GET",
@@ -554,7 +584,7 @@ export class GitLabPrFetcher {
         }
       }
       if (includeHeaders && failure instanceof GitLabReadError) {
-        if (failure.retryAt) this.retryAt.set(route, Math.max(this.retryAt.get(route) ?? 0, failure.retryAt));
+        this.recordCooldown(host, failure.retryAt);
         throw failure;
       }
       const message = `GitLab request failed on ${host}. Check glab login, read_api permission, project access, and connectivity.`;

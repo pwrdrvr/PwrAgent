@@ -49,6 +49,7 @@ export type ThreadPullRequestMergeDeps = {
     pullRequest: string;
     method: ThreadTodoMergeMethod;
     assertCanMerge: (url: string) => void;
+    deadlineAt?: number;
     /** The open lower layers of the PR's GitHub stack the operator chose to merge with it. */
     mergeOpenLayersBelow?: number[];
   }, thread: ThreadPullRequestMergeTarget) => Promise<ThreadPullRequestMergeResult>;
@@ -121,6 +122,7 @@ export async function readThreadPullRequestMerge(
 export async function mergeThreadPullRequest(
   deps: ThreadPullRequestMergeDeps,
   request: unknown,
+  options?: { deadlineAt?: number },
 ): Promise<MergeThreadPullRequestResponse> {
   const thread = readTarget(request);
   const { url, method, rememberMethod, mergeOpenLayersBelow } = (request ?? {}) as Partial<MergeThreadPullRequestRequest>;
@@ -157,6 +159,7 @@ export async function mergeThreadPullRequest(
     pullRequest: attached,
     method,
     assertCanMerge: (target) => deps.assertNotHeld(thread, target),
+    ...(options?.deadlineAt !== undefined ? { deadlineAt: options.deadlineAt } : {}),
     ...(layersBelow ? { mergeOpenLayersBelow: layersBelow } : {}),
   }, thread);
   if (merged.queued) void deps.refresh(thread).catch((error: unknown) => deps.onRefreshFailed?.(error));

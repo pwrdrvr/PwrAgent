@@ -1,3 +1,4 @@
+import { ForgeRequestQueueFull } from "../pr-status/forge-request-slots";
 import { ForgeReadError } from "../pr-status/forge-tool-contract";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -258,5 +259,12 @@ describe("placing uploaded attachments", () => {
       { path: "/tmp/a.png", alt: "After", url: "/uploads/2/a.png", video: false },
       { path: "/tmp/demo.mp4", url: "/uploads/3/demo.mp4", video: true },
     ])).toBe("Before ![b](/uploads/1/b.png)\n\n![After](/uploads/2/a.png)\n\n[demo.mp4](/uploads/3/demo.mp4)");
+  });
+});
+
+it("reports a full GitLab transport queue as busy with retry advice", async () => {
+  const { client } = harness(() => { throw new ForgeRequestQueueFull(); });
+  await expect(client.execute("get_pull_request", { number: 17 }, ctx())).rejects.toMatchObject({
+    code: "busy", message: expect.stringContaining("Retry after a request completes"),
   });
 });

@@ -15,7 +15,7 @@ import { PrStatusTokenBucket } from "./pr-status-token-bucket";
 type Payload = Record<string, unknown>;
 type Artifact = { id?: number; jobId?: number; name?: string; sizeBytes?: number; expired?: boolean; expiresAt?: string; createdAt?: string; fileType?: string; url: string };
 type Read = (repo: ForgeRepository, endpoint: string, signal?: AbortSignal, raw?: boolean) => Promise<unknown>;
-type ForgeRequestSource = "shared" | "operator_merge_preflight";
+type ForgeRequestSource = "shared" | "operator_merge_preflight" | "merge_offer";
 /** One GitHub REST or GraphQL request. `path` is relative to the REST root; `graphql` posts to the host's GraphQL endpoint. */
 export type GithubRequest = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -229,6 +229,11 @@ export class ForgeCiClient {
   /** Stack evidence for an operator-confirmed PR-card or to-do merge. */
   async requestGithubForOperatorMergePreflight(r: ForgeRepository, request: GithubRequest, signal?: AbortSignal): Promise<unknown> {
     return this.requestGithubWithSource(r, request, signal, "operator_merge_preflight");
+  }
+
+  /** Background stack evidence shares the request budget above its foreground floor. */
+  async requestGithubForMergeOffer(r: ForgeRepository, request: GithubRequest): Promise<unknown> {
+    return this.requestGithubWithSource(r, request, undefined, "merge_offer");
   }
 
   private async requestGithubWithSource(

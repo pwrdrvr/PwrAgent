@@ -443,3 +443,69 @@ describe("review regressions", () => {
     expect(tryTakeRequestToken).toHaveBeenCalledTimes(36);
   });
 });
+
+it.each(["read", "write"] as const)("rechecks GitLab enablement before dispatching a queued %s", async (kind) => {
+  let enabled = true;
+  const hold = Promise.withResolvers<string>();
+  const saturated = Promise.withResolvers<void>();
+  let sent = 0;
+  const takeToken = vi.fn(() => true);
+  const fetcher = new GitLabPrFetcher({
+    discover: async () => discovery, isEnabled: () => enabled, tryTakeRequestToken: takeToken,
+    run: async () => {
+      if (++sent === 3) saturated.resolve();
+      return await hold.promise;
+    },
+  });
+  const request = (endpoint: string) => kind === "read"
+    ? fetcher.readApi(ref.host, endpoint)
+    : fetcher.writeApi(ref.host, endpoint, "POST", {});
+  const active = ["one", "two", "three"].map(request);
+  await saturated.promise;
+  const queued = request("queued");
+  void queued.catch(() => {});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  enabled = false;
+  hold.resolve("{}");
+  await Promise.all(active);
+  await expect(queued).rejects.toMatchObject({ code: "provider_disabled" });
+  expect(sent).toBe(3);
+  expect(takeToken).toHaveBeenCalledTimes(3);
+});
+
+it("applies a GitLab write's Retry-After to queued writes and later reads", async () => {
+  let now = Date.parse("2026-11-27T13:00:00Z");
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const limited = Promise.withResolvers<string>();
+  const held = Promise.withResolvers<string>();
+  const saturated = Promise.withResolvers<void>();
+  let sent = 0;
+  const takeToken = vi.fn(() => true);
+  const fetcher = new GitLabPrFetcher({
+    discover: async () => discovery, tryTakeRequestToken: takeToken,
+    run: async (_command, args) => {
+      if (++sent === 3) saturated.resolve();
+      if (args.at(-1) === "limited") return await limited.promise;
+      return await held.promise;
+    },
+  });
+  const write = (endpoint: string) => fetcher.writeApi(ref.host, endpoint, "POST", {});
+  try {
+    const active = Promise.allSettled([write("limited"), write("held"), write("held")]);
+    await saturated.promise;
+    const queued = write("queued");
+    const queuedCheck = expect(queued).rejects.toMatchObject({ status: 429, retryAt: now + 120_000 });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    limited.resolve("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\n\r\n{}");
+    held.resolve("{}");
+    await active;
+    await queuedCheck;
+    await expect(fetcher.readApi(ref.host, "read")).rejects.toMatchObject({ status: 429, retryAt: now + 120_000 });
+    expect(takeToken).toHaveBeenCalledTimes(3);
+    now += 120_000;
+    await expect(write("recovered")).resolves.toEqual({});
+    expect(takeToken).toHaveBeenCalledTimes(4);
+  } finally {
+    clock.mockRestore();
+  }
+});

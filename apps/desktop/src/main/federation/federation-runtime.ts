@@ -8225,9 +8225,9 @@ function localBackendOperations(
       if (!owned) throw new Error("backend and threadId are required.");
       return await readThreadPullRequestMerge(peerThreadPullRequestMergeDeps(), owned);
     },
-    async mergeThreadPullRequestV1(request) {
+    async mergeThreadPullRequestV1(request, rpcOptions) {
       return await mergeThreadPullRequestForPeer(request, async (owned) =>
-        await mergeThreadPullRequest(peerThreadPullRequestMergeDeps(), owned));
+        await mergeThreadPullRequest(peerThreadPullRequestMergeDeps(), owned, rpcOptions));
     },
     // A peer's requests for this instance's projects. The router already
     // required turn_control; the service validates and applies them exactly
