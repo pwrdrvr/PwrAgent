@@ -15,6 +15,20 @@ import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { PROJECT_CARD_HOVER_DELAY_MS } from "../ProjectHeaderCard";
 
+/** Thread rows read by the archive-group count: the walk over the whole list. */
+const archiveWalk = { rows: 0 };
+
+vi.mock("../archive-group-counts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../archive-group-counts")>();
+  return {
+    ...original,
+    countArchiveGroup: (...args: Parameters<typeof original.countArchiveGroup>) => {
+      archiveWalk.rows += args[1].length;
+      return original.countArchiveGroup(...args);
+    },
+  };
+});
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -90,15 +104,21 @@ function mockSidebarLayout(): void {
   });
 }
 
-function renderSidebar(params: {
+type SidebarParams = {
   threads: NavigationThreadSummary[];
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onSetThreadPin?: (thread: NavigationThreadSummary, pinned: boolean) => Promise<void>;
   onRevealPath?: (path: string, label: string) => void;
   applications?: DesktopApplicationsSnapshot;
-}) {
-  return render(
+};
+
+function renderSidebar(params: SidebarParams) {
+  return render(sidebarElement(params));
+}
+
+function sidebarElement(params: SidebarParams) {
+  return (
     <Sidebar
       backends={[ARCHIVING_BACKEND]}
       browseMode="inbox"
@@ -117,7 +137,7 @@ function renderSidebar(params: {
       onRevealPath={params.onRevealPath}
       onSelectThread={() => undefined}
       onSetThreadPin={params.onSetThreadPin}
-    />,
+    />
   );
 }
 
@@ -405,6 +425,48 @@ describe("sidebar thread card", () => {
     fireEvent.click(within(shown).getByRole("button", { name: "More thread actions", hidden: true }));
     expect(screen.getByRole("menu")).toBeInTheDocument();
     expect(card()).toBeNull();
+  });
+
+  // Found by the scaling audit: every hover, and every navigation update
+  // while a card was up, walked the whole thread list for its sub-threads.
+  it("walks no thread list to open a card or keep it current", async () => {
+    const threads = [thread("a"), thread("b"), thread("c")];
+    const onArchiveThread = vi.fn(async () => undefined);
+    const view = renderSidebar({ threads, onArchiveThread });
+    archiveWalk.rows = 0;
+    const shown = hoverOpen("a");
+    const updated = [...threads.slice(0, 2), thread("c", { title: "Thread c, renamed" })];
+    view.rerender(sidebarElement({ threads: updated, onArchiveThread }));
+    expect(card()).toHaveTextContent("Thread a");
+    expect(archiveWalk.rows).toBe(0);
+    // Archiving checks the loaded rows once, for a sub-thread the count missed.
+    fireEvent.click(within(shown).getByRole("button", { name: /Archive/, hidden: true }));
+    await act(async () => undefined);
+    expect(archiveWalk.rows).toBe(3);
+    expect(onArchiveThread).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }));
+  });
+
+  it("leaves a parent's two archives to its menu", async () => {
+    // The owner's count, as loaded navigation rows carry it.
+    const counted = { ordinaryChildCount: 1 } as Partial<NavigationThreadSummary>;
+    renderSidebar({
+      threads: [thread("a", counted), thread("b", { parentThreadId: "a" })],
+      onArchiveThread: async () => undefined,
+    });
+    let shown = hoverOpen("a");
+    expect(within(shown).queryByRole("button", { name: /^Archive/, hidden: true })).toBeNull();
+    expect(within(shown).getByRole("button", { name: "More thread actions", hidden: true })).toBeInTheDocument();
+    cleanup();
+
+    // A sub-thread loaded before its parent's count caught up: the card's
+    // Archive finds it and offers the menu's two archives instead.
+    const onArchiveThread = vi.fn(async () => undefined);
+    renderSidebar({ threads: [thread("a"), thread("b", { parentThreadId: "a" })], onArchiveThread });
+    shown = hoverOpen("a");
+    fireEvent.click(within(shown).getByRole("button", { name: /^Archive/, hidden: true }));
+    await act(async () => undefined);
+    expect(onArchiveThread).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
   it("swaps Mark read and Archive out while the thread runs", () => {

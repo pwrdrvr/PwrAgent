@@ -73,7 +73,8 @@ export type SidebarThreadCardActions = {
   pin?: { pinned: boolean; toggle: () => void };
   /** Mark read: the thread leaves Attention. */
   markRead?: () => void;
-  archive?: () => void;
+  /** Archives the thread, or opens the menu's two archives for a parent. */
+  archive?: (anchor: HTMLElement) => void;
   /** The row's own context menu, anchored to the card's ⋯. */
   openMenu: (anchor: HTMLElement) => void;
 };
@@ -621,9 +622,9 @@ function ThreadCardActions(props: {
             className="sidebar-thread-card__button"
             tabIndex={-1}
             type="button"
-            onClick={() => {
+            onClick={(event) => {
+              actions.archive?.(event.currentTarget);
               onDone();
-              actions.archive?.();
             }}
           >
             <ArchiveIcon size={12} aria-hidden="true" />

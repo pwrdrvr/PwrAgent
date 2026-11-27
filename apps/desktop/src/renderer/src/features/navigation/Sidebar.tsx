@@ -105,6 +105,7 @@ import {
 } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { countArchiveGroup } from "./archive-group-counts";
+import { ordinaryChildCountOf } from "./subthread-trays";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import {
@@ -3794,8 +3795,16 @@ function SidebarContent(props: SidebarProps) {
     const branch = getThreadNamedBranch(thread);
     const facts = threadCardRowFacts(thread);
     const prUrl = facts.pr?.pr.url;
-    // The card's ⋯ holds both archives for a thread with sub-threads.
-    const hasChildThreads = countArchiveGroup(live, navigationThreads, navigationThreadByKey).childCount > 0;
+    // The card's ⋯ holds both archives for a thread with sub-threads. Its
+    // row's own count answers here, on every hover and update; the loaded
+    // rows, which can run ahead of that count, are walked only on a click.
+    const hasChildThreads = ordinaryChildCountOf(live) > 0;
+    const openMenu = (anchor: HTMLElement): void => {
+      const rect = anchor.getBoundingClientRect();
+      openThreadContextMenu(thread, { x: rect.left, y: rect.bottom + 4, anchorTop: rect.top });
+      // The card closes with the menu open; focus goes back to the row.
+      contextMenuOpenerRef.current = row.querySelector<HTMLElement>(".thread-row__open");
+    };
     return {
       ...(local && applications && openApplication && !thread.workspaceMissing
         ? {
@@ -3844,14 +3853,16 @@ function SidebarContent(props: SidebarProps) {
         : {}),
       ...(threadCanMarkRead(thread) ? { markRead: () => markReadFromContextMenu([thread]) } : {}),
       ...(!hasChildThreads && canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control")
-        ? { archive: () => archiveFromContextMenu(thread) }
+        ? {
+            archive: (anchor: HTMLElement) => {
+              // A sub-thread loaded before its parent's count caught up:
+              // the menu offers the two archives instead.
+              if (countArchiveGroup(live, navigationThreads, navigationThreadByKey).childCount > 0) openMenu(anchor);
+              else archiveFromContextMenu(thread);
+            },
+          }
         : {}),
-      openMenu: (anchor) => {
-        const rect = anchor.getBoundingClientRect();
-        openThreadContextMenu(thread, { x: rect.left, y: rect.bottom + 4, anchorTop: rect.top });
-        // The card closes with the menu open; focus goes back to the row.
-        contextMenuOpenerRef.current = row.querySelector<HTMLElement>(".thread-row__open");
-      },
+      openMenu,
     };
   }
 
