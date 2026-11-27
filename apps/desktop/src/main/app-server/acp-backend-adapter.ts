@@ -1446,6 +1446,7 @@ export class AcpBackendAdapter {
       lastTurnId?: string;
       flushTimer?: ReturnType<typeof setTimeout>;
       flushChain: Promise<void>;
+      consecutiveFlushFailures: number;
     }
   >();
   // Last context fill sent per session this turn. Grok repeats the same
@@ -4356,6 +4357,7 @@ export class AcpBackendAdapter {
         tracker: new AcpSubAgentTracker(),
         recordedKeys: new Map(),
         flushChain: Promise.resolve(),
+        consecutiveFlushFailures: 0,
       };
       this.subAgentSessions.set(key, state);
     } else if (client && state.client !== client) {
@@ -4434,7 +4436,7 @@ export class AcpBackendAdapter {
         outcome: params.turnSettledOutcome,
       }) || dirty;
     }
-    if (!dirty) {
+    if (!dirty && !(params.turnSettledOutcome && state.flushTimer !== undefined)) {
       return;
     }
     if (params.turnSettledOutcome) {
@@ -4459,7 +4461,10 @@ export class AcpBackendAdapter {
     if (!state) {
       return;
     }
-    if (!state.tracker.settleTurn({ turnId: params.turnId, outcome: params.outcome })) {
+    if (
+      !state.tracker.settleTurn({ turnId: params.turnId, outcome: params.outcome })
+      && state.flushTimer === undefined
+    ) {
       return;
     }
     this.drainAcpSessionSubAgentFlush(state);
@@ -4497,14 +4502,18 @@ export class AcpBackendAdapter {
     return flushes;
   }
 
-  private scheduleAcpSessionSubAgentFlush(state: {
-    backend: AcpBackendId;
-    sessionId: string;
-    tracker: AcpSubAgentTracker;
-    recordedKeys: Map<string, string>;
-    flushTimer?: ReturnType<typeof setTimeout>;
-    flushChain: Promise<void>;
-  }): void {
+  private scheduleAcpSessionSubAgentFlush(
+    state: {
+      backend: AcpBackendId;
+      sessionId: string;
+      tracker: AcpSubAgentTracker;
+      recordedKeys: Map<string, string>;
+      flushTimer?: ReturnType<typeof setTimeout>;
+      flushChain: Promise<void>;
+      consecutiveFlushFailures: number;
+    },
+    delayMs = 25,
+  ): void {
     if (!this.options.recordSubAgents || state.flushTimer !== undefined) {
       return;
     }
@@ -4515,7 +4524,7 @@ export class AcpBackendAdapter {
     state.flushTimer = setTimeout(() => {
       state.flushTimer = undefined;
       this.drainAcpSessionSubAgentFlush(state);
-    }, 25);
+    }, delayMs);
     state.flushTimer.unref?.();
   }
 
@@ -4526,6 +4535,7 @@ export class AcpBackendAdapter {
     recordedKeys: Map<string, string>;
     flushTimer?: ReturnType<typeof setTimeout>;
     flushChain: Promise<void>;
+    consecutiveFlushFailures: number;
   }): void {
     if (state.flushTimer !== undefined) {
       clearTimeout(state.flushTimer);
@@ -4547,7 +4557,7 @@ export class AcpBackendAdapter {
     }
     // Optimistically stamp fingerprints before enqueueing so rapid back-to-back
     // updates only emit deltas, and restore them if persistence fails so a later
-    // update can retry.
+    // update or bounded retry can persist them.
     const previousFingerprints = changed.map(({ card, fingerprint }) => ({
       monitorId: card.monitorId,
       subAgentId: card.subAgentId,
@@ -4565,6 +4575,7 @@ export class AcpBackendAdapter {
           threadId: sessionId,
           subAgents,
         });
+        state.consecutiveFlushFailures = 0;
       } catch (error) {
         const retryIds: string[] = [];
         for (const { monitorId, subAgentId, fingerprint, previous } of previousFingerprints) {
@@ -4580,6 +4591,18 @@ export class AcpBackendAdapter {
         }
         if (retryIds.length > 0) {
           state.tracker.markDirty(retryIds);
+          state.consecutiveFlushFailures += 1;
+          const sessionKey = `${backend}:${sessionId}`;
+          if (
+            !this.closed
+            && this.subAgentSessions.get(sessionKey) === state
+            && state.consecutiveFlushFailures <= 2
+          ) {
+            this.scheduleAcpSessionSubAgentFlush(
+              state,
+              state.consecutiveFlushFailures === 1 ? 100 : 400,
+            );
+          }
         }
         acpBackendAdapterLog.warn("acp_subagents_record_failed", {
           backend,

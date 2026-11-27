@@ -745,4 +745,188 @@ describe("ACP sub-agent cards persistence & navigation projection", () => {
       await adapter.close();
     }
   });
+
+  it("drains a pending 25ms coalescing timer immediately on terminal turn settlement even when settleTurn changes nothing", async () => {
+    const persisted: AcpSubAgentCard[] = [];
+    const adapter = new AcpBackendAdapter({
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+      recordSubAgents: async ({ subAgents }) => {
+        persisted.push(...subAgents);
+      },
+    });
+    const internal = adapter as unknown as {
+      observeAcpSubAgentUpdate: (p: Record<string, unknown>) => void;
+      settleAcpSessionSubAgents: (p: Record<string, unknown>) => void;
+      subAgentSessions: Map<string, { flushTimer?: ReturnType<typeof setTimeout>; flushChain: Promise<void> }>;
+    };
+
+    try {
+      // Case 1: Grok subagent_finished schedules the 25ms timer; turn_finished arrives
+      // immediately afterward within the window. settleTurn returns false, yet the timer
+      // must drain synchronously so callers observing turn completion see the settled card.
+      internal.observeAcpSubAgentUpdate({
+        backend: "acp:grok",
+        sessionId: "grok-drain-1",
+        turnId: "turn-1",
+        update: {
+          sessionUpdate: "subagent_finished",
+          subagent_id: "sub-1",
+          description: "Quick worker",
+          status: "completed",
+        },
+      });
+      const state1 = internal.subAgentSessions.get("acp:grok:grok-drain-1")!;
+      expect(state1.flushTimer).toBeDefined();
+      internal.observeAcpSubAgentUpdate({
+        backend: "acp:grok",
+        sessionId: "grok-drain-1",
+        turnId: "turn-1",
+        update: { sessionUpdate: "turn_finished" },
+        turnSettledOutcome: "completed",
+      });
+      expect(state1.flushTimer).toBeUndefined();
+      await state1.flushChain;
+      expect(persisted.find((c) => c.monitorId === "acp-native:sub-1")?.status).toBe("success");
+
+      // Case 2: Failed Antigravity launch schedules the 25ms timer; onPromptError calls
+      // settleAcpSessionSubAgents immediately afterward before the timer fires.
+      internal.observeAcpSubAgentUpdate({
+        backend: "acp:antigravity",
+        sessionId: "agy-drain-2",
+        turnId: "turn-2",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "call-fail-2",
+          title: "Run invoke_subagent",
+          status: "failed",
+          rawInput: { Role: "Failed Worker", TypeName: "research", Prompt: "Audit" },
+        },
+      });
+      const state2 = internal.subAgentSessions.get("acp:antigravity:agy-drain-2")!;
+      expect(state2.flushTimer).toBeDefined();
+      internal.settleAcpSessionSubAgents({
+        backend: "acp:antigravity",
+        sessionId: "agy-drain-2",
+        turnId: "turn-2",
+        outcome: "failed",
+      });
+      expect(state2.flushTimer).toBeUndefined();
+      await state2.flushChain;
+      expect(persisted.find((c) => c.monitorId === "acp-native:call-fail-2")?.status).toBe("failure");
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it("schedules a bounded retry when a terminal sub-agent flush fails on an idle session", async () => {
+    let attempts = 0;
+    const persisted: AcpSubAgentCard[] = [];
+    const adapter = new AcpBackendAdapter({
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+      recordSubAgents: async ({ subAgents }) => {
+        attempts += 1;
+        if (attempts === 2) {
+          throw new Error("transient sqlite busy on terminal flush");
+        }
+        persisted.push(...subAgents);
+      },
+    });
+    const internal = adapter as unknown as {
+      observeAcpSubAgentUpdate: (p: Record<string, unknown>) => void;
+      settleAcpSessionSubAgents: (p: Record<string, unknown>) => void;
+      drainAcpSessionSubAgentFlush: (s: unknown) => void;
+      subAgentSessions: Map<string, { flushTimer?: ReturnType<typeof setTimeout>; flushChain: Promise<void> }>;
+    };
+
+    try {
+      internal.observeAcpSubAgentUpdate({
+        backend: "acp:antigravity",
+        sessionId: "retry-terminal-sess",
+        turnId: "turn-1",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "call-retry-1",
+          title: "Run invoke_subagent",
+          status: "in_progress",
+          rawInput: { Role: "Terminal Retry Worker", TypeName: "research", Prompt: "Audit" },
+        },
+      });
+      const state = internal.subAgentSessions.get("acp:antigravity:retry-terminal-sess")!;
+      internal.drainAcpSessionSubAgentFlush(state);
+      await state.flushChain;
+      expect(persisted.at(-1)?.status).toBe("running");
+
+      // Terminal flush fails transiently; session is now idle with no further updates.
+      internal.settleAcpSessionSubAgents({
+        backend: "acp:antigravity",
+        sessionId: "retry-terminal-sess",
+        turnId: "turn-1",
+        outcome: "completed",
+      });
+      await state.flushChain;
+      expect(persisted.at(-1)?.status).toBe("running");
+
+      // Bounded backoff retry persists the terminal card automatically.
+      await vi.waitFor(() => {
+        expect(persisted.filter((c) => c.monitorId === "acp-native:call-retry-1").at(-1)?.status).toBe("success");
+      }, { timeout: 1_000 });
+      expect(attempts).toBe(3);
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it("repairs orphaned running acp-native sub-agent cards during startup reconciliation", async () => {
+    const stateDb = openInMemoryStateDb();
+    try {
+      const store = new SqliteOverlayStore(stateDb);
+      const startedAt = Date.now() - 120_000;
+      await store.upsertThreadSubAgents({
+        backend: "acp:antigravity",
+        threadId: "crashed-acp-session",
+        subAgents: [
+          {
+            monitorId: "acp-native:orphaned-worker-1",
+            task: "Audit after crash",
+            displayTitle: "Orphaned Worker",
+            status: "running",
+            createdAt: startedAt,
+            updatedAt: startedAt + 1_000,
+            ownerRuntimeInstanceId: "dead-runtime-instance",
+            ownerRegistrySessionId: "dead-registry-session",
+            backend: "acp:antigravity",
+          },
+        ],
+      });
+
+      const repair = await store.reconcileOrphanedThreadSubAgents({
+        currentRuntimeInstanceId: "live-runtime-instance",
+        currentRegistrySessionId: "live-registry-session",
+        liveRuntimeInstanceIds: ["live-runtime-instance"],
+        sessionStartedAt: Date.now(),
+      });
+
+      expect(repair.repairedSubAgents).toBe(1);
+      expect(repair.repairedThreads).toBe(1);
+      const [repaired] = await store.listThreadSubAgents({
+        backend: "acp:antigravity",
+        threadId: "crashed-acp-session",
+      });
+      expect(repaired?.status).toBe("failure");
+      expect(repaired?.outcome).toBe("failure");
+      expect(repaired?.completedAt).toBe(startedAt + 1_000);
+      expect(repaired?.completionSource).toMatchObject({
+        type: "pwragent_fallback",
+        reason: "owner_runtime_stopped",
+      });
+    } finally {
+      stateDb.close();
+    }
+  });
 });
