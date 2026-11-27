@@ -162,7 +162,7 @@ import {
   type DesktopConfigBootstrapState,
 } from "./features/settings/useDesktopConfigBootstrap";
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
-import type { ThreadInfoContext } from "./features/thread-detail/thread-info";
+import { useOpenThreadContextReader } from "./features/thread-detail/useOpenThreadContextReader";
 import {
   DEFAULT_CONTEXT_TAB,
   DEFAULT_ACTION_RUNS_DOCK,
@@ -186,7 +186,7 @@ import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useSidebarOwnerBackends } from "./lib/useSidebarOwnerBackends";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
-import { useDesktopApplications } from "./lib/useDesktopApplications";
+import { remoteApplicationInstanceIdFor, useDesktopApplications } from "./lib/useDesktopApplications";
 import { useEventCallback } from "./lib/useEventCallback";
 import {
   readRendererFederationLabel,
@@ -1960,20 +1960,11 @@ function DesktopAppShell(props: {
   );
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
-  const selectedLaunchpadFederationTarget =
-    navigation.selectedLaunchpad?.federationTarget;
-  const navigationFederationTarget = navigation.federationTarget;
-  const remoteApplicationInstanceId =
-    selectedThreadFederationTarget
-    && isRemoteFederationTarget(selectedThreadFederationTarget)
-      ? selectedThreadFederationTarget.instanceId
-      : selectedLaunchpadFederationTarget
-        && isRemoteFederationTarget(selectedLaunchpadFederationTarget)
-        ? selectedLaunchpadFederationTarget.instanceId
-      : navigationFederationTarget
-        && isRemoteFederationTarget(navigationFederationTarget)
-        ? navigationFederationTarget.instanceId
-        : readRendererFederationTarget()?.instanceId;
+  const remoteApplicationInstanceId = remoteApplicationInstanceIdFor([
+    selectedThreadFederationTarget,
+    navigation.selectedLaunchpad?.federationTarget,
+    navigation.federationTarget,
+  ]);
   const activeFederationTarget = useMemo(
     () => remoteApplicationInstanceId
       ? { scope: "remote" as const, instanceId: remoteApplicationInstanceId }
@@ -3189,18 +3180,7 @@ function DesktopAppShell(props: {
     suspended: remoteReadsSuspended,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
-  // The open thread's context reading, read by its sidebar card when the
-  // card opens: a ref, so a reading per turn re-renders nothing.
-  const openThreadContextRef = useRef<(ThreadInfoContext & { threadKey: string }) | undefined>(undefined);
-  openThreadContextRef.current = navigation.selectedThread && session.contextWindow
-    ? {
-        threadKey: threadSummaryIdentityKey(navigation.selectedThread),
-        totalTokens: session.contextWindow.totalTokens,
-        modelContextWindow: session.contextWindow.modelContextWindow,
-        usedPercent: session.contextWindow.usedPercent,
-      }
-    : undefined;
-  const readOpenThreadContext = useCallback(() => openThreadContextRef.current, []);
+  const readOpenThreadContext = useOpenThreadContextReader(navigation.selectedThread, session.contextWindow);
   const skills = useThreadSkills({
     desktopApi,
     launchpad: navigation.selectedLaunchpad,
