@@ -344,12 +344,26 @@ describe("listReferencedDirectories", () => {
         return startsWith.call(this, prefix, position);
       });
       let result;
+      let segmentVisits = 0;
+      // Both inserting and looking up a path read one child map entry per segment or separator.
+      vi.stubGlobal("Map", class<K, V> extends Map<K, V> {
+        override get(key: K): V | undefined {
+          segmentVisits += 1;
+          return super.get(key);
+        }
+      });
       try {
         result = listReferencedDirectories(draft, rows);
       } finally {
+        vi.unstubAllGlobals();
         spy.mockRestore();
       }
       expect(result).toEqual(rows.slice(0, chipCount));
+      // Six parts per file chip, four per directory. Each match is inserted and queried once more.
+      const matchedCount = Math.min(directoryCount, chipCount);
+      const visitBudget = 6 * chipCount + 4 * directoryCount + 8 * matchedCount;
+      expect(segmentVisits).toBeGreaterThan(0);
+      expect(segmentVisits).toBeLessThanOrEqual(visitBudget);
       const budget = directoryCount + chipCount;
       expect.soft(destinationComparisons).toBeLessThanOrEqual(budget);
       expect(descendantComparisons).toBeLessThanOrEqual(budget);
