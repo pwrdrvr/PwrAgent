@@ -43,7 +43,7 @@ import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata"
 import { prepareSqliteRead } from "./sqlite-prepared-read";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
-import { forgetThreadSpend, projectedThreadSpend } from "./thread-spend-projection";
+import { forgetThreadSpend, projectedThreadSpend, type SpendGateLines } from "./thread-spend-projection";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
 import {
   PROJECT_CHECKOUT_GROUPS_META_KEY,
@@ -215,6 +215,13 @@ const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
 // The focused thread, its context panel, and a few threads open in other
 // windows. A long thread's ledger holds a few MB.
 const THREAD_PRICING_CACHE_THREADS = 8;
+
+type ThreadPricingReadParams = {
+  backend: ThreadOverlayState["backend"];
+  threadId: string;
+  /** A publication also delivers older turn prices repaired by its reads. */
+  onRepriced?: (line: ThreadUsageLineRecord) => void;
+};
 
 type ThreadPricingLedgerRead = {
   lines: ThreadUsageLineRecord[];
@@ -2187,9 +2194,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   async upsertThreadUsageLine(params: {
     line: ThreadUsageLineRecord;
+    fromReplay?: boolean;
   }): Promise<{ line: ThreadUsageLineRecord; summary: ThreadPricingSummary }> {
     const { lines, summaries } = await this.upsertThreadUsageLines({
       lines: [params.line],
+      fromReplay: params.fromReplay,
     });
     const line = lines[0];
     if (!line) {
@@ -2217,6 +2226,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    */
   async upsertThreadUsageLines(params: {
     lines: ThreadUsageLineRecord[];
+    fromReplay?: boolean;
     acpCompletions?: AcpUsageTurnCompletion[];
   }): Promise<{
     lines: ThreadUsageLineRecord[];
@@ -2760,7 +2770,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       ];
     });
 
-    return { lines, summaries: upsert() };
+    const summaries = upsert();
+    if (params.fromReplay && summaryTargets.size) this.pricingRepairGeneration++;
+    return { lines, summaries };
   }
 
   // Record timing separately from finalizing accounting: Codex may send a
@@ -3470,17 +3482,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    * (`sqliteUsageLedgerVersions`) or another connection commits. Callers
    * receive their own copy, because several of them decorate the lines.
    */
-  async readThreadPricing(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
-  }): Promise<ThreadPricingLedgerRead> {
+  async readThreadPricing(params: ThreadPricingReadParams): Promise<ThreadPricingLedgerRead> {
     return structuredClone(this.readStoredThreadPricing(params));
   }
 
-  private readStoredThreadPricing(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
-  }, ownedSnapshot = false): ThreadPricingLedgerRead {
+  private readStoredThreadPricing(params: ThreadPricingReadParams, ownedSnapshot = false): ThreadPricingLedgerRead {
     const db = this.stateDb.raw;
     const ledgerVersions = sqliteUsageLedgerVersions(db);
     if (!ledgerVersions || (db.inTransaction && !ownedSnapshot)) {
@@ -3515,11 +3521,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   /** The alert total includes priced historical gaps and in-flight monitor usage. */
-  async readThreadSpendMicros(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
+  async readThreadSpendMicros(params: ThreadPricingReadParams & {
     localModelIds: readonly string[];
     liveLines: readonly ThreadUsageLineRecord[];
+    liveGates?: SpendGateLines;
   }): Promise<number> {
     const db = this.stateDb.raw;
     // The summary and gap probes share a SQLite snapshot. The partial
@@ -3543,10 +3548,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     };
     let summary = readSummary();
     if (summary.unpriced && this.firstUnpricedBatchHasModel(params)) {
-      await this.repriceThreadUsageHistory(params);
+      // A better-sqlite3 transaction callback cannot await. Complete the repair
+      // and total on its snapshot before returning the promise to the caller.
+      const pending = this.repriceThreadUsageHistory(params);
+      if (pending) await pending;
       summary = readSummary();
     }
-    if (!summary.possible_gap && !params.localModelIds.length && !params.liveLines.length) return summary.micros ?? 0;
+    if (!summary.possible_gap && !params.localModelIds.length && !params.liveLines.length && !params.liveGates?.size) return summary.micros ?? 0;
     // Never retain uncommitted caller state. Our own read transaction keeps
     // the spend checkpoint, changed rows, worker replacements and summary on
     // the same snapshot when another owner is writing this profile.
@@ -3599,9 +3607,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   /** Transcript usage candidates for the requested turn IDs in ledger order. */
-  async readThreadTurnUsageLines(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
+  async readThreadTurnUsageLines(params: ThreadPricingReadParams & {
     turnIds: readonly string[];
   }): Promise<ThreadUsageLineRecord[]> {
     if (params.turnIds.length === 0) return [];
@@ -3636,10 +3642,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return lines;
   }
 
-  private materializeThreadPricing(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
-  }): ThreadPricingLedgerRead {
+  private materializeThreadPricing(params: ThreadPricingReadParams): ThreadPricingLedgerRead {
     const lineRows = this.stateDb.raw
       .prepare(
         `SELECT *
@@ -3715,7 +3718,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
 
       if (repairs.length > 0) {
-        this.persistThreadUsagePricingRepairsSync(repairs);
+        this.persistThreadUsagePricingRepairsSync(repairs, params.onRepriced);
         return this.materializeThreadPricing(params);
       }
     }
@@ -3780,6 +3783,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       existing: ThreadUsageLineRow;
       repaired: ThreadUsageLineRecord;
     }>,
+    onRepriced?: ThreadPricingReadParams["onRepriced"],
   ): void {
     const now = Date.now();
     const updateLine = this.stateDb.raw.prepare(
@@ -3829,9 +3833,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       );
     };
 
+    const changedTurns: ThreadUsageLineRecord[] = [];
     this.stateDb.raw.transaction(() => {
       for (const { existing, repaired } of repairs) {
-        updateLine.run({
+        const result = updateLine.run({
           cacheWriteInputCostMicros:
             repaired.cacheWriteInputCostMicros ?? 0,
           cachedInputCostMicros: repaired.cachedInputCostMicros,
@@ -3848,6 +3853,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           updatedAt: now,
           usageLineId: repaired.usageLineId,
         });
+        if (!result.changes) continue;
+        if (onRepriced && repaired.scope === "turn" && repaired.turnId && repaired.status !== "superseded") {
+          changedTurns.push(repaired);
+        }
         const threadId = repaired.parentThreadId ?? repaired.threadId;
         queueSummary({
           backend: existing.backend,
@@ -3869,6 +3878,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
     })();
     this.pricingRepairGeneration++;
+    if (onRepriced) changedTurns.forEach(onRepriced);
   }
 
   /**
@@ -4667,10 +4677,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    * staged. Page in ledger order and yield between groups, with one repair
    * transaction per pass, exactly as materializeThreadPricing does.
    */
-  private async repriceThreadUsageHistory(
-    params: { backend: ThreadOverlayState["backend"]; threadId: string },
+  private repriceThreadUsageHistory(
+    params: ThreadPricingReadParams,
     readRequestedRepairs?: () => Set<string>,
-  ): Promise<void> {
+  ): void | Promise<void> {
+    const batches = this.threadUsagePricingRepairBatches(params, readRequestedRepairs);
+    if (batches.next().done) return;
+    // Only a repair outside a caller-owned transaction yields a batch.
+    return (async () => {
+      do {
+        await yieldToEventLoop();
+      } while (!batches.next().done);
+    })();
+  }
+
+  private *threadUsagePricingRepairBatches(
+    params: ThreadPricingReadParams,
+    readRequestedRepairs?: () => Set<string>,
+  ): Generator<void> {
     const db = this.stateDb.raw;
     const versions = sqliteUsageLedgerVersions(db);
     const select = prepareSqliteRead(db,
@@ -4717,7 +4741,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         // stale pass instead of persisting prices derived before a local or
         // peer ledger edit. The generation includes raw SQL and rollbacks.
         if (!db.inTransaction && versions) {
-          await yieldToEventLoop();
+          yield;
           stale = version !== (versions.get(params.threadId) ?? 0)
             || dataVersion !== db.pragma("data_version", { simple: true });
           if (stale) break;
@@ -4725,11 +4749,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       if (stale) continue;
       if (repairs.length === 0) return;
-      this.persistThreadUsagePricingRepairsSync(repairs);
+      this.persistThreadUsagePricingRepairsSync(repairs, params.onRepriced);
       if (requested?.size === 0) return;
       // Repairs regroup the remaining unpriced rows. The old recursive full
       // read retries from the newest row too, until a pass makes no progress.
-      if (!db.inTransaction && versions) await yieldToEventLoop();
+      if (!db.inTransaction && versions) yield;
     }
   }
 

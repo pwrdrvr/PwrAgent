@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind, AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import { buildTurnUsageActivityEntryFromLine } from "@pwragent/shared/thread-usage-display";
 import { estimateHistoricalThreadUsageGapLines } from "@pwragent/shared/thread-pricing-projection";
 import { FederationAccountingStream } from "../federation/federation-event-stream";
 import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
@@ -177,6 +178,61 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     }
   });
 
+  it("invalidates a previously loaded turn after another viewer hydrates its accounting", async () => {
+    const registry = createRegistry();
+    const backend = "acp:antigravity";
+    const threadId = "thread-1";
+    const events: PricingEvent[] = [];
+    registry.onEvent(({ notification }) => {
+      if (notification.method === "thread/pricing/updated") events.push(notification as PricingEvent);
+    });
+    for (const id of ["A", "B"]) {
+      await registry.publishLocalEvent(started(backend, id));
+      await registry.publishLocalEvent(usage(backend, id));
+      await complete(registry, backend, id);
+      if (id === "A") {
+        const [original] = (await store.readThreadPricing({ backend, threadId })).lines;
+        const line = { ...original!, usageLineId: "replayed-A", source: "hydration" as const, totalTokens: 12345 };
+        const entry = buildTurnUsageActivityEntryFromLine({ line, turn: { id, status: "completed" } })!;
+        await registryModules(registry).threadUsageLedger.persistReplayUsageLines({
+          entries: [{ ...entry, usageLine: line }], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+        });
+      }
+    }
+    expect(events).toHaveLength(2);
+    expect(events[1]!.params.pricingHistoryRevision).not.toBe(events[0]!.params.pricingHistoryRevision);
+  });
+
+  it.each(["spend", "turn"] as const)("delivers historical repairs from a %s read to owner listeners", async (read) => {
+    const registry = createRegistry([], { spendAlertPolicy: {
+      threadSpendEnabled: read === "spend", threadSpendThresholdUsd: 1,
+      activeTurnSpendEnabled: false, activeTurnSpendThresholdUsd: 1,
+    } });
+    const backend = "acp:antigravity";
+    const threadId = "thread-1";
+    const events: PricingEvent[] = [];
+    registry.onEvent(({ notification }) => {
+      if (notification.method === "thread/pricing/updated") events.push(notification as PricingEvent);
+    });
+    for (const id of ["A", "B"]) {
+      await registry.publishLocalEvent(started(backend, id));
+      await registry.publishLocalEvent(usage(backend, id));
+      await complete(registry, backend, id);
+      if (read === "spend" && id === "A") stateDb.raw.prepare("UPDATE thread_usage_lines SET model = 'gpt-5.5' WHERE turn_id = ?").run(id);
+    }
+    if (read === "turn") {
+      // Repricing B must pass through the newer unpriced A in its retry batch.
+      stateDb.raw.exec(`UPDATE thread_usage_lines SET model = 'gpt-5.5',
+        created_at = CASE turn_id WHEN 'A' THEN 1800000000001 ELSE 1800000000000 END`);
+      await registryModules(registry).threadUsageLedger.emitThreadPricingUpdated({ backend, threadId, updatedTurnId: "B" });
+    }
+    const persisted = (await store.readThreadPricing({ backend, threadId })).lines.find((line) => line.turnId === "A")!;
+    expect(persisted.totalCostMicros).toBeGreaterThan(0);
+    expect(events.at(-1)!.params.pricing.lines).toContainEqual(expect.objectContaining({
+      turnId: "A", priceStatus: "priced", totalCostMicros: persisted.totalCostMicros,
+    }));
+  });
+
   it("agrees with full ledger spend through cumulative gaps, replacements, and late turn corrections", async () => {
     const registry = createRegistry();
     const thread = { backend: "acp:antigravity", threadId: "thread-1" } as const;
@@ -249,6 +305,19 @@ describe("DesktopBackendRegistry usage turn ends", () => {
         throw new Error("rollback");
       })()).toThrow("rollback");
       expect(await inside).toBe(original + 3000);
+      expect(await spend()).toBe(original + 2000);
+      let transactionPricing: ReturnType<typeof store.readThreadPricing> | undefined;
+      expect(() => stateDb.raw.transaction(() => {
+        stateDb.raw.prepare("UPDATE thread_usage_lines SET price_status = 'unpriced', total_cost_micros = 0, pricing_basis = NULL WHERE usage_line_id = ?").run("line-0");
+        inside = spend();
+        transactionPricing = store.readThreadPricing(thread);
+        throw new Error("rollback");
+      })()).toThrow("rollback");
+      const pricing = (await transactionPricing)!;
+      const expected = [...pricing.summaries, ...estimateHistoricalThreadUsageGapLines(pricing.lines)]
+        .reduce((sum, row) => sum + row.totalCostMicros, 0);
+      expect(expected).not.toBe(original + 2000);
+      expect(await inside).toBe(expected);
       expect(await spend()).toBe(original + 2000);
     } finally {
       peer.close();

@@ -81,8 +81,73 @@ class ThreadSpendProjection {
   }
 }
 
+/** The owner mutates an open turn's gate map as helper prices arrive. A
+ * missing ID invalidates the whole map (clear). SQLite changes arrive through
+ * the ledger watcher so a held gate only replaces its current stored cost. */
+export interface SpendGateLines extends ReadonlyMap<string, ThreadUsageLineRecord> {
+  watchChanges(listener: (id?: string) => void): () => void;
+}
+
+class GateSpendAdjustment {
+  private source?: SpendGateLines;
+  private unsubscribe?: () => void;
+  private dirty?: Set<string>;
+  private readonly amounts = new Map<string, number>();
+  private sum = 0;
+
+  close(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.source = undefined;
+    this.dirty = undefined;
+  }
+
+  update(
+    gates: SpendGateLines | undefined,
+    storedChanges: ReadonlySet<string>,
+    rebuild: boolean,
+    retain: boolean,
+    localModels: ReadonlySet<string>,
+    readChanged: (ids: ReadonlySet<string>) => ThreadUsageLineRecord[],
+  ): number {
+    if (gates !== this.source) {
+      this.close();
+      this.source = gates;
+      if (retain && gates) {
+        this.unsubscribe = gates.watchChanges((id) => {
+          if (id === undefined || (this.dirty && this.dirty.size >= 256)) this.dirty = undefined;
+          else this.dirty?.add(id);
+        });
+      }
+    }
+    if (rebuild || !this.dirty) {
+      this.sum = 0;
+      this.amounts.clear();
+      this.dirty = new Set(gates?.keys());
+    }
+    const ids = this.dirty;
+    for (const id of storedChanges) if (gates?.has(id)) ids.add(id);
+    if (!ids.size) return this.sum;
+    const stored = new Map(readChanged(ids).map((line) => [line.usageLineId, usdCost(spendLine(line, localModels))]));
+    for (const id of ids) {
+      this.sum -= this.amounts.get(id) ?? 0;
+      const line = gates?.get(id);
+      if (line) {
+        const amount = usdCost(spendLine(line, localModels)) - (stored.get(id) ?? 0);
+        this.sum += amount;
+        this.amounts.set(id, amount);
+      } else {
+        this.amounts.delete(id);
+      }
+    }
+    ids.clear();
+    return this.sum;
+  }
+}
+
 type SpendCheckpoint = {
   projection: ThreadSpendProjection;
+  gates: GateSpendAdjustment;
   lastReadAt: number;
   dataVersion: number;
   modelKey: string;
@@ -95,7 +160,9 @@ const checkpoints = new WeakMap<Database.Database, Map<string, SpendCheckpoint>>
 
 export function forgetThreadSpend(db: Database.Database, key: string): void {
   const entries = checkpoints.get(db);
-  entries?.get(key)?.stop();
+  const checkpoint = entries?.get(key);
+  checkpoint?.stop();
+  checkpoint?.gates.close();
   entries?.delete(key);
 }
 
@@ -106,6 +173,7 @@ export function projectedThreadSpend(params: {
   threadId: string;
   localModelIds: readonly string[];
   liveLines: readonly ThreadUsageLineRecord[];
+  liveGates?: SpendGateLines;
   retain: boolean;
   readSummaryMicros: () => number;
   readBaseline: () => ThreadUsageLineRecord[];
@@ -128,7 +196,7 @@ export function projectedThreadSpend(params: {
   if (!cached || cached.dataVersion !== version || cached.modelKey !== modelKey) {
     if (params.retain) forgetThreadSpend(db, key);
     const entry: SpendCheckpoint = {
-      projection: new ThreadSpendProjection(), dataVersion: version, modelKey, lastReadAt: now,
+      projection: new ThreadSpendProjection(), gates: new GateSpendAdjustment(), dataVersion: version, modelKey, lastReadAt: now,
       reset: true, dirtyLines: new Set(), stop: () => {},
     };
     if (params.retain) {
@@ -158,19 +226,27 @@ export function projectedThreadSpend(params: {
     if (!cached.reset && cached.dirtyLines.size) {
       cached.reset = !cached.projection.update(params.readChanged(cached.dirtyLines), cached.dirtyLines, localModels);
     }
+    const rebuildGates = cached.reset;
     if (cached.reset) {
       cached.projection = new ThreadSpendProjection();
       cached.projection.update(params.readBaseline(), new Set(), localModels);
       cached.reset = false;
     }
+    const gateAdjustment = cached.gates.update(params.liveGates, cached.dirtyLines, rebuildGates, params.retain, localModels, params.readChanged);
     cached.dirtyLines.clear();
-    let total = cached.projection.total(params.readSummaryMicros(), params.liveLines.length > 0, localModels);
-    // Live gates and workers are monitor rows. Their effective price replaces
-    // the corresponding stored charge and does not affect the gap fold.
+    let total = cached.projection.total(params.readSummaryMicros(), Boolean(params.liveGates?.size || params.liveLines.length), localModels)
+      + gateAdjustment;
+    // A held worker replaces a gate or a stored charge with the same usage ID.
     if (params.liveLines.length) {
       const live = new Map(params.liveLines.map((line) => [line.usageLineId, line]));
-      for (const line of params.readChanged(new Set(live.keys()))) total -= usdCost(spendLine(line, localModels));
-      for (const line of live.values()) total += usdCost(spendLine(line, localModels));
+      const storedIds = new Set<string>();
+      for (const [id, line] of live) {
+        const gate = params.liveGates?.get(id);
+        if (gate) total -= usdCost(spendLine(gate, localModels));
+        else storedIds.add(id);
+        total += usdCost(spendLine(line, localModels));
+      }
+      for (const line of params.readChanged(storedIds)) total -= usdCost(spendLine(line, localModels));
     }
     return total;
   } catch (error) {

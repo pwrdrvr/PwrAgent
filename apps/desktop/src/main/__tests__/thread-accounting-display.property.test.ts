@@ -38,10 +38,11 @@ function makeRegistry(store: SqliteOverlayStore, options: {
   liveLines?: ThreadUsageLineRecord[];
   workerLines?: ThreadUsageLineRecord[];
 } = {}) {
+  const held = new LivePricingLines(options.workerLines?.map((line) => [line.usageLineId, line] as const));
   const subAgentMonitorService = {
-    codexNativeSubAgentParentRecords: new Map([["child", "parent"]]),
-    liveCodexNativeSubAgentUsageRecords: new Map(options.workerLines ? [["parent", new Map([
-      ["codex-native:child", { lines: new LivePricingLines(options.workerLines.map((line) => [line.usageLineId, line])) }],
+    heldWorkerPricingLines: (id: string) => id === "child" && held.size ? [held] : [],
+    liveCodexNativeSubAgentUsageRecords: new Map(held.size ? [["parent", new Map([
+      ["codex-native:child", { lines: held }],
     ])]] : []),
   };
   const registry: DesktopBackendRegistry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
@@ -186,6 +187,20 @@ it("matches full-ledger usage activities for local and federated reads", async (
       }
     },
   ), { numRuns: 8, examples: [["codex", turnIds, "completed", true], ["codex", turnIds, "failed", false]] });
+});
+
+it("matches full pricing tie order when an unrelated live monitor is the only overlay", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    await store.upsertThreadUsageLines({ lines: [
+      usage("candidate-Z", { turnId: turn.id }), usage("candidate-a", { turnId: turn.id, totalCostMicros: 900 }),
+    ] });
+    const { ledger } = makeRegistry(store, { liveLines: [usage("gate", { scope: "monitor" })] });
+    const full = await ledger.readThreadPricingWithLiveTokenMiser(thread);
+    const scoped = await ledger.readThreadTurnUsage({ ...thread, turnIds: [turn.id] });
+    expect(scoped.lines).toEqual(full.lines.filter((line) => line.turnId === turn.id));
+  } finally { db.close(); }
 });
 
 it("accepts a full accounting batch and rejects a larger one before the ledger read", async () => {

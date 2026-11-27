@@ -5,6 +5,13 @@ import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing
 export class LivePricingLines extends Map<string, ThreadUsageLineRecord> {
   private readonly turns = new Map<string, Set<string>>();
 
+  private readonly changeListeners = new Set<(id?: string) => void>();
+
+  watchChanges(listener: (id?: string) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => { this.changeListeners.delete(listener); };
+  }
+
   constructor(previous?: Iterable<readonly [string, ThreadUsageLineRecord]>) {
     super();
     if (previous) {
@@ -19,7 +26,9 @@ export class LivePricingLines extends Map<string, ThreadUsageLineRecord> {
       ids.add(id);
       this.turns.set(line.turnId, ids);
     }
-    return super.set(id, line);
+    super.set(id, line);
+    for (const notify of this.changeListeners) notify(id);
+    return this;
   }
 
   private removeTurnIndex(id: string): void {
@@ -33,16 +42,18 @@ export class LivePricingLines extends Map<string, ThreadUsageLineRecord> {
 
   override delete(id: string): boolean {
     this.removeTurnIndex(id);
-    return super.delete(id);
+    const removed = super.delete(id);
+    if (removed) for (const notify of this.changeListeners) notify(id);
+    return removed;
   }
 
   override clear(): void {
     this.turns.clear();
     super.clear();
+    for (const notify of this.changeListeners) notify();
   }
 
-  appendForTurns(turnIds: ReadonlySet<string>, selected: Map<string, ThreadUsageLineRecord>): boolean {
-    let changed = false;
+  appendForTurns(turnIds: ReadonlySet<string>, selected: Map<string, ThreadUsageLineRecord>): void {
     // A live row of any scope can replace a previously selected row by ID.
     // Probe the smaller side so one worker with one line never walks an entire loaded page.
     const candidates = this.size < selected.size ? this.keys() : selected.keys();
@@ -50,7 +61,6 @@ export class LivePricingLines extends Map<string, ThreadUsageLineRecord> {
       const replacement = this.get(id);
       if (replacement && selected.has(id)) {
         selected.set(id, replacement);
-        changed = true;
       }
     }
     const turns = this.turns.size < turnIds.size ? this.turns.keys() : turnIds;
@@ -58,9 +68,7 @@ export class LivePricingLines extends Map<string, ThreadUsageLineRecord> {
       if (!turnIds.has(turn)) continue;
       for (const id of this.turns.get(turn) ?? []) {
         selected.set(id, this.get(id)!);
-        changed = true;
       }
     }
-    return changed;
   }
 }

@@ -134,6 +134,53 @@ describe("Token Miser savings scaling", () => {
     expect(counter.reads.pricing).toBe(0);
   });
 
+  it("probes only changed gate IDs as spend publications accumulate", async () => {
+    const live = new LivePricingLines();
+    internals.liveTokenMiserUsageLines.set(THREAD_ID, live);
+    const lookup = vi.spyOn(store as unknown as { readThreadUsageLineSync(id: string): unknown }, "readThreadUsageLineSync");
+    const ledger = registryModules(registry).threadUsageLedger;
+    for (let i = 0; i < 8; i++) {
+      const line = gateLine({ index: i, inputTokens: 100, monitorId: `gate-${i}`, live: true });
+      live.set(line.usageLineId, line);
+      await ledger.emitThreadPricingUpdated({ backend: "codex", threadId: THREAD_ID });
+    }
+    expect(lookup.mock.calls.length).toBeLessThanOrEqual(8);
+    lookup.mockClear();
+    await ledger.emitThreadPricingUpdated({ backend: "codex", threadId: THREAD_ID });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("keeps the gate adjustment equal to full spend across storage, replacement and retirement", async () => {
+    const thread = { backend: "codex", threadId: THREAD_ID } as const;
+    const live = new LivePricingLines();
+    internals.liveTokenMiserUsageLines.set(THREAD_ID, live);
+    const spend = vi.spyOn(store, "readThreadSpendMicros");
+    const ledger = registryModules(registry).threadUsageLedger;
+    const check = async () => {
+      spend.mockClear();
+      await ledger.emitThreadPricingUpdated(thread);
+      const full = await ledger.readThreadPricingWithLiveTokenMiser(thread);
+      expect(await spend.mock.results[0]?.value).toBe(full.lines.reduce((sum, line) => sum + line.totalCostMicros, 0));
+    };
+    const gate = gateLine({ index: 0, inputTokens: 1000, monitorId: "first", live: true });
+    live.set(gate.usageLineId, gate);
+    await check();
+    await store.upsertThreadUsageLine({ line: { ...gate, status: "pending" } });
+    await check();
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET total_cost_micros = 7 WHERE usage_line_id = ?").run(gate.usageLineId);
+    await check();
+    live.set(gate.usageLineId, { ...gate, totalCostMicros: gate.totalCostMicros + 100 });
+    await check();
+    const extra = gateLine({ index: 1, inputTokens: 100, monitorId: "second", live: true });
+    live.set(extra.usageLineId, extra);
+    live.delete(gate.usageLineId);
+    await check();
+    live.clear();
+    await check();
+    live.set(gate.usageLineId, gate);
+    await check();
+  });
+
   it("reconciles live-only turns and replacements as a usage line changes scope", async () => {
     const original = parentLine({ id: "usage", turnId: "first" });
     await store.upsertThreadUsageLine({ line: original });
