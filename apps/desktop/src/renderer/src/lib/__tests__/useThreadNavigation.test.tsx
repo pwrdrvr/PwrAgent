@@ -11563,6 +11563,29 @@ describe("useThreadNavigation", () => {
     expect(latestThreadActionError(onThreadActionError, "archive-thread")).toContain("/failed: Thread is still running");
   });
 
+  it("sends the displayed project membership revision with Archive and Mark Read", async () => {
+    const directoryKey = "directory:/shown";
+    const directory = { key: directoryKey, kind: "directory" as const, label: "Shown", path: "/shown", threadKeys: [], needsAttentionCount: 0 };
+    const markNavigationDirectorySeen = vi.fn(async () => ({ directoryKey, changedCount: 0 }));
+    const removeNavigationDirectory = vi.fn(async () => ({ directoryKey, registrationRetained: true as const }));
+    const api: DesktopApi = { markNavigationDirectorySeen, removeNavigationDirectory,
+      getNavigationQueryPage: async (request) => {
+        const page = navigationQueryFixture(request, { directories: [directory], threads: [] });
+        return { ...page, directories: page.directories?.map((row) => ({ ...row, ownerMembershipRevision: "shown-revision" })) };
+      },
+    };
+    const { result } = renderHook(() => useRealThreadNavigation(api));
+    await waitFor(() => expect(result.current.directories[0]?.ownerMembershipRevision).toBe("shown-revision"));
+    await act(async () => {
+      await result.current.markDirectoriesSeen([directoryKey]);
+      await result.current.archiveDirectories([directoryKey]);
+    });
+    expect(markNavigationDirectorySeen).toHaveBeenCalledWith(expect.objectContaining({ directoryKey, displayedMembershipRevision: "shown-revision" }));
+    expect(removeNavigationDirectory).toHaveBeenCalledWith(expect.objectContaining({
+      directoryKey, archiveThreads: true, displayedMembershipRevision: "shown-revision",
+    }));
+  });
+
   it("removes an empty registered directory and deletes its overlay row", async () => {
     const registeredLaunchpad = {
       directoryKey: "directory:/repo/app",

@@ -16,7 +16,7 @@ import { isMessagingInteractivePendingRequest } from "./core/messaging-pending-r
 import { getRbacPolicyService } from "./rbac-policy-service";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import type { MessagingStoreLike } from "./core/messaging-storage";
-import { setNamedMessagingBindingReader } from "./named-messaging-bindings";
+import { noteMessagingBindingsChange, setNamedMessagingBindingReader } from "./named-messaging-bindings";
 import type {
   MessagingAdapter,
   MessagingBackendBridge,
@@ -2868,6 +2868,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   private broadcastBindingsChanged(): void {
+    noteMessagingBindingsChange();
     void this.syncFederationEventSubscriptions().catch((error) => {
       messagingLog.warn("federation event subscription sync failed", {
         error: error instanceof Error ? error.message : String(error),

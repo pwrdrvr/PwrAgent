@@ -5,9 +5,20 @@ type Thread = { backend: AppServerBackendKind; threadId: string };
 type NamedBindingReader = (thread?: Thread, includeOffline?: boolean) => Promise<MessagingBindingRecord[]>;
 
 let reader: NamedBindingReader | undefined;
+let bindingsRevision = 0;
+
+export function noteMessagingBindingsChange(): void {
+  bindingsRevision += 1;
+}
+
+export function readMessagingBindingsRevision(): number {
+  return bindingsRevision;
+}
 
 export function setNamedMessagingBindingReader(next: NamedBindingReader | undefined): void {
+  if (reader === next) return;
   reader = next;
+  noteMessagingBindingsChange();
 }
 
 export async function listNamedMessagingBindings(thread?: Thread, includeOffline = false): Promise<MessagingBindingRecord[]> {

@@ -90,6 +90,7 @@ type Resource = {
   token: string;
   value: NavigationWindowResource;
   pending?: Promise<void>;
+  refreshCompletion?: Promise<void>;
   /** Metadata notices observed after dispatch and awaiting the replacement baseline. */
   membershipRead?: {
     paths: Set<string>;
@@ -497,7 +498,8 @@ export class NavigationWindowQueries {
       } else {
         // Replace the lifetime rather than revive a released token or pending read.
         const next: Resource = { ...resource, token: `${this.prefix}:${++this.nextResource}`,
-          released: false, pending: undefined, refreshAfterPending: false, invalidated: false, membershipUncertain: true };
+          released: false, pending: undefined, refreshCompletion: undefined, refreshAfterPending: false,
+          invalidated: false, membershipUncertain: true };
         // Hiding the window ends a restore early. Showing it is a new opening.
         if (!next.resumeExpansion) budget = this.armResume(next, budget);
         this.resources.set(resource.value.id, next);
@@ -534,9 +536,9 @@ export class NavigationWindowQueries {
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", batch, count: selected.length, invalidatedOnly,
       caller: safeNavigationDiagnosticTrigger(trigger), trigger: safeNavigationDiagnosticTrigger(trigger), cause });
     let startedReads = false;
-    const refreshed = Promise.all(selected.map(async (resource) => {
+    const refreshed = Promise.all(selected.map((resource) => {
       const pending = resource.pending;
-      let retryJoinedPinRead = Boolean(pending && owesPinRead(resource));
+      const retryJoinedPinRead = Boolean(pending && owesPinRead(resource));
       // Owner events already fence pending reads. Attribute the replacement
       // to this caller without scheduling another one for the same event.
       const replacePending = requireNewObservation && forceRead(resource);
@@ -550,21 +552,18 @@ export class NavigationWindowQueries {
         // exactly why its baseline is stale.
         if (!resource.invalidated) resource.membershipUncertain = true;
         if (pending && replacePending) resource.refreshAfterPending = true;
-        const read = this.read(resource, false, undefined, false, "refresh", false);
+        void this.read(resource, false, undefined, false, "refresh", false);
         startedReads ||= !pending && Boolean(resource.pending);
-        await read;
       }
-      while (this.isCurrent(resource)) {
-        if (resource.pending) {
-          await resource.pending;
-          continue;
-        }
-        // The receipt can arrive while the broadcast's read is still in
-        // flight. Give that failed read the same recovery as a late receipt.
-        if (!retryJoinedPinRead || !owesPinRead(resource)) break;
-        retryJoinedPinRead = false;
-        await this.read(resource, false);
-      }
+      const shared = this.waitForRefreshCompletion(resource);
+      if (!retryJoinedPinRead) return shared;
+      // The receipt can arrive while the broadcast's read is still in
+      // flight. Give that failed read the same recovery as a late receipt.
+      return shared?.then(() => {
+        if (!this.isCurrent(resource) || !owesPinRead(resource)) return;
+        void this.read(resource, false);
+        return this.waitForRefreshCompletion(resource);
+      });
     }));
     let completion = refreshed.then(() => undefined);
     if (windowScope !== undefined && selected.length > 0) {
@@ -577,6 +576,21 @@ export class NavigationWindowQueries {
     // read's loading state together, including a refresh of multiple owners.
     if (startedReads) this.publish();
     return completion;
+  }
+
+  private waitForRefreshCompletion(resource: Resource): Promise<void> | undefined {
+    if (resource.refreshCompletion || !resource.pending) return resource.refreshCompletion;
+    // Follow replacements once per resource, then settle every joined caller.
+    const drain = async (first: Promise<void>) => {
+      try {
+        await first;
+        while (this.isCurrent(resource) && resource.pending) await resource.pending;
+      } finally {
+        resource.refreshCompletion = undefined;
+      }
+    };
+    resource.refreshCompletion = drain(resource.pending);
+    return resource.refreshCompletion;
   }
 
   /** Invalidate transport baselines before canonical owner events can race a late page. */

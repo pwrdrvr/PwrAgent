@@ -128,6 +128,52 @@ it("refreshes a completed page invalidated during the rest of its window refresh
   } finally { gate.resolve(); queries.dispose(); }
 });
 
+it("shares completion across owner changes that each overtake a dispatched refresh", async () => {
+  async function observe(changes: number) {
+    const replies: Array<() => void> = [];
+    let revision = 0;
+    let settled = 0;
+    const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent));
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    const liveChecks = vi.spyOn(queries as unknown as { isCurrent: (resource: unknown) => boolean }, "isCurrent");
+    const waiters: Promise<void>[] = [];
+    const refresh = () => waiters.push(queries.refresh(undefined, undefined, true).then(() => { settled++; }));
+    try {
+      queries.setDemand(new Map([["group-0", request(0)]]));
+      await until(() => idle(queries));
+      liveChecks.mockClear();
+      read.mockClear();
+      read.mockImplementation((sent) => {
+        const snapshot = page(sent, String(revision));
+        return new Promise((resolve) => replies.push(() => resolve(snapshot)));
+      });
+      queries.invalidate("group-0");
+      refresh();
+      for (let i = 0; i < changes; i++) {
+        await until(() => replies.length === 1);
+        revision++;
+        queries.invalidate(undefined, undefined, event(0));
+        refresh();
+        expect(settled).toBe(0);
+        replies.shift()!();
+      }
+      await until(() => replies.length === 1);
+      expect(settled).toBe(0);
+      replies.shift()!();
+      await Promise.all(waiters);
+      expect(settled).toBe(changes + 1);
+      expect(read).toHaveBeenCalledTimes(changes + 1);
+      expect(queries.getSnapshot().resources.get("group-0")?.state.page?.countsRevision).toBe(String(revision));
+      return liveChecks.mock.calls.length;
+    } finally { queries.dispose(); replies.splice(0).forEach((resolve) => resolve()); }
+  }
+
+  // Doubling separately dispatched replacements doubles lifecycle work, not
+  // the number of callers independently following the entire read chain.
+  const first = await observe(16);
+  expect(await observe(32)).toBeLessThanOrEqual(2 * first);
+});
+
 it("row-only bursts obey complete child membership even while metadata is stale or refreshing", async () => {
   // Specification: without a membership change, the owner's complete child
   // set remains the exclusion oracle throughout any ordering of row events.

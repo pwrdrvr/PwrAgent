@@ -8482,10 +8482,14 @@ export function useThreadNavigation(
 
   const markDirectoriesSeen = useCallback(async (directoryKeys: string[]): Promise<void> => {
     onThreadActionErrorRef.current?.({ kind: "mark-directory-read", message: undefined });
+    const displayed = stateRef.current.rows?.directoryRows;
     try {
       if (!desktopApi?.markNavigationDirectorySeen) throw new Error("Upgrade this instance to mark directory membership read on its owner.");
       for (const directoryKey of new Set(directoryKeys)) {
-        await desktopApi.markNavigationDirectorySeen({ directoryKey, federationTarget: readRendererFederationTarget() });
+        const displayedMembershipRevision = displayed?.get(directoryKey)?.ownerMembershipRevision;
+        await desktopApi.markNavigationDirectorySeen({ directoryKey, federationTarget: readRendererFederationTarget(),
+          ...(displayedMembershipRevision !== undefined ? { displayedMembershipRevision } : {}),
+        });
       }
       await refresh();
     } catch (error) {
@@ -8496,12 +8500,15 @@ export function useThreadNavigation(
   const archiveDirectories = useCallback(async (directoryKeys: string[]): Promise<void> => {
     setArchiveThreadError(undefined);
     setArchiveThreadNotice(undefined);
+    const displayed = stateRef.current.rows?.directoryRows;
     const failures: string[] = [];
     for (const directoryKey of new Set(directoryKeys)) {
       try {
         if (!desktopApi?.removeNavigationDirectory) throw new Error("Upgrade this instance to archive projects through owner navigation.");
+        const displayedMembershipRevision = displayed?.get(directoryKey)?.ownerMembershipRevision;
         const response = await desktopApi.removeNavigationDirectory({
           directoryKey, archiveThreads: true, federationTarget: readRendererFederationTarget(),
+          ...(displayedMembershipRevision !== undefined ? { displayedMembershipRevision } : {}),
         });
         const notice = formatArchiveCleanupNotice(response.cleanup ?? []);
         if (notice) setArchiveThreadNotice(notice);
