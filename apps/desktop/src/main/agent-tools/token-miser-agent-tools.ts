@@ -1,3 +1,5 @@
+import { boundedCommandTools } from "./bounded-command-tool";
+import type { BoundedCommandCapture } from "../token-miser/bounded-command";
 import { retrievalSuccess } from "./token-miser-delivery";
 import { buildFocusedTokenMiserTools } from "./token-miser-focused-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
@@ -12,11 +14,13 @@ import type { TokenMiserGroupBatchOperation } from "../token-miser/token-miser-s
 export function buildTokenMiserToolDefinitions(
   store?: TokenMiserStore,
   focused?: TokenMiserFocusedSummaries,
+  capture?: BoundedCommandCapture,
 ): AgentToolDefinition[] {
   if (!store) {
-    return [];
+    return boundedCommandTools(capture);
   }
   return [
+    ...boundedCommandTools(capture, store),
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "search_token_miser_output",
@@ -63,7 +67,7 @@ export function buildTokenMiserToolDefinitions(
       name: "read_token_miser_output",
       annotations: { readOnlyHint: true },
       description:
-        "Read an inclusive line range from one preserved tool result. The returned range remains subject to the 10k-token parent-result cap, including one very long line. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread. Originals are retained until the next turn starts and may become unavailable earlier after memory-pressure eviction, archive or restart.",
+        "Read an inclusive line range from one preserved tool result, or pass byteOffset with just objectId for an exact 1024-byte base64 page of its UTF-8 text. The returned range remains subject to the 10k-token parent-result cap, including one very long line. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread. Originals are retained until the next turn starts and may become unavailable earlier after memory-pressure eviction, archive or restart.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -72,11 +76,22 @@ export function buildTokenMiserToolDefinitions(
           objectId: { type: "string" },
           startLine: { type: "integer", minimum: 1 },
           endLine: { type: "integer", minimum: 1 },
+          byteOffset: { type: "integer", minimum: 0 },
         },
       },
       dispatch: async (args, context) => {
         const objectId = readString(args.objectId);
         if (!objectId) return invalidArguments("objectId is required.");
+        if (args.byteOffset !== undefined) {
+          const offset = args.byteOffset;
+          if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0
+            || args.startLine !== undefined || args.endLine !== undefined) {
+            return invalidArguments("Supply a nonnegative byteOffset with just objectId.");
+          }
+          const page = await store.readBytes({ objectId, threadId: context.threadId, byteOffset: offset });
+          return page ? await retrievalSuccess({ store, context, objectId,
+            structuredContent: page, visibleText: JSON.stringify(page) }) : notFound();
+        }
         const result = await store.readLines({
           objectId,
           threadId: context.threadId,

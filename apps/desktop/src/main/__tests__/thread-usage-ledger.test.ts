@@ -326,13 +326,7 @@ describe("ThreadUsageLedger", () => {
     ), { numRuns: 300 });
   });
 
-  /**
-   * Reconciling the Token Miser ledger at startup stops each tracking gate
-   * whose thread compacted after the gate was created, at that compaction,
-   * then tracks exactly the gates still open and persists what the store now
-   * holds.
-   */
-  it("stops gates compacted while closed and tracks exactly the gates still open", async () => {
+  it("restores only demanded threads and stops their gates compacted while closed", async () => {
     const threads = ["thread-0", "thread-1", "thread-2"];
     const gateInput = fc.record({
       threadId: fc.constantFrom(...threads),
@@ -358,19 +352,19 @@ describe("ThreadUsageLedger", () => {
         const stops: Array<{ objectId: string; stoppedAt: number }> = [];
         const tokenMiserStore = {
           prune: async () => {},
-          *listMetadataPages() {
-            for (let offset = 0; offset < entries.length; offset += 3) {
-              yield entries.slice(offset, offset + 3).map((entry) => ({ ...entry }));
+          *listMetadataPages(_limit: number, threadId: string) {
+            const scoped = entries.filter((entry) => entry.threadId === threadId);
+            for (let offset = 0; offset < scoped.length; offset += 3) {
+              yield scoped.slice(offset, offset + 3).map((entry) => ({ ...entry }));
             }
           },
-          readMetadata: async (objectId: string) => entries.find((entry) => entry.objectId === objectId),
-          stopReplayTracking: async ({ objectId, stoppedAt }: { objectId: string; stoppedAt: number }) => {
-            stops.push({ objectId, stoppedAt });
-            if (refuses.has(objectId)) return undefined;
-            const entry = entries.find((candidate) => candidate.objectId === objectId)!;
-            entry.replayTrackingStoppedAt = stoppedAt;
-            return { ...entry };
-          },
+          restoreReplayTracking: async ({ objectIds, stoppedAt }: { objectIds: string[]; stoppedAt: number }) =>
+            objectIds.map((objectId) => {
+              stops.push({ objectId, stoppedAt });
+              const entry = entries.find((candidate) => candidate.objectId === objectId)!;
+              if (!refuses.has(objectId)) entry.replayTrackingStoppedAt = stoppedAt;
+              return { ...entry };
+            }),
         };
         const { ledger, internals } = createLedger({
           host: { tokenMiserStore: tokenMiserStore as never },
@@ -379,11 +373,7 @@ describe("ThreadUsageLedger", () => {
               compactions[threads.indexOf(threadId)]!.map((observedAt) => ({ observedAt })),
           } },
         });
-        const persisted: TokenMiserObjectMetadata[][] = [];
-        vi.spyOn(internals, "persistTokenMiserLedgerEntries").mockImplementation(async (metadata) => {
-          persisted.push([...metadata]);
-          return [];
-        });
+        const persist = vi.spyOn(internals, "persistTokenMiserLedgerEntries");
 
         // The oracle, from the inputs alone.
         const latest = (threadId: string) => compactions[threads.indexOf(threadId)]!.at(-1);
@@ -402,12 +392,16 @@ describe("ThreadUsageLedger", () => {
           expectedOpen.set(input.threadId, (expectedOpen.get(input.threadId) ?? new Set()).add(objectId));
         });
 
-        await ledger.initializeTokenMiserLedger();
-        expect(stops).toEqual(expectedStops);
-        const open = new Map([...internals.activeTokenMiserReplayEntries].map(([threadId, active]) =>
-          [threadId, new Set(active.keys())]));
-        expect(open).toEqual(expectedOpen);
-        expect(persisted.flat()).toEqual(entries);
+        for (const threadId of threads) {
+          await ledger.restoreTokenMiserReplayForThread(threadId);
+          const open = new Set(internals.activeTokenMiserReplayEntries.get(threadId)?.keys());
+          expect(open).toEqual(expectedOpen.get(threadId) ?? new Set());
+          expect(stops.splice(0)).toEqual(expectedStops.filter(({ objectId }) =>
+            entries.find((entry) => entry.objectId === objectId)?.threadId === threadId));
+          expect(internals.activeTokenMiserReplayEntries.size).toBe(threads.slice(0, threads.indexOf(threadId) + 1)
+            .filter((id) => expectedOpen.has(id)).length);
+        }
+        expect(persist).not.toHaveBeenCalled();
       },
     ), { numRuns: 300 });
   });
@@ -445,6 +439,8 @@ describe("ThreadUsageLedger", () => {
           ledger.rememberActiveTokenMiserReplayEntry(entry);
           return { ...entry };
         },
+        restoreReplayTracking: async ({ objectIds, stoppedAt }: { objectIds: string[]; stoppedAt: number }) =>
+          await Promise.all(objectIds.map((objectId) => tokenMiserStore.stopReplayTracking({ objectId, stoppedAt }))),
       };
       const { ledger, internals } = createLedger({
         host: { tokenMiserStore: tokenMiserStore as never },
@@ -461,19 +457,61 @@ describe("ThreadUsageLedger", () => {
           },
         } },
       });
-      vi.spyOn(internals, "persistTokenMiserLedgerEntries").mockImplementation(async () => {
-        if (timing !== "during the initial read") await deliverCompaction();
-        return [];
+      let firstSeen!: () => void;
+      const firstPage = new Promise<void>((resolve) => { firstSeen = resolve; });
+      const remember = ledger.rememberActiveTokenMiserReplayEntry.bind(ledger);
+      vi.spyOn(ledger, "rememberActiveTokenMiserReplayEntry").mockImplementation((entry) => {
+        remember(entry);
+        if (entry.objectId === "first") firstSeen();
       });
 
-      await ledger.initializeTokenMiserLedger();
+      const restore = ledger.restoreTokenMiserReplayForThread("thread");
+      if (timing !== "during the initial read") {
+        await firstPage;
+        await deliverCompaction();
+      }
+      await restore;
 
       expect(entries.map((entry) => entry.replayTrackingStoppedAt)).toEqual([observedAt, observedAt, undefined]);
       expect([...internals.activeTokenMiserReplayEntries.get("thread")!.keys()]).toEqual(["after-compaction"]);
     },
   );
 
-  it("restores later pages and publishes their usage after a ledger page write fails", async () => {
+  it("applies a live compaction to gates imported after its marker write failed", async () => {
+    const entry = gate({ objectId: "legacy-gate", threadId: "thread", createdAt: 1, replayTrackingVersion: 2 });
+    let ready = false;
+    let imported = false;
+    const restoreReplayTracking = vi.fn(async ({ stoppedAt }: { stoppedAt: number }) => [
+      { ...entry, replayTrackingStoppedAt: stoppedAt },
+    ]);
+    const tokenMiserStore = {
+      async prune() {
+        if (!ready) throw new Error("fixture malformed legacy history");
+        imported = true;
+      },
+      hasCompletedLegacyImport: () => imported,
+      *listMetadataPages() { if (imported) yield [entry]; },
+      restoreReplayTracking,
+    };
+    const { ledger, internals } = createLedger({
+      host: { tokenMiserStore: tokenMiserStore as never },
+      stores: { usage: { recordThreadCompaction: async () => { throw new Error("fixture marker write failed"); } } },
+    });
+    vi.spyOn(Date, "now").mockReturnValue(10);
+    await ledger.restoreTokenMiserReplayForThread("thread");
+    await ledger.handleThreadCompactionReplayBoundary({
+      backend: "codex",
+      notification: { method: "thread/compacted", params: { itemId: "boundary", threadId: "thread" } },
+    });
+
+    ready = true;
+    await ledger.prepareTokenMiserStorage();
+    await ledger.restoreTokenMiserReplayForThread("thread");
+    expect(restoreReplayTracking).toHaveBeenCalledWith({ objectIds: ["legacy-gate"], threadId: "thread", stoppedAt: 10 });
+    expect(internals.activeTokenMiserReplayEntries.has("thread")).toBe(false);
+  });
+
+  it("repairs later history pages and publishes their usage after a page write fails", async () => {
     const entries = ["first", "second", "third"].map((threadId) =>
       gate({ objectId: threadId, threadId, createdAt: 1, replayTrackingVersion: 2 }));
     const tokenMiserStore = {
@@ -486,9 +524,9 @@ describe("ThreadUsageLedger", () => {
       .mockImplementation(async ([entry]) => [entry!.threadId]);
     const publish = vi.spyOn(ledger, "emitThreadPricingUpdated").mockResolvedValue();
 
-    await ledger.initializeTokenMiserLedger();
+    await ledger.repairTokenMiserHistory();
 
-    expect([...internals.activeTokenMiserReplayEntries.keys()]).toEqual(["first", "second", "third"]);
+    expect(internals.activeTokenMiserReplayEntries.size).toBe(0);
     expect(persist.mock.calls.map(([page]) => page[0]?.threadId)).toEqual(["first", "second", "third"]);
     expect(publish.mock.calls.map(([params]) => params.threadId)).toEqual(["second", "third"]);
   });
@@ -576,7 +614,7 @@ describe("ThreadUsageLedger", () => {
     expect(ledger.listLiveTokenMiserSubAgents("thread-a")).toEqual([card]);
   });
 
-  it("exposes the reconciliation in flight, which settles only once the ledger is restored", async () => {
+  it("coalesces same-thread repair demand and joins it before shutdown", async () => {
     let release!: () => void;
     const released = new Promise<void>((resolve) => { release = resolve; });
     const tokenMiserStore = {
@@ -589,15 +627,16 @@ describe("ThreadUsageLedger", () => {
       await released;
       return [];
     });
-    await expect(ledger.currentTokenMiserLedgerReconciliation).resolves.toBeUndefined();
-    const reconciliation = ledger.initializeTokenMiserLedger();
-    expect(ledger.currentTokenMiserLedgerReconciliation).toBe(reconciliation);
+    await expect(ledger.drainTokenMiserLedgerWork()).resolves.toBeUndefined();
+    const reconciliation = ledger.repairTokenMiserHistory("thread");
+    expect(ledger.repairTokenMiserHistory("thread")).toBe(reconciliation);
     let settled = false;
-    void ledger.currentTokenMiserLedgerReconciliation.then(() => { settled = true; });
+    const drain = ledger.drainTokenMiserLedgerWork().then(() => { settled = true; });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(settled).toBe(false);
     release();
     await reconciliation;
+    await drain;
     expect(settled).toBe(true);
   });
 

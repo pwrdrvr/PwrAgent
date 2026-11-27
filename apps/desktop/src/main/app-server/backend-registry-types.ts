@@ -279,6 +279,7 @@ export type BackendClient = {
     reasoningEffort?: string;
   }): Promise<HelperModelResolution>;
   generateStructuredObject?(params: {
+    signal?: AbortSignal;
     helper: HelperModelId;
     model?: string;
     reasoningEffort?: string;

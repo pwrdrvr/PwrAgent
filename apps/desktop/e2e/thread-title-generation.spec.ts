@@ -141,7 +141,7 @@ test("applies a generated title even when the latest title lookup has not caught
   });
 
   try {
-    await app.window.getByRole("button", { name: new RegExp(PROMPT) }).click();
+    await app.window.getByRole("button", { name: PROMPT, exact: true }).click();
     await expect(
       app.window.getByRole("heading", {
         level: 2,

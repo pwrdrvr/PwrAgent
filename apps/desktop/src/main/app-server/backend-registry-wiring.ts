@@ -76,6 +76,7 @@ import { getTokenMiserBridgeDescriptorPath, TokenMiserHookBridge } from "../toke
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import { TOKEN_MISER_DIAGNOSTICS_DIRNAME } from "../token-miser/token-miser-types";
 import { TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
+import { boundedCommandHelper } from "../token-miser/bounded-command-helper";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { AgentToolMcpServer } from "../agent-tools/agent-tool-mcp-server";
 import { createScratchProjectDirectory as defaultCreateScratchProjectDirectory } from "./scratch-projects";
@@ -193,7 +194,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   let codexEnvironmentCommandRunner: ThreadDirectoryServiceDependencies["codexEnvironmentCommandRunner"];
   let codexEnvironmentHydrationStore: ThreadDirectoryServiceDependencies["codexEnvironmentHydrationStore"];
   let tokenMiserDiagnostics: RegistryDependencies["tokenMiserDiagnostics"];
-  let tokenMiserStore: RegistryDependencies["tokenMiserStore"];
+  let tokenMiserStore = options?.tokenMiserStore;
   let tokenMiserServiceValue: RegistryDependencies["tokenMiserService"];
   let tokenMiserHookBridge: RegistryDependencies["tokenMiserHookBridge"];
   let tokenMiserCodeModeReducerDescriptorPath: RegistryDependencies["tokenMiserCodeModeReducerDescriptorPath"];
@@ -416,6 +417,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     options?.acpSessionIdleCloseMs ?? ACP_SESSION_IDLE_CLOSE_MS;
   const codexThreadIdleUnsubscribeMs =
     options?.codexThreadIdleUnsubscribeMs ?? CODEX_THREAD_IDLE_UNSUBSCRIBE_MS;
+  const resolveTokenMiserBoundedCommands = options?.resolveTokenMiserBoundedCommands ?? (() => {
+    try {
+      return (settingsService ?? getDesktopSettingsService()).resolveTokenMiserBoundedCommands();
+    } catch {
+      return false;
+    }
+  });
   const resolveTokenMiserEnabledFn = options?.resolveTokenMiserEnabled ?? (() => {
     try {
       return (
@@ -790,16 +798,18 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       {
         onMetadataUpdated: async (metadata, reason) => {
           if (reason === "retrieval") ports.tokenMiserDiagnostics?.recordRetrieval(metadata);
-          ports.rememberPendingTokenMiserInterception(metadata);
           ports.rememberActiveTokenMiserReplayEntry(metadata);
+          // Restoring a past compaction only closes replay tracking. The
+          // historical view owns any accounting backfill for that gate.
+          if (reason === "restore-stop") return;
+          ports.rememberPendingTokenMiserInterception(metadata);
           // A replay-counter write changes nothing the gate card or its usage
           // line renders, and it fires once per active gate per model
           // request. Republishing the whole ledger for each one turned a
           // single usage event into N pricing reads and 2N notifications;
           // `recordTokenMiserParentModelRequest` already emits once for the
           // whole batch.
-          // Startup reconciles and publishes a page at a time.
-          if (reason === "replay" || reason === "flushed" || reason === "startup-stop") {
+          if (reason === "replay" || reason === "flushed") {
             return;
           }
           try {
@@ -855,7 +865,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         ports.tokenMiserCodeModeGroupingVersion,
       postToolUseExactOutputVersion: () =>
         ports.tokenMiserPostToolUseExactOutputVersion,
-      onFocusedInference: (params) => ports.recordTokenMiserFocusedInference(params),
+      onFocusedInference: (params) => ports.recordTokenMiserHelperInference(params),
       generateSummary: async (params) => {
         if (!ports.codexClient.generateStructuredObject) {
           return {
@@ -940,11 +950,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       elicit: (request, invocation, context, signal) => ports.requestUpstreamMcpForm(request, invocation, context, signal),
     });
   }
-  initialize.push(() => {
-    if (ports.tokenMiserStore) {
-      void ports.initializeTokenMiserLedger();
-    }
-  });
   const gitDirectoryService =
     options?.gitDirectoryService ??
     new GitDirectoryService({
@@ -978,7 +983,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       : options?.agentToolMcpServer ??
         new AgentToolMcpServer({
           resolveCallContext: (context) =>
-            ports.resolveAgentToolMcpCallContext(context),
+            ports.resolveAgentToolMcpCallContext(context, "invoke"),
           resolveCatalogs: async (context) => context.managedReview
             ? [{ id: "managed_review", router: managedReviewLedgerRouter }]
             : context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
@@ -1008,8 +1013,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               forgePrToolHandler: ports.gatedForgePrToolHandler,
               forgeToolPolicy: ports.resolveForgeToolPolicy(),
               threadOrchestrationHandler: ports.threadOrchestrationHandler,
-              tokenMiserStore: ports.tokenMiserStore,
+              tokenMiserStore: context.backend === "codex" ? ports.tokenMiserStore : undefined,
               tokenMiserFocused: ports.tokenMiserService?.focused,
+              boundedCommandCapture: ["acp:antigravity", "claude", "codex"].includes(context.backend) && ports.resolveTokenMiserBoundedCommands()
+                ? ports.boundedCommandCapture : undefined,
               starMapHandler: ports.starMapHandler,
               threadTodoHandler: ports.threadTodoHandler,
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
@@ -1024,10 +1031,12 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
           isToolAdvertised: async (name, context) => isAgentToolAdvertisedLocally(name)
+            && (name !== "capture_token_miser_command" || !context.threadId
+              || ports.boundedCommandsEnabled(await ports.resolveTokenMiserThreadOverride(context.backend, context.threadId)))
             && (name !== "create_monitor_delegation" || !context.threadId
               || await ports.isJobMonitorCreationEnabled({ backend: context.backend, threadId: context.threadId }))
             && (name !== "manage_pwragent" || await ports.canManagePwrAgent(
-              await ports.resolveAgentToolMcpCallContext(context) ?? context, true)),
+              ports.resolveAgentToolMcpCallContext(context, "catalog") ?? context, true)),
           resolveToolResultReminder: (context) =>
             ports.takeAcpMonitorJobSuggestion(context),
         });
@@ -1038,7 +1047,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         (createsLiveCodexClient
           ? new AgentToolMcpServer({
               resolveCallContext: (context) =>
-                ports.resolveAgentToolMcpCallContext(context),
+                ports.resolveAgentToolMcpCallContext(context, "invoke"),
               authorizeToolCall: refuseUnlistedPdfTool,
               isToolAdvertised: isAgentToolAdvertisedLocally,
               resolveCatalogs: () => [
@@ -1653,7 +1662,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   }, () => ports);
 
   const codexRuntimeSupervisor = new CodexRuntimeSupervisor(context, {
-    threadUsageLedger,
     threadArchiveCoordinator,
     threadWorkspaceService,
     resolveCodexAppServerRecycleSettingsFn,
@@ -1761,6 +1769,18 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolveCodexFastAllowedFn,
     resolvePdfAnalysisEnabledFn,
     acpSessionIdleCloseMs,
+    resolveTokenMiserBoundedCommands,
+    resolveBoundedCommandHelper: (caller) => {
+      try {
+        return boundedCommandHelper(settingsService ?? getDesktopSettingsService(), codexClient, async (usage) => {
+          if (caller.turnId) await threadUsageLedger.recordTokenMiserHelperInference({
+            threadId: caller.threadId, turnId: caller.turnId, inferenceId: randomUUID(), usage,
+          }, caller.backend);
+        });
+      } catch {
+        return undefined;
+      }
+    },
     resolveTokenMiserEnabledFn,
     resolveTokenMiserDefaultEnabledFn,
     resolveTokenMiserPollingReviewsEnabledFn,

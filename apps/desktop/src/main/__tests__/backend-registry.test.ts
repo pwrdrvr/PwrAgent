@@ -1651,6 +1651,28 @@ describe("DesktopBackendRegistry", () => {
     expect(codexClient.generateStructuredObject).toHaveBeenCalledOnce();
   });
 
+  it.skipIf(process.platform === "win32")("returns capture text without allocating a managed delivery on stock Codex", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+      resolveTokenMiserEnabled: () => false, resolveTokenMiserBoundedCommands: () => true });
+    onTestFinished(() => registry.close());
+    const store = new TokenMiserStore("stock-capture-receipts");
+    Object.assign(registry, { tokenMiserStore: store });
+    const mark = vi.spyOn(store, "prepareOwnerTextDelivery");
+    const capture = (registry as unknown as { boundedCommandCapture: { inspect: () => Promise<string> } }).boundedCommandCapture;
+    vi.spyOn(capture, "inspect").mockResolvedValue("git diff exited 0");
+    registryModules(registry).turnState.registerTurn("codex:fixture:turn");
+    const result = await codexClient.emitRequest({ method: "item/tool/call", params: {
+      threadId: "fixture", turnId: "turn", callId: "summary", requestId: "summary",
+      namespace: "pwragent", tool: "capture_token_miser_command", arguments: { objectId: "o1" },
+    } } as AppServerPendingRequestNotification);
+    expect(result).toMatchObject({ success: true, contentItems: [{ type: "inputText", text: "git diff exited 0" }] });
+    expect(mark).not.toHaveBeenCalled();
+    for (const backend of ["codex", "claude", "acp:antigravity"] as const) {
+      expect(registry.readBackendComposerSettings(backend).tokenMiser?.enabled).toBe(true);
+    }
+  });
+
   it("publishes owner Token Miser settings and persists overrides through the registry", async () => {
     const overlayStore = createOverlayStoreMock();
     let enabled = true;
@@ -1840,6 +1862,23 @@ describe("DesktopBackendRegistry", () => {
     } finally {
       await registry.close();
     }
+  });
+
+  it.skipIf(process.platform === "win32")("advertises bounded shell capture on stock Codex only when the profile and thread allow it", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = createDesktopBackendRegistry({
+      codexClient, overlayStore: createOverlayStoreMock(),
+      resolveTokenMiserEnabled: () => false, resolveTokenMiserBoundedCommands: () => true,
+    });
+    try {
+      for (const enabled of [true, false]) {
+        await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd, tokenMiserEnabled: enabled });
+        const names = pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name);
+        expect(names.includes("capture_token_miser_command")).toBe(enabled);
+        expect(names).not.toContain("read_token_miser_output");
+        expect(codexClient.lastStartThreadParams?.config).toBeUndefined();
+      }
+    } finally { await registry.close(); }
   });
 
   it("keeps Token Miser available for per-thread opt-in when its default is off", async () => {

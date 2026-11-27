@@ -282,7 +282,7 @@ export function buildPwrAgentToolSearchDefinition(
       if (!result.ok) return result;
       const visibleText = JSON.stringify(result.data);
       const delivery = store && context.turnId
-        ? await store.prepareToolDefinitionDelivery({ threadId: context.threadId, turnId: context.turnId, visibleText })
+        ? await store.prepareOwnerTextDelivery({ threadId: context.threadId, turnId: context.turnId, visibleText })
         : undefined;
       return agentToolSuccess(result.data, {
         contentItems: [{ type: "inputText", text: delivery?.text ?? visibleText }],

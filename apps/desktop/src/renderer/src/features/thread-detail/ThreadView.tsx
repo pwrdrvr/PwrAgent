@@ -802,6 +802,7 @@ export type ThreadViewProps = {
   /** Settings -> General -> Reviews: whether a new review panel opens with Auto-fix on. */
   reviewAutoFixDefault?: boolean;
   /** Token Miser experiment availability gate. */
+  tokenMiserCaptureEnabled?: boolean;
   tokenMiserEnabled?: boolean;
   /** Inherited Token Miser state when a thread has no explicit override. */
   tokenMiserDefaultEnabled?: boolean;
@@ -3365,6 +3366,7 @@ export function ThreadView(props: ThreadViewProps) {
         pastedImageMaxPatches={props.pastedImageMaxPatches}
         pdfAnalysisEnabled={props.pdfAnalysisEnabled}
         reviewAutoFixDefault={props.reviewAutoFixDefault}
+        tokenMiserCaptureEnabled={props.tokenMiserCaptureEnabled}
         tokenMiserEnabled={props.tokenMiserEnabled}
         tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
         monitorJobSuggestionsDefaultEnabled={props.monitorJobSuggestionsDefaultEnabled}

@@ -2,6 +2,7 @@ import type { NavigationIdentity } from "@pwragent/shared/contracts/navigation";
 import type { ReadThreadFamilyPricingResponse } from "@pwragent/shared/thread-family-pricing";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { getDesktopBackendRegistry } from "./backend-registry";
 import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
 import { readThreadFamilyPricing } from "./thread-family-pricing";
 
@@ -31,6 +32,9 @@ export function createLocalThreadFamilyPricingReader(
   return async (root) => await readThreadFamilyPricing({
     root,
     loadIndex: () => index ??= loadThreadFamilyPricingIndex(localInstanceId),
-    readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
+    readSummaries: async (threads) => {
+      await getDesktopBackendRegistry().repairTokenMiserFamilyCharges(threads);
+      return await getDesktopOverlayStore().readThreadPricingSummaries(threads);
+    },
   });
 }

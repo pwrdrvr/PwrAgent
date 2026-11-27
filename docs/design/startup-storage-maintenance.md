@@ -75,9 +75,11 @@ transaction touches one thread and one artifact family, with at most 128 indexed
 candidate rows and 256 KiB of logical content plus a fixed row allowance. This
 is deliberately below the discussed 10–20-thread ceiling. Statements enumerate
 their columns explicitly; schema changes must keep byte accounting current.
-Individual oversized records are retained, and a candidate window containing
-only oversized rows ends that family for this run. This can retain later small
-rows as well; it trades completeness for bounded candidate inspection.
+Individual oversized records are retained. For Token Miser gates, the worker
+advances its cursor past oversized records and gates whose helper charges are
+still unsettled. These rows count against the candidate limit. For other
+artifact families, a window containing only oversized rows ends that family
+for this run.
 
 After an 8 ms transaction or 1 MiB observed WAL growth, the worker halves its
 row limit, down to one. It yields five milliseconds between slices. These are

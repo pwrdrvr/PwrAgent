@@ -8,6 +8,8 @@ import { createTempStateDb } from "./sqlite-test-utils";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { DesktopSettingsService } from "../settings/desktop-settings-service";
+import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 
 const roots: string[] = [];
 const databases: StateDb[] = [];
@@ -86,6 +88,40 @@ it("uses the thread index for scoped accounting and observation reads", async ()
   const observations = stateDb.raw.prepare("EXPLAIN QUERY PLAN SELECT payload FROM token_miser_observations WHERE thread_id = ? ORDER BY created_at").all("owner");
   expect(JSON.stringify(objects)).toContain("idx_token_miser_objects_thread");
   expect(JSON.stringify(observations)).toContain("idx_token_miser_observations_thread");
+});
+
+it("keeps an explicit restore newer than a legacy archive marker imported by a peer", async () => {
+  const { store, legacy, root, stateDb } = await fixture();
+  const key = createHash("sha256").update(params.threadId).digest("hex");
+  const thread = path.join(legacy, "threads", key);
+  await fs.mkdir(thread, { recursive: true });
+  await fs.writeFile(path.join(thread, "archived"), "legacy-generation");
+  if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: stateDb.raw, dbPath: stateDb.raw.name });
+  const restore = await measureSqliteWrites(() => store.restoreThread(params.threadId));
+  expectSqliteWriteBudget({
+    scenario: "token-miser-restore-before-migration",
+    note: "One explicit restore records a live retention key before a possible legacy import.",
+    writes: restore.writes,
+  });
+  expect((await measureSqliteWrites(() => store.restoreThread(params.threadId))).writes.rowsChanged).toBe(0);
+
+  const peer = StateDb.open(path.join(root, "state.db"));
+  databases.push(peer);
+  const importer = new TokenMiserStore(legacy, { storage: new SqliteTokenMiserStorage(peer) });
+  await importer.prune({ maxAgeMs: 0, maxBytes: 0 });
+  await expect(store.store(params)).resolves.toMatchObject({ threadId: params.threadId });
+});
+
+it("imports legacy usage on the explicit Settings read", async () => {
+  const { store, legacy, root } = await fixture();
+  const entry = (await store.stage(params)).metadata;
+  await fs.mkdir(legacy, { recursive: true });
+  await fs.writeFile(path.join(legacy, `${entry.objectId}.json`), JSON.stringify(entry));
+  const settings = new DesktopSettingsService({
+    configPath: path.join(root, "config.toml"), tokenMiserStore: store, env: {},
+    secretStore: new MemoryDesktopSecretStore(),
+  });
+  await expect(settings.readTokenMiserUsage()).resolves.toMatchObject({ interceptionCount: 1 });
 });
 
 it("budgets durable acceptance, observations, replay buffering and turn flushes", async () => {

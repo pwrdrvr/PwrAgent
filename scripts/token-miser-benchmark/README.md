@@ -1,0 +1,146 @@
+# Foreground command output in PwrAgent
+
+Measurements from November 26, 2026 on macOS. Each run used a fresh local repository with the same header regression, 1,600 changed CSS rows, one passing test and one failing test. Both tests emitted 1,100 identical progress lines. The required answer identifies `headers.css`, the change from sticky to static at `top: 7px`, both test names, the expected and actual values, and exit 1.
+
+## Measured results
+
+“Raw” reads the CSS file and patch, then runs each test. “Guided” reads three lines, asks Git for a diffstat, archives each test's streams and returns its tail with its exit status. “Capture” uses the same narrow read and PwrAgent's explicit tool for the complete patch and both test runs.
+
+| Harness | Workflow | First input | Peak | Cached input | Uncached input | Total input | Calls | Tool bytes | Answer |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Antigravity | Raw | — | 25,979 | 68,429 | 27,125 | 95,554 | — | 40,956 | Complete |
+| Antigravity | Guided | — | 13,231 | 46,221 | 11,601 | 57,822 | — | 1,989 | Complete |
+| Antigravity | Capture | — | 17,565 | 37,189 | 18,795 | 55,984 | — | 3,713 | Complete |
+| Stock Codex | Raw | 20,398 | 30,994 | 99,456 | 31,681 | 131,137 | 5 | 196,555 | Complete |
+| Stock Codex | Guided | 20,445 | 21,289 | 82,176 | 21,766 | 103,942 | 5 | 1,450 | Complete |
+| Stock Codex | Capture | 18,356 | 21,013 | 77,568 | 20,776 | 98,344 | 5 | 3,217 | Complete |
+| Managed Codex | Raw | 20,433 | 43,001 | 135,680 | 43,521 | 179,201 | 5 | 196,554 | Complete |
+| Managed Codex | Guided | 20,477 | 21,345 | 82,304 | 21,863 | 104,167 | 5 | 1,450 | Complete |
+| Managed Codex | Capture | 20,427 | 22,953 | 85,376 | 22,892 | 108,268 | 5 | 3,213 | Complete |
+| Claude | Raw | 4,919 | 11,927 | 21,009 | 9,542 | 30,551 | 4 | 16,897 | Missing test names and failure detail |
+| Claude | Guided | 4,997 | 6,121 | 23,344 | 3,733 | 27,077 | 5 | 1,455 | Complete |
+| Claude | Capture | 4,923 | 8,868 | 21,072 | 6,478 | 27,550 | 4 | 3,483 | Complete |
+
+Capture reduced peak by 32.4% on Antigravity, 32.2% on stock Codex, 46.6% on managed Codex and 25.6% on Claude. Guided commands alone met the 30% peak goal on every harness. All four capture runs recovered the same 87,585-byte Git patch through the tool's byte-range interface while the turn was active. Its SHA-256 was `41d5ca4afc1a4db2df3c99cd33dbecc4d698e132e467e0958a2233650fb96228`. The oracle checked both streams' merged test logs for all 1,100 repetitions, the pass name, the error and exits 0, 0, 1. Claude's raw result exposed a truncated failed Bash preview. Its bounded result supplied the missing diagnosis. A separate local Vitest 5.0.5 success/failure fixture recovered all 1,100 progress lines per run. Its 33,313 and 33,969 bytes reduced to 396 and 1,046 bytes with exits 0 and 1, the test name and the failure diagnostic preserved. The original capture runs in this table used local rules and made zero helper calls.
+
+The savings varied between runs. Stock Codex's capture began with 2,042 fewer tokens than its raw run. A repeat starting at 20,395 tokens peaked at 22,902, a 26.1% reduction against that raw run. A second stock raw run began at 20,401 and peaked at 42,975. Antigravity sometimes batched the three captures, but an earlier sequential capture used 152,455 input tokens against 98,218 tokens raw, even as peak fell from 26,605 to 17,547. The extra preparation and retrieval calls can cost more than they save.
+
+Antigravity 1.5.18 used `gemini-4-neon-high` through process-per-session ACP. Peak is the highest reported context fill. ACP supplies cumulative usage. First-request input and model-call count are unavailable. Codex 0.169.0 and managed `pwragent-v0.171.0-pwragent.5` used `gpt-6.1-sol` through App Server. Peak is maximum last-request input. Totals are the final cumulative counters. Claude Code 2.1.305 used `claude-opus-5-5` with Agent SDK 0.3.330, the PwrAgent SDK options, permission callback and HTTP MCP server. Claude's peak is the largest input over unique assistant message IDs. Uncached input includes cache creation. Each raw run had the same fixture tool catalog available.
+
+Tool bytes count UTF-8 result text once at completion. For Antigravity this includes ACP native output and benchmarked PwrAgent MCP content measured at the owner because ACP omits that MCP text. Discovery traffic may add unreported bytes. Codex supplies rendered shell output and dynamic tool text. Claude supplies SDK tool-result blocks. Harnesses apply different model-side truncation. The input counters establish inference volume. Raw capture transport bytes alone cannot establish how many tokens reached a request. The largest individual capture result in the recorded output was 701 bytes on Antigravity and both Codex builds, and 829 bytes on Claude. The check includes owner-produced MCP result text. The full diff and repetitive logs stayed outside those result blocks.
+
+## Native Code Mode
+
+Both stock Codex 0.169.0 and managed Codex v0.171.0-pwragent.5 emitted a native `exec` cell in App Server's raw response items. Each matched run executed the four foreground commands serially in one cell. The bounded cells kept each prepared shell command in JavaScript, awaited its completion and emitted the summary and retrieval handle. The retrieval oracle compared the full patch byte for byte and checked both test logs for all 1,100 progress repetitions and exits 0 and 1.
+
+| Codex | One-cell task | First input | Peak input | Cached input | Uncached input | Total input | Model calls | Child tool bytes | Returned cell bytes | Answer |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Stock | Raw | 20,589 | 31,556 | 20,480 | 31,665 | 52,145 | 2 | 196,552 | 40,154 | Missing changed filename and pass name |
+| Stock | Bounded | 20,626 | 21,720 | 20,736 | 21,610 | 42,346 | 2 | 3,220 | 1,969 | Complete |
+| Managed | Raw | 20,567 | 31,612 | 0 | 52,179 | 52,179 | 2 | 196,548 | 40,154 | Missing pass name and exit status |
+| Managed | Bounded | 20,674 | 21,758 | 20,864 | 21,568 | 42,432 | 2 | 3,220 | 1,969 | Complete |
+| Managed | Bounded with managed reducer active | 20,702 | 22,012 | 20,864 | 21,850 | 42,714 | 2 | 3,670 | 2,437 | Complete |
+
+Peak fell 31.2% on both builds with the explicit capture tool alone. With the managed reducer and its authenticated receipts active, peak fell 30.4% against the managed raw run. Total input fell 18.8% on stock and 18.7% on managed. The returned cell shrank 95.1%. Cell bytes sum the UTF-8 text blocks in the native `custom_tool_call_output` that Codex returns to the model. Child tool bytes measure the shell and dynamic tool results inside the cell. The inference measurements use App Server's per-request and cumulative counters. One matched pair per build establishes a fixture measurement, with cache and model variation between runs.
+
+With PwrAgent's production deferred catalog, both builds first searched for the capture tool, then ran the full task. Both produced a complete answer in three model requests. Stock peaked at 22,640 input tokens and managed at 22,630. A separate live managed run installed the production Token Miser bridge, reducer configuration and SQLite storage in the fixture. The bridge observed all four cells and requested zero second evaluations. A live one-cell regression exposed an extra evaluation when JavaScript emitted the summary inside a JSON object. Managed captures now use the existing exact-delivery receipt. For these excerpts the reducer recognizes the original string and its exact JSON-string encoding. Sixteen batched excerpts triggered evaluation on the previous implementation. The regression now passes, while unrelated large output still triggers evaluation. The final one-cell managed run recorded one observation and zero evaluations. In another run the model also emitted a broad tool catalog during discovery. Its 33,595-byte cell triggered a generic evaluation. The command cell triggered none. The fixture recorded the generic request and returned unavailable, so its 30,180 peak includes the catalog passing through. Both Codex builds also denied an actual capture from inside Code Mode. The execution marker and completion receipt stayed absent. In separate in-flight Code Mode controls, interrupting the active turn stopped the matched native test process on both builds. Neither test reached its completion marker.
+
+The Claude Agent SDK 0.3.330 init catalog contained 32 tools with the native Code Mode opt-in environment variable set. It included Bash, Workflow and the PwrAgent capture tool. It omitted REPL and Claude answered `CODE_MODE_UNAVAILABLE`. The direct Bash/MCP flow is verified in the earlier table. Antigravity 1.5.18 accepted an exact approved Python `run_workflow` probe. Both the call to PwrAgent capture and the call to `run_command` reported that `call_tool` was undefined. Use the direct ACP flow on that build. The installed workflow guide makes direct calls conditional on the workflow's advertised tool list. [Claude Code Mode documentation](https://code.claude.com/docs/en/code-mode)
+
+## Helper selection and cost
+
+**Helper for ambiguous command output** in Experimental → Token Miser offers local rules, the configured Codex Token Miser helper, or the provider selected in Defaults → Decisions. In TOML use `token_miser_bounded_helper = "deterministic"`, `"codex"` or `"decision"`. Local rules are the default. The choice applies to the approved foreground capture tool across the three backends. The managed reducer retains its existing handling for other tool families and grouped cells.
+
+Small logs, one-hunk diffs and repetitive test progress use local rules. For a large ambiguous result the approval names the selected helper. It receives at most six source excerpts, bounded to 4,096 bytes for the serialized command and evidence. It can choose one source excerpt. The owner supplies the exit status, diagnostics and retrieval handle. Each capture memoizes the result. A disabled or unavailable provider, invalid selection or eight-second deadline leaves the deterministic summary available. No provider key is handed to the shell. Internal decision calls go directly through the owner's System One client and create no entry in the sidebar decisions registry.
+
+A separate live stock Code Mode run added a second diff hunk to exercise the subscription path. The isolated `gpt-6-luna` helper received 375 bytes of evidence once, took 3.90 seconds and reported 4,479 input tokens, including 3,200 cached, and 64 output tokens. Both noisy tests took zero helper calls. The parent answered correctly and all three logs were retrieved. The local decision path was exercised against a loopback System One fixture. The Jev request and key routing were verified with a synthetic credential and intercepted HTTP transport. Hosted Jev latency, token use, billing and selection quality were not measured.
+
+The Codex selector records its returned model, account and tokens on the invoking backend and thread. One measured invocation committed one usage line (82,400 WAL bytes, approximately 1.65 MB/day at 20 invocations/day). Managed single-result acceptance took two commits with the initial handle reservation and one with a warm block. Grouped acceptance, including the cell observation, took three and two respectively. Persisting an explicit launchpad override for a new capture thread took one commit and 20,600 WAL bytes (0.41 MB/day at 20 new overrides/day).
+
+## Ownership and permission
+
+Enable **Settings → Experimental → Token Miser → Capture foreground command output** and start a fresh thread. The profile TOML equivalent is `token_miser_bounded_commands = true` in `[experimental]`. The switch defaults off, supports the stock Codex executable and respects the Token Miser thread override and default. The separate managed Codex Token Miser setting still selects the fork and handles its existing tool families.
+
+`capture_token_miser_command` accepts `git diff`, `git diff --cached`, `node --test FILE.test.js|cjs|mjs` or `pnpm exec vitest run FILE.test.ts|tsx` on POSIX. The owner checks a live backend, thread, turn and policy, then requests one explicit approval for the named command's output. A rejection returns no ticket. Approval prepares a private file and returns a complete native shell command with redirection visible. The harness chooses the cwd, environment, sandbox and native approval for that command. The owner never launches Git or a project test process. The tool does not ask the shell for escalation. The harness may refuse access to the capture file.
+
+The owner accepts a receipt only from the matching native command and item in the issuing turn. The receipt is emitted after successful redirection and preserves the executed program's status. The owner reads its original descriptor, unlinks the pathname at completion and can return deterministic diagnostics, a literal search, an inclusive line range or lossless 1,024-byte base64 pages. Exact retrieval includes stdout and stderr merged in shell order. Summary and query text are bounded to 1,450 bytes. Search covers the first 2,048 characters of each line. This retrieval interface checks the backend, thread and invoking turn. The existing managed Codex retrieval store uses different object ownership, so the dedicated tool serves these handles. Completed handles expire after five minutes or at turn end. Pending execution has a five-minute start deadline. Foreground execution can exceed five minutes once observed. The shell receives the command and capture destination. Only the owner can send excerpts to a selected helper.
+
+Fresh denial and cancellation controls on stock Codex, Claude and Antigravity each recorded the native approval for the exact prepared command and the client decision. All six finished without creating the execution marker or yielding a usable receipt. Antigravity and Claude also stopped the child on interruption. On macOS the desktop registry sent `turn/interrupt` for the correct thread and turn. Stock Codex 0.169.0 and managed v0.171.0-pwragent.5 kept a registered resumable command alive before its first yield. Both wrote the marker after interruption with App Server still running. An earlier yielded terminal and a concurrent turn survived. A completion-only command exited before marker release in the debug App Server control. This is the native `interrupt-raw` baseline. [Upstream Unified Exec behavior](https://github.com/openai/codex/pull/14602)
+
+Foreground capture provides a stronger guarantee. Its owner checks individual terminal support, matches the issuing thread, native item ID, process ID and exact prepared command against the live terminal list, then terminates that match at turn end. On both Codex builds the captured child produced neither a completion marker nor a usable receipt. A separate HTTP MCP registry test exercised accept, decline, cancellation and invocation after turn end. Live benchmark clients granted retention only for their exact fixture commands and supplied the approvals in place of the Electron UI.
+
+### Model-facing output references
+
+Foreground capture and managed Codex publish a lowercase `o` followed by decimal digits. The three captures in each fresh fixture returned **`o1`, `o2`, `o3` (two characters each)**. Each model used those values to retrieve its Git diff, passing test and failing test. The source and its alias expire together. Existing UUID lookups still use the same ownership and retention checks. The prepared shell text and authenticated delivery markers still carry opaque receipts.
+
+| Harness | Direct tools | Native Code Mode |
+| --- | --- | --- |
+| Stock Codex 0.169.0 | Three captures retrieved | Three captures retrieved in one cell |
+| Managed Codex v0.171.0-pwragent.5 | Three captures retrieved | Three captures retrieved in one cell with the reducer active |
+| Claude Agent SDK 0.3.330 | Three captures retrieved | No REPL in the shipped catalog |
+| Antigravity 1.5.18 | Three captures retrieved | The tested workflow had no nested shell binding |
+
+All six capture runs reconstructed the 87,585-byte patch and checked literal searches, line ranges, both test exit codes and all 1,100 progress lines in each test log. The subscription Codex catalog advertised Code Mode for every available model. To verify the separate direct path on both binaries, the probe used a fixture model catalog with direct tools enabled and checked the raw App Server events for accidental Code Mode execution.
+
+Two additional runs used managed Codex automatic reduction with a deterministic fixture summarizer. App Server delivered `Output reference: o1` to the parent, once in a native function result and once in a Code Mode cell result. On both paths the model then searched `o1` for `diff --git` and recovered `headers.css`. The managed read tool also accepts `byteOffset` to retrieve 1,024-byte pages of the retained UTF-8 text. Unit tests separately exercise grouped member and focused segment handles, including exact source spans.
+
+A profile reserves 256 consecutive numbers per SQLite transaction. The first approved capture measured one commit and 8,240 WAL bytes. The next capture in the block measured zero commits. At one handle per minute for 24 hours in one owner process, six reservations at that measured cost would add about 0.049 MB/day. A restarted owner reserves a fresh block on its first use. Gaps prevent stale references from reaching another output.
+
+### Native hook probes
+
+- Antigravity's two-session synthetic PreToolUse overwrite archived 9,929 bytes. The final ACP text block fell from 10,233 to 247 bytes and the next context fill from 21,589 to 15,928. Starting fills were 15,739 and 15,740. Both sessions gave the same answer. Execute approval displayed the original command. PostToolUse carried metadata without an output field. This establishes feasibility and leaves authorization of a changed executable or redirection unproven. Google documents argument replacement before execution and an empty response after execution. [Antigravity hook contract](https://antigravity.google/docs/hooks)
+- On both Codex builds a trusted PreToolUse hook with `permissionDecision: allow` changed exactly `git diff` to `git diff --stat`. Under read-only/untrusted, App Server requested native approval for the rewritten shell command. Decline produced a declined item with no exit code. This was observed with Code Mode off and with its feature switches on. Both traces identify the hook tool as Bash. Coverage of every nested execution variant remains unverified. With the same pre-hook allow decision and read-only/never, redirecting the rewritten diff to a fixture file failed with “operation not permitted” on both executables. Neither created the file. A trial using a local Unix socket as the capture destination was refused by the ordinary workspace-write sandbox. A separate App Server read-only control on both builds returned exit 1 for the raw test’s attempted workspace write and exit 125 when the prepared command could not open its output file. Neither wrote the sentinel. The implementation requests no network or filesystem permission extension. The live managed benchmark used the real binary and the fixture catalog. It did not configure a separate generic helper in that run. The existing managed reducer still handles other tool families. A regression test sends the real capture receipt, summary and exact byte page through its default-threshold service and verifies zero helper calls. Mixed Code Mode cells continue to use the existing group policy. [Codex hooks](https://learn.chatgpt.com/docs/hooks#pretooluse)
+- Claude's PreToolUse `ask` plus `updatedInput` delivered the changed `git diff --stat` to PwrAgent's SDK permission callback. Accept produced a stat, decline stopped execution. A PostToolUse replacement reached the parent in a separate success probe, but the hook saw 30,000 of 87,585 stdout bytes and a persisted-size field. Failing Bash used the separate failure hook. These observations cover the default permission mode. [Claude Code hook decision control](https://code.claude.com/docs/en/hooks#pretooluse-decision-control)
+
+The probes did not establish equivalence across original-command deny rules, rewritten-command rules, auto modes and compound commands. The product enables the explicit tool with its own approval. It installs no transparent PreToolUse rewrite. Native direct reads, background jobs, arbitrary shell discovery and Windows shells remain outside this prototype.
+
+## Packaged Sticky Markdown Table Headers
+
+The operator's packaged Sticky Markdown Table Headers incident reported context fill of 36,318, then 261,638 after 106 seconds, peaking at 478,856. The default profile pricing ledger recorded six usage rows totalling 34,097,970 cached and 1,099,796 uncached input tokens. ACP did not expose first-request input or model-call count for this comparison.
+
+The first 50 native reads returned 541,697 bytes inside 15,105 numbered file lines, or 623,409 bytes with numbering and result framing. The early shell returned 82,234 rendered characters, including one 46,055-character Git inspection. The reported build/test/lint subset was approximately 478k characters. A broader command-family classification including compound commands and pnpm filter/exec found 573,733. One 1,790-line result contained 1,596 repeated occurrences after first instances. These volumes and the request counters support the same diagnosis. They cannot assign an exact number of input tokens to one read or diff. A separate Codex CLI raw control analyzed with the bundled rollout skill had four tool outputs, 82,426 output characters, one truncation and five request-counter events.
+
+The ten Antigravity active-turn warnings occurred with `startReserved=true`, immediately before registration, in two groups of five. The packaged log had no matching call rejection. Catalog eligibility for `manage_pwragent` used the strict invocation resolver, logged a warning and then evaluated eligibility against its registered client context. A local HTTP MCP fixture reproduced that path. The fix keeps the catalog lookup quiet. The fixture failed on the old code and passes with the fix. A real invoke with no uniquely active turn still rejects and logs, and overlapping backends with the same native thread ID retain distinct identities.
+
+The model-facing discovery records at steps 201, 229 and 254 returned the lab schemas. `lab_request_status` required `id`. The post-compaction call at step 268 supplied `request_id`. `lab_status` accepted an empty object. Step 358 supplied `target`. Both rejected extra fields and returned invalid arguments (-32602). The capture does not expose every post-compaction request body, so it cannot establish which schema text survived compaction. No gateway change was warranted.
+
+## Owner-side scaling audit
+
+Local probes compared PR head `73a7ec8d9` with the indexed capture reader and receipt matcher. The capture probe ran the prepared foreground command against a temporary Git repository. It checked each requested line against native `git diff` stdout and counted bytes returned by the owner's file descriptor. Each series started with a fresh capture and no cached summary.
+
+| Diff rows | Old bytes for 8 forward ranges | Old bytes for 16 | Old bytes for 32 | New bytes for 8, 16 or 32 |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,024 | 854,115 | 1,640,547 | 3,213,411 | 133,282 |
+| 2,048 | 1,511,523 | 2,822,243 | 5,443,683 | 266,434 |
+| 4,096 | 2,826,339 | 5,185,635 | 9,904,227 | 532,738 |
+
+The reader keeps one page of line previews and the byte offset and line number of each page it has visited. A cold seek indexes the intervening data. A warm seek uses the nearest checkpoint. Reading within the cached page performs zero file reads. Searching for absent text still requires visiting the remaining previews. Seeded oracle checks exercised backward ranges, overlapping readers, CRLF, split and invalid UTF-8, and unterminated lines longer than a page. Exact byte paging continues to use positional reads.
+
+| Work counted | Workload | Before | After |
+| --- | --- | ---: | ---: |
+| Receipt payloads opened for one emitted receipt | 32 / 64 / 128 pending | 32 / 64 / 128 | 1 / 1 / 1 |
+| Receipt payloads opened for four emitted receipts | Same pending counts | 32 / 64 / 128 | 4 / 4 / 4 |
+| Clock reads inserting temporary cache entries | 32 / 64 / 128 insertions | 528 / 2,080 / 8,256 | 32 / 64 / 128 |
+| Shell display parses for eight unrelated native events | 6 / 12 / 24 live capture tickets | 48 / 96 / 192 | 8 / 8 / 8 |
+| History rows loaded by eight missing group lookups | 16 / 32 / 64 historical outputs | 128 / 256 / 512 | 0 / 0 / 0 |
+
+Code Mode matching still checks the complete owner-issued raw or JSON-quoted text, its thread and retention generation. The group lookup keeps the historical newest-record check for a live native cell ID. Current short handles take the direct lookup. A separate managed Codex retrieval probe read 8, 16 and 32 exact 1,024-byte pages and counted one source UTF-8 encoding per output in all nine runs. Deterministic regressions cover the warm capture read, receipt lookup, insertion, shell parse and stale-group budgets. These counters measure local owner work. The harness inference measurements are in the preceding benchmarks.
+
+## Reproduction
+
+From the repository root, run the following for each of `agy`, `codex` and `claude`. Supply the managed executable as the final argument for a second Codex run. Use locally installed, authenticated harnesses. The script creates fresh repositories and writes private protocol evidence in the ignored desktop captures directory. Only synthetic commands should be used with this benchmark.
+
+```sh
+pnpm --filter @pwragent/desktop exec tsx scripts/benchmark-bounded-command.mjs agy raw
+pnpm --filter @pwragent/desktop exec tsx scripts/benchmark-bounded-command.mjs agy bounded
+pnpm --filter @pwragent/desktop exec tsx scripts/benchmark-bounded-command.mjs agy capture
+pnpm --filter @pwragent/desktop exec tsx scripts/benchmark-bounded-command.mjs agy deny
+pnpm --filter @pwragent/desktop exec tsx scripts/benchmark-bounded-command.mjs agy cancel
+pnpm --filter @pwragent/desktop exec tsx scripts/benchmark-bounded-command.mjs agy interrupt
+```
+
+For the native Codex comparison, use `code-mode-raw-batch` and `code-mode-batch` on each binary. Use `code-mode-discovery` for the deferred catalog, `code-mode-reducer` on the managed executable, and `code-mode-helper` for the separate two-hunk subscription probe. Set `PWRAGENT_BENCHMARK_MANAGED_REDUCER=1` to combine discovery or batching with the managed bridge. Set `PWRAGENT_BENCHMARK_CODE_MODE=1` with `deny` for the nested native denial control. Run `agy code-mode` and `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 ... claude code-mode` to probe their native tool surfaces. All switches apply to the benchmark process only.
+
+To reproduce the managed automatic-reduction checks, run the same benchmark with `codex managed-handles MANAGED_BINARY` and `codex code-mode-managed-handles MANAGED_BINARY`. To force direct foreground capture on either Codex binary, set `PWRAGENT_BENCHMARK_DIRECT_TOOLS=1` with the `capture` variant. The fixture writes its direct catalog only under the private evidence directory.
+
+Pass each printed evidence directory to `python3 scripts/token-miser-benchmark/summarize.py`. The aggregator uses the recorded harness protocol frames. This is an offline operator command. PwrAgent runtime code uses the harness protocols. Run `readonly-raw` and `readonly` on Codex for the native read-only control. Compare `interrupt-raw` with `interrupt` to exercise native terminal cancellation.

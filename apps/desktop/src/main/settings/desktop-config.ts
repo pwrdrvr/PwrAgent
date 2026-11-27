@@ -89,6 +89,7 @@ import type {
   DesktopOnboardingCompletedSource,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
+  BoundedCommandHelperMode,
   DesktopSettingsConfigPatch,
   DesktopAgentNotificationPolicy,
   DesktopSpendAlertPolicy,
@@ -237,6 +238,8 @@ export type DesktopSettingsConfig = {
     threadPricingDisplayCodexCredits?: boolean;
     tokenMiserEnabled?: boolean;
     tokenMiserDefaultEnabled?: boolean;
+    tokenMiserBoundedCommands?: boolean;
+    tokenMiserBoundedHelper?: BoundedCommandHelperMode;
     codexToolDiscovery?: boolean;
     researchEnabled?: boolean;
     resourceCheckoutsEnabled?: boolean;
@@ -1116,23 +1119,8 @@ export function desktopSettingsPatchToEdits(
       patch.general.spendAlerts.threadSpendThresholdUsd,
     );
   }
-  if (patch.general?.agentNotifications?.maxPerThreadPerDay !== undefined) {
-    set(
-      ["general", "agent_notifications", "max_per_thread_per_day"],
-      patch.general.agentNotifications.maxPerThreadPerDay,
-    );
-  }
-  if (patch.general?.agentNotifications?.maxPerProfilePerDay !== undefined) {
-    set(
-      ["general", "agent_notifications", "max_per_profile_per_day"],
-      patch.general.agentNotifications.maxPerProfilePerDay,
-    );
-  }
-  if (patch.general?.agentNotifications?.maxScheduledPerThread !== undefined) {
-    set(
-      ["general", "agent_notifications", "max_scheduled_per_thread"],
-      patch.general.agentNotifications.maxScheduledPerThread,
-    );
+  if (patch.general?.agentNotifications) {
+    edits.push(...agentNotificationSettingsEdits(patch.general.agentNotifications));
   }
 
   if (patch.experimental?.fullAccessRiskWarningDismissed !== undefined) {
@@ -1179,6 +1167,14 @@ export function desktopSettingsPatchToEdits(
       ["experimental", "token_miser_enabled"],
       patch.experimental.tokenMiserEnabled,
     );
+  }
+  if (patch.experimental?.tokenMiserBoundedCommands !== undefined) {
+    set(["experimental", "token_miser_bounded_commands"], patch.experimental.tokenMiserBoundedCommands);
+  }
+  if (patch.experimental?.tokenMiserBoundedHelper !== undefined) {
+    const helper = readBoundedCommandHelper(patch.experimental.tokenMiserBoundedHelper);
+    if (!helper) throw new Error("Unknown bounded command helper.");
+    set(["experimental", "token_miser_bounded_helper"], helper);
   }
   if (patch.experimental?.tokenMiserFocusedSummariesEnabled !== undefined) {
     set(
@@ -2753,6 +2749,8 @@ function normalizeDesktopConfig(
         readBoolean(experimental?.token_miser_diagnostics_enabled),
       tokenMiserPollingReviewsEnabled:
         readBoolean(experimental?.token_miser_polling_reviews_enabled),
+      tokenMiserBoundedHelper: readBoundedCommandHelper(experimental?.token_miser_bounded_helper),
+      tokenMiserBoundedCommands: readBoolean(experimental?.token_miser_bounded_commands),
       tokenMiserDefaultEnabled:
         readBoolean(experimental?.token_miser_default_enabled),
       codexToolDiscovery: readBoolean(experimental?.codex_tool_discovery),
@@ -3149,6 +3147,20 @@ function normalizeDesktopConfig(
  * team must be a MathOS team id and the origin a plain HTTPS origin. The hosted
  * platform's origin is the default and is not written.
  */
+/** `[general.agent_notifications]`: the operator's bounds on agent notices. */
+function agentNotificationSettingsEdits(
+  policy: Partial<DesktopAgentNotificationPolicy>,
+): TomlEdit[] {
+  const table = ["general", "agent_notifications"];
+  const keys = [
+    ["max_per_thread_per_day", policy.maxPerThreadPerDay],
+    ["max_per_profile_per_day", policy.maxPerProfilePerDay],
+    ["max_scheduled_per_thread", policy.maxScheduledPerThread],
+  ] as const;
+  return keys.flatMap(([key, value]): TomlEdit[] =>
+    value === undefined ? [] : [{ op: "set", path: [...table, key], value }]);
+}
+
 function researchMathosEdits(mathos: { team?: string | null; origin?: string | null }): TomlEdit[] {
   const table = ["research", "mathos"];
   const edits: TomlEdit[] = [];
@@ -3668,6 +3680,10 @@ function isDesktopChatReplyComposer(
     || value === "tiptap-wysiwyg-markdown-chips"
     || value === "custom-widget-chips"
   );
+}
+
+function readBoundedCommandHelper(value: unknown): BoundedCommandHelperMode | undefined {
+  return value === "deterministic" || value === "decision" || value === "codex" ? value : undefined;
 }
 
 function readToolUpdateMode(

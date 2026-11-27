@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { READ_NAVIGATION_BACKEND_METADATA } from "../state/navigation-backend-metadata";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
-import { compactStorage, observeStorageArchive, storageDetailStatements } from "../state/storage-maintenance";
+import { compactStorage, observeStorageArchive, storageDetailSlices } from "../state/storage-maintenance";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 let tempDir: string | undefined;
@@ -134,8 +134,8 @@ describe("bounded backend navigation metadata", () => {
     const worker = StateDb.open(file);
     try {
       observeStorageArchive(worker.raw, "codex", thread.id, true, 100);
-      for (const operation of storageDetailStatements(worker.raw, { backend: "codex", threadId: thread.id })) {
-        worker.raw.transaction(() => operation.statement.run(...operation.parameters)).immediate();
+      for (const operation of storageDetailSlices(worker.raw, { backend: "codex", threadId: thread.id })) {
+        worker.raw.transaction(() => operation.run()).immediate();
       }
       worker.cleanupExpired(Date.now(), 0);
       compactStorage(worker.raw);

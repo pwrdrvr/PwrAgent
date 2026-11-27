@@ -426,7 +426,7 @@ import { classifyDirectory, navigationPathIdentity, orderByHomePreference } from
 import { mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
 import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
-import { parseClaudeSubAgentTranscriptThreadId } from "@pwragent/shared/subagent-kind";
+import { isTokenMiserSubAgent, parseClaudeSubAgentTranscriptThreadId } from "@pwragent/shared/subagent-kind";
 import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import { type FederationInstanceId, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import {
@@ -618,6 +618,7 @@ import {
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
 import { TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
+import { BoundedCommandCapture } from "../token-miser/bounded-command";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
@@ -1910,6 +1911,8 @@ export class DesktopBackendRegistry {
   /** Publications of provider list changes, in the order they were saved. */
   private codexModelProviderPublication: Promise<void> = Promise.resolve();
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
+  private readonly resolveBoundedCommandHelper: RegistryDependencies["resolveBoundedCommandHelper"];
+  private readonly resolveTokenMiserBoundedCommands: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly acpSessionIdleCloseMs: number;
   private acpIdleSessionTimer?: NodeJS.Timeout;
@@ -1925,6 +1928,34 @@ export class DesktopBackendRegistry {
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
+  private readonly boundedCommandCapture = new BoundedCommandCapture(() => {
+    if (!this.tokenMiserStore) throw new Error("Token Miser storage is unavailable.");
+    return this.tokenMiserStore.issueOutputHandle();
+  }, async (caller) => {
+    if (this.closed || !this.isLiveDynamicToolCall(caller.backend, caller)
+      || !this.resolveTokenMiserBoundedCommands()) return false;
+    const enabled = this.boundedCommandsEnabled(
+      await this.resolveTokenMiserThreadOverride(caller.backend, caller.threadId),
+    );
+    return enabled && !this.closed && this.isLiveDynamicToolCall(caller.backend, caller);
+  }, async (caller, command, helper) => {
+    if (caller.backend === "codex") {
+      const supported = await this.withCodexThreadClient(caller.threadId, async (client) =>
+        !!client.terminateBackgroundTerminal && (await client.listBackgroundTerminals?.(caller.threadId))?.supported === true);
+      if (!supported) throw new Error("This Codex runtime cannot stop an individual captured terminal.");
+    }
+    const response = await this.handleServerRequest(caller.backend, {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: caller.threadId, turnId: caller.turnId ?? "",
+        requestId: `bounded-command-${randomUUID()}`, serverName: "PwrAgent Token Miser",
+        mode: "form", requestedSchema: { type: "object", properties: {} },
+        message: `Allow Token Miser to retain output from one native shell invocation of ${command}? The command uses the shell's working directory and permissions. Its full output will be available to this turn for up to five minutes.${helper ? ` Relevant excerpts may be sent to ${helper}.` : ""}`,
+        _meta: null,
+      },
+    });
+    return readRecord(response)?.action === "accept";
+  }, (caller) => this.resolveBoundedCommandHelper(caller));
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserDiagnostics?: TokenMiserDiagnostics;
   private readonly tokenMiserService?: TokenMiserService;
@@ -2018,6 +2049,8 @@ export class DesktopBackendRegistry {
     this.resolveCodexFastAllowedFn = dependencies.resolveCodexFastAllowedFn;
     this.resolvePdfAnalysisEnabledFn = dependencies.resolvePdfAnalysisEnabledFn;
     this.acpSessionIdleCloseMs = dependencies.acpSessionIdleCloseMs;
+    this.resolveTokenMiserBoundedCommands = dependencies.resolveTokenMiserBoundedCommands;
+    this.resolveBoundedCommandHelper = dependencies.resolveBoundedCommandHelper;
     this.resolveTokenMiserEnabledFn = dependencies.resolveTokenMiserEnabledFn;
     this.resolveTokenMiserDefaultEnabledFn = dependencies.resolveTokenMiserDefaultEnabledFn;
     this.resolveTokenMiserPollingReviewsEnabledFn = dependencies.resolveTokenMiserPollingReviewsEnabledFn;
@@ -2272,7 +2305,6 @@ export class DesktopBackendRegistry {
       handoffThreadWorkspace: (...args: Parameters<ThreadWorkspaceService["handoffThreadWorkspace"]>) => this.threadWorkspaceService.handoffThreadWorkspace(...args),
       hasActiveCodexWork: (...args: Parameters<typeof this.hasActiveCodexWork>) => this.hasActiveCodexWork(...args),
       holdBackendSelfStartedTurn: (...args: Parameters<typeof this.holdBackendSelfStartedTurn>) => this.holdBackendSelfStartedTurn(...args),
-      initializeTokenMiserLedger: (...args: Parameters<ThreadUsageLedger["initializeTokenMiserLedger"]>) => this.threadUsageLedger.initializeTokenMiserLedger(...args),
       interruptTurn: (...args: Parameters<typeof this.interruptTurn>) => this.interruptTurn(...args),
       invalidateProviderRuntimeSelections: (...args: Parameters<typeof this.invalidateProviderRuntimeSelections>) => this.invalidateProviderRuntimeSelections(...args),
       invalidateThreadListCache: (...args: Parameters<typeof this.invalidateThreadListCache>) => this.invalidateThreadListCache(...args),
@@ -2342,7 +2374,7 @@ export class DesktopBackendRegistry {
       recordCodexWorktreeOwnerThread: (...args: Parameters<typeof this.recordCodexWorktreeOwnerThread>) => this.recordCodexWorktreeOwnerThread(...args),
       recordMissingCodexThread: (...args: Parameters<typeof this.recordMissingCodexThread>) => this.recordMissingCodexThread(...args),
       recordQueuedMessageTitle: (...args: Parameters<typeof this.recordQueuedMessageTitle>) => this.recordQueuedMessageTitle(...args),
-      recordTokenMiserFocusedInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserFocusedInference"]>) => this.threadUsageLedger.recordTokenMiserFocusedInference(...args),
+      recordTokenMiserHelperInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserHelperInference"]>) => this.threadUsageLedger.recordTokenMiserHelperInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
       refreshCodexProviderCatalogs: (...args: Parameters<typeof this.refreshCodexProviderCatalogs>) => this.refreshCodexProviderCatalogs(...args),
       retryCodexProviderCatalogs: () => this.retryCodexProviderCatalogs(),
@@ -2382,6 +2414,8 @@ export class DesktopBackendRegistry {
       resolveThreadEnvironmentCwd: (...args: Parameters<typeof this.resolveThreadEnvironmentCwd>) => this.resolveThreadEnvironmentCwd(...args),
       resolveThreadMcpRootDirectories: (...args: Parameters<ThreadMcpConnections["resolveThreadMcpRootDirectories"]>) => this.threadMcpConnections.resolveThreadMcpRootDirectories(...args),
       get resolveTokenMiserDefaultEnabledFn() { return current().resolveTokenMiserDefaultEnabledFn; },
+      get resolveTokenMiserBoundedCommands() { return current().resolveTokenMiserBoundedCommands; },
+      boundedCommandsEnabled: (override?: boolean) => current().boundedCommandsEnabled(override),
       get resolveTokenMiserEnabledFn() { return current().resolveTokenMiserEnabledFn; },
       resolveTokenMiserEnabledForOverride: (...args: Parameters<typeof this.resolveTokenMiserEnabledForOverride>) => this.resolveTokenMiserEnabledForOverride(...args),
       resolveTokenMiserParentModel: (...args: Parameters<ThreadUsageLedger["resolveTokenMiserParentModel"]>) => this.threadUsageLedger.resolveTokenMiserParentModel(...args),
@@ -2454,6 +2488,7 @@ export class DesktopBackendRegistry {
       get tokenMiserRuntimePreparationFailure() { return current().tokenMiserRuntimePreparationFailure; },
       set tokenMiserRuntimePreparationFailure(value) { current().tokenMiserRuntimePreparationFailure = value; },
       get tokenMiserServerCapabilities() { return current().tokenMiserServerCapabilities; },
+      get boundedCommandCapture() { return current().boundedCommandCapture; },
       get tokenMiserService() { return current().tokenMiserService; },
       get tokenMiserStore() { return current().tokenMiserStore; },
       get toolOutputAlertPolicy() { return current().toolOutputAlertPolicy; },
@@ -4900,17 +4935,20 @@ export class DesktopBackendRegistry {
   ): Pick<BackendSummary, "tokenMiser" | "modelDefaults" | "modelProviderDefaults" | "codexFastAllowed"> {
     const defaults = this.resolveProviderModelDefaultsFn();
     const showBackendDefaults = backend !== "codex" || this.codexOpenAiProviderEnabled;
+    const captureEnabled = process.platform !== "win32"
+      && ["codex", "claude", "acp:antigravity"].includes(backend)
+      && this.resolveTokenMiserBoundedCommands();
     return {
       modelDefaults: showBackendDefaults ? defaults[backend] : undefined,
       modelProviderDefaults: Object.fromEntries(Object.entries(defaults)
         .filter(([key]) => (showBackendDefaults && key === backend) || (backend === "codex" && key.startsWith("codex-provider:")))),
-      ...(backend === "codex" ? {
+      ...(backend === "codex" || captureEnabled ? {
         tokenMiser: {
-          enabled: this.resolveTokenMiserEnabledFn(),
+          enabled: captureEnabled || this.resolveTokenMiserEnabledFn(),
           defaultEnabled: this.resolveTokenMiserDefaultEnabledFn(),
         },
-        codexFastAllowed: this.resolveCodexFastAllowedFn(),
       } : {}),
+      ...(backend === "codex" ? { codexFastAllowed: this.resolveCodexFastAllowedFn() } : {}),
     };
   }
 
@@ -5329,10 +5367,20 @@ export class DesktopBackendRegistry {
     // could be followed by a fresh Codex child process and writes to a store
     // `close()` already finalized. `maybeRestartCodexForManagedRuntimeChange`
     // guards on `closed` for the same reason.
-    if (this.closed) return;
-    await this.threadUsageLedger.currentTokenMiserLedgerReconciliation;
     if (this.closed || !this.resolveTokenMiserEnabledFn()) return;
     await this.prepareTokenMiserRuntime();
+  }
+
+  scheduleTokenMiserLegacyCleanup(): void {
+    if (!this.closed) this.threadUsageLedger.scheduleTokenMiserLegacyCleanup();
+  }
+
+  async repairTokenMiserFamilyCharges(
+    members: ReadonlyArray<{ backend: AppServerBackendKind; threadId: string }>,
+  ): Promise<void> {
+    for (const { backend, threadId } of members) {
+      if (backend === "codex") await this.threadUsageLedger.repairTokenMiserHistory(threadId, { chargesOnly: true });
+    }
   }
 
   refreshProvidersAtStartup(permit: ProviderDiscoveryPermit): Promise<void> {
@@ -7959,6 +8007,13 @@ export class DesktopBackendRegistry {
         : display;
     }
     this.assertNotBootstrap("readThread");
+    const { resource, monitorId } = request.display;
+    if (backend === "codex" && (
+      resource === "pricing" || resource === "subagents"
+      || (resource === "subagent" && monitorId && isTokenMiserSubAgent({ monitorId }))
+    )) {
+      await this.threadUsageLedger.repairTokenMiserHistory(request.threadId);
+    }
     const pricing = await this.threadUsageLedger.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
     if (backend === "codex" && request.display.resource === "pricing"
       && pricing.summaries.length === 0 && !pricing.lines.some((line) => line.status !== "superseded")) {
@@ -7978,7 +8033,6 @@ export class DesktopBackendRegistry {
       ...(request.display.resource === "tools" || request.display.resource === "incident" ? { includeAllInvocations: true } : {}),
     });
     const toolAccounting = stored ? await this.threadUsageLedger.withTokenMiserAccounting({ accounting: stored, backend, threadId: request.threadId }) : undefined;
-    const monitorId = request.display.monitorId;
     // Pricing includes in-memory gates; their parent links and accounting
     // must come from the same live view before grouping and pagination.
     const pricingCards = await this.threadUsageLedger.readPricingSubAgents({ backend, threadId: request.threadId, pricing });
@@ -8373,7 +8427,12 @@ export class DesktopBackendRegistry {
         })
       : Promise.resolve(undefined);
     const [activity, codexAccountTokenUsage] = await Promise.all([
-      this.overlayStore.readUsageActivity(request),
+      (async () => {
+        // The sidebar pace probe reads committed usage only. A full activity
+        // view can recover historical charges from gates left by a crash.
+        if (includeAccountTokenUsage) await this.threadUsageLedger.repairTokenMiserHistory();
+        return await this.overlayStore.readUsageActivity!(request);
+      })(),
       accountTokenUsagePromise,
     ]);
     const codex = this.codexLimitObservation();
@@ -9373,6 +9432,7 @@ export class DesktopBackendRegistry {
       // advertised three retrieval tools into every turn of an operator who
       // never enabled the feature.
       ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
+      boundedCommandCapture: backend === "codex" && this.boundedCommandsEnabled(tokenMiserOverride) ? this.boundedCommandCapture : undefined,
       starMapHandler: this.starMapHandler,
       threadTodoHandler: this.threadTodoHandler,
       openAIDecisionsHandler: this.openAIDecisionsHandler,
@@ -17202,7 +17262,7 @@ export class DesktopBackendRegistry {
     // in memory. `closed` prevents either drain from re-arming its timer; the
     // serialized flush chains ensure no write survives close().
     await liveThreadUsageEmitBarrier;
-    await this.threadUsageLedger.currentTokenMiserLedgerReconciliation;
+    await this.threadUsageLedger.drainTokenMiserLedgerWork();
     this.subAgentMonitorService.clearCompletedTaskMonitors();
     await this.threadUsageLedger.flushLiveThreadUsageLines();
     await this.subAgentMonitorService.persistLiveCodexNativeSubAgentUsage();
@@ -17252,6 +17312,7 @@ export class DesktopBackendRegistry {
           }
         },
       },
+      { name: "bounded-command-capture", close: () => this.boundedCommandCapture.close() },
       ...this.captureStores.splice(0).map((store, index) => ({
         name: `capture-${index}`,
         close: () => store.close(),
@@ -17814,6 +17875,7 @@ export class DesktopBackendRegistry {
       eagerTools?: ReadonlySet<string>;
       caller?: import("@pwragent/shared/contracts/app-tools").PwrAgentAppManagementContext;
       jobMonitorCreationEnabled?: boolean;
+      tokenMiserOverride?: boolean;
     } = {},
   ): Promise<CodexDynamicToolSpec[]> {
     const { caller, discoveryEnabled = this.resolveCodexToolDiscoveryFn(), eagerTools } = options;
@@ -17821,6 +17883,9 @@ export class DesktopBackendRegistry {
       ? await this.isJobMonitorCreationEnabled({ backend: "codex", threadId: caller.threadId, turnId: caller.turnId })
       : true);
     const researchDecisionsReady = await this.isResearchDecisionsReady();
+    const boundedCommandsEnabled = this.resolveTokenMiserBoundedCommands() && this.boundedCommandsEnabled(
+      caller?.threadId ? await this.resolveTokenMiserThreadOverride("codex", caller.threadId) : options.tokenMiserOverride,
+    );
     const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
         currentTurnInputSource: this.currentTurnInputSource,
@@ -17841,6 +17906,7 @@ export class DesktopBackendRegistry {
         forgeToolPolicy: this.forgeToolBridge.resolveForgeToolPolicy(),
         threadOrchestrationHandler: this.threadOrchestrationHandler,
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
+        boundedCommandCapture: boundedCommandsEnabled ? this.boundedCommandCapture : undefined,
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
@@ -17933,7 +17999,6 @@ export class DesktopBackendRegistry {
     }
     this.assertThreadOwnership();
     try {
-      await this.threadUsageLedger.currentTokenMiserLedgerReconciliation;
       await this.tokenMiserHookBridge.start();
       const capabilities = await this.readTokenMiserServerCapabilities(
         this.codexClient,
@@ -18377,7 +18442,7 @@ export class DesktopBackendRegistry {
           ) {
             await this.recordObservedCodexSettings(notification);
           }
-          if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
+          if (this.shouldInvalidateThreadListCacheForNotification(notification)) {
             this.invalidateThreadListCache(backend);
           }
           if (notification.method === "thread/archived") {
@@ -18701,7 +18766,9 @@ export class DesktopBackendRegistry {
     return this.threadDirectoryService.refreshThreadDirectoryRelationship(params);
   }
 
-  private shouldInvalidateThreadListCacheForNotification(method: string): boolean {
+  private shouldInvalidateThreadListCacheForNotification(notification: AppServerNotification): boolean {
+    const { method } = notification;
+    if (method === "thread/subAgents/updated") return notification.params.navigationChanged !== false;
     return (
       method === "navigation/threadDirectories/updated" ||
       method === "thread/branch/updated" ||
@@ -18716,7 +18783,6 @@ export class DesktopBackendRegistry {
       method === "thread/rewound" ||
       method === "thread/started" ||
       method === "thread/status/changed" ||
-      method === "thread/subAgents/updated" ||
       method === "thread/subthreadOrder/updated" ||
       method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
@@ -19697,7 +19763,7 @@ export class DesktopBackendRegistry {
             // still enforces the thread setting when its registered tool is called.
             const initialTools = await this.buildCodexParentDynamicTools(
               this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
-              { jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled !== false
+              { tokenMiserOverride: overlay?.tokenMiserEnabled, jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled !== false
                 || !(await this.supportsTokenMiserDynamicToolsResume(client)) },
             );
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
@@ -20799,14 +20865,18 @@ export class DesktopBackendRegistry {
       return await new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools, enabled ? this.tokenMiserStore : undefined))
         .handleDynamicToolCall({ backend, call: hostToolCall });
     }
+    const captureOnly = hostToolCall?.tool === "capture_token_miser_command"
+      && (!this.isLiveDynamicToolCall(backend, hostToolCall)
+        || !await this.isTokenMiserDynamicToolCallEnabled(backend, hostToolCall)
+        || !await this.withCodexThreadClient(hostToolCall.threadId, (client) => this.supportsTokenMiserCodeModeReducer(client)));
     const tokenMiserRouter = new AgentToolRouter(
-      buildTokenMiserToolDefinitions(this.tokenMiserStore, this.tokenMiserService?.focused),
+      buildTokenMiserToolDefinitions(captureOnly ? undefined : this.tokenMiserStore, this.tokenMiserService?.focused, this.boundedCommandCapture),
     );
     if (
       hostToolCall
       && tokenMiserRouter.acceptsDynamicToolCall(hostToolCall)
     ) {
-      if (!(await this.isTokenMiserDynamicToolCallEnabled(
+      if (hostToolCall.tool !== "capture_token_miser_command" && !(await this.isTokenMiserDynamicToolCallEnabled(
         backend,
         hostToolCall,
       ))) {
@@ -20874,6 +20944,7 @@ export class DesktopBackendRegistry {
         threadOrchestrationHandler: this.threadOrchestrationHandler,
         tokenMiserStore: this.tokenMiserStore,
         tokenMiserFocused: this.tokenMiserService?.focused,
+        boundedCommandCapture: this.boundedCommandCapture,
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
@@ -21192,6 +21263,10 @@ export class DesktopBackendRegistry {
     return parentOverlay?.tokenMiserEnabled;
   }
 
+  private boundedCommandsEnabled(override?: boolean): boolean {
+    return this.resolveTokenMiserBoundedCommands() && (override ?? this.resolveTokenMiserDefaultEnabledFn());
+  }
+
   private resolveTokenMiserEnabledForOverride(
     threadOverride: boolean | undefined,
   ): boolean {
@@ -21235,6 +21310,7 @@ export class DesktopBackendRegistry {
 
   private resolveAgentToolMcpCallContext(
     context: AgentToolMcpClientContext,
+    purpose: "catalog" | "invoke",
   ): ResolvedAgentToolMcpCallContext | undefined {
     if (!context.threadId) {
       return undefined;
@@ -21252,6 +21328,7 @@ export class DesktopBackendRegistry {
           ),
       );
     if (matchingTurns.length !== 1) {
+      if (purpose === "catalog") return undefined;
       backendRegistryLog.warn("MCP active turn resolution failed", {
         backend: context.backend,
         threadId: context.threadId,
@@ -23192,11 +23269,39 @@ export class DesktopBackendRegistry {
 
   private async emit(event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt): Promise<void> {
     const notification = event.notification;
+    if (!event.federationTarget && this.boundedCommandCapture.pending
+      && (notification.method === "item/started" || notification.method === "item/completed")) {
+      const item = readRecord(notification.params.item);
+      if (item?.type === "commandExecution" && typeof item.id === "string") {
+        const shell = !event.backend.startsWith("acp:") || item.commandSource === "shell";
+        this.boundedCommandCapture.observe({
+          backend: event.backend, threadId: notification.params.threadId, turnId: notification.params.turnId ?? undefined,
+        }, {
+          id: item.id, processId: readOptionalString(item.processId), command: shell ? readOptionalString(item.command) : undefined,
+          // Interrupted Unified Exec terminals can still be running. Keep their stop identity for endTurn.
+          completed: notification.method === "item/completed" && item.status !== "interrupted",
+          rejected: item.status === "declined" || item.status === "cancelled",
+          output: readOptionalString(item.aggregatedOutput) ?? readOptionalString(readRecord(item.data)?.output),
+        });
+      }
+    }
     const isTerminal = notification.method === "turn/completed"
       || notification.method === "turn/failed" || notification.method === "turn/cancelled";
+    let releaseBoundedCommands: Promise<void> | undefined;
     if (isTerminal && !event.federationTarget) {
       const turnId = turnIdFromTerminalNotification(notification);
       if (turnId) {
+        if (this.boundedCommandCapture.pending) {
+          const threadId = notification.params.threadId;
+          releaseBoundedCommands = this.boundedCommandCapture.endTurn({ backend: event.backend, threadId, turnId },
+            event.backend === "codex" ? (matches) => this.withCodexThreadClient(threadId, async (client) => {
+              const list = await client.listBackgroundTerminals?.(threadId);
+              for (const terminal of list?.terminals ?? []) {
+                if (matches(terminal)) await client.terminateBackgroundTerminal?.(threadId, terminal.processId);
+              }
+            }) : undefined)
+            .catch((error) => backendRegistryLog.warn("Could not release native command capture", { error: String(error) }));
+        }
         this.managedReviewService.candidateLedger.retireToolTurn({
           backend: event.backend, threadId: notification.params.threadId, turnId,
         });
@@ -23224,6 +23329,7 @@ export class DesktopBackendRegistry {
       : undefined;
     codexStartDelivery ??= ownedStartDelivery;
     try {
+      if (releaseBoundedCommands) await releaseBoundedCommands;
       if (event.backend === "codex") {
         if (isTerminal) {
           this.context.turnState.observeTurnTerminal(notification.params.threadId, turnIdFromTerminalNotification(notification));
@@ -23455,7 +23561,7 @@ export class DesktopBackendRegistry {
       }
     }
     this.rememberThreadTitleFromEvent(event);
-    if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
+    if (this.shouldInvalidateThreadListCacheForNotification(event.notification)) {
       // Reconciled turn status does not certify the provider's activity timestamp.
       this.invalidateThreadListCache(event.backend);
     }

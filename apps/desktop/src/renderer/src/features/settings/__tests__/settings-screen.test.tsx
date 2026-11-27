@@ -2594,7 +2594,7 @@ describe("SettingsScreen", () => {
     ).not.toBeDisabled();
 
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
-    const tokenMiserSwitch = getLabeledSwitch("Make Token Miser available");
+    const tokenMiserSwitch = getLabeledSwitch("Automatically reduce tool output in managed Codex");
     expect(tokenMiserSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(tokenMiserSwitch);
     await waitFor(() => {
@@ -5144,6 +5144,53 @@ describe("SettingsScreen", () => {
     await waitFor(() => expect(within(folderLine).getByRole("status")).toBeEmptyDOMElement());
   });
 
+  it("disables foreground capture when the owner cannot run it", () => {
+    const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: false };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+    const toggle = screen.getByRole("switch", { name: "Capture foreground command output" });
+    expect(toggle).toBeDisabled();
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText("Foreground command capture requires a supported POSIX owner.")).toBeVisible();
+  });
+
+  it("saves a bounded-command helper with stock Codex while managed Token Miser is off", async () => {
+    const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    const settings = createSettingsState(snapshot);
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={settings} onClose={() => undefined} />);
+    const choices = screen.getByRole("radiogroup", { name: "Helper for ambiguous command output" });
+    const section = screen.getByRole("region", { name: "Token Miser" });
+    const switches = within(section).getAllByRole("switch");
+    expect(switches[0]).toHaveAccessibleName("Capture foreground command output");
+    expect(switches[1]).toHaveAccessibleName("Enable on threads by default — Token Miser");
+    expect(switches[2]).toHaveAccessibleName("Automatically reduce tool output in managed Codex");
+    expect(switches[0]).toBeChecked();
+    expect(switches[2]).not.toBeChecked();
+    expect(within(choices).getByRole("radio", { name: "Local rules only" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(choices).getByRole("radio", { name: "Decision model" }));
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserBoundedHelper: "decision" } }));
+  });
+
+  it("keeps command capture available while managed Codex is unavailable", () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      boundedCommandsSupported: true,
+      activation: { observedAt: 1_800_000_000_000, state: "unavailable" },
+    };
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+    const section = within(screen.getByRole("region", { name: "Token Miser" }));
+    expect(section.getByRole("button", { name: /Token Miser.*Default on/ })).toBeInTheDocument();
+    expect(section.getByText("Codex could not load the gate")).toBeInTheDocument();
+  });
+
   it("lets an available Token Miser experiment default threads on or off", async () => {
     const snapshot = createSnapshot();
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
@@ -5677,7 +5724,7 @@ describe("SettingsScreen", () => {
     );
 
     const availabilitySwitch = screen.getByRole("switch", {
-      name: "Make Token Miser available",
+      name: "Automatically reduce tool output in managed Codex",
     });
     fireEvent.click(availabilitySwitch);
 

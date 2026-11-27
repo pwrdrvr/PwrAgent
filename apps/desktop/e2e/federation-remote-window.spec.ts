@@ -581,6 +581,9 @@ test.describe("federation remote window", () => {
       app = await launchElectronApp({
         fixturePath: fixture.fixturePath,
         secretStorage: "memory",
+        // Both pending repairs are seeded by the replay. Keep live GitHub
+        // status polling and the runner's authentication out of this test.
+        env: { PWRAGENT_GH_ENABLED: "false" },
         preLaunchHook: async (homeRoot) => {
           const statePath = path.join(
             homeRoot,
@@ -789,6 +792,7 @@ test.describe("federation remote window", () => {
 
       const localRow = window.getByRole("button", {
         name: "Local control thread",
+        exact: true,
       });
       await expect(localRow).toBeVisible({ timeout: 30_000 });
       await localRow.click();
@@ -843,6 +847,7 @@ test.describe("federation remote window", () => {
 
       const remoteRow = window.getByRole("button", {
         name: "Remote reconnect thread",
+        exact: true,
       });
       await expect(remoteRow).toBeVisible({ timeout: 30_000 });
 
