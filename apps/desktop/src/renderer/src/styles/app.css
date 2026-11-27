@@ -46905,6 +46905,25 @@ button.pricing-token-miser__folded:focus-visible {
   flex-direction: column;
 }
 
+/* A PR row's chip is only `#123` and its dot: the title beside it gives way.
+   `.pr-chip` may shrink so a repo-prefixed label fits a sidebar lane, but here
+   a long title out-shrank it and clipped the number to `#6`.
+   At the rail's 240px floor a long number with a merge-queue badge leaves no
+   room for Auto-fix either, so the row wraps it to a second line. The title
+   claims only leftover space (basis 0), so it never forces that wrap. Declared
+   after `.details-row__text` so order and specificity both favor it. */
+.details-row--pr {
+  flex-wrap: wrap;
+}
+
+.details-row--pr > .pr-chip {
+  flex-shrink: 0;
+}
+
+.details-row--pr > .details-row__text {
+  flex-basis: 0;
+}
+
 .details-row__title {
   overflow: hidden;
   color: var(--text-primary);
