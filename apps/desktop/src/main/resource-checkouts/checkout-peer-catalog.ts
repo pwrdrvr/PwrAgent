@@ -1,5 +1,4 @@
 import type { ResourceAuthority, ResourceDomain } from "@pwragent/shared/contracts/resource-checkouts";
-import { checkoutCatalogView } from "./checkout-catalog-view";
 import { canonicalKey, object, text } from "./checkout-input";
 import { MAX_EXTERNAL_DOMAINS } from "./checkout-configuration";
 
@@ -95,6 +94,9 @@ export class CheckoutPeerCatalog {
       generation = received;
       if (page.version !== 1 || !Array.isArray(page.views) || page.views.length > PAGE_SIZE
         || typeof page.more !== "boolean" || (page.more && page.views.length !== PAGE_SIZE)) break;
+      if (!page.views.length) return views;
+      // The headless owner loads the schema only when a peer sends resource rows.
+      const { checkoutCatalogView } = await import("./checkout-catalog-view");
       for (const row of page.views) {
         const view = checkoutCatalogView.parse(row);
         const key = canonicalKey(view.resource.canonicalKey);
