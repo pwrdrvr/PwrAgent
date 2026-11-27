@@ -1,5 +1,6 @@
 import {
   memo,
+  useId,
   useMemo,
   useRef,
   useEffect,
@@ -1241,6 +1242,7 @@ export function TranscriptImageTile(props: {
   imageNumber: number;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
 }): ReactNode {
+  const tileId = useId();
   const [failed, setFailed] = useState(false);
   const sourceLabel = useMemo(
     () => formatTranscriptImageSourceLabel(props.imagePart.url),
@@ -1251,7 +1253,7 @@ export function TranscriptImageTile(props: {
   const unavailableReason = transcriptImageUnavailableReason(props.imagePart);
   if (unavailableReason) {
     return (
-      <div className="transcript-message__image-fallback">
+      <div id={tileId} className="transcript-message__image-fallback">
         <div className="transcript-message__image-fallback-main">
           <span className="transcript-message__image-fallback-title">
             {unavailableReason}
@@ -1263,7 +1265,7 @@ export function TranscriptImageTile(props: {
 
   if (failed) {
     return (
-      <div className="transcript-message__image-fallback">
+      <div id={tileId} className="transcript-message__image-fallback">
         <div className="transcript-message__image-fallback-main">
           <span className="transcript-message__image-fallback-title">Image failed to load</span>
           <code
@@ -1286,6 +1288,7 @@ export function TranscriptImageTile(props: {
 
   return (
     <button
+      id={tileId}
       type="button"
       className="transcript-message__image-button"
       aria-label={`Expand transcript image ${props.imageNumber}`}

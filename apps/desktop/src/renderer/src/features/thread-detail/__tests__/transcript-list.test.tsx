@@ -53,6 +53,12 @@ describe("TranscriptList", () => {
     fireEvent.scroll(element);
   }
 
+  function mockMessageBox(list: HTMLElement, id: string, top: () => number) {
+    const box = list.querySelector(`[data-entry-id="${id}"]`)!.firstElementChild!;
+    vi.spyOn(box, "getBoundingClientRect")
+      .mockImplementation(() => new DOMRect(0, top() - list.scrollTop, 160, 60));
+  }
+
   beforeEach(() => {
     scrollHeight = 480;
     clientHeight = 240;
@@ -4446,7 +4452,7 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
   });
 
-  it("preserves the reader position when older messages are prepended", () => {
+  it("preserves the reader position when a prepend coincides with growth below it", () => {
     const { rerender } = render(
       <TranscriptList
         entries={[
@@ -4471,10 +4477,16 @@ Implementation notes remain in a readable bubble.`;
     );
 
     const list = screen.getByRole("list");
+    let prependedHeight = 0;
+    mockMessageBox(list, "message-2", () => 100 + prependedHeight);
+    mockMessageBox(list, "message-3", () => 170 + prependedHeight);
     list.scrollTop = 80;
     fireEvent.scroll(list);
 
-    scrollHeight = 640;
+    // The inserted rows add 160px above the reader. An image adds another
+    // 60px below them in the same layout, which must not affect scrollTop.
+    prependedHeight = 160;
+    scrollHeight = 700;
 
     rerender(
       <TranscriptList
@@ -4506,6 +4518,142 @@ Implementation notes remain in a readable bubble.`;
     );
 
     expect(list.scrollTop).toBe(240);
+  });
+
+  it("holds the reading position when an image load changes offsets without changing total height", () => {
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    scrollHeight = 720;
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "earlier",
+            role: "user",
+            text: "Earlier screenshot",
+            parts: [{ type: "image", url: "https://example.invalid/load.png", alt: "Earlier screenshot" }],
+          },
+          { type: "message", id: "reading", role: "assistant", text: "Reading here" },
+          { type: "message", id: "later", role: "user", text: "Later screenshot" },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="image-wrap"
+        onLoadOlder={async () => undefined}
+      />,
+    );
+    const list = screen.getByRole("list");
+    let shift = 0;
+    mockMessageBox(list, "earlier", () => 0);
+    mockMessageBox(list, "reading", () => 100 + shift);
+    mockMessageBox(list, "later", () => 170 + shift);
+    scrollAwayWithScrollbar(list, 80);
+
+    // Growing a photo line above can shrink a line below by the same amount.
+    // There is no content ResizeObserver delivery for that layout.
+    shift = 72;
+    const frames: FrameRequestCallback[] = [];
+    const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) =>
+      frames.push(callback));
+    try {
+      fireEvent.load(screen.getByAltText("Earlier screenshot"));
+      act(() => {
+        for (const frame of frames) frame(0);
+      });
+      expect(list.scrollTop).toBe(152);
+    } finally {
+      animationFrame.mockRestore();
+    }
+  });
+
+  it("updates the folded gallery index as previews fail or arrive", () => {
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const turn = { id: "gallery", status: "completed" as const, startedAt: 100, completedAt: 900 };
+    const entries = (names: string[]): AppServerThreadEntry[] => [
+      { type: "message", id: "capture", role: "user", text: "Capture the dashboards.", turn },
+      {
+        type: "activity",
+        id: "screenshots",
+        summary: "Captured the dashboards",
+        status: "completed",
+        turn,
+        details: [{
+          id: "screenshot-result",
+          kind: "read",
+          label: "Screenshots",
+          images: names.map((name) => ({
+            type: "image",
+            url: `https://example.invalid/${name}.png`,
+            alt: name,
+          })),
+        }],
+      },
+      { type: "message", id: "done", role: "assistant", phase: "final", text: "Done.", turn },
+    ];
+    const props = {
+      loading: false,
+      loadingMore: false,
+      threadId: "failed-gallery-images",
+      onLoadOlder: async () => undefined,
+    };
+    const view = render(<TranscriptList {...props} entries={entries(["first", "second", "third"])} />);
+    const list = screen.getByRole("list");
+    const gallery = screen.getByRole("group", { name: "Images from previous work" });
+    const row = gallery.closest(".transcript-list__item")!;
+    const indexBuilds = vi.spyOn(row, "querySelectorAll");
+    let lastTileShift = 0;
+    const defaultRect = HTMLElement.prototype.getBoundingClientRect;
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.parentElement === gallery) {
+          const index = Array.from(gallery.children).indexOf(this);
+          const top = 64 * index + (index >= 2 ? lastTileShift : 0);
+          return new DOMRect(0, top - list.scrollTop, 160, 60);
+        }
+        if (this.parentElement?.getAttribute("data-entry-id") === "done") {
+          return new DOMRect(0, 350 - list.scrollTop, 160, 60);
+        }
+        return defaultRect.call(this);
+      });
+    onTestFinished(() => {
+      rect.mockRestore();
+    });
+    scrollAwayWithScrollbar(list, 80);
+    expect(indexBuilds).toHaveBeenCalledTimes(1);
+
+    fireEvent.error(within(gallery).getByAltText("first"));
+    scrollAwayWithScrollbar(list, 90);
+    fireEvent.error(within(gallery).getByAltText("second"));
+    scrollAwayWithScrollbar(list, 100);
+
+    expect(within(gallery).getAllByText("Image failed to load")).toHaveLength(2);
+    // Replacing one tile must do work proportional to the change.
+    expect.soft(indexBuilds).toHaveBeenCalledTimes(1);
+
+    indexBuilds.mockClear();
+    fireEvent.error(within(gallery).getByAltText("third"));
+    // The replacement is still the tile on the reading line. A simultaneous
+    // reflow above it must be compensated even though its DOM node changed.
+    lastTileShift = 48;
+    view.rerender(<TranscriptList {...props} entries={entries(["first", "second", "third", "fourth"])} />);
+    fireEvent.scroll(list);
+    expect.soft(list.scrollTop).toBe(148);
+    expect(within(gallery).getByAltText("fourth")).toBeInTheDocument();
+    scrollAwayWithScrollbar(list, 172);
+    // An appended tile must leave the existing block index in place.
+    expect(indexBuilds).not.toHaveBeenCalled();
   });
 
   it("preserves the reader position when entries expand behind a pinned prompt", () => {
@@ -4542,9 +4690,14 @@ Implementation notes remain in a readable bubble.`;
     );
 
     const list = screen.getByRole("list");
+    let prependedHeight = 0;
+    mockMessageBox(list, prompt.id, () => 0);
+    mockMessageBox(list, "message-2", () => 100 + prependedHeight);
+    mockMessageBox(list, lastMessage.id, () => 170 + prependedHeight);
     list.scrollTop = 80;
     fireEvent.scroll(list);
 
+    prependedHeight = 160;
     scrollHeight = 640;
 
     rerender(
