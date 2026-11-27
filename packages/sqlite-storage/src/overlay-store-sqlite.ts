@@ -2828,7 +2828,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           AND EXISTS (
             SELECT 1 FROM thread_usage_lines AS line
              WHERE line.usage_turn_id = thread_usage_turns.usage_turn_id
-               AND line.source = 'live' AND line.scope = 'turn' AND line.status != 'superseded'
+               AND line.source = 'live' AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL AND line.status != 'superseded'
           )`,
     ).get(backend, threadId, turnId) as {
       usage_turn_id: string;
@@ -2848,6 +2849,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         ?? (this.stateDb.raw.prepare(
           `SELECT final_context_tokens FROM thread_usage_turns
             WHERE provider = ? AND backend = ? AND thread_id = ? AND parent_thread_id IS NULL
+              AND backend GLOB 'acp:*'
               AND turn_id != ? AND completed_at <= ? AND final_context_tokens > 0
             ORDER BY completed_at DESC, observed_at DESC LIMIT 1`,
         ).get(turn.provider, backend, threadId, turnId, completedAt) as { final_context_tokens: number } | undefined)

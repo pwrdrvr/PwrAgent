@@ -114,16 +114,29 @@ scenario flushes billing before completion, as does its control.
 
 | Scenario | Control commits | Measured commits | Control WAL bytes | Measured WAL bytes |
 | --- | ---: | ---: | ---: | ---: |
-| Steered, shrink verified | 3 | 3 | 218,360 | 230,720 |
-| Idle, no shrink on first fill | 6 | 6 | 230,720 | 230,720 |
-| Idle, shrink verified by a fresh owner | 3 | 3 | 218,360 | 144,200 |
+| Steered, shrink verified | 3 | 3 | 218,360 | 243,080 |
+| Idle, no shrink on first fill | 6 | 6 | 230,720 | 238,960 |
+| Idle, shrink verified by a fresh owner | 3 | 3 | 218,360 | 148,320 |
 
 Streamed fill, cached replays, duplicate terminal events, and time spent
 waiting add zero commits. Confirmation and its marker share the next ordinary
 turn's completion transaction. WAL bytes depend on page layout and the
-checkpoint at reopen. Using the largest observed increase, 12,360 bytes per
-compaction at ten compactions per day projects about 0.124 MB of additional
+checkpoint at reopen. Using the largest observed increase, 24,720 bytes per
+compaction at ten compactions per day projects about 0.247 MB of additional
 WAL per day.
+
+The completion lookup reuses the live root billing index. Idle compaction
+seeks the latest completed ACP root turn with a recorded fill in a partial
+index. An in-memory probe varied target turns and unrelated billed lines
+independently from 1,000 to 4,000. Completion held at 85 SQLite VM steps and
+idle baseline lookup at 123. Before indexing, the largest tested cases took
+25,078 and 68,077 steps respectively.
+
+A separate file-backed run settled 64, 128, and 256 ordinary ACP turns with
+and without the idle baseline index. Each turn made one existing commit in
+both configurations. The index added about 4.1–5.2 KB of WAL per turn in
+these runs, or about 0.52 MB/day at 100 ordinary ACP turns. It also adds one
+4,120-byte frame to the maintenance fixture's VACUUM.
 
 ### Write budgets
 

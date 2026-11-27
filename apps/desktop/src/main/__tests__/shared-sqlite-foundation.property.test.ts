@@ -57,6 +57,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_unpriced_thread"
     && row.name !== "idx_thread_usage_lines_unpriced_parent"
     && row.name !== "idx_thread_usage_turns_pending_acp_compaction"
+    && row.name !== "idx_thread_usage_turns_acp_context"
     && row.name !== "idx_automation_runs_backend_turn"
     && row.tbl_name !== "automation_pruned_run_costs"
     && row.name !== "idx_pr_status_watches_retry"
@@ -181,7 +182,7 @@ const upgrades = [
   { version: 80, sql: "DROP TABLE durable_turn_requests; DROP TABLE thread_reviews; DROP TABLE owner_jobs" },
   { version: 82, sql: "ALTER TABLE thread_usage_lines DROP COLUMN request_pricing; DROP TABLE thread_automatic_wake_guards; DROP TABLE thread_automatic_wake_admissions; DROP TABLE thread_automatic_wake_reviews" },
   { version: CURRENT_STATE_DB_USER_VERSION, sql: "DROP INDEX idx_pr_status_watches_retry; DROP INDEX idx_pr_status_watches_history" },
-  { version: CURRENT_STATE_DB_USER_VERSION, sql: "DROP INDEX idx_thread_usage_turns_pending_acp_compaction; ALTER TABLE thread_usage_turns DROP COLUMN acp_compaction_before_tokens" },
+  { version: CURRENT_STATE_DB_USER_VERSION, sql: "DROP INDEX idx_thread_usage_turns_pending_acp_compaction; DROP INDEX idx_thread_usage_turns_acp_context; ALTER TABLE thread_usage_turns DROP COLUMN acp_compaction_before_tokens" },
 ] as const;
 
 it.each(upgrades)("upgrades v$version ($sql) and reopens without losing metadata or adding writes", async ({ version, sql }) => {

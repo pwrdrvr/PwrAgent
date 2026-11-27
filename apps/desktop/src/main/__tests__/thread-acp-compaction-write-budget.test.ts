@@ -51,6 +51,57 @@ function acpTurn(registry: ReturnType<typeof owner>, turnId: string, model = "ge
   };
 }
 
+it("seeks single ACP usage rows and orders the idle baseline by completion", async () => {
+  const state = openFreshStateDb(":memory:");
+  const store = new SqliteOverlayStore(state);
+  const registry = owner(store);
+  try {
+    for (const [id, fill] of [["later-completion", 320_000], ["later-observation", 470_000]] as const) {
+      const ordinary = acpTurn(registry, id);
+      await ordinary.start();
+      await ordinary.context(fill);
+      await ordinary.usage();
+      await ordinary.complete();
+    }
+    const setOrder = state.raw.prepare("UPDATE thread_usage_turns SET completed_at = ?, observed_at = ? WHERE turn_id = ?");
+    setOrder.run(10, 20, "later-completion");
+    setOrder.run(9, 21, "later-observation");
+
+    const compact = acpTurn(registry, "compact");
+    await compact.start();
+    await compact.usage();
+    const plans: { completion?: string[]; baseline?: string[] } = {};
+    const prepare = state.raw.prepare.bind(state.raw);
+    const recordPlan = (sql: string, args: unknown[]) =>
+      (prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>).map((row) => row.detail);
+    const spy = vi.spyOn(state.raw, "prepare").mockImplementation((sql) => {
+      if (sql.startsWith("SELECT usage_turn_id, provider, model, final_context_tokens")) {
+        plans.completion = recordPlan(sql, [backend, threadId, "compact"]);
+      } else if (sql.startsWith("SELECT final_context_tokens FROM thread_usage_turns")) {
+        plans.baseline = recordPlan(sql, ["google", backend, threadId, "compact", Date.now()]);
+      }
+      return prepare(sql);
+    });
+    try {
+      await compact.complete(true);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(state.raw.prepare("SELECT acp_compaction_before_tokens AS tokens FROM thread_usage_turns WHERE turn_id = ?")
+      .get("compact")).toEqual({ tokens: 320_000 });
+    // Neither query may scan billed lines or sort an entire thread's turns.
+    expect(plans.completion).toEqual(expect.arrayContaining([
+      expect.stringMatching(/SEARCH line .*idx_thread_usage_lines_completion_turn/),
+    ]));
+    expect(plans.baseline).toEqual([
+      expect.stringMatching(/SEARCH thread_usage_turns .*idx_thread_usage_turns_acp_context/),
+    ]);
+  } finally {
+    await registry.close();
+    state.close();
+  }
+});
+
 it.each(["stop-first", "settlement-first"] as const)(
   "keeps the first ordinary fill through ACP cancellation in %s order",
   async (order) => {
