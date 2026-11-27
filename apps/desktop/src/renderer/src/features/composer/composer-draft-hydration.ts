@@ -5,7 +5,7 @@ import { type AppServerSkillSummary } from "@pwragent/shared/contracts/normalize
 import { parseInstanceReferenceUrl } from "../../lib/instance-references";
 import { decodeMarkdownDestination } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";
-import { parseSkillMentionParts } from "../../lib/skill-mentions";
+import { indexMentionSkills, parseSkillMentionParts } from "../../lib/skill-mentions";
 import { parsePullRequestUrl, resolveLivePullRequest, type PullRequestLinkContextValue } from "../../lib/pull-request-links";
 import type { ThreadLinkContextValue } from "../../lib/thread-links";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
@@ -27,9 +27,16 @@ export function hydrateComposerDraft(
   draft: string;
   skillTokens: ComposerSkillToken[];
 } {
+  // Only inline links and CommonMark thread autolinks can mint a token.
+  // Incomplete pasted Markdown can therefore bypass the Markdown parser entirely.
+  const labelEnd = canonicalDraft.indexOf("](");
+  const hasInlineLink = labelEnd >= 0 && canonicalDraft.includes(")", labelEnd + 2);
+  const mayHaveAutolink = threadLinks && /<pwragent:\/\/thread\/[^<>\r\n]*>/i.test(canonicalDraft);
+  if (!hasInlineLink && !mayHaveAutolink) return { draft: canonicalDraft, skillTokens: [] };
+
   let draft = "";
   const skillTokens: ComposerSkillToken[] = [];
-  const sharedSkillNames = findSharedSkillNames(skills);
+  let skillIndex: ReturnType<typeof indexMentionSkills> | undefined;
 
   const hydrateSkillAndDirectoryParts = (text: string): void => {
     for (const part of parseSkillMentionParts(text)) {
@@ -62,11 +69,12 @@ export function hydrateComposerDraft(
       // it when exactly one skill has that name: with a `$release` in each
       // linked project, the first one found is a different project's
       // release, and the restored chip would silently run it.
+      skillIndex ??= indexMentionSkills(skills);
       const matchingSkill =
-        skills.find((skill) => skill.path === part.path)
-        ?? (isSharedSkillName(sharedSkillNames, part.name)
+        skillIndex.byPath.get(part.path)
+        ?? (isSharedSkillName(findSharedSkillNames(skills), part.name)
           ? undefined
-          : skills.find((skill) => skill.name === part.name));
+          : skillIndex.byName.get(part.name));
       skillTokens.push(
         createComposerSkillToken(
           matchingSkill ?? {
