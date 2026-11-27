@@ -5,11 +5,23 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
-import { expect, test } from "./fixtures/electron-test";
+import { expect, test as base } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
-import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "../src/main/__tests__/helpers/outpost-daemon";
+import { createOutpostDaemonStarter, OUTPOST_VIEWER_CAPABILITIES } from "../src/main/__tests__/helpers/outpost-daemon";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+type StartOutpostDaemon = ReturnType<typeof createOutpostDaemonStarter>;
+
+const test = base.extend<{ startOutpostDaemon: StartOutpostDaemon }>({
+  startOutpostDaemon: async ({ playwright: _playwright }, use) => {
+    const cleanups: Array<() => Promise<void>> = [];
+    try {
+      await use(createOutpostDaemonStarter((cleanup) => { cleanups.push(cleanup); }));
+    } finally {
+      await Promise.all(cleanups.map((cleanup) => cleanup()));
+    }
+  },
+});
 
 test.beforeAll(() => {
   execFileSync(process.execPath, [path.resolve(specDir, "../../../packages/pwragent/scripts/build.mjs")], {
@@ -17,7 +29,7 @@ test.beforeAll(() => {
   });
 });
 
-test("the mounted Node owner keeps one native turn and distinct immutable queued inputs", async () => {
+test("the mounted Node owner keeps one native turn and distinct immutable queued inputs", async ({ startOutpostDaemon }) => {
   test.skip(process.platform === "win32", "The executable Outpost supports Linux and macOS");
   test.setTimeout(120_000);
   const outpost = await startOutpostDaemon({ packageRoot: path.resolve(specDir, "../../../packages/pwragent") });
@@ -75,7 +87,7 @@ test("the mounted Node owner keeps one native turn and distinct immutable queued
   } finally { await app?.close(); await outpost.close(); }
 });
 
-async function mountOutpost(title: string) {
+async function mountOutpost(startOutpostDaemon: StartOutpostDaemon, title: string) {
   const outpost = await startOutpostDaemon({ packageRoot: path.resolve(specDir, "../../../packages/pwragent"), capabilities: [...OUTPOST_VIEWER_CAPABILITIES, "turn_queue_pause"] });
   let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
   try {
@@ -104,10 +116,10 @@ async function mountOutpost(title: string) {
   } catch (error) { await app?.close(); await outpost.close(); throw error; }
 }
 
-test("a remote queued message becomes a private viewer draft before edited input gets a new acceptance", async () => {
+test("a remote queued message becomes a private viewer draft before edited input gets a new acceptance", async ({ startOutpostDaemon }) => {
   test.skip(process.platform === "win32", "The executable Outpost supports Linux and macOS");
   test.setTimeout(120_000);
-  const { outpost, app, identity, queue } = await mountOutpost("Invented private draft");
+  const { outpost, app, identity, queue } = await mountOutpost(startOutpostDaemon, "Invented private draft");
   try {
     const active = await outpost.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
     const prompt = `${"Invented queued Ω text beyond the preview. ".repeat(12)}Private edit tail.`;
@@ -142,10 +154,10 @@ test("a remote queued message becomes a private viewer draft before edited input
   } finally { await app.close(); await outpost.close(); }
 });
 
-test("viewer pause, order and held Retry controls act on the mounted owner's queue", async () => {
+test("viewer pause, order and held Retry controls act on the mounted owner's queue", async ({ startOutpostDaemon }) => {
   test.skip(process.platform === "win32", "The executable Outpost supports Linux and macOS");
   test.setTimeout(120_000);
-  const { outpost, app, identity, queue } = await mountOutpost("Invented remote queue controls");
+  const { outpost, app, identity, queue } = await mountOutpost(startOutpostDaemon, "Invented remote queue controls");
   const displaced = `${outpost.workspace}-unavailable`;
   let missing = false;
   try {

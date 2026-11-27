@@ -11,7 +11,7 @@ import type { NavigationLaunchpadDraft } from "@pwragent/shared/contracts/naviga
 import type { SubmitDurableTurnRequest } from "@pwragent/shared/contracts/durable-turn-requests";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
-import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon, type OutpostDaemon } from "./helpers/outpost-daemon";
+import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon, type OutpostDaemon } from "./helpers/vitest-outpost-daemon";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 

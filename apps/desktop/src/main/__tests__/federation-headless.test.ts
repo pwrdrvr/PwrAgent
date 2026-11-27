@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { FEDERATION_OPERATOR_QUESTION_METHODS } from "../federation/federation-operator-questions";
 import { FEDERATION_THREAD_TODO_METHODS } from "../federation/federation-thread-todos";
-import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "./helpers/outpost-daemon";
+import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon } from "./helpers/vitest-outpost-daemon";
 
 describe.skipIf(process.platform === "win32")("desktop client against the standalone outpost", () => {
   it.each(["direct", "symlink"] as const)("uses the current navigation, composer, transcript and project contracts (%s workspace)", async (workspaceKind) => {

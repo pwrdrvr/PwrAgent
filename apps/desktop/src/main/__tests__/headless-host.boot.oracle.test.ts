@@ -3,12 +3,12 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { build } from "esbuild";
 import fc from "fast-check";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
-import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
-import { buildHeadless } from "../../../scripts/build-headless.mjs";
-import { createNativeHelperFixture } from "../../test-setup/native-helper-fixture";
+import { expect, inject, it, onTestFinished } from "vitest";
+// Keep the build script in Vitest's watch graph. Global setup runs the build.
+import "../../../scripts/build-headless.mjs";
+import { requireOracleFixture } from "../../test-setup/oracle-fixture-context";
 import { ensureNamedProfileExists } from "../profile";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store";
@@ -25,48 +25,8 @@ const REFUSED_PROBES = [
   "create_monitor_delegation", "inject_progress", "complete_monitoring", "merge_pull_request",
 ];
 
-type BootFixture = { outputDirectory: string; guard: string };
-
-async function buildBootFixture(root: string): Promise<BootFixture> {
-  const outputDirectory = path.join(root, "runtime");
-  await buildHeadless({ outputDirectory, sourcemap: false, logLevel: "warning", plugins: [{ name: "owned-codex-protocol", setup(builder) {
-    builder.onResolve({ filter: /(?:^|\/)stdio-transport$/ }, () => ({ path: "fixture-codex", namespace: "owned-codex" }));
-    builder.onLoad({ filter: /.*/, namespace: "owned-codex" }, () => ({
-      contents: `export { OwnerConformanceCodexTransport as StdioJsonRpcTransport } from ${JSON.stringify(path.join(import.meta.dirname, "fixtures/owner-conformance-codex-transport.ts"))};`,
-      loader: "ts", resolveDir: import.meta.dirname,
-    }));
-  } }] });
-  // Reuse the repository's CLI guard in the child. Probe failures may be
-  // caught by owners, so the recorded violations still fail process exit.
-  const guard = path.join(root, "guard.cjs");
-  await build({
-    entryPoints: [path.join(import.meta.dirname, "setup/agent-cli-spawn-guard.ts")], outfile: guard,
-    bundle: true, platform: "node", format: "cjs", logLevel: "silent",
-    plugins: [{ name: "child-test-hooks", setup(builder) {
-      builder.onResolve({ filter: /^vitest$/ }, () => ({ path: "hooks", namespace: "child-test" }));
-      builder.onLoad({ filter: /.*/, namespace: "child-test" }, () => ({
-        contents: `export const afterEach = () => {}; export const afterAll = fn => process.once("exit", () => { try { fn(); } catch (error) { require("node:fs").writeSync(2, error.message + "\\n"); process.exitCode = 1; } });`,
-        loader: "js",
-      }));
-    } }],
-  });
-  return { outputDirectory, guard };
-}
-
-let fixture: ReturnType<typeof createNativeHelperFixture<BootFixture>>;
-
-beforeAll(async () => {
-  // Build the runtime and CLI guard before measuring boot and shutdown.
-  fixture = createNativeHelperFixture(buildBootFixture);
-  await fixture.ready;
-});
-
-afterAll(async () => {
-  await fixture?.dispose();
-});
-
 it("boots and shuts down the real Node owners while preserving desktop-encrypted federation keys", async ({ signal }) => {
-  const { outputDirectory, guard } = await fixture.ready;
+  const { outputDirectory, guard } = requireOracleFixture(inject("headlessDriver"));
   signal.throwIfAborted();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "headless-host-boot-"));
   let stopChild: (() => Promise<unknown[]>) | undefined;
