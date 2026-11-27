@@ -1039,6 +1039,12 @@ function logBackendLifecycleNotification(
 
 let threadListCacheSequence = 0;
 
+function requiresSuccessfulCodexThreadList(callerReason?: string): boolean {
+  return callerReason === "archive-cleanup"
+    || callerReason === "startup-provider-refresh"
+    || callerReason === "authentication-recovery";
+}
+
 class CompactionRecoveryRevoked extends Error {
   constructor(readonly status: "busy" | "discarded" = "discarded") { super("Compaction recovery admission was revoked"); }
 }
@@ -4442,7 +4448,7 @@ export class DesktopBackendRegistry {
       caller: normalizedParams.callerReason,
       provider: normalizedParams.backend === "codex" ? "codex" : normalizedParams.backend ? "acp" : "all",
       archived: normalizedParams.archived === true,
-    }, () => this.readThreadList(normalizedParams, displayMetadataObservationSequence));
+    }, () => this.readThreadList(normalizedParams, displayMetadataObservationSequence, { cacheKey, pendingState }));
     const promise = execution
       .then((threads) => {
         if (this.threadListCache.get(cacheKey) === pendingState) {
@@ -5004,6 +5010,7 @@ export class DesktopBackendRegistry {
       skipArchivedMetadataRefresh?: boolean;
     },
     displayMetadataObservationSequence: number,
+    cache: { cacheKey: string; pendingState: ThreadListCacheState },
   ): Promise<AppServerThreadSummary[]> {
     const durableThreads = await this.readDurableStartupThreads(
       params,
@@ -5026,12 +5033,22 @@ export class DesktopBackendRegistry {
       || params.backend === "codex"
       || (params.backend && isAcpBackendId(params.backend))
     ) {
-      const listed = await this.readProviderThreadList(
-        params.backend,
-        params,
-        diagnostics,
-        displayMetadataObservationSequence,
-      );
+      // A turn can use the provider rows even while navigation is still reading
+      // environment files. Keep the shared read on the pending cache entries
+      // so an invalidation fences it along with the projected results.
+      const canShareProviderRead = params.backend === "codex"
+        && !params.forceRefresh
+        && !requiresSuccessfulCodexThreadList(params.callerReason)
+        && this.threadListCache.get(cache.cacheKey) === cache.pendingState;
+      const sibling = canShareProviderRead
+        ? this.threadListCache.get(this.buildThreadListCacheKey({ ...params, enrichEnvironmentOptions: !enrichEnvironmentOptions }))
+        : undefined;
+      const providerRead = sibling?.providerRead ?? {
+        observationSequence: displayMetadataObservationSequence,
+        result: this.readProviderThreadList(params.backend, params, diagnostics, displayMetadataObservationSequence),
+      };
+      if (canShareProviderRead) cache.pendingState.providerRead = providerRead;
+      const listed = await providerRead.result;
       const threads = enrichEnvironmentOptions
         ? this.inheritIncompleteThreadList(
           await this.withThreadEnvironmentOptions(listed.threads),
@@ -5040,7 +5057,7 @@ export class DesktopBackendRegistry {
         : listed.threads;
       this.rememberThreadListContexts(
         threads,
-        displayMetadataObservationSequence,
+        providerRead.observationSequence,
         listed.enriched,
         params.archived,
       );
@@ -18575,6 +18592,7 @@ export class DesktopBackendRegistry {
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
+    enrichEnvironmentOptions?: boolean;
     filter?: string;
     forceRefresh?: boolean;
     limit?: number;
@@ -18595,7 +18613,7 @@ export class DesktopBackendRegistry {
       codexDirectoryBackfill,
       enrichDirectories: params.enrichDirectories === true,
       // A CWD lookup must never join a pending environment-enriched list.
-      enrichEnvironmentOptions: params.callerReason !== "turn-cwd",
+      enrichEnvironmentOptions: params.enrichEnvironmentOptions ?? (params.callerReason !== "turn-cwd"),
       revalidateDirectories: includesCodex && params.enrichDirectories === true && params.forceRefresh === true,
       filter: params.filter?.trim() ?? "",
       limit: params.limit,
@@ -18771,11 +18789,7 @@ export class DesktopBackendRegistry {
           // cannot authorize absence. Retry an unexpectedly short walk sooner.
           .listThreads(params, diagnostics, params.maxPages === undefined ? () => { incomplete = true; } : undefined)
           .catch(async (error) => {
-            if (
-              diagnostics?.callerReason === "archive-cleanup"
-              || diagnostics?.callerReason === "startup-provider-refresh"
-              || diagnostics?.callerReason === "authentication-recovery"
-            ) {
+            if (requiresSuccessfulCodexThreadList(diagnostics?.callerReason)) {
               throw error;
             }
 

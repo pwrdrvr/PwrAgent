@@ -46,6 +46,7 @@ async function coldOwner() {
   });
   return {
     registry, blockedReads, firstRead: firstRead.promise, releaseReads: releaseReads.resolve,
+    providerListCalls: () => codexClient.listThreadsCallCount,
     waitingCwd: worktrees[2].cwd,
     startTurns: async () => {
       await Promise.all(turnWorktrees.map(({ id }) => registry.startTurn({
@@ -91,6 +92,8 @@ it("bounds blocked environment stats on a cold list while turns use workspace me
     // Three distinct stale checkouts are enough to cross the physical cap.
     expect(fixture.blockedReads.length).toBeLessThanOrEqual(2);
     await expect(fixture.startTurns()).resolves.toEqual(fixture.expectedCwds);
+    // Both projections can use the same provider rows while discovery is blocked.
+    expect(fixture.providerListCalls()).toBe(1);
     expect(fixture.blockedReads.length).toBeLessThanOrEqual(2);
     fixture.releaseReads();
     expect(await listing).toContainEqual(expect.objectContaining({
