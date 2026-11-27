@@ -362,8 +362,8 @@ jobs:
         timeout-minutes: 4
         shell: bash
         run: |
-          runtime="$RUNNER_TEMP/pwragent-model-bench"
-          mkdir -p "$runtime"
+          # The desktop spawn guard uses Node's OS temp root, which can differ from RUNNER_TEMP.
+          runtime="$(mktemp -d "$(node -p 'require("node:os").tmpdir()')/pwragent-model-bench.XXXXXX")"
           npm install --prefix "$runtime" --no-audit --no-fund @openai/codex@0.169.0
           curl --fail --silent --show-error --retry 2 \
             --output "$runtime/antigravity.tar.gz" \
@@ -371,14 +371,15 @@ jobs:
           echo "3dee9f26e298156db673f6ce2a0f5dfed5b30006e04ceb9809c68070e7b717587b33a3da0f8bc2eda45af81a50bc8b14c82b28ae5832bcfe3e7fd49397117b31  $runtime/antigravity.tar.gz" | sha512sum --check
           tar -xOzf "$runtime/antigravity.tar.gz" antigravity > "$runtime/agy"
           chmod +x "$runtime/agy"
+          printf 'directory=%s\n' "$runtime" >> "$GITHUB_OUTPUT"
 
       - name: Check outbound model request budgets
         id: model-request
         if: ${{ !cancelled() && steps.model-runtimes.outcome == 'success' }}
         timeout-minutes: 3
         env:
-          PWRAGENT_MODEL_BENCH_CODEX: ${{ runner.temp }}/pwragent-model-bench/node_modules/.bin/codex
-          PWRAGENT_MODEL_BENCH_AGY: ${{ runner.temp }}/pwragent-model-bench/agy
+          PWRAGENT_MODEL_BENCH_CODEX: ${{ steps.model-runtimes.outputs.directory }}/node_modules/.bin/codex
+          PWRAGENT_MODEL_BENCH_AGY: ${{ steps.model-runtimes.outputs.directory }}/agy
           PWRAGENT_MODEL_BENCH_RESULT: ${{ runner.temp }}/model-request-result.json
         run: >-
           pnpm test apps/desktop/src/main/__tests__/model-request-size.test.ts
