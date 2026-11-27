@@ -787,7 +787,7 @@ it("reuses installed Git for repeated merge offers while reading the live guard 
     resetAppServerServiceForTests();
     const service = initializeDesktopAppServerService();
     vi.spyOn(service as unknown as { prReviewOfferDirectories: () => string[] }, "prReviewOfferDirectories").mockReturnValue([cwd]);
-    const requestGithub = vi.fn<ForgeCiClient["requestGithub"]>(async (_repo, request) => {
+    const requestGithubForMergeOffer = vi.fn<ForgeCiClient["requestGithubForMergeOffer"]>(async (_repo, request) => {
       if (request.graphql) return { data: { repository: { pullRequest: {
         baseRefName: "main", headRefOid: head, timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
       } } } };
@@ -799,8 +799,8 @@ it("reuses installed Git for repeated merge offers while reading the live guard 
       if (request.path.endsWith("/pulls/1")) return { merged: false };
       throw new Error("Unexpected forge request");
     });
-    vi.spyOn(service as unknown as { getForgeCiClient: () => Pick<ForgeCiClient, "requestGithub"> }, "getForgeCiClient")
-      .mockReturnValue({ requestGithub });
+    vi.spyOn(service as unknown as { getForgeCiClient: () => Pick<ForgeCiClient, "requestGithubForMergeOffer"> }, "getForgeCiClient")
+      .mockReturnValue({ requestGithubForMergeOffer });
     const pr: PrSummary = {
       number: 2, provider: "github.com", org: "fixture", repo: "stack", state: "passing",
       lifecycleState: "open", url: "https://github.com/fixture/stack/pull/2", headRefName: "upper", baseRefName: "main",
@@ -809,7 +809,7 @@ it("reuses installed Git for repeated merge offers while reading the live guard 
     const checkoutStarts = () => start.mock.calls.filter(([directory, args]) => directory === cwd && args[0] === "rev-parse");
     expect(await offer()).toMatchObject({ blocked: false });
     expect(await offer()).toMatchObject({ blocked: false });
-    expect(requestGithub.mock.calls.filter(([, request]) => request.graphql)).toHaveLength(2);
+    expect(requestGithubForMergeOffer.mock.calls.filter(([, request]) => request.graphql)).toHaveLength(2);
     expect(checkoutStarts()).toHaveLength(1);
     await writeFile(path.join(cwd, ".git", "gh-stack"), JSON.stringify({
       schemaVersion: 1, repository: "github.com:fixture/stack",
@@ -819,7 +819,7 @@ it("reuses installed Git for repeated merge offers while reading the live guard 
       ] }],
     }));
     expect(await offer()).toMatchObject({ blocked: true, lowerKeys: ["github.com/fixture/stack#1"] });
-    expect(requestGithub.mock.calls.filter(([, request]) => request.path.endsWith("/pulls/2"))).toHaveLength(3);
+    expect(requestGithubForMergeOffer.mock.calls.filter(([, request]) => request.path.endsWith("/pulls/2"))).toHaveLength(3);
     expect(checkoutStarts()).toHaveLength(1);
   } finally {
     start.mockRestore();

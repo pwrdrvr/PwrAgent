@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { enableComposerPlanMode } from "./fixtures/composer-row";
 
 const requestUserInputSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,7 +28,8 @@ async function openRequestUserInputReplay() {
 
   await app.window
     .getByRole("textbox", { name: "Reply", exact: true })
-    .fill("/plan Ask the plan questionnaire.");
+    .fill("Ask the plan questionnaire.");
+  await enableComposerPlanMode(app.window);
   await app.window.getByRole("button", { name: "Send" }).click();
 
   await app.advance({ stepId: "status-active-1" });

@@ -4286,6 +4286,7 @@ function DesktopAppShell(props: {
         launchpadConfigurationError: navigation.selectedLaunchpadConfigurationError,
         onReloadLaunchpadConfiguration: navigation.refreshSelectedLaunchpadConfiguration,
         threadConfigurationReady: navigation.selectedThreadDetailReady,
+        threadConfigurationPreview: navigation.composerConfigurationPreview,
         composerDisabled:
           !navigation.selectedThread ||
           !navigation.selectedThreadConfigurationReady ||
@@ -4760,6 +4761,7 @@ function DesktopAppShell(props: {
             approvalRequestThreadKeys={session.approvalRequestThreadKeys}
             inputRequestThreadKeys={session.inputRequestThreadKeys}
             terminalThreadKeys={terminalThreadKeys}
+            onOpenThreadTerminal={terminals.openPanel}
             queuedMessageThreadKeys={queuedMessageThreadKeys}
             draftThreadKeys={draftThreadKeys}
             unassignedThreadDraftCount={unassignedThreadDraftCount}

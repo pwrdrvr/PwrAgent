@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { NavigationQueryPage, NavigationRow } from "@pwragent/shared/contracts/navigation";
@@ -84,5 +85,38 @@ it.each(["unchanged", "remote status", "remote subagent"] as const)("budgets dem
     const updated = result.current.threads.find((row) => row.id === "thread-1")!;
     if (scenario === "remote status") expect(updated.threadStatus).toBe("idle");
     if (scenario === "remote subagent") expect(updated.subAgents?.[0]?.updatedAt).toBe(21);
+  } finally { unmount(); }
+});
+
+it("skips view commits for environment clears that change no loaded row", async () => {
+  Object.assign(window, { __pwragentFederationTarget: { scope: "remote", instanceId: "peer-1" } });
+  const f = fixture(true);
+  let commits = 0;
+  const { result, unmount } = renderHook(() => {
+    const navigation = useThreadNavigation(f.api);
+    useLayoutEffect(() => { commits++; });
+    return navigation;
+  });
+  try {
+    await waitFor(() => expect(result.current.threads).toHaveLength(20));
+    await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+    const other = result.current.threads.find((thread) => thread.id !== result.current.selectedThread?.id)!;
+    const target = { scope: "remote" as const, instanceId: "peer-1" };
+    const update = (threadId: string, environmentId?: string) => f.emit({ backend: "codex", federationTarget: target,
+      notification: { method: "thread/codexEnvironment/updated", params: {
+        threadId, codexEnvironmentRuntime: environmentId ? { environmentId, executionTarget: "local" } : undefined,
+      } },
+    });
+    await act(async () => update(other.id, "demo"));
+    expect(result.current.threads.find((row) => row.id === other.id)?.codexEnvironmentRuntime?.environmentId).toBe("demo");
+    await act(async () => update(other.id));
+    expect(result.current.threads.find((row) => row.id === other.id)?.codexEnvironmentRuntime).toBeUndefined();
+    const previousCommits = commits;
+    const previousRows = result.current.threads;
+    for (const threadId of ["outside-loaded-page", other.id]) {
+      await act(async () => update(threadId));
+    }
+    expect(commits - previousCommits).toBe(0);
+    expect(result.current.threads).toBe(previousRows);
   } finally { unmount(); }
 });

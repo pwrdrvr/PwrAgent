@@ -38,6 +38,7 @@ export type ElectronCloseExecution = {
   elapsedMs: number;
   forceExitOutcome: "not-needed" | "exited" | "timed-out";
   forced: boolean;
+  launcherExitObservedBeforeForce?: boolean;
   gracefulCloseOutcome: ElectronCloseHandshakeOutcome;
   quitRequestOutcome: "completed" | "rejected";
 };
@@ -75,6 +76,7 @@ export type ElectronShutdownSummary = {
   quitRequestOutcome: ElectronCloseExecution["quitRequestOutcome"];
   gracefulCloseOutcome: ElectronCloseHandshakeOutcome;
   forceExitOutcome: ElectronCloseExecution["forceExitOutcome"];
+  launcherExitObservedBeforeForce?: boolean;
   phases: {
     rendererWindow: ElectronShutdownPhaseSummary;
     integratedTerminal: ElectronShutdownPhaseSummary;
@@ -100,6 +102,7 @@ export function memoizeElectronClose(
 type ElectronCloseActions = {
   forceKillTree(): Promise<void>;
   now(): number;
+  observeLauncherExit(): boolean | undefined;
   requestQuit(): Promise<void>;
   startClose(): Promise<void>;
   waitForGracefulClose(
@@ -166,12 +169,14 @@ export async function executeElectronClose(
     };
   }
 
+  const launcherExitObservedBeforeForce = actions.observeLauncherExit();
   await actions.forceKillTree();
   const postKillCloseOutcome = await actions.waitForPostKillClose(closePromise);
   return {
     elapsedMs: normalizeDuration(actions.now() - startedAt),
     forceExitOutcome: postKillCloseOutcome === "closed" ? "exited" : "timed-out",
     forced: true,
+    launcherExitObservedBeforeForce,
     gracefulCloseOutcome,
     quitRequestOutcome,
   };
@@ -276,6 +281,7 @@ export function buildElectronShutdownSummary(params: {
     quitRequestOutcome: params.execution.quitRequestOutcome,
     gracefulCloseOutcome: params.execution.gracefulCloseOutcome,
     forceExitOutcome: params.execution.forceExitOutcome,
+    launcherExitObservedBeforeForce: params.execution.launcherExitObservedBeforeForce,
     phases: {
       rendererWindow: summarizePhase(params.events, "renderer-window"),
       integratedTerminal: summarizePhase(params.events, "integrated-terminal"),
@@ -338,9 +344,14 @@ export function assertElectronCloseCompleted(summary: ElectronShutdownSummary): 
     summary.gracefulCloseOutcome === "timeout"
     || summary.forceExitOutcome === "timed-out"
   ) {
-    throw new Error(
-      "Electron close timed out; the owning test had an open launcher pipe after app quit.",
-    );
+    const observed = summary.launcherExitObservedBeforeForce;
+    let observation = "The launcher exit state before forced cleanup was unavailable.";
+    if (observed !== undefined) {
+      observation = observed
+        ? "The launcher had reported process exit before forced cleanup."
+        : "The launcher had not reported process exit before forced cleanup.";
+    }
+    throw new Error(`Electron close timed out. ${observation}`);
   }
 }
 

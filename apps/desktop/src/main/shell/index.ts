@@ -899,8 +899,13 @@ function installProfileFocusRequestWatcher(): void {
 }
 
 function openProfileFromMenu(profile: string): Promise<void> {
-  return Promise.resolve(openDesktopPwrAgentProfile({ profile }))
-    .then(() => undefined)
+  return openDesktopPwrAgentProfile({ profile })
+    .then(() => undefined, (error: unknown) => {
+      mainLog.warn("failed to open profile from menu", {
+        profile,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    })
     .finally(refreshProfileMenus);
 }
 

@@ -1152,7 +1152,7 @@ describe("bootstrapApp", () => {
       ],
     });
     openDesktopPwrAgentProfileMock.mockReset();
-    openDesktopPwrAgentProfileMock.mockReturnValue({
+    openDesktopPwrAgentProfileMock.mockResolvedValue({
       opened: false,
       profile: "default",
       reason: "active",

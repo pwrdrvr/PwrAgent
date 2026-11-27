@@ -11,7 +11,7 @@ import { readWindowsJobStartupTelemetry, windowsJobCleanupVerified, wrapCommandI
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 const fixture = vi.hoisted(() => ({ launcher: "" }));
-vi.mock("../windows-job-launcher-path", () => ({ windowsGitJobLauncher: () => fixture.launcher }));
+vi.mock("../windows-job-launcher-path", () => ({ windowsJobLauncherPath: () => fixture.launcher }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawn: vi.fn(actual.spawn) };

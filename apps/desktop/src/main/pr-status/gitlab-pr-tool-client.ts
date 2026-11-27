@@ -1,12 +1,13 @@
 import path from "node:path";
 import { redactForgeLog } from "./forge-ci-client";
 import { ForgeReadError, repositoryUrl, type ForgeRepository } from "./forge-tool-contract";
+import { ForgeRequestQueueFull } from "./forge-request-slots";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "./forge-pr-tool-contract";
 import {
   BODY_READ_MAX_CHARS, COMMENT_READ_MAX_CHARS, UNTRUSTED, forgeWebUrl, num, pageUnifiedDiff, payloadItems, payloadObject, placeUploadedAttachments, positive, readValidatedAttachment, str, untrusted, validateForgeAttachments,
   type ForgePrToolContext, type Payload,
 } from "./forge-pr-tool-shared";
-import { GitLabReadError, type GitLabPrFetcher, type GitLabWriteMethod } from "./gitlab-pr-fetcher";
+import { GitLabBudgetDeferred, GitLabReadError, type GitLabPrFetcher, type GitLabWriteMethod } from "./gitlab-pr-fetcher";
 import { gitlabMergeTrainStatus } from "./pr-merge-queue";
 import { describeMergeQueueState, isMergeQueueActive } from "@pwragent/shared/pr-merge-queue";
 
@@ -143,7 +144,12 @@ export class GitlabPrToolClient {
     } catch (error) {
       if (ctx.signal?.aborted) throw new ForgeReadError("cancelled", "GitLab request cancelled.");
       if (error instanceof ForgeReadError) throw error;
+      if (error instanceof ForgeRequestQueueFull) throw new ForgeReadError("busy", error.message);
+      if (error instanceof GitLabBudgetDeferred) throw new ForgeReadError("rate_limited", error.message);
       if (error instanceof GitLabReadError) {
+        if (error.retryAt !== undefined) {
+          throw new ForgeReadError("rate_limited", `GitLab asked requests to wait until ${new Date(error.retryAt).toISOString()}.`);
+        }
         const code = error.status === 401 ? "unauthenticated" : error.status === 403 ? "forbidden" : error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : error.status === 429 ? "rate_limited" : error.status === 413 ? "response_too_large" : [400, 405, 406, 422].includes(error.status) ? "rejected" : "provider_error";
         throw new ForgeReadError(code, error.reason ? `GitLab returned HTTP ${error.status}: ${redactForgeLog(error.reason)}` : `GitLab returned HTTP ${error.status}. Check glab login, api permission and project access.`);
       }

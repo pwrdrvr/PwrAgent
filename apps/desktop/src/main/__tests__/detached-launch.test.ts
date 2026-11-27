@@ -40,7 +40,7 @@ spawn(process.execPath, target, {
   env: { ...process.env, REPORT_PATH: dir + "/plain.json" },
   stdio: "ignore",
 }).unref();
-spawnDetachedProcess(process.execPath, target, {
+await spawnDetachedProcess(process.execPath, target, {
   ...process.env,
   REPORT_PATH: dir + "/helper.json",
 });

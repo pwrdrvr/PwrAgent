@@ -1,10 +1,14 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { useMemo, type ComponentProps } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useLayoutEffect, useMemo, type ComponentProps } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationLaunchpadDraft, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { useThreadNavigation } from "../../../lib/useThreadNavigation";
+import { ThreadView } from "../../thread-detail/ThreadView";
+import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { Composer as ProductionComposer } from "../Composer";
 
@@ -152,7 +156,7 @@ describe("composer controls layout", () => {
     // Send is icon-only; its label is still its name.
     const send = screen.getByRole("button", { name: "Send" });
     expect(send.querySelector("svg")).not.toBeNull();
-    expect(container.querySelector(".composer__toggle[aria-label='Plan mode']")).toBeNull();
+    expect(within(setup as HTMLElement).getByRole("button", { name: "Plan mode" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("merges project, checkout and machine into one Where pill on a new thread", () => {
@@ -286,6 +290,146 @@ describe("composer controls layout", () => {
     });
     expect(runCodexEnvironmentAction).toHaveBeenCalledWith(expect.objectContaining({ actionId: "test", threadId: "thread-env" }));
     expect(setCodexThreadEnvironment).not.toHaveBeenCalled();
+  });
+
+  it.each(["toolbar", "overflow", "cleared"] as const)("shows only confirmed actions on the first commit of a revisit (%s)", async (scenario) => {
+    installRowLayout(scenario === "overflow" ? 345 : 1600);
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const runCodexEnvironmentAction = vi.fn<NonNullable<DesktopApi["runCodexEnvironmentAction"]>>();
+    const setCodexThreadEnvironment = vi.fn<NonNullable<DesktopApi["setCodexThreadEnvironment"]>>();
+    const row = { ...environmentThread, codexEnvironmentRuntime: undefined, codexEnvironmentOptions: undefined };
+    const other = { ...row, id: "other" };
+    const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({ acknowledged: true, backend: "codex" as const, threadId: row.id }));
+    const nextRead = createDeferred<void>();
+    let revisiting = false;
+    function ownerThread(): NavigationThreadSummary {
+      if (!revisiting) return { ...environmentThread, codexEnvironmentRuntime: { ...environmentThread.codexEnvironmentRuntime!, setupStatus: "failed" } };
+      if (scenario !== "toolbar") return row;
+      return { ...environmentThread, codexEnvironmentRuntime: { ...environmentThread.codexEnvironmentRuntime!,
+        selectedActionIdByEnvironmentId: { demo: "test" } } };
+    }
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async ({ ref }) => {
+      if (ref.threadId === row.id && revisiting) await nextRead.promise;
+      return {
+        protocol: 2, ref, revision: revisiting ? "new" : "initial", identity: "present", readiness: "ready",
+        thread: ref.threadId === other.id ? other : ownerThread(),
+      };
+    });
+    const api: DesktopApi = {
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request, { threads: [row, other] }),
+      getNavigationSelectedDetail: read, runCodexEnvironmentAction, setCodexThreadEnvironment, acknowledgeThreadEnvironmentFailure,
+      onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    const commits: Array<{ id?: string; run: boolean; environment: boolean; authorized: boolean }> = [];
+    function ThreadComposer() {
+      const navigation = useThreadNavigation(api);
+      const terminals = useIntegratedTerminals(api);
+      useLayoutEffect(() => {
+        commits.push({
+          id: navigation.selectedThread?.id,
+          run: Boolean(document.querySelector('[data-composer-fold="run"]')),
+          environment: Boolean(document.querySelector('[data-composer-fold="details"] [aria-label*="environment" i]')),
+          authorized: navigation.selectedThreadConfigurationReady,
+        });
+      });
+      return <>
+        <button onClick={() => navigation.selectThread(row)}>Select A</button>
+        <button onClick={() => navigation.selectThread(other)}>Select B</button>
+        <ThreadView terminals={terminals} desktopApi={api} backends={[backendSummary()]} skills={[]}
+          composerDisabled={!navigation.selectedThreadConfigurationReady} selectedThread={navigation.selectedThread}
+          threadConfigurationReady={navigation.selectedThreadDetailReady}
+          threadConfigurationPreview={navigation.composerConfigurationPreview}
+          loading={!revisiting} loadingMore={false} messageCount={revisiting ? 1 : 0}
+          transcriptEntries={revisiting ? [{ type: "message", id: "message", role: "user", text: "Hello" }] : []}
+          clearPendingRequest={() => undefined} onLoadOlder={async () => undefined}
+          addOptimisticUserMessage={() => "optimistic"} removeOptimisticMessage={() => undefined} />
+      </>;
+    }
+    render(<ThreadComposer />);
+    await act(async () => { fireEvent.click(screen.getByText("Select A")); });
+    await waitFor(() => expect(commits.at(-1)).toMatchObject({ id: row.id, run: true, environment: true }));
+    await act(async () => { fireEvent.click(screen.getByText("Select B")); });
+    await waitFor(() => expect(commits.at(-1)).toMatchObject({ id: other.id, run: false, authorized: true }));
+    if (scenario === "cleared") {
+      await act(async () => {
+        for (const listener of listeners) listener({ backend: "codex", notification: {
+          method: "thread/codexEnvironment/updated", params: { threadId: row.id, codexEnvironmentRuntime: undefined },
+        } });
+      });
+    }
+    revisiting = true;
+    commits.length = 0;
+    read.mockClear();
+    await act(async () => { fireEvent.click(screen.getByText("Select A")); });
+    expect.soft(commits.find((commit) => commit.id === row.id)).toMatchObject({
+      run: scenario !== "cleared", environment: true, authorized: false,
+    });
+    expect.soft(acknowledgeThreadEnvironmentFailure).not.toHaveBeenCalled();
+    const setup = document.querySelector<HTMLElement>(".composer__setup")!;
+    if (scenario === "toolbar") {
+      const run = within(setup).getByRole("button", { name: "Run" });
+      const picker = within(setup).getByRole("button", { name: /^Environment:/i });
+      await act(async () => { run.click(); picker.click(); });
+      expect.soft(run).toBeDisabled();
+      expect.soft(picker).toBeDisabled();
+      expect.soft(runCodexEnvironmentAction).not.toHaveBeenCalled();
+      expect.soft(screen.queryByRole("option", { name: "No environment" })).toBeNull();
+    } else if (scenario === "overflow") {
+      await settleFold();
+      fireEvent.click(within(setup).getByRole("button", { name: "Thread options" }));
+      const menu = screen.getByRole("menu", { name: "Thread options" });
+      const run = within(menu).getByRole("menuitem", { name: "Run Test" });
+      const clear = within(menu).getByRole("menuitemradio", { name: "No environment" });
+      await act(async () => { run.click(); clear.click(); });
+      expect.soft(run).toBeDisabled();
+      expect.soft(clear).toBeDisabled();
+      expect.soft(runCodexEnvironmentAction).not.toHaveBeenCalled();
+      expect.soft(setCodexThreadEnvironment).not.toHaveBeenCalled();
+    }
+    expect(read.mock.calls.filter(([request]) => request.ref.threadId === row.id)).toHaveLength(1);
+    await act(async () => nextRead.resolve());
+    expect(commits.at(-1)).toMatchObject({ id: row.id, run: scenario === "toolbar", environment: scenario === "toolbar", authorized: true });
+    if (scenario === "toolbar") {
+      const run = within(setup).getByRole("button", { name: "Run" });
+      expect(run).toBeEnabled();
+      await act(async () => { run.click(); });
+      expect(runCodexEnvironmentAction).toHaveBeenCalledWith(expect.objectContaining({ threadId: row.id, actionId: "test" }));
+    }
+  });
+
+  it("folds Plan with the Details controls while it is off and keeps it in the row once on", async () => {
+    // Pinned controls are 340 (see above). ▶ (28 + 4) fits beside them in
+    // 380; the Details controls, Plan among them, do not.
+    installRowLayout(380);
+    const { container } = render(
+      <Composer
+        backends={[backendSummary()]}
+        desktopApi={{ pickFileFromDisk: vi.fn(), runCodexEnvironmentAction: vi.fn(), setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={environmentThread}
+      />,
+    );
+    await settleFold();
+
+    const setup = container.querySelector(".composer__setup") as HTMLElement;
+    const planSlot = () => within(setup).getByRole("button", { name: "Plan mode", hidden: true })
+      .closest(".composer__fold-slot") as HTMLElement;
+    expect(setup.dataset.foldedTiers).toBe("1");
+    expect(planSlot()).toHaveClass("is-folded");
+
+    fireEvent.click(within(setup).getByRole("button", { name: "Thread options" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Thread options" })).getByRole("menuitemcheckbox", { name: "Plan mode", checked: false }));
+    // Refolded before a frame could paint: Plan now takes ▶'s room.
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+
+    expect(planSlot()).not.toHaveClass("is-folded");
+    expect(planSlot()).not.toHaveAttribute("data-composer-fold");
+    expect(within(setup).getByRole("button", { name: "Plan mode" })).toHaveAttribute("aria-pressed", "true");
+    expect(setup.dataset.foldedTiers).toBe("2");
   });
 
   it("draws the Details-bound controls and ▶ only once the thread's configuration has loaded", async () => {

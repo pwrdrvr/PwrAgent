@@ -10482,6 +10482,16 @@ button.stack-display__thread,
   background: var(--accent-soft);
 }
 
+/* The branch row copies its name; the glyph says so on hover or focus. */
+.thread-info-card__copy-hint {
+  opacity: 0;
+}
+
+.thread-info-card__fact--target:hover .thread-info-card__copy-hint,
+.thread-info-card__fact--target:focus-visible .thread-info-card__copy-hint {
+  opacity: 1;
+}
+
 .thread-info-card__fact-value {
   min-width: 0;
   overflow: hidden;
@@ -10533,122 +10543,50 @@ button.stack-display__thread,
 
 .sidebar-thread-card__actions {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 10px -8px 0;
-  padding-top: 6px;
+  align-items: center;
+  gap: 2px;
+  margin: 10px -4px 0;
+  padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
 }
 
-.sidebar-thread-card__split {
-  display: flex;
-  gap: 1px;
-}
-
-.sidebar-thread-card__split > .sidebar-thread-card__row:first-child {
+.sidebar-thread-card__actions-spacer {
   flex: 1 1 auto;
-  min-width: 0;
 }
 
-.sidebar-thread-card__row {
-  display: flex;
+/* The card's one icon row: open icons left, the thread's own actions right. */
+.sidebar-thread-card__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 28px;
-  padding: 4px 8px;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 12.5px;
-  text-align: left;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
-.sidebar-thread-card__row > svg {
-  flex: 0 0 auto;
-  color: var(--text-secondary);
-}
-
-/* Hover is a neutral wash; the accent marks the app choice in use. */
-.sidebar-thread-card__row:hover {
+/* Hover is a neutral wash; the accent marks a pressed toggle (Pin). */
+.sidebar-thread-card__icon:hover {
   background: var(--surface-overlay-hover);
+  color: var(--text-primary);
 }
 
-.sidebar-thread-card__row.is-current {
+.sidebar-thread-card__icon.is-on {
   color: var(--accent-bright);
-}
-
-.sidebar-thread-card__row-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-thread-card__chevron {
-  flex: 0 0 auto;
-  justify-content: center;
-  width: 28px;
-  padding: 4px;
 }
 
 .sidebar-thread-card__app-icon {
   flex: 0 0 auto;
 }
 
-.sidebar-thread-card__sublist {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 0 0 2px 22px;
-}
-
-.sidebar-thread-card__buttons {
-  display: flex;
-  gap: 4px;
-  padding: 6px 2px 0;
-}
-
-.sidebar-thread-card__buttons-spacer {
-  flex: 1 1 auto;
-}
-
-.sidebar-thread-card__button {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.sidebar-thread-card__button--icon {
-  width: 30px;
-  padding: 0;
-}
-
-.sidebar-thread-card__button:hover {
-  background: var(--accent-soft);
-  color: var(--text-primary);
-}
-
-.sidebar-thread-card__button.is-on {
-  color: var(--accent-bright);
-}
-
 /* The AI provider gauge's peek (`ProviderGaugePeek`): each provider's
-   tightest limit on the AI providers panel's limit rows, worst first. */
+   Weekly limit per allowance on the AI providers panel's limit rows,
+   fullest provider first. */
 .provider-peek {
   width: 290px;
   padding-bottom: 8px;
@@ -10679,9 +10617,48 @@ button.stack-display__thread,
   font-weight: 600;
 }
 
-.provider-peek__grid {
-  margin-top: 4px;
-  font-size: 11.5px;
+.provider-peek__scope-name {
+  display: block;
+  margin: 6px 0 0 13px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* One fixed window column ("WEEKLY" is the longest word), the same for
+   every provider, so every bar shares its left edge and width. A stat line
+   too long for the column beside it wraps above the bar, never beside a
+   narrower one. */
+.provider-peek__limit {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: baseline;
+  margin: 4px 0 0 13px;
+}
+
+.provider-peek__window {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.provider-peek__stat {
+  display: block;
+  grid-column: auto;
+}
+
+/* A 5h row on pace to run out before its reset. */
+.provider-peek__limit.is-warning .provider-peek__window {
+  color: var(--status-warning-text);
+}
+
+/* The panel's own label names the scope and "limit"; the window column
+   above replaces it. */
+.provider-peek__stat dt {
+  display: none;
 }
 
 .provider-peek__none {
@@ -12400,6 +12377,11 @@ button.stack-display__thread,
 .thread-context-menu.thread-context-menu__flyout--start {
   left: auto;
   right: calc(100% + 2px);
+}
+
+/* An app in the thread menu's "Open in…" flyout, with the app's own icon. */
+.thread-context-menu .thread-context-menu__open-in {
+  gap: 8px;
 }
 
 /* A PR row in the thread menu's Copy Pull Request URL flyout: the chip's

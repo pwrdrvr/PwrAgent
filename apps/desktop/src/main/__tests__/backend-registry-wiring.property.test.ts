@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 const registryPath = fileURLToPath(new URL("../app-server/backend-registry.ts", import.meta.url));
 
@@ -35,25 +35,48 @@ function parse(file: string): ts.SourceFile {
 }
 
 /** Identifiers in code only: comments and string literals do not count. */
-function mentionsIdentifier(source: ts.SourceFile, name: string): boolean {
-  let found = false;
-  const visit = (node: ts.Node): void => {
-    if (found) return;
-    if (ts.isIdentifier(node) && node.text === name) found = true;
-    else ts.forEachChild(node, visit);
+function mentionsRegistryModules(file: string, source: string, createSourceFile = ts.createSourceFile): boolean {
+  const name = "registryModules";
+  // An identifier can spell any of its characters with a Unicode escape.
+  if (!source.includes(name) && !source.includes("\\u")) return false;
+
+  const visit = (node: ts.Node): true | undefined => {
+    if (ts.isIdentifier(node) && node.text === name) return true;
+    return ts.forEachChild(node, visit);
   };
-  visit(source);
-  return found;
+  return visit(createSourceFile(file, source, ts.ScriptTarget.Latest)) === true;
 }
 
 it("keeps the composition root's module accessor out of production code", () => {
   const allowed = path.join(sourceRoot, "app-server", "backend-registry-wiring.ts");
   // Any code mention counts, so an aliased or namespace import is caught too.
   const users = productionSources
-    .filter((file) => file !== allowed && mentionsIdentifier(parse(file), "registryModules"))
+    .filter((file) => file !== allowed && mentionsRegistryModules(file, readFileSync(file, "utf8")))
     .map((file) => path.relative(sourceRoot, file));
   // Importers call the registry's facade members; only tests reach a module directly.
   expect(users).toEqual([]);
+});
+
+it("skips AST construction when a source cannot contain the module accessor identifier", () => {
+  const createSourceFile = vi.fn(ts.createSourceFile);
+  expect(mentionsRegistryModules("unrelated.ts", "export const unrelated = 0;", createSourceFile)).toBe(false);
+  expect(createSourceFile).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["an aliased import", "fixture.ts", 'import { registryModules as modules } from "./wiring";', true],
+  ["a namespace access", "fixture.ts", "wiring.registryModules", true],
+  ["a fixed-width Unicode escape", "fixture.ts", "const \\u0072egistryModules = 0;", true],
+  ["a braced Unicode escape", "fixture.ts", "wiring.registry\\u{004d}odules", true],
+  ["an escaped identifier in a JSX expression", "fixture.tsx", "<span>{reg\\u0069stryModules}</span>", true],
+  ["a comment", "fixture.ts", "// registryModules", false],
+  ["a quoted property key", "fixture.ts", 'wiring["registryModules"]', false],
+  ["a regular expression", "fixture.ts", "/registryModules/", false],
+  ["a template literal", "fixture.ts", "tag(`reg\\u0069stryModules`)", false],
+  ["a longer identifier", "fixture.ts", "registryModulesByRegistry", false],
+  ["a private identifier", "fixture.ts", "class C { #registryModules = 0; }", false],
+])("checks for the exact module accessor identifier in %s", (_description, file, source, expected) => {
+  expect(mentionsRegistryModules(file, source)).toBe(expected);
 });
 
 /**

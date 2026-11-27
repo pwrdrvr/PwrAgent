@@ -196,9 +196,9 @@ function readPwrAgentProfileCodexProfile(profileName: string) {
     ?? discovery.profiles[0]!;
 }
 
-export function openDesktopPwrAgentProfile(
+export async function openDesktopPwrAgentProfile(
   request: OpenDesktopPwrAgentProfileRequest,
-): OpenDesktopPwrAgentProfileResponse {
+): Promise<OpenDesktopPwrAgentProfileResponse> {
   const profile = normalizeProfileName(request.profile);
   if (!profile) {
     throw new Error(
@@ -234,7 +234,7 @@ export function openDesktopPwrAgentProfile(
   // main process needs electron-vite's renderer endpoint to render correctly.
   // The new instance outlives this one, so it must not keep this process's
   // open files (see spawnDetachedProcess).
-  spawnDetachedProcess(process.execPath, args, {
+  await spawnDetachedProcess(process.execPath, args, {
     ...process.env,
     [PWRAGENT_PROFILE_ENV]: profile,
   });

@@ -64,7 +64,7 @@ export async function openComposerThreadOptions(page: Page): Promise<Locator> {
   return menu;
 }
 
-async function closeComposerThreadOptions(page: Page): Promise<void> {
+export async function closeComposerThreadOptions(page: Page): Promise<void> {
   const menu = page.getByRole("menu", { name: "Thread options" });
   if (await menu.isVisible()) await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
@@ -149,4 +149,22 @@ export async function startComposerDictation(page: Page): Promise<void> {
     return;
   }
   await composerRow(page).getByRole("button", { name, exact: true }).click();
+}
+
+/**
+ * Turns Plan mode on for the next send: the row's toggle, or ⋮'s item when
+ * it has folded. Once on, the toggle stays in the row.
+ */
+export async function enableComposerPlanMode(page: Page): Promise<void> {
+  const name = "Plan mode";
+  const toggle = composerRowButton(page, name);
+  if (await isComposerTierFolded(page, "details", toggle)) {
+    const menu = await openComposerThreadOptions(page);
+    await menu.getByRole("menuitemcheckbox", { name, exact: true }).click();
+    await expect(menu).toBeHidden();
+  } else {
+    await composerRow(page).getByRole("button", { name, exact: true }).click();
+  }
+  await expect(composerRow(page).getByRole("button", { name, exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
 }

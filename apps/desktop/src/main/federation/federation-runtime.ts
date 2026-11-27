@@ -1422,10 +1422,23 @@ export class DesktopFederationRuntime {
   }
 
   private assertDurableTurnPeer(target: FederationRemoteTarget, capability: FederationCapability = "durable_turn_requests_v1"): void {
-    const peer = this.connectedPeerTargets().find((candidate) => candidate.target.instanceId === target.instanceId);
-    if (!peer?.capabilities.includes(capability) || !peer.capabilities.includes("turn_control")) {
+    const grants = this.connectedOwnerGrants(target.instanceId);
+    if (!grants?.includes(capability) || !grants.includes("turn_control")) {
       throw new DurableTurnRequestError("request_unsupported");
     }
+  }
+
+  private connectedOwnerGrants(instanceId: FederationInstanceId): readonly FederationCapability[] | undefined {
+    if (instanceId === this.localInstanceId) return undefined;
+    const direct = this.router?.getConnection(instanceId);
+    if (direct) return direct.capabilities;
+    const advertised = this.remotePeerDirectory.get(instanceId);
+    if (advertised?.status !== "connected" || !this.gatewayInstanceId
+      || !this.router?.getConnection(this.gatewayInstanceId)) return undefined;
+    // As in visiblePeers, local enrollment takes precedence when the same
+    // owner also appears in the gateway directory (including revocation).
+    const peer = this.store().getPeer(instanceId) ?? advertised;
+    return peer.status === "connected" ? peer.capabilities : undefined;
   }
 
   private durableTurnRequestService(): DurableTurnRequestService {
@@ -1457,10 +1470,7 @@ export class DesktopFederationRuntime {
             startTurnInputOutcome(response));
           return response;
         },
-        isQueued: async (receipt) => {
-          await backend.readQueuedTurn({ backend: receipt.backend, threadId: receipt.threadId, queueEntryId: receipt.queueEntryId });
-          return true;
-        },
+        isQueued: async (receipt) => getDesktopBackendRegistry().hasQueuedTurn(receipt),
         steer: async (request, scope) => {
           const response = await backend.controlActiveTurn!({ ...request, operation: "steer" });
           this.turnViewers.accepted((JSON.parse(scope) as string[])[1]!,
@@ -8224,9 +8234,9 @@ function localBackendOperations(
       if (!owned) throw new Error("backend and threadId are required.");
       return await readThreadPullRequestMerge(peerThreadPullRequestMergeDeps(), owned);
     },
-    async mergeThreadPullRequestV1(request) {
+    async mergeThreadPullRequestV1(request, rpcOptions) {
       return await mergeThreadPullRequestForPeer(request, async (owned) =>
-        await mergeThreadPullRequest(peerThreadPullRequestMergeDeps(), owned));
+        await mergeThreadPullRequest(peerThreadPullRequestMergeDeps(), owned, rpcOptions));
     },
     // A peer's requests for this instance's projects. The router already
     // required turn_control; the service validates and applies them exactly

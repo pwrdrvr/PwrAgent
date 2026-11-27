@@ -3844,7 +3844,10 @@ class DesktopAppServerService {
     this.forgeCiClient ??= new ForgeCiClient({
       gitlab: this.getPrFetcher().gitlab,
       enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
-      takeToken: (source) => this.takePrPollingToken(source === "operator_merge_preflight" ? "Operator merge preflight" : "Agent CI read"),
+      takeToken: (source) => {
+        if (source === "merge_offer") return this.takePrPollingToken("Review offer stack check", [], [], 4);
+        return this.takePrPollingToken(source === "operator_merge_preflight" ? "Operator merge preflight" : "Agent CI read");
+      },
     });
     return this.forgeCiClient;
   }
@@ -4058,12 +4061,8 @@ class DesktopAppServerService {
     const ci = this.getForgeCiClient();
     const path = `repos/${encodeURIComponent(ref.org)}/${encodeURIComponent(ref.repo)}`;
     const lowerKeys = new Set<string>();
-    const request = async (params: Parameters<ForgeCiClient["requestGithub"]>[1]) => {
-      // Offers share the poll budget but leave capacity for the next ordinary
-      // status batch and foreground forge reads.
-      if (this.prStatusTokenBucket.peek() <= 4) throw new ForgeReadError("rate_limited", "Review offer stack check is waiting for forge capacity.");
-      return await ci.requestGithub(repository, params);
-    };
+    const request = (params: Parameters<ForgeCiClient["requestGithubForMergeOffer"]>[1]) =>
+      ci.requestGithubForMergeOffer(repository, params);
     try {
       const base = await assertGithubStackMergeAllowed(repository, pr.number, catalogs,
         (route) => request({ path: path + route }),
@@ -6506,8 +6505,8 @@ class DesktopAppServerService {
     );
   }
 
-  private takePrPollingToken(source: string, prKeys: string[] = [], threadKeys: string[] = []): boolean {
-    const admitted = this.prStatusTokenBucket.tryTake();
+  private takePrPollingToken(source: string, prKeys: string[] = [], threadKeys: string[] = [], minimumRemaining = 0): boolean {
+    const admitted = this.prStatusTokenBucket.tryTake(undefined, minimumRemaining);
     this.prActivity.record({
       category: "budget",
       budget: "polling",
@@ -6517,7 +6516,9 @@ class DesktopAppServerService {
       delta: admitted ? -1 : 0,
       availableTokens: this.prStatusTokenBucket.availableTokens,
       ...(admitted ? {} : { tone: "warning" as const }),
-      message: admitted ? "PR check allowed" : "PR check postponed: request budget empty",
+      message: admitted ? "PR check allowed" : minimumRemaining > 0
+        ? "PR check postponed: preserving foreground request budget"
+        : "PR check postponed: request budget empty",
     });
     return admitted;
   }
@@ -9384,6 +9385,7 @@ class DesktopAppServerService {
         isProviderEnabled: (provider) =>
           getDesktopSettingsService().isForgeEnabled(provider),
       }, new GitLabPrFetcher({
+        isEnabled: () => getDesktopSettingsService().isForgeEnabled("gitlab"),
         tryTakeRequestToken: () => this.takePrPollingToken("GitLab additional request"),
         getObservationTimestamp: () => this.nextPrObservationTimestamp(),
       }));

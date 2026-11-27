@@ -6,6 +6,7 @@ import type {
 } from "../contracts/normalized-app-server";
 import {
   fitThreadReplayWithinByteBudget,
+  pageThreadReplay,
   replayWithEntries,
   type ThreadReplayCursorIdSpace,
 } from "../thread-replay-paging";
@@ -314,4 +315,58 @@ it.each(workloads)("bounds encoded work for %s overflow with %i entries", (curso
   expect.soft(fullEncodes).toBeLessThanOrEqual(1);
   expect.soft(encodes).toBeLessThanOrEqual(2 * count + 4);
   expect.soft(encodedBytes).toBeLessThanOrEqual(4 * inputBytes);
+});
+
+it("keeps draining all replay pages linear in entry count", () => {
+  const measureDrainReads = (turns: number): number => {
+    let reads = 0;
+    const entries: AppServerThreadEntry[] = [];
+    for (let turn = 0; turn < turns; turn += 1) {
+      for (let item = 0; item < 4; item += 1) {
+        entries.push(
+          new Proxy<AppServerThreadEntry>(
+            {
+              type: "message",
+              id: `e-${turn}-${item}`,
+              role: item === 0 ? "user" : "assistant",
+              text: `t=${turn} i=${item}`,
+              createdAt: 1_000 + turn * 10 + item,
+              turn: { id: `turn-${turn}`, status: "completed" },
+            },
+            {
+              get(target, property, receiver) {
+                if (property === "id" || property === "turn") {
+                  reads += 1;
+                }
+                return Reflect.get(target, property, receiver);
+              },
+            },
+          ),
+        );
+      }
+    }
+    const replay: AppServerThreadReplay = {
+      entries,
+      messages: [],
+      pagination: { supportsPagination: false, hasPreviousPage: false },
+      threadStatus: "idle",
+    };
+    let before: string | undefined;
+    let totalEntries = 0;
+    for (;;) {
+      const page = pageThreadReplay(replay, { before, limit: 5 });
+      totalEntries += page.entries.length;
+      if (!page.pagination.hasPreviousPage || !page.pagination.previousCursor) {
+        break;
+      }
+      before = page.pagination.previousCursor;
+    }
+    expect(totalEntries).toBe(turns * 4);
+    return reads;
+  };
+
+  const smallReads = measureDrainReads(40);
+  const largeReads = measureDrainReads(120);
+  // An O(P * N) unindexed drain grows ~9x when tripling turn count.
+  expect(largeReads).toBeLessThanOrEqual(smallReads * 4);
 });

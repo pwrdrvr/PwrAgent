@@ -81,6 +81,14 @@ unresolved or fixture teardown exceeds its 20-second deadline. The process-tree
 snapshot cannot follow an orphan once its tracked launcher and intermediate
 parents have exited.
 
+A fixture timeout records whether Node had observed launcher exit immediately
+before forced cleanup in `close-summary.launcherExitObservedBeforeForce`. An
+omitted value means the observation was unavailable. Match the launcher PID and
+test attempt in the worker timeline to the session-drain records. If `quit`
+precedes a delay and `process-exit` and `process-close` arrive together, use the
+controller's live-root stack capture to investigate native shutdown. A gap
+between observed exit and close calls for a pipe inventory to identify holders.
+
 Chromium's native shutdown runs after the application's reported quit phases.
 The E2E bootstrap gives each process its own `userData` and `sessionData`
 directory under the fixture's temporary root before importing the app. Detached

@@ -876,6 +876,7 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   ): Promise<ReadThreadPullRequestMergeResponse>;
   mergeThreadPullRequestV1?(
     request: unknown,
+    rpcOptions?: FederationRpcRequestOptions,
   ): Promise<FederationMergeThreadPullRequestResultV1>;
   /**
    * Optional on owner adapters, like `moveQueuedTurn`: an owner without
@@ -1605,7 +1606,7 @@ export function registerFederationBackendHandlers(params: {
   if (params.backend.mergeThreadPullRequestV1) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.mergeThreadPullRequestV1,
-      async (envelope) => await params.backend.mergeThreadPullRequestV1!(envelope.params),
+      async (envelope) => await params.backend.mergeThreadPullRequestV1!(envelope.params, { deadlineAt: envelope.deadlineAt }),
     );
   }
   if (params.backend.setProjectForgeAutomation) {
