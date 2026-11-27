@@ -1,0 +1,83 @@
+name: Model Request Report
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Update PR model request report
+    if: >-
+      github.event.workflow_run.event == 'pull_request'
+      && contains(fromJSON('["success","failure","timed_out"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    concurrency:
+      # A fork run may have no pull_requests entry. Use the same group for
+      # associated and unassociated runs from the same PR head branch.
+      group: model-request-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      # workflow_run gives this job a write token even on fork PRs. Check
+      # out only the workflow's trusted default-branch commit.
+      - name: Checkout trusted reporter
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci/model-request-report.cjs
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve PR and baseline
+        id: resolve
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const report = require("./scripts/ci/model-request-report.cjs");
+            await report.resolve({ github, context, core });
+
+      - name: Download PR measurement archive
+        id: current
+        if: steps.resolve.outputs.current_artifact != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.resolve.outputs.current_artifact }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/model-request/pr
+          skip-decompress: true
+
+      - name: Download main measurement archive
+        id: baseline
+        if: steps.resolve.outputs.baseline_artifact != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.resolve.outputs.baseline_artifact }}
+          run-id: ${{ steps.resolve.outputs.baseline_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/model-request/main
+          skip-decompress: true
+
+      - name: Publish PR comment
+        if: steps.resolve.outputs.pull != ''
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          MODEL_REPORT_PULL: ${{ steps.resolve.outputs.pull }}
+          MODEL_REPORT_PR_DIR: ${{ steps.current.outcome == 'success' && steps.current.outputs.download-path || '' }}
+          MODEL_REPORT_BASE_DIR: ${{ steps.baseline.outcome == 'success' && steps.baseline.outputs.download-path || '' }}
+          MODEL_REPORT_BASE_RUN: ${{ steps.resolve.outputs.baseline_run }}
+          MODEL_REPORT_BASE_SHA: ${{ steps.resolve.outputs.baseline_sha }}
+          MODEL_REPORT_EXACT_BASE: ${{ steps.resolve.outputs.exact_base }}
+        with:
+          script: |
+            const report = require("./scripts/ci/model-request-report.cjs");
+            await report.publish({ github, context, core });

@@ -83,3 +83,38 @@ run attempt has its own artifact: a partial job rerun may leave other slices
 missing in that attempt. Compact per-slice artifacts are retained for seven
 days, and the consolidated artifact for 30 days. Existing detailed retry and
 Playwright artifacts remain available for diagnosis.
+
+## Model request impact
+
+The Linux Lint job measures outbound model request bodies for Codex, Claude,
+and Antigravity. It starts the pinned agent runtimes through PwrAgent's
+normal thread and turn entry points. Local fake model endpoints answer the
+first turn and a follow-up with synthetic responses. No provider login or
+real credential is needed. The artifact contains only byte and call counts.
+
+The check budgets each provider's total request body bytes, number of
+model calls, primary request body, input and history, instructions, and tools.
+The primary request is the largest model request in the turn. Instruction
+bytes cover system fields and system or developer messages. Instructions
+embedded in a user message count toward input and history. The totals include
+auxiliary model calls, such as Antigravity's title-generation call.
+
+The job uploads `model-request-results` even when a ceiling fails.
+The publisher on `main` updates one comment per PR into `main`. It uses the
+successful push for the recorded PR base when available and otherwise uses a
+recent successful `main` push with measurements. Docs-only PRs that skip Lint
+do not produce measurements.
+
+For a local run, set `PWRAGENT_MODEL_BENCH_CODEX` and `PWRAGENT_MODEL_BENCH_AGY`
+to the pinned executables in an OS temp directory, then run
+`pnpm test apps/desktop/src/main/__tests__/model-request-size.test.ts --maxWorkers=2`.
+The benchmark uses the workspace's pinned Claude SDK binary. Set
+`PWRAGENT_MODEL_BENCH_RESULT` to an output file to export the numeric results.
+
+Set `PWRAGENT_MODEL_BENCH_COMPARISON` to a new local file to also capture a
+fresh turn and follow-up through PwrAgent and a fresh turn directly from each
+CLI. Both paths use the same binary, model, first prompt, and synthetic starting
+directory with fresh agent homes and no custom Agent instructions. Both Codex
+runs use workspace-write with the noninteractive approval policy. The comparison
+file includes the synthetic JSON request bodies and is written locally with
+restricted permissions.
