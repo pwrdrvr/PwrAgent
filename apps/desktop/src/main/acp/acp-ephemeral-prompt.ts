@@ -1,4 +1,5 @@
 import type { AcpJsonRpcTransport } from "./acp-client.js";
+import { ACP_CLIENT_INFO } from "./acp-client-info.js";
 
 /**
  * One prompt against an ACP agent on a transport the caller owns and closes:
@@ -133,7 +134,7 @@ export async function runAcpEphemeralPrompt(
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
       },
-      clientInfo: { name: "pwragent", title: "PwrAgent", version: "0.0.0" },
+      clientInfo: ACP_CLIENT_INFO,
     }));
     closeSupported = asRecord(asRecord(asRecord(initialized?.agentCapabilities)
       ?.sessionCapabilities)?.close) !== undefined;

@@ -118,6 +118,7 @@ describe("ACP ephemeral prompt", () => {
       "session/close",
       "_x.ai/session/delete",
     ]);
+    expect(agent.calls[0]?.params?.clientInfo).toMatchObject({ name: "pwragent", title: "PwrAgent" });
     expect(agent.calls[1]?.params).toEqual({
       cwd: "/profile/state/acp-helper-workspace",
       mcpServers: [],

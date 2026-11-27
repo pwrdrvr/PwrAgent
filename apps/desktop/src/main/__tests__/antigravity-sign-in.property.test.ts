@@ -223,8 +223,11 @@ describe("Antigravity personal sign-in", () => {
     const probe = new FixtureChild();
     const methods: string[] = [];
     probe.stdin.on("data", (chunk) => {
-      const { id, method } = JSON.parse(String(chunk));
+      const { id, method, params } = JSON.parse(String(chunk));
       methods.push(method);
+      if (method === "initialize") {
+        expect(params.clientInfo).toMatchObject({ name: "pwragent", title: "PwrAgent" });
+      }
       const response = method === "initialize"
         ? { result: { protocolVersion: 1 } }
         : { error: { code: -32000, message: `Authentication required ${FIXTURE_CODE}` } };

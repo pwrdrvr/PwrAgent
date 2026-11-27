@@ -37,6 +37,23 @@ afterEach(() => {
   removeTempStateDbDir(tempDir);
 });
 
+it.each(["acp:antigravity", "acp:gemini", "acp:grok"] as const)(
+  "identifies PwrAgent when initializing %s",
+  async (backendId) => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({ backendId, store, transport });
+    try {
+      await client.initialize();
+      expect(transport.requests[0]).toMatchObject({
+        method: "initialize",
+        params: { clientInfo: { name: "pwragent", title: "PwrAgent" } },
+      });
+    } finally {
+      await client.dispose();
+    }
+  },
+);
+
 it("persists ordinary ACP activity but strips review ledger payloads across tool updates", async () => {
   await fc.assert(fc.asyncProperty(fc.constantFrom(
     { name: "mcp_pwragent_record_review_candidate" },

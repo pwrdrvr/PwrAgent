@@ -323,10 +323,9 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
       const request = vi.spyOn(AcpStdioJsonRpcTransport.prototype, "request").mockImplementation(async (method, params) => {
         expect(method).toBe("initialize");
         expect(params?.protocolVersion).toBe(1);
-        const info = params?.clientInfo as { name?: string; version?: string } | undefined;
-        if (info && (typeof info.name !== "string" || typeof info.version !== "string")) {
-          throw new Error("ACP error -32602: invalid client implementation information");
-        }
+        expect(params?.clientInfo).toMatchObject({
+          name: "pwragent", title: "PwrAgent", version: expect.any(String),
+        });
         return { protocolVersion: 1, agentInfo: { name: "Antigravity ACP Server", version } };
       });
       try {

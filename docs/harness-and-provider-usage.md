@@ -22,10 +22,11 @@ When the vendor's binary makes the request, the vendor sees its own client, its 
 
 t3code was asked to remove its Antigravity usage-limit reporting. t3code read the Antigravity CLI's OAuth token from the OS keyring or an `antigravity-oauth-token` file. It then called `v1internal:retrieveUserQuotaSummary` and `v1internal:fetchAvailableModels` on `https://cloudcode-pa.googleapis.com` and `https://daily-cloudcode-pa.googleapis.com`, sending a forged `antigravity/hub/...` User-Agent. t3code removed that code on 2026-11-25 in [pingdotgg/t3code#43026](https://github.com/pingdotgg/t3code/pull/43026). Julius Marminge confirmed that the violation was calling the internal API instead of using ACP.
 
-Two paths remain allowed:
+t3code separately removed a fallback that sent Zed's name as the ACP client identity to receive additional models in [pingdotgg/t3code#43087](https://github.com/pingdotgg/t3code/pull/43087). PwrAgent identifies itself as PwrAgent and uses the model catalog the official `agy acp` server returns.
 
-- Driving the official `agy` ACP server (`agy acp`), which is how PwrAgent runs Antigravity threads.
-- Running `agy --print /usage`. The vendor's binary makes that request, and PwrAgent parses only its output (`apps/desktop/src/main/acp/antigravity-usage.ts`). Do not reimplement that call.
+Google's [CLI 1.5.1 release notes](https://antigravity.google/docs/changelog?tab=cli#v1-5-1) say ACP clients receive the models available to the signed-in account. The [ACP editor guide](https://antigravity.google/docs/ide/extensions/acp/#models-and-thinking-level) still lists specific clients for partner models. A model offered by the server describes what that session can select.
+
+Google documents [connecting ACP clients to `agy acp`](https://antigravity.google/docs/ide/extensions/acp/) and [excludes third-party application wrappers from consumer headless support](https://antigravity.google/docs/faq/#can-i-use-antigravity-cli-headless-mode-in-third-party-coding-agents-or-automate-account-switching). PwrAgent leaves Antigravity account quotas to the vendor. To check them, open the Antigravity CLI and run [`/usage` interactively](https://antigravity.google/docs/cli/commands/usage/).
 
 ## Every harness, not only Antigravity
 
@@ -37,7 +38,7 @@ The same boundary applies to every backend PwrAgent integrates:
 
 This document adds to the [Codex data boundary](../apps/desktop/docs/codex-data-boundary.md) and does not weaken it. PwrAgent still never reads Codex-owned session JSONL, rollout files, or SQLite databases, and `pnpm lint:codex-storage` still enforces that.
 
-Current usage sources follow the rule: Codex rate limits come from App Server `account/rateLimits`, Claude limits come from the Agent SDK's rate-limit events, and Antigravity usage comes from `agy --print /usage`.
+Codex rate limits come from App Server `account/rateLimits`. Claude limits come from the Agent SDK's rate-limit events. Grok limits come from its ACP billing extension.
 
 An API key the operator enters in PwrAgent Settings for PwrAgent's own use is not a harness credential. This rule covers credentials that a harness's own sign-in created.
 

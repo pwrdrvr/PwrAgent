@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
+import { ACP_CLIENT_INFO } from "./acp-client-info.js";
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp/mcp-server-config";
 import {
   ACP_PERMISSION_MODE_OPTION_ID,
@@ -622,11 +623,7 @@ export class AcpAgentClient {
         },
         terminal: false,
       },
-      clientInfo: {
-        name: "pwragent",
-        title: "PwrAgent",
-        version: "0.0.0",
-      },
+      clientInfo: ACP_CLIENT_INFO,
     });
     // Destructive archive eligibility must use this process's advertisement,
     // rather than inheriting a cached capability from an older executable.
