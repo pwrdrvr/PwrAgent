@@ -1324,6 +1324,7 @@ export async function closeElectronApplication(
     : undefined;
   const execution = await executeElectronClose({
     now: performance.now.bind(performance),
+    observeLauncherExit: () => child.pid === undefined ? undefined : hasExited(child),
     requestQuit: async () => {
       await withTimeout(
         electronApp.evaluate(({ app }) => {
