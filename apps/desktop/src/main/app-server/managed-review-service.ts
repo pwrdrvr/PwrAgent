@@ -1,3 +1,4 @@
+import type { ReviewStartOwner } from "./registry-turn-state";
 import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
 import { errorMessageFromTerminalNotification, turnIdFromTerminalNotification } from "./backend-registry-notifications";
 import type { RegistryHostPorts } from "./registry-host-ports";
@@ -105,7 +106,6 @@ import {
 } from "./thread-model-options";
 import { assistantOutputForTurn, reviewEntryReviewer } from "./thread-transcript-helpers";
 import {
-  buildActiveTurnModeKey,
   buildReviewSubAgentKey,
   buildTurnStartReservationKey,
   parseActiveTurnKey,
@@ -256,7 +256,7 @@ export class ManagedReviewService {
     if (managedReview?.mode === "native" && managedReview.backend === "codex"
       && managedReview.reviewThreadId === managedReview.parentThreadId) {
       const interruptTurnId = this.context.turnState.reviewInterrupt(
-        buildActiveTurnModeKey(managedReview.reviewThreadId, managedReview.turnId),
+        { threadId: managedReview.reviewThreadId, turnId: managedReview.turnId },
       );
       const relatedReviewTurnId = turnId === managedReview.turnId ? interruptTurnId : managedReview.turnId;
       const shouldAttachRootTurnId =
@@ -376,9 +376,8 @@ export class ManagedReviewService {
     };
     delivery.lifecycleTurnId = lifecycleTurnId;
     if (terminal.backend === "claude" && terminal.method === "turn/completed"
-      && [...this.context.turnState.reviewAdmissions()].some(candidate =>
-        candidate.backend === terminal.backend && candidate.threadId === terminal.threadId
-        && candidate.invokingTurnId === terminal.turnId && candidate.status === "scheduled")) {
+      && this.context.turnState.reviewAdmissionsForThread(terminal).some(candidate =>
+        candidate.invokingTurnId === terminal.turnId && candidate.status === "scheduled")) {
       // A new Claude turn may relaunch the live query and join its consumer.
       // That consumer is still awaiting this terminal delivery.
       delivery.afterDelivery = () => this.drainPendingReviewStartsForTerminalTurn(terminal).catch(error => {
@@ -434,9 +433,9 @@ export class ManagedReviewService {
     return this.context.turnState.liveReviewRecords();
   }
 
-  /** Review sub-agents by review turn, kept after the live record ends. */
-  get reviewSubAgentRecordsByReviewTurn(): ReadonlyMap<string, ReviewSubAgentRecord> {
-    return this.reviewSubAgentsByReviewTurn;
+  /** Card metadata remains available for usage attribution after completion. */
+  historicalReviewForTurn(key: string): ReviewSubAgentRecord | undefined {
+    return this.reviewSubAgentsByReviewTurn.get(key)?.record;
   }
 
 
@@ -449,10 +448,7 @@ export class ManagedReviewService {
 
 
 
-  private readonly reviewSubAgentsByReviewTurn = new Map<
-    string,
-    ReviewSubAgentRecord
-  >();
+  private readonly reviewSubAgentsByReviewTurn = new Map<string, { record: ReviewSubAgentRecord; order: number }>();
 
 
   private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
@@ -634,7 +630,7 @@ export class ManagedReviewService {
 
   private async startReviewWithTerminalEvidence(
     params: StartReviewRequest,
-    terminals: object,
+    terminals: ReviewStartOwner,
     trustedSnapshot: boolean,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
     agentAntigravityAccess?: AgentAntigravityReviewAccess,
@@ -983,7 +979,8 @@ export class ManagedReviewService {
     );
     const earlyTerminal = this.context.turnState.reviewStartTerminal(terminals, reviewSubAgentKey);
     this.context.turnState.activateReview(reviewSubAgentRecord);
-    this.reviewSubAgentsByReviewTurn.set(reviewSubAgentKey, reviewSubAgentRecord);
+    const historyOrder = this.reviewSubAgentsByReviewTurn.get(reviewSubAgentKey)?.order ?? this.reviewSubAgentsByReviewTurn.size;
+    this.reviewSubAgentsByReviewTurn.set(reviewSubAgentKey, { record: reviewSubAgentRecord, order: historyOrder });
     this.releasePullRequestReviewStart(terminals);
     if (reserveCodexReviewStart) {
       this.context.turnState.releaseStart(params.threadId, reviewReservation);
@@ -1060,7 +1057,7 @@ export class ManagedReviewService {
     parentBackend: AppServerBackendKind;
     parentThreadId: string;
     target: StartReviewRequest["target"];
-    terminals: object;
+    terminals: ReviewStartOwner;
     tokenMiserEnabled: boolean;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     // Only a same-provider review can inherit the parent's live session state;
@@ -1510,11 +1507,9 @@ export class ManagedReviewService {
     pendingTurnId: string;
     turnId: string;
   }): void {
-    for (const candidate of this.context.turnState.reviewAdmissions()) {
+    for (const candidate of this.context.turnState.reviewAdmissionsForThread(params)) {
       if (
-        candidate.backend !== params.backend
-        || candidate.threadId !== params.threadId
-        || candidate.invokingTurnId !== params.pendingTurnId
+        candidate.invokingTurnId !== params.pendingTurnId
         || candidate.status !== "scheduled"
       ) {
         continue;
@@ -1554,16 +1549,13 @@ export class ManagedReviewService {
     turnId: string;
     method: "turn/completed" | "turn/failed" | "turn/cancelled";
   }): Promise<void> {
-    const pending = [...this.context.turnState.reviewAdmissions()].filter(
-      (candidate) =>
-        candidate.backend === params.backend &&
-        candidate.threadId === params.threadId &&
-        candidate.invokingTurnId === params.turnId &&
+    const pending = this.context.turnState.reviewAdmissionsForThread(params).filter(
+      (candidate) => candidate.invokingTurnId === params.turnId &&
         candidate.status === "scheduled",
     );
     const failures: Array<{ error: string; target: AppServerReviewTarget }> = [];
     for (const candidate of pending) {
-      const current = this.context.turnState.reviewAdmission(candidate.pendingReviewId);
+      const current = this.context.turnState.reviewAdmissionsForThread(params).find(admission => admission.pendingReviewId === candidate.pendingReviewId);
       if (current?.status !== "scheduled" || current.invokingTurnId !== params.turnId) continue;
       if (params.method !== "turn/completed") {
         const error =
@@ -1759,7 +1751,7 @@ export class ManagedReviewService {
       && record.backend === "codex"
       && record.reviewThreadId === record.parentThreadId
         ? this.context.turnState.reviewInterrupt(
-            buildActiveTurnModeKey(record.reviewThreadId, record.turnId),
+            { threadId: record.reviewThreadId, turnId: record.turnId },
           )
         : undefined;
     await this.context.emit({
@@ -1907,7 +1899,7 @@ export class ManagedReviewService {
       return;
     }
 
-    this.context.turnState.finishReview(activeReview.key);
+    this.context.turnState.finishReview(activeReview.record);
     const { record } = activeReview;
     this.context.turnState.unlinkReviewChild(
       buildThreadIdentityKey(record.backend, record.reviewThreadId),
@@ -1946,13 +1938,13 @@ export class ManagedReviewService {
 
   clearNativeReviewActiveTurns(record: ReviewSubAgentRecord): void {
     if (record.mode === "native" && record.backend === "codex") {
-      const reviewKey = buildActiveTurnModeKey(record.reviewThreadId, record.turnId);
+      const reviewKey = { threadId: record.reviewThreadId, turnId: record.turnId };
       const interruptTurnId = this.context.turnState.reviewInterrupt(reviewKey);
       for (const turnId of new Set([record.turnId, interruptTurnId])) {
         if (!turnId) {
           continue;
         }
-        const modeKey = buildActiveTurnModeKey(record.reviewThreadId, turnId);
+        const modeKey = { threadId: record.reviewThreadId, turnId };
         this.context.turnState.forgetExecution(modeKey);
         this.context.turnState.forgetReview(modeKey);
         this.context.turnState.unregisterTurn({ backend: "codex", threadId: record.reviewThreadId, turnId: turnId });
@@ -2009,12 +2001,7 @@ export class ManagedReviewService {
     parentThreadId: string;
     turnId?: string;
   }): ReviewSubAgentRecord | undefined {
-    return Array.from(this.context.turnState.liveReviewRecords().values()).find(
-      (record) =>
-        record.parentBackend === params.backend
-        && record.parentThreadId === params.parentThreadId
-        && (!params.turnId || record.turnId === params.turnId),
-    );
+    return this.context.turnState.liveReviewForParent(params.backend, params.parentThreadId, params.turnId);
   }
 
   findManagedReviewForChildRequest(params: {
@@ -2022,13 +2009,16 @@ export class ManagedReviewService {
     reviewThreadId: string;
     turnId?: string;
   }): ReviewSubAgentRecord | undefined {
-    return Array.from(this.context.turnState.liveReviewRecords().values()).find(
-      (record) =>
-        record.mode === "managed"
-        && record.backend === params.backend
-        && record.reviewThreadId === params.reviewThreadId
-        && (!params.turnId || record.turnId === params.turnId),
-    );
+    const reviews = this.context.turnState.liveReviewsForChild(params.backend, params.reviewThreadId);
+    if (!reviews) return undefined;
+    if (params.turnId) {
+      const record = reviews.get(params.turnId);
+      return record?.mode === "managed" ? record : undefined;
+    }
+    for (const record of reviews.values()) {
+      if (record.mode === "managed") return record;
+    }
+    return undefined;
   }
 
   private async publishManagedReviewTerminal(
@@ -2262,33 +2252,20 @@ export class ManagedReviewService {
     threadId: string;
     turnId: string;
   }): { key: string; record: ReviewSubAgentRecord } | undefined {
-    const exactKey = buildReviewSubAgentKey(
-      params.backend,
-      params.threadId,
-      params.turnId,
-    );
-    const exactRecord = this.context.turnState.liveReviewRecords().get(exactKey);
+    const reviews = this.context.turnState.liveReviewsForChild(params.backend, params.threadId);
+    if (!reviews) return undefined;
+    const exactRecord = reviews.get(params.turnId);
     if (exactRecord) {
-      return { key: exactKey, record: exactRecord };
+      return { key: buildReviewSubAgentKey(params.backend, params.threadId, params.turnId), record: exactRecord };
     }
-
-    if (params.backend !== "codex") {
-      return undefined;
-    }
-
-    for (const [key, record] of this.context.turnState.liveReviewRecords().entries()) {
-      if (record.backend !== params.backend || record.reviewThreadId !== params.threadId) {
-        continue;
-      }
-      const reviewTurnKey = buildActiveTurnModeKey(
-        record.reviewThreadId,
-        record.turnId,
-      );
-      if (this.context.turnState.reviewInterrupt(reviewTurnKey) === params.turnId) {
-        return { key, record };
+    if (params.backend === "codex") {
+      const roots = this.context.turnState.reviewRootsForInterrupt(params.threadId, params.turnId);
+      for (const record of reviews.values()) {
+        if (roots.has(record.turnId)) {
+          return { key: buildReviewSubAgentKey(params.backend, params.threadId, record.turnId), record };
+        }
       }
     }
-
     return undefined;
   }
 
@@ -2302,12 +2279,7 @@ export class ManagedReviewService {
     if (pending) {
       return pending;
     }
-    const active = Array.from(this.context.turnState.liveReviewRecords().values()).find(
-      (record) =>
-        record.mode === "managed"
-        && record.backend === params.backend
-        && record.reviewThreadId === params.reviewThreadId,
-    );
+    const active = this.findManagedReviewForChildRequest(params);
     return active
       ? {
           parentBackend: active.parentBackend,
@@ -2568,12 +2540,6 @@ export class ManagedReviewService {
    * which `docs/thread-history-persistence.md` requires.
    */
   async forwardManagedReviewActivity(event: AgentEvent): Promise<void> {
-    // Every emitted event reaches this method, including per-chunk streaming
-    // deltas on unrelated threads. Reviews are rare and short-lived, so settle
-    // the common case with a size check before touching the notification.
-    if (this.context.turnState.liveReviewRecords().size === 0) {
-      return;
-    }
     const method = event.notification.method;
     const isItemEnvelope =
       method === "item/started" || method === "item/completed";
@@ -2647,28 +2613,20 @@ export class ManagedReviewService {
     threadId: string,
     turnId: string,
   ): string | undefined {
-    const matches = (records: Iterable<ReviewSubAgentRecord>): string | undefined => {
-      for (const record of records) {
-        if (
-          record.mode !== "native"
-          || record.backend !== "codex"
-          || record.reviewThreadId !== record.parentThreadId
-          || record.reviewThreadId !== threadId
-          || record.turnId === turnId
-        ) {
-          continue;
-        }
-        const reviewTurnKey = buildActiveTurnModeKey(record.reviewThreadId, record.turnId);
-        if (this.context.turnState.reviewInterrupt(reviewTurnKey) === turnId) {
-          return record.turnId;
-        }
-      }
-      return undefined;
-    };
-    return (
-      matches(this.context.turnState.liveReviewRecords().values())
-      ?? matches(this.reviewSubAgentsByReviewTurn.values())
-    );
+    const roots = this.context.turnState.reviewRootsForInterrupt(threadId, turnId);
+    if (!roots.size) return undefined;
+    for (const record of this.context.turnState.liveReviewsForChild("codex", threadId)?.values() ?? []) {
+      if (record.mode === "native" && record.parentThreadId === threadId && roots.has(record.turnId)) return record.turnId;
+    }
+    // The live card may already have settled. Probe retained metadata only for
+    // mapped outer IDs, preserving history insertion order when mappings overlap.
+    let first: { record: ReviewSubAgentRecord; order: number } | undefined;
+    for (const root of roots) {
+      const entry = this.reviewSubAgentsByReviewTurn.get(buildReviewSubAgentKey("codex", threadId, root));
+      if (entry?.record.mode === "native" && entry.record.reviewThreadId === threadId && entry.record.parentThreadId === threadId
+        && (!first || entry.order < first.order)) first = entry;
+    }
+    return first?.record.turnId;
   }
 
   /**
@@ -2682,8 +2640,8 @@ export class ManagedReviewService {
   }): string | undefined {
     const reviewKey = buildReviewSubAgentKey(params.backend, params.threadId, params.turnId);
     const record =
-      this.context.turnState.liveReviewRecords().get(reviewKey)
-      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey)
+      this.context.turnState.liveReviewsForChild(params.backend, params.threadId)?.get(params.turnId)
+      ?? this.historicalReviewForTurn(reviewKey)
       ?? this.findActiveReviewSubAgentForTerminal(params)?.record;
     return record?.turnId;
   }
@@ -2769,8 +2727,8 @@ export class ManagedReviewService {
     }
     const reviewKey = buildReviewSubAgentKey(event.backend, threadId, turnId);
     const record =
-      this.context.turnState.liveReviewRecords().get(reviewKey)
-      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey)
+      this.context.turnState.liveReviewsForChild(event.backend, threadId)?.get(turnId)
+      ?? this.historicalReviewForTurn(reviewKey)
       ?? this.findActiveReviewSubAgentForTerminal({
         backend: event.backend,
         threadId,

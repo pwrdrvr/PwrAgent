@@ -33,10 +33,7 @@ type TurnInputSourceRecord = {
 const turnInputSourceKey = ({ backend, threadId, turnId }: TurnIdentity): string => JSON.stringify([backend, threadId, turnId]);
 type CodexTurnReference = string | Pick<TurnIdentity, "threadId" | "turnId">;
 type TurnReference = string | TurnIdentity;
-type ReviewProjection = {
-  readonly live: ReadonlyMap<string, ReviewSubAgentRecord>;
-  readonly children: ReadonlyMap<string, Omit<ReviewChildLink, "key">>;
-};
+export type ReviewStartOwner = Readonly<Pick<TurnIdentity, "backend" | "threadId">>;
 export type CodexStartDeliveryReceipt = Readonly<{ threadId: string; turnId: string; owner: object }>;
 
 /** In-memory activity owner, constructed by the owner composition root. */
@@ -50,9 +47,13 @@ export class RegistryTurnState {
   private readonly otherProviderOrigins = new Set<StartingTurnOrigin>();
   private readonly turnInputSources = new Map<string, TurnInputSourceRecord>();
   private readonly deletionListeners = new Set<(key: string) => void>();
-  // Immutable projections, invalidated by the canonical state commit. Streamed
-  // events must not scan idle thread history just to ask whether reviews exist.
-  private cachedReviewProjection: ReviewProjection | undefined = { live: new Map(), children: new Map() };
+  private readonly openReviewStartThreads = new Map<string, ReviewStartOwner>();
+  private readonly reviewsByChild = new Map<string, {
+    members: Map<number, ReviewSubAgentRecord>;
+    byTurn?: ReadonlyMap<string, ReviewSubAgentRecord>;
+  }>();
+  private readonly reviewParents = new Map<string, Omit<ReviewChildLink, "key">>();
+  private cachedLiveReviews: ReadonlyMap<string, ReviewSubAgentRecord> | undefined = new Map();
   private order = 0;
   private statusSequence = 0;
   private readonly emptyActivity = idleCodexThreadActivity();
@@ -61,11 +62,11 @@ export class RegistryTurnState {
     return this.activities.get(threadId) ?? this.emptyActivity;
   }
 
-  transition(threadId: string, event: CodexThreadActivityEvent): void {
+  private transition(threadId: string, event: CodexThreadActivityEvent): void {
     const previous = this.codex(threadId);
     const next = transition(previous, event);
     if (previous === next) return;
-    this.commitCodexActivity(threadId, previous, next);
+    this.commitCodexActivity(threadId, next);
     // Commit before invoking synchronous quit/restart listeners. No side map
     // of Codex registration keys is maintained.
     for (const turn of previous.turns) {
@@ -77,11 +78,7 @@ export class RegistryTurnState {
     }
   }
 
-  private invalidateReviewProjection(previous: CodexThreadActivity, next: CodexThreadActivity): void {
-    if (previous.liveReviews !== next.liveReviews || previous.reviewChildren !== next.reviewChildren) this.cachedReviewProjection = undefined;
-  }
-
-  private commitCodexActivity(threadId: string, previous: CodexThreadActivity, next: CodexThreadActivity): void {
+  private commitCodexActivity(threadId: string, next: CodexThreadActivity): void {
     // Like the old collections, an unobserved idle listing row owns no memory.
     // Keep high-water marks and request/history evidence when they do exist.
     const forget = next.phase === "idle" && next.statusWatermark === 0 && !next.observation
@@ -90,7 +87,6 @@ export class RegistryTurnState {
       && next.liveReviews.length === 0 && next.reviewChildren.length === 0;
     if (forget) this.activities.delete(threadId);
     else this.activities.set(threadId, next);
-    this.invalidateReviewProjection(previous, next);
   }
 
   hasActiveTurn(threadId: string, ignoreStartReservation = false): boolean {
@@ -289,10 +285,10 @@ export class RegistryTurnState {
   }
   forgetReviewInterrupt(key: CodexTurnReference): void { this.setReviewInterrupt(key); }
   reviewInterrupt(key: CodexTurnReference): string | undefined { return this.turn(key)?.review?.interruptTurnId; }
-  reviewInterruptEntries(): Array<[string, string]> {
-    return [...this.activities].flatMap(([id, state]) => state.turns.flatMap(turn => turn.review?.interruptTurnId
-      ? [{ key: buildActiveTurnModeKey(id, turn.turnId), turnId: turn.review.interruptTurnId, order: turn.review.interruptOrder! }] : []))
-      .sort((left, right) => left.order - right.order).map(({ key, turnId }) => [key, turnId]);
+  reviewRootsForInterrupt(threadId: string, turnId: string): ReadonlySet<string> {
+    const roots = this.codex(threadId).turns.filter(turn => turn.turnId !== turnId && turn.review?.interruptTurnId === turnId);
+    return new Set(roots.sort((left, right) => left.review!.interruptOrder! - right.review!.interruptOrder!)
+      .map(turn => turn.turnId));
   }
 
   retryOperation(threadId: string): CodexOperationReceipt | undefined { return activeCodexOperation(this.codex(threadId)); }
@@ -444,10 +440,16 @@ export class RegistryTurnState {
       const previous = this.otherProviderReviewActivities.get(key)?.state ?? this.emptyActivity;
       const next = transition(previous, event);
       this.otherProviderReviewActivities.set(key, { backend: identity.backend, threadId: identity.threadId, state: next });
-      this.invalidateReviewProjection(previous, next);
     }
   }
 
+  private reviewActivity({ backend, threadId }: ReviewStartOwner): CodexThreadActivity {
+    return backend === "codex" ? this.codex(threadId)
+      : this.otherProviderReviewActivities.get(buildThreadIdentityKey(backend, threadId))?.state ?? this.emptyActivity;
+  }
+  reviewAdmissionsForThread(thread: ReviewStartOwner): readonly ReviewAdmission[] {
+    return this.reviewActivity(thread).admissions;
+  }
   reviewAdmissions(): PendingReviewStartRecord[] { return this.reviewActivities().flatMap(({ state }) => state.admissions); }
   reviewAdmission(id: string): PendingReviewStartRecord | undefined { return this.reviewAdmissions().find(admission => admission.pendingReviewId === id); }
   setReviewAdmission(record: PendingReviewStartRecord): void {
@@ -462,61 +464,85 @@ export class RegistryTurnState {
     this.reviewTransition(record, { type: "reviewAdmission", admission });
   }
 
-  beginReviewStart(identity: { backend: AppServerBackendKind; threadId: string }): object {
-    const owner = {};
-    this.reviewTransition(identity, { type: "reviewStartOpened", owner });
+  beginReviewStart({ backend, threadId }: ReviewStartOwner): ReviewStartOwner {
+    const owner = { backend, threadId };
+    this.reviewTransition(owner, { type: "reviewStartOpened", owner });
+    this.openReviewStartThreads.set(buildThreadIdentityKey(backend, threadId), owner);
     return owner;
   }
-  endReviewStart(owner: object): void {
-    for (const activity of this.reviewActivities()) {
-      if (activity.state.reviewStarts.some(start => start.owner === owner)) this.reviewTransition(activity, { type: "reviewStartClosed", owner });
+  endReviewStart(owner: ReviewStartOwner): void {
+    this.reviewTransition(owner, { type: "reviewStartClosed", owner });
+    if (!this.reviewActivity(owner).reviewStarts.length) {
+      this.openReviewStartThreads.delete(buildThreadIdentityKey(owner.backend, owner.threadId));
     }
   }
   recordReviewTerminal(terminal: ReviewTerminal): void {
-    for (const activity of this.reviewActivities()) {
-      if (activity.state.reviewStarts.length) this.reviewTransition(activity, { type: "reviewTerminal", terminal });
+    // A pending start can return any child identity, including a different provider.
+    for (const thread of this.openReviewStartThreads.values()) {
+      this.reviewTransition(thread, { type: "reviewTerminal", terminal });
     }
   }
-  reviewStartTerminal(owner: object, key: string): ReviewTerminal | undefined {
-    for (const { state } of this.reviewActivities()) {
-      const start = state.reviewStarts.find(start => start.owner === owner);
-      if (start) return start.terminals.find(terminal => buildActiveTurnKey(terminal.backend, terminal.threadId, terminal.turnId) === key);
-    }
-    return undefined;
+  reviewStartTerminal(owner: ReviewStartOwner, key: string): ReviewTerminal | undefined {
+    return this.reviewActivity(owner).reviewStarts.find(start => start.owner === owner)?.terminals
+      .find(terminal => buildActiveTurnKey(terminal.backend, terminal.threadId, terminal.turnId) === key);
   }
 
-  private reviewProjection(): ReviewProjection {
-    if (!this.cachedReviewProjection) {
-      const activities = this.reviewActivities();
-      this.cachedReviewProjection = {
-        live: new Map(activities.flatMap(({ state }) => state.liveReviews)
-          .sort((left, right) => left.order - right.order)
-          .map(({ record }) => [buildActiveTurnKey(record.backend, record.reviewThreadId, record.turnId), record])),
-        children: new Map(activities.flatMap(({ state }) => state.reviewChildren)
-          .map(link => [link.key, { parentBackend: link.parentBackend, parentThreadId: link.parentThreadId }])),
-      };
-    }
-    return this.cachedReviewProjection;
+  liveReviewRecords(): ReadonlyMap<string, ReviewSubAgentRecord> {
+    return this.cachedLiveReviews ??= new Map([...this.reviewsByChild.values()].flatMap(child => [...child.members])
+      .sort(([left], [right]) => left - right)
+      .map(([, record]) => [buildActiveTurnKey(record.backend, record.reviewThreadId, record.turnId), record]));
   }
-  liveReviewRecords(): ReadonlyMap<string, ReviewSubAgentRecord> { return this.reviewProjection().live; }
+  liveReviewsForChild(backend: AppServerBackendKind, threadId: string): ReadonlyMap<string, ReviewSubAgentRecord> | undefined {
+    const child = this.reviewsByChild.get(buildThreadIdentityKey(backend, threadId));
+    if (!child) return undefined;
+    return child.byTurn ??= new Map(Array.from(child.members.values(), record => [record.turnId, record]));
+  }
+  liveReviewForParent(backend: AppServerBackendKind, threadId: string, turnId?: string): ReviewSubAgentRecord | undefined {
+    return this.reviewActivity({ backend, threadId }).liveReviews.find(({ record }) => !turnId || record.turnId === turnId)?.record;
+  }
+  private reviewMembership(record: ReviewSubAgentRecord) {
+    return this.reviewActivity({ backend: record.parentBackend, threadId: record.parentThreadId }).liveReviews.find(
+      entry => entry.record.backend === record.backend && entry.record.reviewThreadId === record.reviewThreadId
+        && entry.record.turnId === record.turnId,
+    );
+  }
   activateReview(record: ReviewSubAgentRecord): void {
-    this.reviewTransition({ backend: record.parentBackend, threadId: record.parentThreadId }, { type: "reviewActivated", record, order: ++this.order });
+    const order = this.reviewMembership(record)?.order ?? ++this.order;
+    this.reviewTransition({ backend: record.parentBackend, threadId: record.parentThreadId }, { type: "reviewActivated", record, order });
+    const key = buildThreadIdentityKey(record.backend, record.reviewThreadId);
+    const child = this.reviewsByChild.get(key) ?? { members: new Map<number, ReviewSubAgentRecord>() };
+    child.members.set(order, record);
+    child.byTurn = undefined;
+    this.reviewsByChild.set(key, child);
+    this.cachedLiveReviews = undefined;
   }
-  finishReview(key: string): void {
-    const record = this.liveReviewRecords().get(key);
-    if (record) this.reviewTransition({ backend: record.parentBackend, threadId: record.parentThreadId }, { type: "reviewFinished", record });
+  finishReview(review: string | ReviewSubAgentRecord): void {
+    const record = typeof review === "string" ? this.liveReviewRecords().get(review) : review;
+    if (!record) return;
+    const membership = this.reviewMembership(record);
+    if (membership?.record !== record) return;
+    this.reviewTransition({ backend: record.parentBackend, threadId: record.parentThreadId }, { type: "reviewFinished", record });
+    const key = buildThreadIdentityKey(record.backend, record.reviewThreadId);
+    const child = this.reviewsByChild.get(key)!;
+    child.members.delete(membership.order);
+    child.byTurn = undefined;
+    if (!child.members.size) this.reviewsByChild.delete(key);
+    this.cachedLiveReviews = undefined;
   }
 
-  reviewChildParent(key: string): Omit<ReviewChildLink, "key"> | undefined { return this.reviewProjection().children.get(key); }
+  reviewChildParent(key: string): Omit<ReviewChildLink, "key"> | undefined { return this.reviewParents.get(key); }
   linkReviewChild(key: string, parent: Omit<ReviewChildLink, "key">): void {
     this.unlinkReviewChild(key);
-    this.reviewTransition({ backend: parent.parentBackend, threadId: parent.parentThreadId }, {
-      type: "reviewChildLinked", link: { key, parentBackend: parent.parentBackend, parentThreadId: parent.parentThreadId },
+    const { parentBackend, parentThreadId } = parent;
+    this.reviewTransition({ backend: parentBackend, threadId: parentThreadId }, {
+      type: "reviewChildLinked", link: { key, parentBackend, parentThreadId },
     });
+    this.reviewParents.set(key, { parentBackend, parentThreadId });
   }
   unlinkReviewChild(key: string): void {
-    for (const activity of this.reviewActivities()) {
-      if (activity.state.reviewChildren.some(link => link.key === key)) this.reviewTransition(activity, { type: "reviewChildUnlinked", key });
-    }
+    const parent = this.reviewParents.get(key);
+    if (!parent) return;
+    this.reviewTransition({ backend: parent.parentBackend, threadId: parent.parentThreadId }, { type: "reviewChildUnlinked", key });
+    this.reviewParents.delete(key);
   }
 }
