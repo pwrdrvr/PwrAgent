@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { query, McpServerStatus, ModelInfo, Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { query, McpServerStatus, ModelInfo, Options, Query, SDKUserMessage, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
+import type { ClaudeSkillEvidence } from "./claude-skills";
 import { loadClaudeAgentSdk } from "./claude-sdk";
 import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { getMainLogger } from "../log";
@@ -49,6 +50,30 @@ export async function discoverClaudeModels(params: {
   });
   if (models.length === 0) throw new Error("Claude returned no available models.");
   return claudeModelOptions(models, { source: "discovery", cliVersion: params.cliVersion });
+}
+
+/**
+ * A folder's slash commands and Claude's skill listing, read through one
+ * session that receives no prompt. The listing names each skill's file, which
+ * is how the commands that are skills are told apart.
+ */
+export async function readClaudeCatalog(params: {
+  executable: string;
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+}): Promise<{ commands: SlashCommand[]; skills: ClaudeSkillEvidence[] }> {
+  return await readClaudeMetadata({
+    ...params,
+    read: async (session) => {
+      const [commands, context] = await Promise.all([
+        session.supportedCommands(),
+        // Summary detail answers locally, without token-count requests.
+        session.getContextUsage({ detail: "summary" }).catch(() => undefined),
+      ]);
+      return { commands, skills: context?.skills?.skillFrontmatter ?? [] };
+    },
+    timeoutMessage: "Claude command discovery timed out.",
+  });
 }
 
 /**

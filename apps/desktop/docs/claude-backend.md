@@ -73,6 +73,40 @@ does not, the two directories differ.
 - After an Agent SDK or Electron upgrade, build, then run
   `pnpm --filter @pwragent/desktop probe:claude-session-reader`.
 
+## Slash commands and skills
+
+`supportedCommands()` lists Claude Code's own commands, custom commands,
+plugin commands, and skills together, and marks only the first with
+`builtin`. [claude-skills.ts](../src/main/claude/claude-skills.ts) splits them:
+the composer offers skills under `$` and every other command under `/`.
+
+- A command is a skill when `getContextUsage({ detail: "summary" })` lists it
+  with a `SKILL.md` path. Summary detail answers locally; the default `full`
+  detail makes token-count requests.
+- That listing leaves out skills marked `disable-model-invocation`. For those,
+  PwrAgent checks `<CLAUDE_CONFIG_DIR>/skills/<name>/SKILL.md`, then
+  `<cwd>/.claude/skills/<name>/SKILL.md`. A skill found in neither stays
+  under `/`, where it still runs.
+- A built-in row that shares a skill's name keeps the name under `/`, because
+  `/name` runs the built-in.
+
+Claude does not act on `$name` or the composer's `[$name](path)` link, so
+`claudeSkillPrompt` rewrites each skill mention to `/name` before sending.
+The transcript keeps what the operator typed. Observed with Claude Code
+2.1.305:
+
+| Prompt | Result |
+| --- | --- |
+| Starts with `/name` (or its last text block does) | Claude starts the skill directly. The rest of the text becomes its arguments, including other `/skill` mentions. |
+| `/name` elsewhere | The model starts the skill with its Skill tool. The tool accepts a user-only skill because the user's text names it. |
+| A skill started directly, plus another `/name` | The Skill tool refuses the user-only one. |
+| `$name` or `[$name](path)` | Nothing starts; the Skill tool refuses a user-only skill. |
+
+So a prompt whose only skill opens it keeps `/name` first. When a prompt names
+more than one skill, a text block that opens with one gets a leading space,
+so each skill goes through the Skill tool. Recheck this table after a Claude
+Code upgrade that changes slash-command handling.
+
 ## Artifacts
 
 Claude Code's `Artifact`, `ArtifactComments` and `ArtifactData` tools publish

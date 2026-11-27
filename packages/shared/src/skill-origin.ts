@@ -112,9 +112,15 @@ function classifySkillOriginCore(
     case "system":
       return { kind: "built-in", label: "Built-in" };
     case "admin":
+    case "claude-managed":
       return { kind: "admin", label: "Admin" };
     case "antigravity-user":
+    case "claude-user":
       return { kind: "personal", label: "Personal" };
+    case "claude-synced":
+      // Synced from the operator's claude.ai account into a folder named
+      // by account ids, which would make a meaningless chip.
+      return { kind: "other", label: "claude.ai" };
     case "user": {
       const normalizedSkillPath = normalizeTrimmedPath(skillPath);
       // PwrAgent hands Codex its own bundled skill folder, which Codex lists
@@ -557,12 +563,12 @@ function matchLinkedDirectory(
   return best?.origin;
 }
 
-/** The folder that holds the `.agents` or `.codex` skills directory. */
+/** The folder that holds the `.agents`, `.codex`, or `.claude` skills directory. */
 function repositoryFolderLabel(skillPath: string): string | undefined {
   const segments = normalizePath(skillPath).split("/");
   const markerIndex = segments.findIndex(
     (segment, index) =>
-      (segment === ".agents" || segment === ".codex")
+      (segment === ".agents" || segment === ".codex" || segment === ".claude")
       && segments[index + 1] === "skills",
   );
   return markerIndex > 0 ? segments[markerIndex - 1] || undefined : undefined;

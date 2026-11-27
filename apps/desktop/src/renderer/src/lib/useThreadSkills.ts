@@ -307,7 +307,9 @@ export function useThreadSkills(params: {
               {
                 ...(typeof cwd === "string" ? { cwd } : {}),
                 commands,
-                skills: [],
+                // The update carries commands only. A backend that lists its
+                // skills beside them (Claude) keeps the ones already loaded.
+                skills: current[commandKey]?.response?.data.flatMap((entry) => entry.skills) ?? [],
               },
             ],
           },

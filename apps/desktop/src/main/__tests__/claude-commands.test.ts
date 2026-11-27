@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Query, SDKMessage, SlashCommand, query } from "@anthropic-ai/claude-agent-sdk";
+import type { Query, SDKMessage, SDKUserMessage, SlashCommand, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerAvailableCommandSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ClaudeBackend, type ClaudeBackendOptions } from "../claude/claude-backend";
@@ -40,14 +40,17 @@ const command = (name: string, extra: Partial<SlashCommand> = {}): SlashCommand 
 async function fixture(params: {
   messages?: () => AsyncGenerator<SDKMessage>;
   supportedCommands?: () => Promise<SlashCommand[]>;
+  getContextUsage?: () => Promise<unknown>;
   readCommands?: ClaudeBackendOptions["readCommands"];
+  readCatalog?: ClaudeBackendOptions["readCatalog"];
+  findSkillFiles?: ClaudeBackendOptions["findSkillFiles"];
   readMcpServers?: ClaudeBackendOptions["readMcpServers"];
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-commands-"));
   roots.push(root);
   const events: AgentEvent[] = [];
   const run = vi.fn((_args: Parameters<typeof query>[0]) => Object.assign(params.messages!(), {
-    close: vi.fn(), supportedCommands: params.supportedCommands,
+    close: vi.fn(), supportedCommands: params.supportedCommands, getContextUsage: params.getContextUsage,
   }) as unknown as Query);
   const backend = new ClaudeBackend({
     store: new ClaudeSessionStore(root),
@@ -56,6 +59,9 @@ async function fixture(params: {
     discoverModels: async () => [],
     inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
     readCommands: params.readCommands,
+    readCatalog: params.readCatalog,
+    // Never look in the operator's own Claude folder.
+    findSkillFiles: params.findSkillFiles ?? (async () => new Map()),
     readMcpServers: params.readMcpServers,
     resolveEnv: async () => ({ PATH: "/fixture" }),
     emit: async (event) => { events.push(event); },
@@ -63,7 +69,27 @@ async function fixture(params: {
     cancelRequest: async () => {},
   });
   backends.push(backend);
-  return { backend, events, root };
+  return { backend, events, root, run };
+}
+
+// The fixture's empty result ends a plain prompt's turn as failed; these
+// tests are about what was sent and listed, not how the turn ended.
+const turnsEnded = (events: AgentEvent[]) => events.filter((event) =>
+  event.notification.method === "turn/completed" || event.notification.method === "turn/failed").length;
+
+const skillListing = (root: string, ...names: string[]) => ({
+  totalTokens: 10, maxTokens: 1000,
+  skills: { totalSkills: names.length, includedSkills: names.length, tokens: names.length, skillFrontmatter: names.map((name) => ({
+    name, source: "projectSettings", path: path.join(root, ".claude", "skills", name, "SKILL.md"), tokens: 1,
+  })) },
+});
+
+async function sentPrompt(run: ReturnType<typeof vi.fn>, call: number): Promise<SDKUserMessage["message"]["content"]> {
+  const args = run.mock.calls[call]?.[0] as Parameters<typeof query>[0] | undefined;
+  if (!args) throw new Error(`Claude was not started ${call + 1} times`);
+  const { prompt } = args;
+  if (typeof prompt === "string") throw new Error("Expected streaming input");
+  return (await prompt[Symbol.asyncIterator]().next()).value.message.content;
 }
 
 describe("claudeCommandSummaries", () => {
@@ -179,6 +205,80 @@ describe("Claude slash commands", () => {
     expect((await second).map((entry) => entry.name)).toEqual(["deploy"]);
     expect((await f.backend.listCommands({ cwd: f.root })).map((entry) => entry.name)).toEqual(["deploy"]);
     expect(readCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists the skills Claude reports under $ and keeps commands under /", async () => {
+    const f = await fixture({
+      supportedCommands: async () => [command("init", { builtin: true }), command("release"), command("deploy")],
+      getContextUsage: async () => skillListing(f.root, "release"),
+      async *messages() {
+        yield { type: "system", subtype: "init", session_id: "8f0d2c6e-56b9-4c1f-9e43-6f7a4a1d9b20" } as unknown as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "" } as unknown as SDKMessage;
+      },
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "hello" }] });
+    await vi.waitFor(() => expect(turnsEnded(f.events)).toBe(1));
+
+    const methods = f.events.map((event) => event.notification.method)
+      .filter((method) => method === "thread/availableCommands/updated" || method === "skills/changed");
+    // The composer that holds the command update asks for the skills next.
+    expect(methods).toEqual(["thread/availableCommands/updated", "skills/changed"]);
+    const update = f.events.find((event) => event.notification.method === "thread/availableCommands/updated")!
+      .notification.params as { commands: AppServerAvailableCommandSummary[] };
+    expect(update.commands.map((entry) => entry.name)).toEqual(["init", "deploy"]);
+    const catalog = await f.backend.listCatalog({ threadId });
+    expect(catalog.skills).toEqual([{
+      name: "release", description: "release description",
+      path: path.join(f.root, ".claude", "skills", "release", "SKILL.md"), enabled: true, scope: "repo",
+    }]);
+  });
+
+  it("sends a $skill mention as the /skill Claude starts", async () => {
+    const f = await fixture({
+      supportedCommands: async () => [command("release"), command("deploy")],
+      getContextUsage: async () => skillListing(f.root, "release"),
+      async *messages() {
+        yield { type: "system", subtype: "init", session_id: "1c3e9a52-7d4b-4e8f-a1b6-2f5c8d9e0a13" } as unknown as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "" } as unknown as SDKMessage;
+      },
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turns = () => turnsEnded(f.events);
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "$release first" }] });
+    await vi.waitFor(() => expect(turns()).toBe(1));
+    await vi.waitFor(async () => expect((await f.backend.listCatalog({ threadId })).skills).toHaveLength(1));
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "$release v2, not $deploy" }] });
+    await vi.waitFor(() => expect(turns()).toBe(2));
+
+    // Before Claude has listed its skills, only a picked link is rewritten.
+    expect(await sentPrompt(f.run, 0)).toEqual([{ type: "text", text: "$release first" }]);
+    expect(await sentPrompt(f.run, 1)).toEqual([{ type: "text", text: "/release v2, not $deploy" }]);
+    // The transcript keeps what the operator typed.
+    const sentText = f.events.flatMap((event) => {
+      if (event.notification.method !== "item/completed") return [];
+      const item = event.notification.params.item as { type?: string; text?: string };
+      return item.type === "userMessage" ? [item.text] : [];
+    });
+    expect(sentText).toEqual(["$release first", "$release v2, not $deploy"]);
+  });
+
+  it("probes commands and skills together and finds skills Claude hides from the model", async () => {
+    const readCatalog = vi.fn(async ({ cwd }: { cwd: string }) => ({
+      commands: [command("release"), command("manual-only"), command("deploy"), command("review", { builtin: true })],
+      skills: skillListing(cwd, "release").skills.skillFrontmatter,
+    }));
+    const findSkillFiles = vi.fn(async ({ names }: { names: readonly string[] }) => new Map(names
+      .filter((name) => name === "manual-only")
+      .map((name) => [name, { path: `/home/.claude/skills/${name}/SKILL.md`, scope: "claude-user" as const }])));
+    const f = await fixture({ readCatalog, findSkillFiles });
+    const catalog = await f.backend.listCatalog({ cwd: f.root });
+    expect(catalog.commands.map((entry) => entry.name)).toEqual(["deploy", "review"]);
+    expect(catalog.skills.map((entry) => [entry.name, entry.scope])).toEqual([["release", "repo"], ["manual-only", "claude-user"]]);
+    // Only rows Claude's listing did not account for are looked up.
+    expect(findSkillFiles).toHaveBeenCalledWith(expect.objectContaining({ cwd: f.root, names: ["manual-only", "deploy"] }));
+    expect(await f.backend.listCommands({ cwd: f.root })).toEqual(catalog.commands);
+    expect(readCatalog).toHaveBeenCalledTimes(1);
   });
 
   it("backs off after a failed probe instead of spawning per keystroke", async () => {
