@@ -169,6 +169,21 @@ describe("normalizeQueuedMessageTitle", () => {
     expect(normalizeQueuedMessageTitle({ title: `${prefix}e\u0301xyz` })).toBe(prefix);
   });
 
+  it("keeps a PR number ending at the limit before a comma", () => {
+    const title = `${"a".repeat(92)} PR 4613`;
+    expect(normalizeQueuedMessageTitle({ title: `${title}, then archive` })).toBe(title);
+  });
+
+  it("keeps all 100 code points in a title with an emoji", () => {
+    const title = `🚀 ${"a".repeat(92)} ready`;
+    expect(normalizeQueuedMessageTitle({ title })).toBe(title);
+  });
+
+  it("stops before a cluster that would cross the code-point limit", () => {
+    const prefix = `🚀${"a".repeat(98)}`;
+    expect(normalizeQueuedMessageTitle({ title: `${prefix}👩‍💻xyz` })).toBe(prefix);
+  });
+
   it("rejects anything that is not a non-empty title string", () => {
     expect(normalizeQueuedMessageTitle(undefined)).toBeUndefined();
     expect(normalizeQueuedMessageTitle([])).toBeUndefined();

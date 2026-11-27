@@ -48,6 +48,7 @@ const QUEUED_MESSAGE_TITLE_CONTEXT_NAME_LIMIT = 80;
 /** Senders named in the context; a bigger batch ends with "and N more". */
 const QUEUED_MESSAGE_TITLE_CONTEXT_SENDER_LIMIT = 5;
 const PLACEHOLDER_PATTERN = /\{\{(MESSAGE|CONTEXT)\}\}/gu;
+const titleWords = new Intl.Segmenter("en", { granularity: "word" });
 
 export const QUEUED_MESSAGE_TITLE_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -170,12 +171,16 @@ export function normalizeQueuedMessageTitle(object: unknown): string | undefined
   if (typeof raw !== "string") return undefined;
   const cleaned = cleanTitle(raw);
   if (!cleaned) return undefined;
-  if (cleaned.length <= QUEUED_MESSAGE_TITLE_MAX_CHARACTERS) return cleaned;
-  const prefix = graphemePrefix(cleaned, QUEUED_MESSAGE_TITLE_MAX_CHARACTERS);
-  const wordBreak = prefix.lastIndexOf(" ");
-  const endsInsideWord = cleaned[prefix.length] !== " ";
-  return cleanTitle(endsInsideWord && wordBreak >= 0 ? prefix.slice(0, wordBreak) : prefix)
-    || undefined;
+  const codePoints = Array.from(cleaned);
+  if (codePoints.length <= QUEUED_MESSAGE_TITLE_MAX_CHARACTERS) return cleaned;
+  // Convert the code-point limit to the code-unit offset used by both segmenters.
+  const limit = codePoints.slice(0, QUEUED_MESSAGE_TITLE_MAX_CHARACTERS).join("").length;
+  const prefix = graphemePrefix(cleaned, limit);
+  const word = titleWords.segment(cleaned).containing(prefix.length);
+  if (word?.isWordLike && word.index > 0 && word.index < prefix.length) {
+    return cleanTitle(prefix.slice(0, word.index)) || undefined;
+  }
+  return cleanTitle(prefix) || undefined;
 }
 
 function cleanTitle(value: string): string {
