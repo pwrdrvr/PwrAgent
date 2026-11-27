@@ -152,6 +152,21 @@ describe("ACP ephemeral prompt", () => {
     expect(result).toMatchObject({ text: '{"analysis":"Answered without tools."}', refusedRequests: 2 });
   });
 
+  it("cancels only the isolated helper when the capture ends and discards the session", async () => {
+    const started = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const agent = new ScriptedAgent({ "session/prompt": () => {
+      started.resolve();
+      return new Promise(() => undefined);
+    } });
+    const run = runAcpEphemeralPrompt(agent, { ...request, signal: controller.signal });
+    await started.promise;
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ failure: "stopped" });
+    expect(agent.notified).toEqual([{ method: "session/cancel", params: { sessionId: "grok-session" } }]);
+    expect(agent.methods().slice(-2)).toEqual(["session/close", "_x.ai/session/delete"]);
+  });
+
   it("cancels a turn that outlives the budget, and still discards the session", async () => {
     const agent = new ScriptedAgent({ "session/prompt": () => new Promise(() => undefined) });
 

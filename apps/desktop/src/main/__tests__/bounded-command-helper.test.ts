@@ -78,3 +78,53 @@ it("uses the explicitly selected Jev endpoint without registering a sidebar deci
     fetch.mockRestore();
   }
 });
+
+it("sends only to the exact helper selected for this capture origin and invalidates changed selections", async () => {
+  const codex = { generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { choice: "0" } })) };
+  const claude = { generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { choice: "1" } })) };
+  const row = { backend: "claude", model: "haiku", reasoningEffort: "low" };
+  const settings = {
+    resolveTokenMiserBoundedHelper: () => "configured" as const,
+    resolveHelperModelSettings: () => ({ defaultModel: "fixture-mini", helpers: { token_miser_capture_antigravity: row } }),
+    resolveDecisionModelSettings: () => ({}), resolveDecisionApiKey: vi.fn(),
+  };
+  const run = (origin: "codex" | "claude" | "acp:antigravity") => boundedCommandHelper(settings, codex, undefined,
+    { origin, threadId: "parent", claude });
+  const agy = run("acp:antigravity")!;
+  expect(agy.label).toContain("haiku");
+  expect(run("claude")).toBeUndefined();
+  const signal = new AbortController().signal;
+  await expect(agy.select("git diff", ["a", "b"], signal)).resolves.toBe(1);
+  expect(claude.generateStructuredObject).toHaveBeenCalledWith(expect.objectContaining({
+    helper: "token_miser_capture_antigravity", model: "haiku", reasoningEffort: "low", disableExecution: true,
+  }));
+  expect(codex.generateStructuredObject).not.toHaveBeenCalled();
+  row.model = "sonnet";
+  await expect(agy.select("git diff", ["a", "b"], signal)).resolves.toBeUndefined();
+  expect(claude.generateStructuredObject).toHaveBeenCalledTimes(1);
+  await expect(run("codex")!.select("git diff", ["a", "b"], signal)).resolves.toBe(0);
+  expect(codex.generateStructuredObject).toHaveBeenCalledWith(expect.objectContaining({ model: "fixture-mini", requireExactModel: true }));
+});
+
+it.each(["jev", "local", "openai"] as const)("pins %s regardless of the profile default, with no sidebar registration", async (mode) => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(mode === "openai"
+    ? { answers: [{ type: "choice", name: "excerpt", choice: "1" }] } : { answers: { q1: { choice: "1" } } }));
+  try {
+    const settings = {
+      resolveTokenMiserBoundedHelper: () => mode,
+      resolveDecisionModelSettings: () => ({ model: "off" as const, local: { model: "clef-test", endpoint: "http://localhost:8040" },
+        jev: { model: "jev-test" } }),
+      resolveDecisionApiKey: vi.fn(async () => "synthetic-key"),
+      resolveOpenAIDecisionsApiKey: vi.fn(async () => "synthetic-openai-key"),
+      resolveOpenAIDecisionsSettings: () => ({ enabled: true }),
+    };
+    const helper = boundedCommandHelper(settings, {}, undefined, { origin: "claude", threadId: "parent", claude: {} });
+    await expect(helper?.select("git diff", ["a", "b"], new AbortController().signal)).resolves.toBe(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, options] = fetch.mock.calls[0]!;
+    expect(String(url)).toContain({ openai: "api.openai.com", local: "localhost:8040", jev: "api.typesafe.ai" }[mode]);
+    expect(JSON.parse(String(options?.body)).model).toBe({ openai: "gpt-6-luna", jev: "jev-test", local: "clef-test" }[mode]);
+    expect(settings.resolveOpenAIDecisionsApiKey).toHaveBeenCalledTimes(Number(mode === "openai"));
+    expect(settings.resolveDecisionApiKey).toHaveBeenCalledTimes(Number(mode !== "openai"));
+  } finally { fetch.mockRestore(); }
+});

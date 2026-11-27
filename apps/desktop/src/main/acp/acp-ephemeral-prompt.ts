@@ -14,6 +14,7 @@ import type { AcpJsonRpcTransport } from "./acp-client.js";
  * mode, so the caller's `sessionMeta` has to remove the tools themselves.
  */
 export type AcpEphemeralPromptRequest = {
+  signal?: AbortSignal;
   /** A directory the operator does not work in; agents key history by cwd. */
   cwd: string;
   prompt: string;
@@ -66,6 +67,7 @@ export async function runAcpEphemeralPrompt(
   transport: AcpJsonRpcTransport,
   request: AcpEphemeralPromptRequest,
 ): Promise<AcpEphemeralPromptResult> {
+  if (request.signal?.aborted) throw new AcpEphemeralPromptError("stopped", "The helper was cancelled.");
   if (!transport.onRequest) {
     // Without a request handler the agent's permission requests would go
     // unanswered by us, and the transport decides what that means.
@@ -89,6 +91,8 @@ export async function runAcpEphemeralPrompt(
   const failed = new Promise<never>((_resolve, reject) => {
     fail = reject;
   });
+  const abort = () => fail(new AcpEphemeralPromptError("stopped", "The helper was cancelled."));
+  request.signal?.addEventListener("abort", abort, { once: true });
   const unsubscribeRequest = transport.onRequest((method) => {
     refusedRequests += 1;
     if (method === "session/request_permission") {
@@ -231,7 +235,7 @@ export async function runAcpEphemeralPrompt(
     if (
       sessionId
       && error instanceof AcpEphemeralPromptError
-      && (error.failure === "timeout" || error.failure === "output_limit")
+      && (error.failure === "timeout" || error.failure === "output_limit" || error.failure === "stopped")
     ) {
       await bounded(transport.notify?.("session/cancel", { sessionId }));
     }
@@ -242,6 +246,7 @@ export async function runAcpEphemeralPrompt(
           error instanceof Error ? error.message : String(error),
         );
   } finally {
+    request.signal?.removeEventListener("abort", abort);
     clearTimeout(timer);
     collecting = false;
     unsubscribeNotification();

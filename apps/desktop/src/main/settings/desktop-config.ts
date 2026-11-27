@@ -1,3 +1,4 @@
+import { BOUNDED_COMMAND_HELPER_MODES } from "@pwragent/shared/contracts/settings";
 import {
   codexSkillProfileNameError,
   type CodexSkillProfile,
@@ -3646,7 +3647,7 @@ function isDesktopChatReplyComposer(
 }
 
 function readBoundedCommandHelper(value: unknown): BoundedCommandHelperMode | undefined {
-  return value === "deterministic" || value === "decision" || value === "codex" ? value : undefined;
+  return BOUNDED_COMMAND_HELPER_MODES.find((mode) => mode === value);
 }
 
 function readToolUpdateMode(

@@ -619,7 +619,9 @@ export type DesktopSettingsSource =
   | DesktopSettingsNonSecretSource
   | DesktopSettingsSecretSource;
 
-export type BoundedCommandHelperMode = "deterministic" | "codex" | "decision";
+/** "codex" and "decision" keep the meaning of already-saved v2 selections. */
+export const BOUNDED_COMMAND_HELPER_MODES = ["deterministic", "configured", "openai", "jev", "local", "codex", "decision"] as const;
+export type BoundedCommandHelperMode = (typeof BOUNDED_COMMAND_HELPER_MODES)[number];
 
 export type DesktopSettingsValue<T> = {
   value: T;

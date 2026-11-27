@@ -51,6 +51,7 @@ const DEFAULT_MAX_OUTPUT_CHARS = 32_000;
  */
 export async function generateAcpStructuredObject(params: {
   backend: AcpBackendId;
+  signal?: AbortSignal;
   /** A directory the operator does not work in. */
   cwd: string;
   run: (request: AcpEphemeralPromptRequest) => Promise<AcpEphemeralPromptResult>;
@@ -76,6 +77,7 @@ export async function generateAcpStructuredObject(params: {
   let result: AcpEphemeralPromptResult;
   try {
     result = await params.run({
+      ...(params.signal ? { signal: params.signal } : {}),
       cwd: params.cwd,
       prompt: `${params.prompt}\n\n${contract}`,
       sessionMeta: helper.sessionMeta(`${params.system}\nYou have no tools.\n${contract}`),

@@ -1971,7 +1971,7 @@ describe("DesktopSettingsService", () => {
       });
       expect(service.resolveTokenMiserBoundedCommands()).toBe(true);
       expect(service.resolveTokenMiserBoundedHelper()).toBe("deterministic");
-      for (const helper of ["decision", "codex", "deterministic"] as const) {
+      for (const helper of ["configured", "openai", "jev", "local", "decision", "codex", "deterministic"] as const) {
         await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedHelper: helper } });
         expect(service.resolveTokenMiserBoundedHelper()).toBe(helper);
         expect((await service.readSettingsProjection()).experimental.tokenMiserBoundedHelper).toEqual({ value: helper, source: "config" });

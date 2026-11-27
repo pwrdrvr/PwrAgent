@@ -49,9 +49,22 @@ The Claude Agent SDK 0.3.330 init catalog contained 32 tools with the native Cod
 
 ## Helper selection and cost
 
-**Helper for ambiguous command output** in Experimental → Token Miser offers local rules, the configured Codex Token Miser helper, or the provider selected in Defaults → Decisions. In TOML use `token_miser_bounded_helper = "deterministic"`, `"codex"` or `"decision"`. Local rules are the default. The choice applies to the approved foreground capture tool across the three backends. The managed reducer retains its existing handling for other tool families and grouped cells.
+The owner reads `[experimental].token_miser_bounded_helper`. The default, `deterministic`, counts repeated lines and keeps diagnostics, hunk headers and exit status without inference. With `configured`, `[[models.helper_models]]` rows select a helper for each capture origin: `token_miser_capture_codex`, `token_miser_capture_claude`, or `token_miser_capture_antigravity`. A row names the helper backend (`codex`, `claude`, or `acp:grok`), model and optional reasoning effort. The Codex origin can inherit an explicitly saved global Codex helper model. An Antigravity row requires an explicit helper backend. An absent model, unsupported route or expired approval leaves the local summary available.
 
-Small logs, one-hunk diffs and repetitive test progress use local rules. For a large ambiguous result the approval names the selected helper. It receives at most six source excerpts, bounded to 4,096 bytes for the serialized command and evidence. It can choose one source excerpt. The owner supplies the exit status, diagnostics and retrieval handle. Each capture memoizes the result. A disabled or unavailable provider, invalid selection or eight-second deadline leaves the deterministic summary available. No provider key is handed to the shell. Internal decision calls go directly through the owner's System One client and create no entry in the sidebar decisions registry.
+For a decision classifier choose `openai` (OpenAI Decisions), `jev` (the configured Jev model), or `local` (the configured Clef endpoint and model). Each selection uses that provider even when the profile's default decision provider differs. The provider must be enabled and have its required credentials. Existing `codex` and `decision` settings retain their original meanings. The settings redesign is separate from the routing contract.
+
+```toml
+[experimental]
+token_miser_bounded_helper = "configured"
+
+[[models.helper_models]]
+helper = "token_miser_capture_antigravity"
+backend = "claude"
+model = "haiku"
+reasoning_effort = "low"
+```
+
+Small logs, one-hunk diffs and repetitive test progress use local rules. For a large ambiguous result the approval names the selected helper. It receives at most six source excerpts, bounded to 4,096 bytes for the serialized command and evidence. It can choose one source excerpt. The owner supplies the exit status, diagnostics and retrieval handle. Each capture memoizes the result. A disabled or unavailable provider, invalid selection or eight-second deadline leaves the deterministic summary available. No provider key is handed to the shell. Internal decision calls use the owner's selected provider client and create no entry in the sidebar decisions registry.
 
 A separate live stock Code Mode run added a second diff hunk to exercise the subscription path. The isolated `gpt-6-luna` helper received 375 bytes of evidence once, took 3.90 seconds and reported 4,479 input tokens, including 3,200 cached, and 64 output tokens. Both noisy tests took zero helper calls. The parent answered correctly and all three logs were retrieved. The local decision path was exercised against a loopback System One fixture. The Jev request and key routing were verified with a synthetic credential and intercepted HTTP transport. Hosted Jev latency, token use, billing and selection quality were not measured.
 

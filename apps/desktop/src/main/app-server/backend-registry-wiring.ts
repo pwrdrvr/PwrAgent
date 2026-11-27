@@ -76,7 +76,8 @@ import { getTokenMiserBridgeDescriptorPath, TokenMiserHookBridge } from "../toke
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import { TOKEN_MISER_DIAGNOSTICS_DIRNAME } from "../token-miser/token-miser-types";
 import { TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
-import { boundedCommandHelper } from "../token-miser/bounded-command-helper";
+import { generateAcpStructuredObject } from "./acp-structured-generation";
+import { boundedCommandHelper, BOUNDED_HELPER_TIMEOUT_MS } from "../token-miser/bounded-command-helper";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { AgentToolMcpServer } from "../agent-tools/agent-tool-mcp-server";
 import { createScratchProjectDirectory as defaultCreateScratchProjectDirectory } from "./scratch-projects";
@@ -1774,10 +1775,21 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolveTokenMiserBoundedCommands,
     resolveBoundedCommandHelper: (caller) => {
       try {
+        const origin = caller.backend;
+        if (origin !== "codex" && origin !== "claude" && origin !== "acp:antigravity") return;
         return boundedCommandHelper(settingsService ?? getDesktopSettingsService(), codexClient, async (usage) => {
           if (caller.turnId) await threadUsageLedger.recordTokenMiserHelperInference({
             threadId: caller.threadId, turnId: caller.turnId, inferenceId: randomUUID(), usage,
           }, caller.backend);
+        }, {
+          origin, threadId: caller.threadId,
+          grok: { generateStructuredObject: async (request) => await generateAcpStructuredObject({
+            ...request, backend: "acp:grok", cwd: await resolveAcpHelperWorkspace(),
+            system: request.system ?? "", turnTimeoutMs: BOUNDED_HELPER_TIMEOUT_MS, maxOutputChars: 256,
+            run: (prompt) => acpBackend.runEphemeralPrompt("acp:grok", prompt),
+          }) },
+          claude: { generateStructuredObject: async (request) =>
+            await claudeBackend.selectCaptureExcerpt(request, await resolveAcpHelperWorkspace()) },
         });
       } catch {
         return undefined;
