@@ -173,6 +173,13 @@ export function ExperimentalSettings(props: {
       tokenMiserSwitchPending
       || tokenMiserActivation?.state !== "active"
     );
+  const managedCodexStatus = tokenMiserWriteTarget === true ? "Installing"
+    : tokenMiserWriteTarget === false ? "Turning off"
+    : tokenMiserInert ? "Not running"
+    : tokenMiserSwitchPending ? "Waiting for idle"
+    : tokenMiserStarting ? "Starting"
+    : undefined;
+  const tokenMiserAvailable = boundedCommands.value || (tokenMiserEnabled.value && !managedCodexStatus);
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
@@ -260,57 +267,17 @@ export function ExperimentalSettings(props: {
         eyebrow="Experimental"
         title="Token Miser"
         description="Keep large command results available for retrieval and send bounded output to the parent thread."
-        chip={
-          tokenMiserWriteTarget === true
-            ? "Installing"
-            : tokenMiserWriteTarget === false
-              ? "Turning off"
-              : tokenMiserInert
-                ? "Not running"
-                : !tokenMiserEnabled.value
-                  ? boundedCommands.value ? "Command capture" : "Off"
-                  : tokenMiserSwitchPending
-                    ? "Waiting for idle"
-                    : tokenMiserStarting
-                      ? "Starting"
-                      : tokenMiserDefaultEnabled.value ? "Default on" : "Opt-in"
-        }
-        chipKind={
-          tokenMiserWriteTarget === undefined && tokenMiserInert
-            ? "warn"
-            : tokenMiserEnabled.value && !tokenMiserStarting ? "ok" : "default"
-        }
+        chip={tokenMiserAvailable
+          ? tokenMiserDefaultEnabled.value ? "Default on" : "Opt-in"
+          : managedCodexStatus ?? "Off"}
+        chipKind={tokenMiserAvailable ? "ok" : tokenMiserInert ? "warn" : "default"}
       >
         <div className="settings-fields">
-          <ToggleField
-            checked={tokenMiserWriteTarget ?? tokenMiserEnabled.value}
-            disabled={
-              props.saving || tokenMiserWriteTarget !== undefined
-            }
-            label="Make Token Miser available"
-            sub="Download and activate PwrAgent's verified Codex build, then expose per-thread controls."
-            help="Off by default. PwrAgent downloads, verifies, and durably selects its Token Miser-compatible Codex build; no path selection or hook approval is required. Update checks run only while this switch is on, and a new build takes over after active Codex turns finish. If activation or summarization is unavailable, the original result passes through unchanged."
-            source={sourceBadge(tokenMiserEnabled)}
-            actions={
-              managedCodexProgress ? (
-                <ManagedRuntimeProgressStrip
-                  progress={managedCodexProgress}
-                  waitingForIdle={managedCodex?.state === "pending-switch"}
-                />
-              ) : undefined
-            }
-            onChange={(enabled) => {
-              setTokenMiserWriteTarget(enabled);
-              return props.onTokenMiserEnabledChange(enabled).finally(() => {
-                setTokenMiserWriteTarget(undefined);
-              });
-            }}
-          />
           <ToggleField
             checked={boundedCommands.value}
             disabled={props.saving}
             label="Capture foreground command output"
-            sub="Offer approved Git diffs and focused tests with exact log retrieval on Codex, Claude and Antigravity."
+            sub="Offer approved Git diffs and focused tests with exact log retrieval on stock or managed Codex, Claude and Antigravity."
             source={sourceBadge(boundedCommands)}
             onChange={(enabled) => props.onWriteConfig({ experimental: { tokenMiserBoundedCommands: enabled } })}
           />
@@ -332,11 +299,34 @@ export function ExperimentalSettings(props: {
             disabled={props.saving || (!tokenMiserEnabled.value && !boundedCommands.value)}
             label="Enable on threads by default"
             switchQualifier="Token Miser"
-            sub="Threads without an explicit override inherit this setting. Individual threads can still turn Token Miser on or off from the composer menu."
-            help="This default applies to the Token Miser features enabled above. Threads with a saved preference keep their own setting."
+            sub="Apply enabled Token Miser features to threads without an override. Change individual threads from the composer menu."
             source={sourceBadge(tokenMiserDefaultEnabled)}
             onChange={(enabled) => {
               return props.onTokenMiserDefaultEnabledChange(enabled);
+            }}
+          />
+          <ToggleField
+            checked={tokenMiserWriteTarget ?? tokenMiserEnabled.value}
+            disabled={
+              props.saving || tokenMiserWriteTarget !== undefined
+            }
+            label="Automatically reduce tool output in managed Codex"
+            sub="Download PwrAgent's verified Codex build to summarize large tool results, including in Code Mode."
+            help="PwrAgent checks for updates while this setting is on and switches builds after active Codex turns finish. If a summary is unavailable, the thread receives the original output."
+            source={sourceBadge(tokenMiserEnabled)}
+            actions={managedCodexProgress ? (
+              <ManagedRuntimeProgressStrip
+                progress={managedCodexProgress}
+                waitingForIdle={managedCodex?.state === "pending-switch"}
+              />
+            ) : boundedCommands.value && managedCodexStatus ? (
+              <span role="status">{managedCodexStatus}</span>
+            ) : undefined}
+            onChange={(enabled) => {
+              setTokenMiserWriteTarget(enabled);
+              return props.onTokenMiserEnabledChange(enabled).finally(() => {
+                setTokenMiserWriteTarget(undefined);
+              });
             }}
           />
           <ToggleField
