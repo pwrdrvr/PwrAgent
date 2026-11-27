@@ -1396,6 +1396,40 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
+  it.each([8, 16, 32])("checks sidebar delta grants for %i owners without enumerating peers", count => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    const router = new FederationRouter({ localInstanceId: "viewer" });
+    harness.router = router;
+    const capability = "navigation_page_deltas_v1";
+    const getPeer = vi.fn((id: string) => id.endsWith("-enrolled")
+      ? { label: id, status: "connected" as const, capabilities: [] } : undefined);
+    const visible = vi.spyOn(harness, "visiblePeers").mockReturnValue([]);
+    const listPeers = vi.fn(() => []);
+    const listConnections = vi.spyOn(router, "listConnections");
+    harness.store = () => ({ getPeer, listPeers });
+    for (let i = 0; i < count; i++) {
+      const id = `owner-${i}`;
+      router.registerConnection({ peerId: id, capabilities: [capability], sendEnvelope() {} });
+      for (const suffix of ["-relayed", "-enrolled"]) {
+        harness.remotePeerDirectory.set(id + suffix, { id: id + suffix, capabilities: [capability] });
+      }
+    }
+    const supports = (instanceId: string) => runtime.remoteTargetSupportsCapability({ scope: "remote", instanceId }, capability);
+    for (let i = 0; i < count; i++) expect(supports(`owner-${i}`)).toBe(true);
+    expect(visible).not.toHaveBeenCalled();
+    expect(supports("")).toBe(false);
+    expect(getPeer).not.toHaveBeenCalled();
+    for (let i = 0; i < count; i++) {
+      expect(supports(`owner-${i}-relayed`)).toBe(true);
+      expect(supports(`owner-${i}-enrolled`)).toBe(false);
+    }
+    expect(visible).not.toHaveBeenCalled();
+    expect(getPeer).toHaveBeenCalledTimes(count * 2);
+    expect(listPeers).not.toHaveBeenCalled();
+    expect(listConnections).not.toHaveBeenCalled();
+  });
+
   it("distinguishes unavailable peers from a connected peer's negotiated navigation protocol", () => {
     const runtime = new DesktopFederationRuntime();
     const harness = runtime as unknown as RuntimeHarness;

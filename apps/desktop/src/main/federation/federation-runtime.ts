@@ -1973,13 +1973,13 @@ export class DesktopFederationRuntime {
     target: FederationRemoteTarget,
     capability: FederationCapability,
   ): boolean {
-    const visiblePeer = this.visiblePeers().find(
-      (peer) => peer.id === target.instanceId,
-    );
-    return this.viewerCapabilitiesFor(
-      target.instanceId,
-      visiblePeer,
-    ).includes(capability);
+    const id = target.instanceId;
+    const direct = this.router?.getConnection(id);
+    if (direct) return direct.capabilities.includes(capability);
+    // Match visiblePeers' precedence using only the requested peer's records.
+    if (id === this.localInstanceId || !isFederationInstanceId(id)) return false;
+    const peer = this.store().getPeer(id) ?? this.remotePeerDirectory.get(id);
+    return peer?.capabilities.includes(capability) ?? false;
   }
 
   /** A toolbar toggle belongs to this process, never the shared profile settings. */

@@ -51,9 +51,11 @@ export function registerNavigationBackendHandlers(params: {
       const connection = sourcePeerId && params.router.getConnection(sourcePeerId);
       if (connection && !params.localContext && request.consumer === "main-sidebar" && typeof ownerPageBase === "string"
         && ownerPageBase.length <= 128 && connection.capabilities.includes("navigation_page_deltas_v1")) {
-        // A peer token names one raw page. Only a fresh projection can establish what that page contains now.
-        const page = await params.backend.getNavigationQueryPage!({ ...request, completeBaselineRevision: undefined,
+        // A viewer without a token may still hold a complete page that filled the byte budget.
+        const page = await params.backend.getNavigationQueryPage!({ ...request,
+          completeBaselineRevision: ownerPageBase === "" ? request.completeBaselineRevision : undefined,
           retainedRange: undefined, windowPageBase: undefined }, options(envelope));
+        if (page.unchanged) return page;
         return deltas.encode(envelope.sourceInstanceId, connection, { ...request, ownerPageBase }, page);
       }
       return params.backend.getNavigationQueryPage!(request, options(envelope));

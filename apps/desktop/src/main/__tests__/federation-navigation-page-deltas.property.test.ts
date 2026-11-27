@@ -186,7 +186,7 @@ it("reconstructs fresh owner projections through generated membership, order, me
   }), { numRuns: 6 });
 });
 
-it("recovers an unapplicable delta in one extra read and keeps reordered replies with their own request", async () => {
+it("recovers an unapplicable delta in one extra read", async () => {
   const f = fixture(32);
   const viewer = f.connect("viewer");
   const query = request(8);
@@ -203,22 +203,38 @@ it("recovers an unapplicable delta in one extra read and keeps reordered replies
   }, true);
   expect(recoveredReads).toBe(2);
   expect(repaired).toEqual(first);
+});
 
-  const arrived = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const late = cache.read(query, async sent => {
-    const wire = await viewer.raw(sent);
-    arrived.resolve();
-    await release.promise;
-    return wire;
-  }, true);
-  await arrived.promise;
+it.each(["older first", "newer first"])("retains the newest accepted token when overlapping replies arrive %s", async delivery => {
+  const f = fixture(32);
+  const viewer = f.connect("viewer");
+  const query = request(8);
+  const cache = new RemoteNavigationPageBaselines();
+  const first = await cache.read(query, viewer.raw, true);
+  function delayedRead() {
+    const arrived = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const page = cache.read(query, async sent => {
+      const wire = await viewer.raw(sent);
+      arrived.resolve();
+      await release.promise;
+      return wire;
+    }, true);
+    return { arrived: arrived.promise, release: release.resolve, page };
+  }
+  const older = delayedRead();
+  await older.arrived;
   f.threads[0] = { ...f.threads[0]!, title: "new" };
   f.publish();
-  const latest = await cache.read(query, viewer.raw, true);
-  release.resolve();
-  expect(await late).toEqual(first);
-  expect(await cache.read(query, viewer.raw, true)).toEqual(latest);
+  const newer = delayedRead();
+  await newer.arrived;
+  for (const pending of delivery === "older first" ? [older, newer] : [newer, older]) {
+    pending.release();
+    await pending.page;
+  }
+  expect(await older.page).toEqual(first);
+  expect((await newer.page).entries[0]!.row.title).toBe("new");
+  expect(await cache.read(query, viewer.raw, true)).toEqual(await newer.page);
   expect(viewer.results.at(-1)!.entries).toHaveLength(0);
 });
 
@@ -256,4 +272,48 @@ it("evicts owner fingerprints across requesters and keeps full baseline offers w
   last.title += "x".repeat(NAVIGATION_QUERY_MAX_RESULT_BYTES - Buffer.byteLength(JSON.stringify(page)));
   expect(Buffer.byteLength(JSON.stringify(page))).toBe(NAVIGATION_QUERY_MAX_RESULT_BYTES);
   expect(encoder.encode("first", connection, { ...query, ownerPageBase: "" }, page)).toBe(page);
+});
+
+it("acknowledges a complete page at the wire byte limit and resumes deltas after it shrinks", async () => {
+  const f = fixture(1);
+  const query = request(8);
+  const bytes = (value: NavigationQueryPage) => Buffer.byteLength(JSON.stringify(value));
+  const small = await f.fresh(query);
+  f.threads[0] = { ...f.threads[0]!, title: small.entries[0]!.row.title
+    + "x".repeat(NAVIGATION_QUERY_MAX_RESULT_BYTES - bytes(small) - 4) };
+  f.publish();
+  const viewer = f.connect("viewer");
+  for (let i = 0; i < 3; i++) {
+    expect((await viewer.read(query)).entries[0]!.row.title.length).toBe(f.threads[0]!.title.length);
+  }
+  expect(bytes(viewer.results[0]!)).toBeGreaterThan(NAVIGATION_QUERY_MAX_RESULT_BYTES - 64);
+  expect(viewer.results[0]!.ownerPagePatch).toBeUndefined();
+  expect(viewer.results.map(page => page.entries.length)).toEqual([1, 0, 0]);
+  expect(bytes(viewer.results[1]!)).toBeLessThan(1024);
+  f.threads[0] = { ...f.threads[0]!, title: "small again" };
+  f.publish();
+  expect((await viewer.read(query)).entries[0]!.row.title).toBe("small again");
+  expect(viewer.results.at(-1)!.ownerPagePatch?.token).toBeTruthy();
+});
+
+it.each(["entries", "directories", "modelGroups"] as const)("recovers malformed %s and rejects a malformed fresh page", async field => {
+  const f = fixture(4);
+  const viewer = f.connect("viewer");
+  const cache = new RemoteNavigationPageBaselines();
+  const query = request(2);
+  const page = await cache.read(query, viewer.raw, true);
+  let reads = 0;
+  const malformed = (wire: FederationNavigationPageResult) =>
+    ({ ...wire, [field]: field === "entries" ? undefined : {} }) as FederationNavigationPageResult;
+  expect(await cache.read(query, async sent => {
+    const wire = await viewer.raw(sent);
+    return ++reads === 1 ? malformed(wire) : wire;
+  }, true)).toEqual(page);
+  expect(reads).toBe(2);
+  reads = 0;
+  await expect(cache.read(query, async sent => {
+    reads++;
+    return malformed(await viewer.raw(sent));
+  }, true)).rejects.toThrow("fresh owner page");
+  expect(reads).toBe(2);
 });

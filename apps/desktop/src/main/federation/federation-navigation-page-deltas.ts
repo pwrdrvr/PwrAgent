@@ -94,10 +94,17 @@ function validPosition(key: string, length: number): boolean {
   return Number.isInteger(index) && index >= 0 && index < length && String(index) === key;
 }
 
+export function hasNavigationPageRows(page: NavigationQueryPage): boolean {
+  return Array.isArray(page.entries)
+    && (page.directories === undefined || Array.isArray(page.directories))
+    && (page.modelGroups === undefined || Array.isArray(page.modelGroups));
+}
+
 export function expandOwnerPage(
   wire: FederationNavigationPageResult,
   baseline?: { token?: string; page: NavigationQueryPage },
 ): NavigationQueryPage | undefined {
+  if (!wire || !hasNavigationPageRows(wire)) return undefined;
   const { ownerPagePatch: patch, ...page } = wire;
   if (page.protocol !== 2 || page.windowPagePatch || page.remoteOwner || page.unchanged || page.rangeUnchanged) return undefined;
   if (!patch) return page;
