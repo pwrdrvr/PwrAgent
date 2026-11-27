@@ -18,6 +18,7 @@ type RecordedWorktree = {
   branch?: string;
   locked: boolean;
   lockReason?: string;
+  prunable: boolean;
 };
 
 export type RecreateWorktreeParams = {
@@ -100,16 +101,33 @@ function parseRecords(output: string): RecordedWorktree[] {
   for (const line of output.split("\n")) {
     if (line.startsWith("worktree ")) {
       // Git prints forward slashes on Windows; keep paths native for messages.
-      current = { path: path.resolve(line.slice("worktree ".length)), locked: false };
+      current = { path: path.resolve(line.slice("worktree ".length)), locked: false, prunable: false };
       records.push(current);
     } else if (current && line.startsWith("branch ")) {
       current.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
     } else if (current && (line === "locked" || line.startsWith("locked "))) {
       current.locked = true;
       if (line.startsWith("locked ")) current.lockReason = line.slice("locked ".length);
+    } else if (current && (line === "prunable" || line.startsWith("prunable "))) {
+      current.prunable = true;
     }
   }
   return records;
+}
+
+async function findRecordedCheckout(
+  records: RecordedWorktree[],
+  ownPath: string,
+  worktreeMissing: boolean,
+): Promise<RecordedWorktree | undefined> {
+  for (const record of records) {
+    if (record.path === ownPath) return record;
+    // A missing checkout can only match another spelling of a stale record.
+    // Git omits the prunable attribute on locked records even when their folder is gone.
+    if (worktreeMissing && !record.prunable && !record.locked) continue;
+    if (await comparablePath(record.path) === ownPath) return record;
+  }
+  return undefined;
 }
 
 /**
@@ -118,6 +136,8 @@ function parseRecords(output: string): RecordedWorktree[] {
  * the first write, and a clean checkpoint is verified again after checkout.
  */
 export class WorktreeRecoveryService {
+  private readonly recordReads = new Map<string, Promise<RecordedWorktree[]>>();
+
   constructor(private readonly options: { gitEnv?: NodeJS.ProcessEnv } = {}) {}
 
   async recreate(params: RecreateWorktreeParams): Promise<RecreateThreadWorktreeResponse> {
@@ -161,9 +181,7 @@ export class WorktreeRecoveryService {
       const cleanCommit = checkpoint && checkpoint.base === checkpoint.commit ? checkpoint.commit : undefined;
 
       const recorded = await this.listRecords(repositoryPath);
-      const ownRecord = (await Promise.all(recorded.map(async (record) => ({
-        record, same: (await comparablePath(record.path)) === ownPath,
-      })))).find((candidate) => candidate.same)?.record;
+      const ownRecord = await findRecordedCheckout(recorded, ownPath, occupancy === "missing");
       // PwrAgent's own drive lock is cleared below, with the other writes,
       // and only while the drive is attached; a refusal changes nothing.
       const ownLock = ownRecord !== undefined && isPwrAgentWorktreeLock(ownRecord);
@@ -325,19 +343,18 @@ export class WorktreeRecoveryService {
       throw new Error(`The worktree folder still exists: ${params.worktreePath}`);
     }
     const ownPath = await comparablePath(params.worktreePath);
-    for (const record of await this.listRecords(params.repositoryPath)) {
-      if ((await comparablePath(record.path)) !== ownPath) continue;
-      // PwrAgent's own lock is cleared only while its drive is attached.
-      if (record.locked && !(isPwrAgentWorktreeLock(record) && await this.driveAttached(params.worktreePath))) {
-        throw new Error(`Git has a lock on the record of ${params.worktreePath}.`);
-      }
-      // Without --force, Git removes only a record whose folder is gone.
-      await removeManagedWorktree({
-        worktreePath: record.path, lock: record, git: (args) => this.git(params.repositoryPath, args),
-      });
-      return true;
+    const records = await this.listRecords(params.repositoryPath);
+    const record = await findRecordedCheckout(records, ownPath, true);
+    if (!record) return false;
+    // PwrAgent's own lock is cleared only while its drive is attached.
+    if (record.locked && !(isPwrAgentWorktreeLock(record) && await this.driveAttached(params.worktreePath))) {
+      throw new Error(`Git has a lock on the record of ${params.worktreePath}.`);
     }
-    return false;
+    // Without --force, Git removes only a record whose folder is gone.
+    await removeManagedWorktree({
+      worktreePath: record.path, lock: record, git: (args) => this.git(params.repositoryPath, args),
+    });
+    return true;
   }
 
   private async resolveCheckpoint(
@@ -444,8 +461,17 @@ export class WorktreeRecoveryService {
     return await pathKind(path.dirname(worktreePath)) !== "missing";
   }
 
-  private async listRecords(repositoryPath: string): Promise<RecordedWorktree[]> {
-    return parseRecords((await this.git(repositoryPath, ["worktree", "list", "--porcelain"])).stdout);
+  private listRecords(repositoryPath: string): Promise<RecordedWorktree[]> {
+    const key = path.resolve(repositoryPath);
+    const pending = this.recordReads.get(key);
+    if (pending) return pending;
+
+    // Recoveries can change the inventory. Share only the active read.
+    const read = this.git(repositoryPath, ["worktree", "list", "--porcelain"])
+      .then(({ stdout }) => parseRecords(stdout))
+      .finally(() => this.recordReads.delete(key));
+    this.recordReads.set(key, read);
+    return read;
   }
 
   private async resolveCommit(cwd: string, revision: string): Promise<string | undefined> {
