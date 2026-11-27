@@ -6,19 +6,23 @@ import { expect, type TestContext } from "vitest";
 
 type TestLifetime = Pick<TestContext, "signal" | "onTestFinished">;
 type FixtureScope = (run: () => Promise<void>) => Promise<void>;
+type OwnerCheck<Host> = (host: Host) => Promise<void>;
 
-export function checkOwnerParity<Host extends { close(): Promise<void> }>(
-  { signal, onTestFinished }: TestLifetime,
+function runOwnerParity<Host extends { close(): Promise<void> }>(
+  signal: AbortSignal,
   startOwners: ReadonlyArray<() => Promise<Host>>,
-  check: (host: Host) => Promise<void>,
-  withFixture: FixtureScope = (run) => run(),
+  check: OwnerCheck<Host>,
+  withFixture: FixtureScope,
+  onStarting?: (owners: Promise<Host>[]) => void,
 ): Promise<void> {
   const runOwners = async () => {
     signal.throwIfAborted();
+    const starting = startOwners.map(async (start) => start());
+    onStarting?.(starting);
     // Isolated owners can complete independently. Join both branches even
     // when startup or an assertion fails, before closing the fixture scope.
-    const results = await Promise.allSettled(startOwners.map(async (start) => {
-      const host = await start();
+    const results = await Promise.allSettled(starting.map(async (owner) => {
+      const host = await owner;
       try {
         signal.throwIfAborted();
         await check(host);
@@ -30,14 +34,57 @@ export function checkOwnerParity<Host extends { close(): Promise<void> }>(
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, "Both owner parity checks failed");
   };
-  // Vitest can move on from a timed-out body while its async work is still
-  // running. Register the join before even the fixture setup can start.
-  const running = Promise.resolve().then(() => {
+  return Promise.resolve().then(() => {
     signal.throwIfAborted();
     return withFixture(runOwners);
   });
+}
+
+export function checkOwnerParity<Host extends { close(): Promise<void> }>(
+  { signal, onTestFinished }: TestLifetime,
+  startOwners: ReadonlyArray<() => Promise<Host>>,
+  check: OwnerCheck<Host>,
+  withFixture: FixtureScope = (run) => run(),
+): Promise<void> {
+  const running = runOwnerParity(signal, startOwners, check, withFixture);
+  // Vitest can move on from a timed-out body while its async work is still
+  // running. Register the join before even the fixture setup can start.
   onTestFinished(async () => { await running.catch(() => undefined); });
   return running;
+}
+
+/** Starts isolated owners in the setup hook, then exercises them in the test. */
+export function prepareOwnerParity<Host extends { close(): Promise<void> }>(
+  { signal, onTestFinished }: TestLifetime,
+  startOwners: ReadonlyArray<() => Promise<Host>>,
+  withFixture: FixtureScope,
+) {
+  const ready = Promise.withResolvers<void>();
+  const exercise = Promise.withResolvers<OwnerCheck<Host> | undefined>();
+  const running = runOwnerParity(signal, startOwners, async (host) => {
+    const check = await exercise.promise;
+    signal.throwIfAborted();
+    await check?.(host);
+  }, withFixture, (starting) => {
+    void Promise.all(starting).then(() => {
+      signal.throwIfAborted();
+      ready.resolve();
+    }).catch(ready.reject);
+  });
+  void running.catch(ready.reject);
+  onTestFinished(async () => {
+    // Setup can fail or time out before the test has supplied its checks.
+    // Release the ready branch so it can close alongside a late-starting owner.
+    exercise.resolve(undefined);
+    await running.catch(() => undefined);
+  });
+  return {
+    ready: ready.promise,
+    check: (check: OwnerCheck<Host>) => {
+      exercise.resolve(check);
+      return running;
+    },
+  };
 }
 
 export async function withAmbientShellCanary(signal: AbortSignal, run: () => Promise<void>): Promise<void> {

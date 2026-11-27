@@ -1,5 +1,5 @@
 import { openClaudeOwnerCliReleases, type ClaudeOwnerCliReleases } from "./helpers/claude-owner-cli-releases";
-import { checkOwnerParity, withAmbientShellCanary } from "./helpers/owner-parity";
+import { checkOwnerParity, prepareOwnerParity, withAmbientShellCanary } from "./helpers/owner-parity";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
 import { execFileSync } from "node:child_process";
@@ -663,8 +663,16 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await host.close(); vi.unstubAllEnvs(); }
   });
 
-  it("both registered owners keep stable explicit retries separate from changed acceptance", async (context) => {
-    await checkOwnerParity(context, parityOwnerStarters, async (host) => {
+  const explicitRetryTest = it.extend("ownerParity", ({ signal, onTestFinished }) =>
+    prepareOwnerParity({ signal, onTestFinished }, parityOwnerStarters, (run) => withAmbientShellCanary(signal, run)));
+  explicitRetryTest.beforeEach(async ({ ownerParity }) => {
+    // Cold daemon boot and viewer enrollment are fixture setup. Await them
+    // only for the case that declares this fixture, before its RPC deadline.
+    await ownerParity?.ready;
+  });
+
+  explicitRetryTest("both registered owners keep stable explicit retries separate from changed acceptance", async ({ ownerParity }) => {
+    await ownerParity.check(async (host) => {
       const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
       const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
       const request = { ...identity, queueEntryId: "same-caller-identity", delivery: "new_turn" as const,
@@ -680,7 +688,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).rejects.toThrow();
       expect(host.providerSteerCount()).toBe(0);
       await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
-    }, (run) => withAmbientShellCanary(context.signal, run));
+    });
   });
 
   it("scheduled stable identities cannot be replaced by an ordinary explicit admission", async () => {
