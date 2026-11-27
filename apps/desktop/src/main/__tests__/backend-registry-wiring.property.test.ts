@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 const registryPath = fileURLToPath(new URL("../app-server/backend-registry.ts", import.meta.url));
 
@@ -35,7 +35,7 @@ function parse(file: string): ts.SourceFile {
 }
 
 /** Identifiers in code only: comments and string literals do not count. */
-function mentionsRegistryModules(file: string, source: string): boolean {
+function mentionsRegistryModules(file: string, source: string, createSourceFile = ts.createSourceFile): boolean {
   const name = "registryModules";
   // An identifier can spell any of its characters with a Unicode escape.
   if (!source.includes(name) && !source.includes("\\u")) return false;
@@ -44,7 +44,7 @@ function mentionsRegistryModules(file: string, source: string): boolean {
     if (ts.isIdentifier(node) && node.text === name) return true;
     return ts.forEachChild(node, visit);
   };
-  return visit(ts.createSourceFile(file, source, ts.ScriptTarget.Latest)) === true;
+  return visit(createSourceFile(file, source, ts.ScriptTarget.Latest)) === true;
 }
 
 it("keeps the composition root's module accessor out of production code", () => {
@@ -55,6 +55,12 @@ it("keeps the composition root's module accessor out of production code", () => 
     .map((file) => path.relative(sourceRoot, file));
   // Importers call the registry's facade members; only tests reach a module directly.
   expect(users).toEqual([]);
+});
+
+it("skips AST construction when a source cannot contain the module accessor identifier", () => {
+  const createSourceFile = vi.fn(ts.createSourceFile);
+  expect(mentionsRegistryModules("unrelated.ts", "export const unrelated = 0;", createSourceFile)).toBe(false);
+  expect(createSourceFile).not.toHaveBeenCalled();
 });
 
 it.each([
