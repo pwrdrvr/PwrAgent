@@ -31,6 +31,34 @@ const accepted = (threadId: string, count: number) => ({
   summary: { summary: `PRIVATE_SUMMARY_${count}`, usefulDetails: ["PRIVATE_DETAIL"] },
 });
 
+it("resumes a metadata page by the original indexed keys after a peer update and delete", () => {
+  const { dbPath, tempDir } = createTempStateDb("shared-miser-page-");
+  const readerDb = StateDb.open(dbPath);
+  const writerDb = StateDb.open(dbPath);
+  try {
+    const reader = new SharedStore<Metadata, Observation>(readerDb);
+    const writer = new SharedStore<Metadata, Observation>(writerDb);
+    const first = { objectId: "z", threadId: "first", createdAt: 1, counters: { count: 0 } };
+    const second = { ...first, objectId: "a", createdAt: 2 };
+    const third = { ...first, objectId: "b", threadId: "second" };
+    for (const entry of [third, second, first]) writer.writeMetadata(entry);
+    const updated = { ...first, threadId: "second", createdAt: 3 };
+    writer.writeMetadata(updated);
+
+    const page = reader.readMetadataPage(undefined, 1);
+    expect(page).toEqual({
+      entries: [updated],
+      next: { objectId: "z", threadId: "first", createdAt: 1 },
+    });
+    writer.removeMetadata(first.objectId);
+    expect(reader.readMetadataPage(page.next, 3)).toEqual({ entries: [second, third] });
+  } finally {
+    writerDb.close();
+    readerDb.close();
+    removeTempStateDbDir(tempDir);
+  }
+});
+
 it("binds generated concrete choices and the actual desktop service factory to the portable implementation", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 1 }), fc.nat({ max: 100 }), async (host, count) => {
     const db = openInMemoryStateDb();
@@ -98,8 +126,10 @@ it("matches independent object, observation and generation models across WAL hos
           if (!retention.get(command.owner)?.archived) {
             retention.set(command.owner, { generation: String(at), archived: true }); rows = 1;
           }
-        } else if (command.kind === "restore" && retention.get(command.owner)?.archived) {
-          retention.get(command.owner)!.archived = false; rows = 1;
+        } else if (command.kind === "restore") {
+          const previous = retention.get(command.owner);
+          rows = Number(previous === undefined || previous.archived);
+          retention.set(command.owner, { generation: previous?.generation ?? "", archived: false });
         }
         const measured = await measureSqliteWrites(() => {
           if (command.kind === "object" || command.kind === "sameObject") store.writeMetadata(metadata);

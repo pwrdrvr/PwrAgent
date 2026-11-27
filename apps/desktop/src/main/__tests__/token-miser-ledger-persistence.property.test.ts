@@ -1,5 +1,6 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -150,7 +151,58 @@ async function checkOverlappingFlushes(retrievedCharacters: number, failFirst: b
 }
 
 describe("Token Miser persistence work budgets", () => {
-  it("reuses startup read statements across threads and metadata pages while still seeing peer changes", ownLedgerTest(async () => {
+  it.each(["local", "peer"] as const)(
+    "keeps SQLite replay live through one failed legacy import and picks up a later %s import",
+    ownLedgerTest(async (importer) => {
+      const temp = createTempStateDb("pwragent-token-miser-replay-import-");
+      const db = StateDb.open(temp.dbPath);
+      try {
+        const root = path.join(temp.tempDir, "objects");
+        const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+        const tokenMiserStore = new TokenMiserStore(root, { storage });
+        const current = { ...gate(0), objectId: "00000000-0000-4000-8000-000000000001" };
+        const legacy = { ...gate(1), objectId: "00000000-0000-4000-8000-000000000002" };
+        storage.writeMetadata(current);
+        await fs.mkdir(root);
+        const file = path.join(root, `${legacy.objectId}.json`);
+        await fs.writeFile(file, "{");
+        const { ledger } = fixture(db, tokenMiserStore);
+        vi.spyOn(ledger, "emitThreadToolAccountingUpdated").mockResolvedValue();
+        const imports = vi.spyOn(tokenMiserStore, "prune");
+        const usage = (inputTokens: number) => ledger.recordTokenMiserParentModelRequest({
+          backend: "codex",
+          notification: { method: "thread/tokenUsage/updated", params: {
+            threadId: THREAD, turnId: "live", tokenUsage: { total: { inputTokens } },
+          } },
+        });
+
+        for (const input of [100, 200, 300]) await usage(input);
+        expect(imports).toHaveBeenCalledOnce();
+        expect((await tokenMiserStore.readMetadata(current.objectId))?.cachedReplayCount).toBe(1);
+
+        await fs.writeFile(file, JSON.stringify(legacy));
+        if (importer === "local") {
+          await ledger.prepareTokenMiserStorage();
+        } else {
+          const peer = StateDb.open(temp.dbPath);
+          try {
+            await new TokenMiserStore(root, { storage: new SqliteTokenMiserStorage(peer) }).prune();
+          } finally {
+            peer.close();
+          }
+        }
+        for (const input of [400, 500, 600]) await usage(input);
+        expect(imports).toHaveBeenCalledTimes(importer === "local" ? 2 : 1);
+        expect((await tokenMiserStore.readMetadata(current.objectId))?.cachedReplayCount).toBe(4);
+        expect((await tokenMiserStore.readMetadata(legacy.objectId))?.cachedReplayCount).toBe(1);
+      } finally {
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+      }
+    }),
+  );
+
+  it("reuses history read statements across threads and metadata pages while still seeing peer changes", ownLedgerTest(async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-token-miser-fleet-");
     const db = StateDb.open(temp.dbPath);
@@ -167,10 +219,16 @@ describe("Token Miser persistence work budgets", () => {
       await store.upsertThreadUsageLines({ lines: gates.map((entry, index) => line(index, {
         threadId: entry.threadId, usageTurnId: entry.turnId, startedAt: entry.createdAt - 1,
       })) });
-      await ledger.initializeTokenMiserLedger();
+      await ledger.repairTokenMiserHistory();
 
       const prepare = vi.spyOn(db.raw, "prepare");
-      const { writes } = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      const repeat = fixture(db, tokenMiserStore).ledger;
+      const { writes } = await measureSqliteWrites(async () => {
+        await repeat.repairTokenMiserHistory();
+        for (const threadId of new Set(gates.map((entry) => entry.threadId))) {
+          await repeat.restoreTokenMiserReplayForThread(threadId);
+        }
+      });
       expect(writes.commits).toBe(0);
       // Different thread ids and batches bind different keys to the same SQL.
       // Recompiling any one of these query shapes per lookup breaks the bound.
@@ -186,18 +244,19 @@ describe("Token Miser persistence work budgets", () => {
       // A prepared statement must see current rows on every execution. A
       // peer deletes a card and changes a different gate on a later page.
       const missing = gates[0]!;
-      const stale = { ...gates[9]!, retrievedCharacters: 400 };
+      const stale = { ...gates[64]!, retrievedCharacters: 400 };
       peer.raw.prepare("DELETE FROM thread_sub_agents WHERE thread_id = ? AND monitor_id = ?")
         .run(`codex:${missing.threadId}`, `system:token-miser:${missing.objectId}`);
       const readPage = storage.readMetadataPage.bind(storage);
-      vi.spyOn(storage, "readMetadataPage").mockImplementation((after, limit) => {
+      vi.spyOn(storage, "readMetadataPage").mockImplementation((after, limit, threadId) => {
         if (after !== undefined) peerStorage.writeMetadata(stale);
-        return readPage(after, limit);
+        return readPage(after, limit, threadId);
       });
-      const mixed = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      const repairing = fixture(db, tokenMiserStore).ledger;
+      const mixed = await measureSqliteWrites(() => repairing.repairTokenMiserHistory());
       expectSqliteWriteBudget({
-        scenario: "token-miser-startup-peer-repair",
-        note: "One peer metadata edit between pages and two repaired cards. Startup only, 3 commits per occurrence.",
+        scenario: "token-miser-history-peer-repair",
+        note: "One peer metadata edit between pages and two repaired cards during an explicit history read.",
         writes: mixed.writes,
       });
       for (const entry of [missing, stale]) {
@@ -215,7 +274,161 @@ describe("Token Miser persistence work budgets", () => {
     }
   }));
 
-  it("restores 65 persisted gates in two pages and skips all writes on the next startup", ownLedgerTest(async () => {
+  it("stops cold replay gates in at most one commit per page on the first usage event", ownLedgerTest(async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-token-miser-replay-stop-");
+    const db = StateDb.open(temp.dbPath);
+    try {
+      const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+      const tokenMiserStore = new TokenMiserStore(path.join(temp.tempDir, "objects"), { storage });
+      await tokenMiserStore.prune();
+      db.raw.transaction(() => {
+        for (let index = 0; index < 65; index += 1) storage.writeMetadata({
+          ...gate(index), objectId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+        });
+      })();
+      const { ledger, store } = fixture(db, tokenMiserStore);
+      const observedAt = AT + 100;
+      await store.recordThreadCompaction({ compaction: {
+        backend: "codex", threadId: THREAD, compactionId: "offline", observedAt, updatedAt: observedAt,
+      } });
+      const request = () => ledger.recordTokenMiserParentModelRequest({
+        backend: "codex",
+        notification: { method: "thread/tokenUsage/updated", params: {
+          threadId: THREAD, turnId: "resumed", tokenUsage: { total: { inputTokens: 100 } },
+        } },
+      });
+      const first = await measureSqliteWrites(request);
+      expect(first.writes.commits).toBe(2);
+      expectSqliteWriteBudget({
+        scenario: "token-miser-cold-replay-stop",
+        note: "First usage settles 65 gates compacted while closed, at most one commit per 64-gate page.",
+        writes: first.writes,
+      });
+      const retained = await tokenMiserStore.listMetadata(THREAD);
+      expect(retained).toHaveLength(65);
+      expect(retained.every((entry) => entry.replayTrackingStoppedAt === observedAt)).toBe(true);
+      expect((await measureSqliteWrites(request)).writes.commits).toBe(0);
+    } finally {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }));
+
+  it.each([false, true])("materializes current gate metadata after a peer write (peer also writes its card: %s)", ownLedgerTest(async (peerWritesCard) => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-token-miser-peer-history-");
+    const db = StateDb.open(temp.dbPath);
+    const peerDb = StateDb.open(temp.dbPath);
+    try {
+      const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+      const peerStorage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(peerDb);
+      const tokenMiserStore = new TokenMiserStore(path.join(temp.tempDir, "objects"), { storage });
+      const { ledger, store } = fixture(db, tokenMiserStore);
+      const peer = fixture(peerDb);
+      const original = { ...gate(0), objectId: "00000000-0000-4000-8000-000000000001" };
+      const newer = { ...original, retrievedCharacters: 800 };
+      storage.writeMetadata(original);
+      await ledger.prepareTokenMiserStorage();
+      const getCards = store.getThreadSubAgents.bind(store);
+      vi.spyOn(store, "getThreadSubAgents").mockImplementationOnce(async (request) => {
+        peerStorage.writeMetadata(newer);
+        if (peerWritesCard) await peer.internals.persistTokenMiserLedgerEntries([newer]);
+        return getCards(request);
+      });
+
+      const { writes } = await measureSqliteWrites(() => ledger.repairTokenMiserHistory(THREAD));
+
+      const request = { backend: "codex", threadId: THREAD, monitorId: `system:token-miser:${original.objectId}` } as const;
+      const card = await store.getThreadSubAgent(request);
+      expect(card?.tokenMiserAccounting?.revealedParentTokens)
+        .toBe(estimateTokenCount(newer.replacementCharacters) + estimateTokenCount(newer.retrievedCharacters));
+      if (!peerWritesCard) {
+        expectSqliteWriteBudget({ scenario: "token-miser-history-gate-conflict", writes,
+          note: "A peer advances a gate during repair, then the reader writes its missing charge and retries its card once." });
+      }
+    } finally {
+      peerDb.close();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }));
+
+  it("looks up each retained thread once per page even when gate IDs interleave and timestamps tie", ownLedgerTest(async () => {
+    const temp = createTempStateDb("pwragent-token-miser-locality-");
+    const db = StateDb.open(temp.dbPath);
+    try {
+      const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+      const tokenMiserStore = new TokenMiserStore(path.join(temp.tempDir, "objects"), { storage });
+      const entries = Array.from({ length: 128 }, (_, index) => ({
+        ...gate(index),
+        objectId: `gate-${String(index).padStart(3, "0")}`,
+        threadId: index % 2 === 0 || index === 127 ? "first" : "second",
+        createdAt: AT,
+        turnId: "retained-turn",
+      }));
+      db.raw.transaction(() => {
+        for (const entry of entries) storage.writeMetadata(entry);
+      })();
+      const { ledger, store } = fixture(db, tokenMiserStore);
+      const pricing = vi.spyOn(store, "readTokenMiserGatePricingLines");
+      const cards = vi.spyOn(store, "getThreadSubAgents");
+
+      await ledger.repairTokenMiserHistory();
+
+      // The 65th gate from the first thread shares the cursor's timestamp.
+      // It belongs on the second page with all 63 gates from the second thread.
+      const expected = [["first", 64], ["first", 1], ["second", 63]];
+      expect(pricing.mock.calls.map(([request]) => [request.threadId, request.sourceItemIds.length])).toEqual(expected);
+      expect(pricing.mock.calls.map(([request]) => request.turnIds)).toEqual(
+        expected.map(() => ["retained-turn"]),
+      );
+      expect(cards.mock.calls.map(([request]) => [request.threadId, request.monitorIds.length])).toEqual(expected);
+      for (const threadId of ["first", "second"]) {
+        const saved = await store.listThreadSubAgents({ backend: "codex", threadId });
+        expect(saved.map((card) => card.monitorId).sort()).toEqual(entries
+          .filter((entry) => entry.threadId === threadId)
+          .map((entry) => `system:token-miser:${entry.objectId}`));
+      }
+    } finally {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }));
+
+  it("repairs cold gates without draining or retiring a live gate's usage batch", ownLedgerTest(async () => {
+    const temp = createTempStateDb("pwragent-token-miser-live-history-");
+    const db = StateDb.open(temp.dbPath);
+    try {
+      const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+      const tokenMiserStore = new TokenMiserStore(path.join(temp.tempDir, "objects"), { storage });
+      const [cold, live] = [gate(0), gate(1)] as const;
+      storage.writeMetadata(cold);
+      storage.writeMetadata(live);
+      const { ledger, store, internals } = fixture(db, tokenMiserStore);
+      const drain = vi.spyOn(ledger, "flushLiveThreadUsageLines");
+      const liveLines = new Map([[live.objectId, line(1, { sourceItemId: "system:token-miser:gate-1" })]]);
+      const iterateLiveLines = vi.spyOn(liveLines, Symbol.iterator);
+      internals.liveTokenMiserUsageLines.set(THREAD, liveLines);
+      ledger.rememberPendingTokenMiserInterception(live);
+
+      await ledger.repairTokenMiserHistory(THREAD);
+      expect(drain).not.toHaveBeenCalled();
+      expect(iterateLiveLines).not.toHaveBeenCalled();
+      expect(internals.pendingTokenMiserInterceptions.get(live.objectId)).toBe(live);
+      const cards = () => store.listThreadSubAgents({ backend: "codex", threadId: THREAD });
+      expect((await cards()).map((card) => card.monitorId)).toEqual(["system:token-miser:gate-0"]);
+
+      await ledger.flushPendingTokenMiserLedger({ threadId: THREAD });
+      expect(drain).toHaveBeenCalledOnce();
+      expect((await cards()).map((card) => card.monitorId)).toEqual(["system:token-miser:gate-1", "system:token-miser:gate-0"]);
+    } finally {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }));
+
+  it("repairs 65 persisted gates in two pages and skips all writes in the next owner", ownLedgerTest(async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-token-miser-startup-");
     const db = StateDb.open(temp.dbPath);
@@ -229,22 +442,26 @@ describe("Token Miser persistence work budgets", () => {
       })();
       const read = vi.spyOn(storage, "readMetadataPage");
       const { ledger, store } = fixture(db, tokenMiserStore);
-      const first = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      const first = await measureSqliteWrites(() => ledger.repairTokenMiserHistory(THREAD));
       expectSqliteWriteBudget({
-        scenario: "token-miser-startup-backfill",
-        note: "One startup reconciliation of 65 existing gates without ledger rows, in two pages of at most 64.",
+        scenario: "token-miser-history-backfill",
+        note: "Historical accounting for 65 existing gates without ledger rows, in two pages of at most 64.",
         writes: first.writes,
       });
-      expect(read.mock.calls).toEqual([[undefined, 64], ["gate-8", 64]]);
+      expect(read.mock.calls).toEqual([
+        [undefined, 64, THREAD],
+        [{ threadId: THREAD, createdAt: AT + 63, objectId: "gate-63" }, 64, THREAD],
+      ]);
       expect(await store.listThreadSubAgents({ backend: "codex", threadId: THREAD })).toHaveLength(65);
       expect(ledger.emitThreadPricingUpdated).toHaveBeenCalledTimes(1);
-      const repeat = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      const repeatOwner = fixture(db, tokenMiserStore).ledger;
+      const repeat = await measureSqliteWrites(() => repeatOwner.repairTokenMiserHistory(THREAD));
       expectSqliteWriteBudget({
-        scenario: "token-miser-startup-repeat",
-        note: "Startup reconciliation of 65 unchanged gates after backfill. Zero recurring writes and 0 MB/day.",
+        scenario: "token-miser-history-repeat",
+        note: "A new owner reads 65 unchanged gates after backfill. Zero recurring writes and 0 MB/day.",
         writes: repeat.writes,
       });
-      expect(ledger.emitThreadPricingUpdated).toHaveBeenCalledTimes(1);
+      expect(repeatOwner.emitThreadPricingUpdated).not.toHaveBeenCalled();
     } finally {
       db.close();
       removeTempStateDbDir(temp.tempDir);
