@@ -121,7 +121,6 @@ type Options = {
     turnId?: string;
   }>;
   changed(dependency: ThreadDependency): Promise<void>;
-  onPrObservation?: (urls?: ReadonlySet<string>) => void;
   stackHold?: (dependency: ThreadDependency) => Promise<string | undefined>;
   canDispatch?: (dependency: ThreadDependency) => boolean;
   /**
@@ -758,7 +757,6 @@ export class ThreadDependencyCoordinator {
     if (urls?.size === 0) return Promise.resolve();
     return this.serialize(async () => {
       const observed = urls && new Set([...urls].map((url) => this.canonicalizePrUrl(url)));
-      this.options.onPrObservation?.(observed);
       // A URL saved under a renamed repository's old name, before the forge
       // has named it this session, still takes the event: evaluation asks.
       const named = (url: string | undefined) => {

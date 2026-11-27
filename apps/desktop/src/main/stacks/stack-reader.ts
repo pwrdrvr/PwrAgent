@@ -14,9 +14,28 @@ import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
 import { PR_METADATA_PRIORITY, runPrMetadataFileProbe, runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { createStoredAttachmentObservation, type PrAttachmentDemand } from "../pr-status/pr-detection";
 import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-info/stack-checkout-store";
-import { githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } from "./github-forge-stacks";
+import { advertisedGithubStackPullRequests, githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } from "./github-forge-stacks";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
+
+function publicationTargetsByRepository(prs: readonly PrSummary[]) {
+  const targets = new Map<string, { numbers: Set<number>; branches: Set<string> }>();
+  for (const pr of prs) {
+    const repository = prRepository(pr);
+    let entry = targets.get(repository);
+    if (!entry) targets.set(repository, entry = { numbers: new Set(), branches: new Set() });
+    entry.numbers.add(pr.number);
+    if (pr.headRefName && sameRepositoryHead(pr)) entry.branches.add(pr.headRefName);
+  }
+  return targets;
+}
+
+function catalogTracksPublication(catalog: CatalogRead, targets: ReturnType<typeof publicationTargetsByRepository>): boolean {
+  if (catalog.status !== "ok") return false;
+  const matching = targets.get(catalog.catalog.repository.toLowerCase());
+  return matching !== undefined && catalog.catalog.stacks.some((stack) => stack.branches.some((layer) =>
+    layer.pullRequest ? matching.numbers.has(layer.pullRequest.number) : matching.branches.has(layer.branch)));
+}
 
 export type StackThreadActivity = {
   held?: boolean;
@@ -1421,15 +1440,15 @@ export class StackReader {
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
     activity?: (threadKey: string) => Promise<StackThreadActivity>,
     observation = new StackReadObservation(), validateAttachments?: ValidateStackAttachments,
-    trackedPublishingRepositories?: ReadonlySet<string>,
+    publishingPrs?: readonly PrSummary[],
   ) {
-    return await this.readProjection(threads, knownPrs, directories, activity, observation, false, validateAttachments, trackedPublishingRepositories);
+    return await this.readProjection(threads, knownPrs, directories, activity, observation, false, validateAttachments, publishingPrs);
   }
 
   private async readProjection(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[],
     directories: readonly string[] | undefined, activity: ((threadKey: string) => Promise<StackThreadActivity>) | undefined,
     observation: StackReadObservation, retried: boolean, validateAttachments?: ValidateStackAttachments,
-    trackedPublishingRepositories?: ReadonlySet<string>,
+    publishingPrs?: readonly PrSummary[],
   ): Promise<{ stacks: StackSummary[]; catalogs: CatalogRead[] }> {
     const { demand, hints, inventoryDemand } = observation;
     demand.signal?.throwIfAborted();
@@ -1447,7 +1466,7 @@ export class StackReader {
     const retryProjection = async (): Promise<{ stacks: StackSummary[]; catalogs: CatalogRead[] }> => {
       if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
       return await this.readProjection(
-        threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments, trackedPublishingRepositories,
+        threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments, publishingPrs,
       );
     };
 
@@ -1458,18 +1477,23 @@ export class StackReader {
       if (catalog.status === "ok" && catalog.catalog.stacks.length) wanted.add(commonDir);
       return catalog;
     }));
-    // Auto-publishing only acts on tracked stacks. Once live Git has pinned
-    // the scoped clones, an inferred chain alone cannot justify a fleet scan.
-    if (directories && trackedPublishingRepositories && !wanted.size && !unavailable.length
-      && scopedCatalogs.every(({ status }) => status === "missing" || status === "ok")) {
+    const publicationTargets = publishingPrs && publicationTargetsByRepository(publishingPrs);
+    let advertised = publishingPrs ? advertisedGithubStackPullRequests(publishingPrs) : [];
+    // Only a tracked layer in this observation can publish. An unrelated
+    // catalog in the same clone does not need the fleet's checkout inventory.
+    if (directories && publishingPrs && publicationTargets && !unavailable.length
+      && scopedCatalogs.every((catalog) => (catalog.status === "missing" || catalog.status === "ok")
+        && !catalogTracksPublication(catalog, publicationTargets))) {
       const changed = await scopedCatalogsChanged();
       demand.signal?.throwIfAborted();
       if (changed) return await retryProjection();
-      if (![...trackedPublishingRepositories].some((repository) => githubForgeStacksIn(repository).length)) {
+      advertised = advertisedGithubStackPullRequests(publishingPrs);
+      if (!advertised.length) {
         return { stacks: [], catalogs: scopedCatalogs };
       }
     }
     const eligible = possibleInferredLayers(local, knownPrs);
+    for (const pr of advertised) eligible.add(prIdentity(pr));
     const inferredRows = local.filter((row) => row.prs?.some((pr) => eligible.has(prIdentity(pr))));
     const inferredPaths = new Set(inferredRows.flatMap(threadDirectories));
     const paths = !directories || wanted.size || eligible.size
@@ -1485,7 +1509,7 @@ export class StackReader {
     const unavailablePaths = new Set<string>();
     const backgroundNavigation = !directories
       && (demand.priority?.() ?? PR_METADATA_PRIORITY.background) === PR_METADATA_PRIORITY.background;
-    const packagedHintVersion = backgroundNavigation && !retried ? hints.packagedDiscoveryHintVersion() : undefined;
+    const packagedHintVersion = !retried ? hints.packagedDiscoveryHintVersion() : undefined;
     if (backgroundNavigation && this.deferredTtlRevalidations.size) {
       const currentPaths = new Set(paths);
       // Reserve slots before the concurrent probes so faster checkouts cannot

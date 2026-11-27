@@ -8,7 +8,7 @@ import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitDirectory, bundledGitExecutable, configureBundledGit } from "../bundled-git";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
-import { forgetGithubForgeStacks, githubForgeStackRepository, recordGithubForgeStack } from "../stacks/github-forge-stacks";
+import { forgetGithubForgeStacks, recordGithubForgeStack } from "../stacks/github-forge-stacks";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
 let restoreGit: (() => void) | undefined;
@@ -113,7 +113,9 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const reader = new StackReader();
     const rows = [row(first, "first"), row(second, "second")];
     const scope = [first, second];
-    const interrupted = await reader.read(rows, [], scope, undefined, observation, undefined, new Set([repository]));
+    const target: PrSummary = { provider: "github.com", org: "fixture", repo: "publishing", number: 1,
+      url: "https://github.com/fixture/publishing/pull/1", state: "passing", headRefName: "feat" };
+    const interrupted = await reader.read(rows, [], scope, undefined, observation, undefined, [target]);
     const fresh = await reader.read(rows, [], scope);
     expect(fresh.stacks.map((stack) => stack.name)).toEqual(["feat"]);
     expect(interrupted).toEqual(fresh);
@@ -155,7 +157,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
     onTestFinished(() => starts.mockRestore());
     onTestFinished(forgetGithubForgeStacks);
-    const publishing = new Set([githubForgeStackRepository({ host: "GitHub.com", owner: "Fixture", repo: "Publishing" })]);
+    const publishing = upperRow.prs!;
     const readForPublication = (reader: StackReader, rows: NavigationThreadSummary[]) =>
       reader.read(rows, [], [upper], undefined, undefined, undefined, publishing);
     const checkoutStarts = () => starts.mock.calls.flatMap(([cwd, [verb], purpose]) =>
@@ -189,6 +191,14 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     expect(local.stacks.map((stack) => stack.inferred)).toEqual([false]);
     expect(checkoutStarts()).toContain(lower);
 
+    // An unrelated PR in the same clone cannot publish a catalog's layers.
+    const unrelated = { ...publishing[0]!, number: 99, headRefName: "unrelated" };
+    starts.mockClear();
+    const skipped = await reader.read(rows, [], [upper], undefined, undefined, undefined, [unrelated]);
+    expect(skipped).toEqual({ stacks: [], catalogs: local.catalogs });
+    expect(checkoutStarts()).toEqual([upper]);
+    expect(await reader.read(rows, [], [upper])).toEqual(local);
+
     await writeFile(path.join(repo, ".git", "pwragent-stack-op.json"), "{}");
     const busy = await readForPublication(reader, rows);
     expect(busy.stacks[0]?.layers.map((entry) => entry.health)).toEqual(["held", "held"]);
@@ -210,7 +220,9 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     await writeCatalog(redirected, "publishing");
     await writeFile(redirect, "");
     starts.mockClear();
-    const moved = await readForPublication(reader, rows);
+    const moved = await reader.read(rows, [], [upper], undefined, undefined, undefined, [
+      { ...publishing[0]!, headRefName: "feat" },
+    ]);
     expect(checkoutStarts()).toContain(upper);
     expect(moved.stacks[0]?.name).toBe("feat");
     expect(moved.stacks[0]?.key).not.toBe(local.stacks[0]?.key);
@@ -252,6 +264,15 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       expect(checkoutReads()).toContain(missing);
       expect(checkoutReads().filter((cwd) => paths.includes(cwd))).toEqual([]);
     }), { numRuns: 3, examples: [[[unrelated, nested]]] });
+
+    const scopedRows = [layer, row(unrelated, "unrelated")];
+    process.env.PWRAGENT_GIT_PATH = wrapper;
+    const scopedOracle = await new StackReader().read(scopedRows, [], [stacked]);
+    starts.mockClear();
+    process.env.PWRAGENT_GIT_PATH = executable;
+    const scoped = await new StackReader().read(scopedRows, [], [stacked]);
+    expect(scoped).toEqual(scopedOracle);
+    expect(checkoutReads()).toEqual([stacked]);
 
     // A wrapper can discover the stack from a path with no catalog of its own.
     await writeFile(wrapper, [

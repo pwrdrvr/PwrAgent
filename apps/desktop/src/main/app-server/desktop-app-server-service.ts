@@ -43,7 +43,7 @@ import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 import { getDesktopStackReader, StackReadObservation, stackMemberships, type StackReader, type StackThreadActivity } from "../stacks/stack-reader";
-import { GithubForgeStackDiscovery, githubForgeStackRepository, type GithubForgeStack } from "../stacks/github-forge-stacks";
+import { advertisedGithubStackPullRequests, GithubForgeStackDiscovery, githubForgeStackRepository, type GithubForgeStack } from "../stacks/github-forge-stacks";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
@@ -4057,46 +4057,45 @@ class DesktopAppServerService {
     }
   }
 
-  private observeStackMerge(prUrls?: ReadonlySet<string>): void {
-    if (!prUrls?.size) return;
-    const parents = [...prUrls].flatMap((url) => {
-      const ref = parsePullRequestReferenceUrl(url);
-      const pr = ref && this.prStatusRegistry.get(getPrStatusKey({ provider: ref.provider, org: ref.org, repo: ref.repo, number: ref.number }))?.pr;
-      return pr?.lifecycleState === "merged" ? [pr] : [];
-    });
-    if (!parents.length) return;
-    const affected: PrSummary[] = [];
+  private stackAdvanceCandidates(prs: readonly PrSummary[]): PrSummary[] {
+    const parents = prs.filter((pr) => pr.lifecycleState === "merged");
+    const candidates = new Map(prs.filter((pr) => !isTerminalPullRequest(pr) && pr.headSha)
+      .map((pr) => [getPrStatusKey(pr), pr]));
+    if (!parents.length) return [...candidates.values()];
     for (const { pr } of this.prStatusRegistry.values()) {
-      if (!this.primaryPrThreadsByKey.has(getPrStatusKey(pr))) continue;
-      const parent = parents.find((entry) => isObservedStackParent(entry, pr)
+      const key = getPrStatusKey(pr);
+      if (candidates.has(key) || !this.primaryPrThreadsByKey.has(key) || isTerminalPullRequest(pr) || !pr.headSha) continue;
+      const parent = parents.some((entry) => isObservedStackParent(entry, pr)
         || this.publishedStacks.some((stack) => stack.repository === `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase()
           && entry.provider === pr.provider && entry.org.toLowerCase() === pr.org.toLowerCase() && entry.repo.toLowerCase() === pr.repo.toLowerCase()
           && stack.layers.some((layer, index) => layer.pullRequest?.number === pr.number
             && stack.layers[index - 1]?.pullRequest?.number === entry.number)));
-      if (parent) affected.push(pr);
+      if (parent) candidates.set(key, pr);
     }
-    this.queueStackAdvance(affected);
+    return [...candidates.values()];
   }
 
   private queueStackAdvance(prs: readonly PrSummary[]): void {
     if (!this.ownerNavigationActive || !this.backgroundPrPollingEnabled || !prs.length) return;
-    void this.advanceObservedStacks(prs).catch((error) => {
+    const candidates = this.stackAdvanceCandidates(prs);
+    if (!candidates.length) return;
+    void this.advanceObservedStacks(candidates).catch((error) => {
       appServerLog.debug("stack publishing evaluation failed", { error: String(error) });
     });
   }
 
-  private async advanceObservedStacks(prs: readonly PrSummary[]): Promise<void> {
-    const open = prs.filter((pr) => !isTerminalPullRequest(pr) && pr.headSha);
+  private async advanceObservedStacks(open: readonly PrSummary[]): Promise<void> {
     const byLayer = new Map(open.map((pr) => [`${pr.provider}:${pr.org}/${pr.repo}#${pr.number}`.toLowerCase(), pr]));
     // Inferred stacks can hold dispatch but cannot publish automatically.
     const observation = new StackReadObservation();
-    const directories = await observation.hints.markerCandidates(open.flatMap((pr) => this.prStackDirectories(pr)));
+    const advertised = new Set(advertisedGithubStackPullRequests(open));
+    const paths = open.flatMap((pr) => this.prStackDirectories(pr).map((cwd) => ({ cwd, advertised: advertised.has(pr) })));
+    const directories = [...new Set([
+      ...await observation.hints.markerCandidates(paths.filter((entry) => !entry.advertised).map(({ cwd }) => cwd)),
+      ...paths.filter((entry) => entry.advertised).map(({ cwd }) => cwd),
+    ])];
     if (!directories.length) return;
-    // A polled stack position can arrive before its member list.
-    const repositories = open.some((pr) => pr.githubStack)
-      ? undefined
-      : new Set(open.map((pr) => githubForgeStackRepository({ host: pr.provider, owner: pr.org, repo: pr.repo })));
-    const { stacks } = await this.readScopedStacks(directories, undefined, observation, repositories);
+    const { stacks } = await this.readScopedStacks(directories, undefined, observation, open);
     await Promise.all(stacks.flatMap((stack) => {
       const next = !stack.inferred && nextStackAdvance(stack.layers);
       const pr = next && next.pullRequest && byLayer.get(`${stack.repository}#${next.pullRequest.number}`);
@@ -4163,25 +4162,25 @@ class DesktopAppServerService {
     directories: readonly string[],
     scope?: { backend: string; threadId: string; prs: PrSummary[] },
     observation = new StackReadObservation(),
-    trackedPublishingRepositories?: ReadonlySet<string>,
+    publishingPrs?: readonly PrSummary[],
   ) {
     observation.demand.signal?.throwIfAborted();
     if (!directories.length) return { stacks: [], catalogs: [] };
     const { threads } = await this.listThreads({});
     await observation.revalidateAfterListing();
     return await this.projectScopedStackInventory(
-      directories, observation, this.readScopedStackInventory(threads, scope), trackedPublishingRepositories,
+      directories, observation, this.readScopedStackInventory(threads, scope), publishingPrs,
     );
   }
 
   private projectScopedStackInventory(
     directories: readonly string[], observation: StackReadObservation,
     inventory: ReturnType<DesktopAppServerService["readScopedStackInventory"]>,
-    trackedPublishingRepositories?: ReadonlySet<string>,
+    publishingPrs?: readonly PrSummary[],
   ) {
     const { rows, knownPrs } = inventory;
     return this.stackReader.read(rows, knownPrs, directories,
-      (key) => this.stackThreadActivity(key), observation, undefined, trackedPublishingRepositories);
+      (key) => this.stackThreadActivity(key), observation, undefined, publishingPrs);
   }
 
   private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {
@@ -6314,13 +6313,15 @@ class DesktopAppServerService {
   private async publishPullRequestStatusUpdates(params: {
     backend: AppServerBackendKind;
     prs: PrSummary[];
+    stackAlreadyObserved?: boolean;
   }): Promise<void> {
+    // Persistence may have yielded to a newer status observation.
+    const current = params.prs.flatMap((pr) => this.matchingPrStatus(pr)?.pr ?? []);
+    // A poll evaluates the open layers and merged parents as one batch before
+    // publishing its status events. Other status sources enter here.
+    if (!params.stackAlreadyObserved) this.queueStackAdvance(current.filter((pr) => pr.lifecycleState === "merged"));
     await Promise.all(
-      params.prs.map(async (observed) => {
-        // A newer observation can supersede this one while the caller
-        // awaits cache persistence or downstream automation.
-        const pr = this.matchingPrStatus(observed)?.pr;
-        if (!pr) return;
+      current.map(async (pr) => {
         const prKey = getPrStatusKey(pr);
         const aliases = this.prRepositoryAliases.equivalentStatusKeys(prKey);
         await getDesktopBackendRegistry().publishLocalEvent({
@@ -7705,7 +7706,7 @@ class DesktopAppServerService {
     }
     await Promise.all(
       [...changedByBackend].map(async ([backend, prs]) =>
-        await this.publishPullRequestStatusUpdates({ backend, prs }),
+        await this.publishPullRequestStatusUpdates({ backend, prs, stackAlreadyObserved: true }),
       ),
     );
     return changed.map((pr) => getPrStatusKey(pr));
@@ -9785,7 +9786,6 @@ class DesktopAppServerService {
         canonicalizePrUrl: (url) => this.prRepositoryAliases.canonicalizeUrl(url),
         resolvePrUrl: async (url) => await this.resolveCurrentPullRequestUrl(url),
         submit: async (request) => await this.submitDependencyWakeup(request),
-        onPrObservation: (urls) => this.observeStackMerge(urls),
         stackHold: async (dependency) => {
           const hold = await this.dependencyCiHold(dependency);
           if (hold) appServerLog.debug("Continue After CI held", { threadId: dependency.threadId, reason: hold });
