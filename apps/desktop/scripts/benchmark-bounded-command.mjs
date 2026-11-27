@@ -141,6 +141,13 @@ async function verifyRetrieval(context, issue, summary) {
   }
   const full = Buffer.concat(chunks);
   const failing = issue.original.includes("sticky.test");
+  const lines = full.toString("utf8").split("\n");
+  const needle = issue.original === "git diff" ? "diff --git" : failing ? "Expected sticky header, got static" : "passing table header";
+  const lineNumber = 1 + lines.findIndex((line) => line.includes(needle));
+  const range = await definition.dispatch({ objectId: issue.objectId, startLine: lineNumber, endLine: lineNumber }, context);
+  const search = await definition.dispatch({ objectId: issue.objectId, query: needle }, context);
+  if (!lineNumber || range.data !== lines[lineNumber - 1].replace(/\r$/u, "")
+    || !search.data?.includes(`${lineNumber}: ${range.data}`)) throw new Error("Search or line-range retrieval differed from the original bytes.");
   if (!summary.startsWith(`${issue.original} exited ${failing ? 1 : 0}.`)) throw new Error("Incorrect exit status.");
   if (issue.original === "git diff") {
     if (!full.equals(execFileSync("git", ["diff"], { cwd }))) throw new Error("Retrieved diff differs from Git.");
