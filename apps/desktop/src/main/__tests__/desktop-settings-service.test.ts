@@ -1970,6 +1970,10 @@ describe("DesktopSettingsService", () => {
         },
       });
       expect(service.resolveTokenMiserBoundedCommands()).toBe(true);
+      await service.writeConfigPatchTargeted({ models: { helperModels: { defaultModel: "global-codex",
+        helpers: { token_miser_capture_codex: { backend: "claude" } },
+      } } });
+      expect(service.resolveHelperModelSettings().helpers.token_miser_capture_codex).toEqual({ backend: "claude" });
       expect(service.resolveTokenMiserBoundedHelper()).toBe("deterministic");
       for (const helper of ["configured", "openai", "jev", "local", "decision", "codex", "deterministic"] as const) {
         await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedHelper: helper } });

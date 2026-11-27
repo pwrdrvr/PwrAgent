@@ -41,6 +41,10 @@ class ScriptedAgent implements AcpJsonRpcTransport {
     return () => { this.requestHandler = undefined; };
   }
 
+  usage(update: Record<string, unknown>): void {
+    for (const listener of this.listeners) listener("session/update", { sessionId: "grok-session", update });
+  }
+
   say(text: string): void {
     for (const listener of this.listeners) {
       listener("session/update", {
@@ -126,6 +130,21 @@ describe("ACP ephemeral prompt", () => {
     expect(agent.calls[2]?.params).toEqual({ sessionId: "grok-session", configId: "model", value: "grok-4.7-build-fast" });
     expect(agent.calls[3]?.params).toEqual({ sessionId: "grok-session", configId: "reasoning_effort", value: "low" });
     expect(agent.calls.slice(5).map((call) => call.params)).toEqual([{ sessionId: "grok-session" }, { sessionId: "grok-session" }]);
+  });
+
+  it("uses the final turn usage once after a model-call usage event", async () => {
+    const agent = new ScriptedAgent({ "session/prompt": (_params, session) => {
+      session.usage({ sessionUpdate: "response_completed", usage: { input_tokens: 3, output_tokens: 1 } });
+      session.usage({ sessionUpdate: "turn_completed", usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } });
+      return { stopReason: "end_turn" };
+    } });
+    expect(await runAcpEphemeralPrompt(agent, request)).toMatchObject({ tokenUsage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } });
+  });
+
+  it("never sends a prompt when its dispatch permission has been withdrawn during setup", async () => {
+    const agent = new ScriptedAgent();
+    await expect(runAcpEphemeralPrompt(agent, { ...request, allowPrompt: () => false })).rejects.toThrow();
+    expect(agent.methods()).not.toContain("session/prompt");
   });
 
   it("refuses every permission and client request the agent makes", async () => {

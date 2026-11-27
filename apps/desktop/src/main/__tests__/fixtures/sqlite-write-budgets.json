@@ -1,4 +1,7 @@
 {
+  "bounded-command-openai-capture-usage": {"commits": 1, "note": "Two billed Decisions attempts are recorded in one transaction even without a selected excerpt.", "observedWalBytes": 78312, "rowsChanged": 5, "statements": 5},
+  "bounded-command-grok-capture-usage": {"commits": 1, "note": "One capture inference writes one usage line on its parent thread using the executing account.", "observedWalBytes": 82432, "rowsChanged": 3, "statements": 3},
+  "bounded-command-claude-capture-usage": {"commits": 1, "note": "One capture inference writes one usage line on its parent thread using the executing account.", "observedWalBytes": 82432, "rowsChanged": 3, "statements": 3},
   "acp-compaction-stop-failure-after-usage-flush": {"commits": 2, "note": "Two terminal commits after billing already flushed. The stop records timing, then the provider failure saves context without another usage line. The control without a fill commits once (4120 WAL bytes).", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "acp-compaction-unbilled-cancellation": {"commits": 1, "note": "One terminal commit retires a pending candidate after an unbilled ordinary prompt. The fill and stop acknowledgement make no writes.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "token-miser-launchpad-override": {"commits": 1, "note": "Persist an explicit capture override on a new thread.", "observedWalBytes": 20600, "rowsChanged": 1, "statements": 1},

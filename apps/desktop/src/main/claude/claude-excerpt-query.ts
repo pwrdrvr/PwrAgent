@@ -23,7 +23,7 @@ export async function runClaudeExcerptQuery(
     ...harness, cwd, model: request.model,
     ...(effort === "low" || effort === "medium" || effort === "high" || effort === "xhigh" || effort === "max" ? { effort } : {}),
     systemPrompt: request.system, tools: [], strictMcpConfig: true, mcpServers: {}, plugins: [],
-    settingSources: [], settings: { disableAllHooks: true, disableSkillShellExecution: true },
+    settingSources: ["user"], settings: { disableAllHooks: true, disableSkillShellExecution: true },
     canUseTool: async () => ({ behavior: "deny", message: "This classifier has no tools." }),
     persistSession: false, maxTurns: 1, abortController: controller,
   };
@@ -31,15 +31,23 @@ export async function runClaudeExcerptQuery(
   request.signal?.addEventListener("abort", abort, { once: true });
   try {
     for await (const message of session) {
-      if (message.type !== "result" || message.subtype !== "success") continue;
+      if (message.type !== "result") continue;
+      const usage = claudeTurnUsage(message.modelUsage);
+      const reportedCost = message.total_cost_usd ?? (Object.values(message.modelUsage).some(row => Number.isFinite(row.costUSD))
+        ? usage.claudeCostUSD : undefined);
+      const inference = {
+        model: usage.model || request.model, reasoningEffort: options.effort?.toString(),
+        ...(usage.last.totalTokens > 0 || (reportedCost ?? 0) > 0
+          ? { tokenUsage: { ...usage, claudeCostUSD: reportedCost } } : {}),
+        helperThreadId: message.session_id,
+      };
+      if (message.subtype !== "success") return { status: "failed", reason: message.subtype, ...inference };
       let answer: unknown;
       try { answer = JSON.parse(message.result); } catch { /* Invalid answers use the local summary. */ }
-      const usage = claudeTurnUsage(message.modelUsage);
       return {
         status: "ok", object: answer && typeof answer === "object" && !Array.isArray(answer)
           && request.isMatch(answer as Record<string, unknown>) ? answer : undefined,
-        model: usage.model || request.model, reasoningEffort: options.effort?.toString(),
-        tokenUsage: usage, helperThreadId: message.session_id,
+        ...inference,
       };
     }
     return { status: "failed", reason: "no_classifier_result" };

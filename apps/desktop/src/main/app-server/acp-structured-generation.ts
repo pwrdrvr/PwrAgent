@@ -90,21 +90,22 @@ export async function generateAcpStructuredObject(params: {
   } catch (error) {
     return { status: "failed", reason: failureReason(helper.label, error, params.turnTimeoutMs, maxOutputChars) };
   }
+  const model = result.model ?? params.model;
+  const metadata = {
+    ...(model ? { model } : {}),
+    ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {}),
+    ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+  };
   const object = parseAcpJsonAnswer(result.text);
   if (
     !isRecord(object)
     || !matchesSchema(params.schema, object)
     || params.isMatch?.(object) === false
   ) {
-    return { status: "failed", reason: `${helper.label} did not answer with the requested JSON.` };
+    return { status: "failed", reason: `${helper.label} did not answer with the requested JSON.`,
+      ...(result.tokenUsage ? metadata : {}) };
   }
-  const model = result.model ?? params.model;
-  return {
-    status: "ok",
-    object,
-    ...(model ? { model } : {}),
-    ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {}),
-  };
+  return { status: "ok", object, ...metadata };
 }
 
 function failureReason(label: string, error: unknown, timeoutMs: number, maxOutputChars: number): string {

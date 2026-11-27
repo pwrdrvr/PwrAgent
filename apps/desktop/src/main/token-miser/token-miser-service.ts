@@ -138,9 +138,10 @@ type TokenMiserDecision = {
   summary: TokenMiserSummary;
 };
 
-export type TokenMiserStructuredGenerationResult =
-  | ({ status: "ok"; object: unknown } & TokenMiserHelperUsage)
-  | { status: "unavailable" | "failed"; reason: string };
+export type TokenMiserStructuredGenerationResult = (
+  | { status: "ok"; object: unknown }
+  | { status: "unavailable" | "failed"; reason: string }
+) & TokenMiserHelperUsage;
 
 export type TokenMiserPreparedCodeModeReduction = {
   response: Extract<

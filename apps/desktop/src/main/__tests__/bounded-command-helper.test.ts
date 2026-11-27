@@ -118,7 +118,8 @@ it.each(["jev", "local", "openai"] as const)("pins %s regardless of the profile 
       resolveOpenAIDecisionsApiKey: vi.fn(async () => "synthetic-openai-key"),
       resolveOpenAIDecisionsSettings: () => ({ enabled: true }),
     };
-    const helper = boundedCommandHelper(settings, {}, undefined, { origin: "claude", threadId: "parent", claude: {} });
+    const helper = boundedCommandHelper(settings, {}, undefined, { origin: "claude", threadId: "parent", claude: {},
+      decisions: { profileId: "fixture", recordUsageLines: vi.fn() } });
     await expect(helper?.select("git diff", ["a", "b"], new AbortController().signal)).resolves.toBe(1);
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, options] = fetch.mock.calls[0]!;

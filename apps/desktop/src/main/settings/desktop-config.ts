@@ -31,6 +31,7 @@ import {
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { isThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import {
+  CAPTURE_HELPER_IDS,
   normalizeTaskMonitorModelChoice,
   type DesktopTaskMonitorModelChoice,
 } from "@pwragent/shared/helper-models";
@@ -4272,6 +4273,7 @@ export function readGithubEnterpriseHostsSetting(raw: TomlScalar | undefined): D
 }
 
 function normalizeHelperModelChoice(
+  helper: string,
   value: {
     backend?: unknown;
     model?: unknown;
@@ -4283,7 +4285,9 @@ function normalizeHelperModelChoice(
   const backend = trim(value.backend);
   const model = trim(value.model);
   const reasoningEffort = trim(value.reasoningEffort);
-  if (!model && !reasoningEffort) return undefined;
+  // A capture backend without a model is an explicit, incomplete choice.
+  // Keep it so the resolver cannot substitute the global Codex model.
+  if (!model && !reasoningEffort && !(backend && Object.values(CAPTURE_HELPER_IDS).some(id => id === helper))) return undefined;
   return {
     ...(backend ? { backend } : {}),
     ...(model ? { model } : {}),
@@ -4556,7 +4560,7 @@ function normalizeHelperModelSettings(
   for (const [helper, choice] of Object.entries(value.helpers)) {
     const id = helper.trim();
     if (id === RETIRED_DIFF_CONDENSATION_HELPER_ID) continue;
-    const normalized = id ? normalizeHelperModelChoice(choice) : undefined;
+    const normalized = id ? normalizeHelperModelChoice(id, choice) : undefined;
     if (normalized) helpers[id] = normalized;
   }
   return {
@@ -4586,7 +4590,7 @@ function readHelperModelSettings(
       }
       const helper = typeof item.helper === "string" ? item.helper.trim() : "";
       if (!helper || helper === RETIRED_DIFF_CONDENSATION_HELPER_ID || helpers[helper]) continue;
-      const choice = normalizeHelperModelChoice({
+      const choice = normalizeHelperModelChoice(helper, {
         backend: item.backend,
         model: item.model,
         reasoningEffort: item.reasoning_effort,

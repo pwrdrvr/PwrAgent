@@ -1,9 +1,12 @@
 import type { BoundedCommandHelperMode } from "@pwragent/shared/contracts/settings";
 import { DECISION_JEV_ENDPOINT, resolveDecisionModelSettings, type DecisionModelResolution } from "@pwragent/shared/decision-models";
-import { createHash } from "node:crypto";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { buildOpenAIDecisionsUsageLine } from "../openai-decisions/openai-decisions-service";
+import { codexModelProviderAccountKey } from "../usage-account-identity";
+import { createHash, randomUUID } from "node:crypto";
 import { CAPTURE_HELPER_IDS, getHelperModelDefinition, resolveHelperModel, type DesktopHelperModelSettings } from "@pwragent/shared/helper-models";
 import { postOpenAIDecision } from "../openai-decisions/openai-decisions-client";
-import { buildOpenAIDecisionsRequestBody, OPENAI_DECISIONS_MODEL, type OpenAIDecisionQuestion } from "@pwragent/shared/openai-decisions";
+import { buildOpenAIDecisionsRequestBody, OPENAI_DECISIONS_MODEL, OPENAI_DECISIONS_ORIGIN, openAIDecisionSafetyMaterial, type OpenAIDecisionQuestion } from "@pwragent/shared/openai-decisions";
 import type { BackendClient } from "../app-server/backend-registry-types";
 import { readSystemOneTarget, type DecisionSettingsReader } from "../openai-decisions/decision-provider-targets";
 import { buildSystemOneDecisionRequest, postSystemOneDecision } from "../openai-decisions/system-one-decisions";
@@ -33,7 +36,14 @@ function decisionIdentity(selected: DecisionModelResolution, provider = selected
 
 type CaptureOrigin = keyof typeof CAPTURE_HELPER_IDS;
 type HelperClient = Pick<BackendClient, "generateStructuredObject">;
-type CaptureRoute = { origin: CaptureOrigin; threadId: string; claude: HelperClient; grok?: HelperClient };
+type CaptureRoute = {
+  origin: CaptureOrigin;
+  threadId: string;
+  claude: HelperClient;
+  grok?: HelperClient;
+  grokEnabled?: () => boolean;
+  decisions?: { profileId: string; recordUsageLines: (lines: ThreadUsageLineRecord[]) => Promise<void> };
+};
 
 function configuredTarget(settings: Settings, route: CaptureRoute, codex: HelperClient) {
   const helper = CAPTURE_HELPER_IDS[route.origin];
@@ -42,7 +52,7 @@ function configuredTarget(settings: Settings, route: CaptureRoute, codex: Helper
   const definition = getHelperModelDefinition(helper);
   const backend = row?.backend ?? definition.backends[0];
   const client = backend === "claude" ? route.claude : backend === "acp:grok" ? route.grok : backend === "codex" ? codex : undefined;
-  if (!client) return;
+  if (!client || (backend === "acp:grok" && !route.grokEnabled?.())) return;
   // Only inherit the global Codex model on Codex threads. Other origins
   // require an explicit row before sending any captured text to a helper.
   if (!row?.model && route.origin !== "codex") return;
@@ -55,7 +65,7 @@ function configuredTarget(settings: Settings, route: CaptureRoute, codex: Helper
 
 /** Internal classifier. A stored credential alone never opts a thread into inference. */
 export function boundedCommandHelper(settings: Settings, codex: Pick<BackendClient, "generateStructuredObject">,
-  onUsage?: (result: Extract<UsageResult, { status: "ok" }>) => Promise<void>,
+  onUsage?: (result: UsageResult) => Promise<void>,
   route?: CaptureRoute,
 ): BoundedCommandHelper | undefined {
   const mode = settings.resolveTokenMiserBoundedHelper();
@@ -81,9 +91,8 @@ export function boundedCommandHelper(settings: Settings, codex: Pick<BackendClie
           schema: { type: "object", properties: { choice: { type: "string", enum: choices } }, required: ["choice"], additionalProperties: false },
           isMatch: (record) => typeof record.choice === "string" && choices.includes(record.choice),
         });
-        if (result.status !== "ok") return;
         if (result.tokenUsage) await onUsage?.(result);
-        if (signal.aborted) return;
+        if (result.status !== "ok" || signal.aborted) return;
         const choice = (result.object as { choice?: unknown } | null)?.choice;
         if (typeof choice === "string" && choices.includes(choice)) return Number(choice);
       },
@@ -91,7 +100,8 @@ export function boundedCommandHelper(settings: Settings, codex: Pick<BackendClie
   }
   if (mode === "openai") {
     const account = settings.resolveOpenAIDecisionsSettings?.();
-    if (!route || !account || account.enabled === false || !settings.resolveOpenAIDecisionsApiKey) return;
+    const decisions = route?.decisions;
+    if (!route || !decisions || !account || account.enabled === false || !settings.resolveOpenAIDecisionsApiKey) return;
     const identity = JSON.stringify([mode, OPENAI_DECISIONS_MODEL, account.organizationId, account.projectId]);
     return {
       identity, label: `OpenAI Decisions (${OPENAI_DECISIONS_MODEL})`,
@@ -104,10 +114,19 @@ export function boundedCommandHelper(settings: Settings, codex: Pick<BackendClie
         const body = buildOpenAIDecisionsRequestBody({
           questions: [{ type: "choice", name: "excerpt", instructions, choices }],
           input: { command, excerpts }, promptCacheKey: "pwragent-token-miser-v2",
-          safetyIdentifier: createHash("sha256").update(JSON.stringify([route.origin, route.threadId])).digest("hex"),
+          safetyIdentifier: createHash("sha256").update(openAIDecisionSafetyMaterial({
+            profileId: decisions.profileId, backend: route.origin, threadId: route.threadId,
+          })).digest("hex"),
         });
         const result = await postOpenAIDecision({ apiKey, body, signal, timeoutMs: BOUNDED_HELPER_TIMEOUT_MS,
           organizationId: account.organizationId, projectId: account.projectId });
+        const accountKey = codexModelProviderAccountKey(OPENAI_DECISIONS_ORIGIN, apiKey);
+        const lines = result.attempts.filter(attempt => attempt.usage !== undefined).map(attempt =>
+          buildOpenAIDecisionsUsageLine({
+            caller: { backend: route.origin, threadId: route.threadId }, decisionId: "system-token-miser-capture",
+            version: 1, attempt, accountKey, now: Date.now(), fallbackId: randomUUID(),
+          }));
+        if (lines.length) await decisions.recordUsageLines(lines);
         const answer = result.ok && Array.isArray(result.body.answers) && result.body.answers[0];
         if (answer?.type === "choice" && answer.name === "excerpt" && choices.some(({ value }) => value === answer.choice)) return Number(answer.choice);
       },

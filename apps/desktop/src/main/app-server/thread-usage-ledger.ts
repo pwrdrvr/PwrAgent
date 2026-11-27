@@ -2962,8 +2962,10 @@ export class ThreadUsageLedger {
     boundedCaptureBackend?: AppServerBackendKind,
   ): Promise<void> {
     const { threadId, turnId, inferenceId, usage: result } = params;
-    if (result.status !== "ok" || !result.tokenUsage) return;
+    if (!result.tokenUsage) return;
+    const reportedCost = readRecord(result.tokenUsage)?.claudeCostUSD;
     const usage = buildTaskMonitorUsageSnapshot({
+      providerCostUsd: typeof reportedCost === "number" ? reportedCost : undefined,
       model: result.model,
       serviceTier: result.serviceTier,
       tokenUsage: result.tokenUsage,

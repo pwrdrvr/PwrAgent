@@ -1,3 +1,4 @@
+import { foldAcpTurnUsage, readAcpUsageEnvelope, type AcpTokenUsage } from "./acp-usage.js";
 import type { AcpJsonRpcTransport } from "./acp-client.js";
 
 /**
@@ -15,6 +16,7 @@ import type { AcpJsonRpcTransport } from "./acp-client.js";
  */
 export type AcpEphemeralPromptRequest = {
   signal?: AbortSignal;
+  allowPrompt?: () => boolean;
   /** A directory the operator does not work in; agents key history by cwd. */
   cwd: string;
   prompt: string;
@@ -37,6 +39,7 @@ export type AcpEphemeralPromptRequest = {
 
 export type AcpEphemeralPromptResult = {
   text: string;
+  tokenUsage?: AcpTokenUsage;
   /** The model that answered, as the agent reported it. */
   model?: string;
   /** Requests the agent made of the client, all refused. */
@@ -79,6 +82,8 @@ export async function runAcpEphemeralPrompt(
   let sessionId: string | undefined;
   let closeSupported = false;
   let refusedRequests = 0;
+  let tokenUsage: AcpTokenUsage | undefined;
+  let usageModel: string | undefined;
   let collecting = false;
   let text = "";
   // Set once the race is lost, so a late `session/new` goes no further.
@@ -106,6 +111,11 @@ export async function runAcpEphemeralPrompt(
       return;
     }
     const update = asRecord(params.update);
+    const envelope = update && readAcpUsageEnvelope(update);
+    if (envelope) {
+      tokenUsage = foldAcpTurnUsage(tokenUsage, envelope);
+      usageModel = envelope.model ?? usageModel;
+    }
     if (update?.sessionUpdate !== "agent_message_chunk") {
       return;
     }
@@ -196,6 +206,9 @@ export async function runAcpEphemeralPrompt(
     if (abandoned) {
       throw new AcpEphemeralPromptError("protocol", "The run ended before the prompt.");
     }
+    if (request.allowPrompt?.() === false) {
+      throw new AcpEphemeralPromptError("stopped", "The helper provider was disabled.");
+    }
     collecting = true;
     const prompted = asRecord(await transport.request(
       "session/prompt",
@@ -210,9 +223,10 @@ export async function runAcpEphemeralPrompt(
         `The agent stopped the turn (${typeof stopReason === "string" ? stopReason : "no reason"}).`,
       );
     }
-    const reportedModel = asRecord(prompted?._meta)?.modelId;
+    const reportedModel = asRecord(prompted?._meta)?.modelId ?? usageModel;
     return {
       text: text.trim(),
+      ...(tokenUsage ? { tokenUsage } : {}),
       ...(typeof reportedModel === "string" && reportedModel
         ? { model: reportedModel }
         : model ? { model } : {}),

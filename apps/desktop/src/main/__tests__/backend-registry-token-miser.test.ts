@@ -5,7 +5,18 @@ import { buildTokenMiserSavingsSummary } from "@pwragent/shared/token-miser-savi
 import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { randomUUID } from "node:crypto";
+import { OPENAI_DECISIONS_MODEL, OPENAI_DECISIONS_ORIGIN, openAIDecisionSafetyMaterial } from "@pwragent/shared/openai-decisions";
+import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
+import { ClaudeBackend } from "../claude/claude-backend";
+import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
+import type { BoundedCommandHelper } from "../token-miser/bounded-command-helper";
+import type { BoundedCommandCaller } from "../token-miser/bounded-command";
+import { DesktopSettingsService } from "../settings/desktop-settings-service";
+import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
+import * as settingsOwner from "../settings/desktop-settings-singleton";
+import * as ownerHost from "../owner-host";
+import { resolveActiveProfileName } from "../profile";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -315,6 +326,101 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       backend: "claude", parentThreadId: "thread-parent", sourceItemId: "system:token-miser-capture:bounded" });
     await internals.recordTokenMiserHelperInference({ ...params, inferenceId: "unpriced-inference", usage: { ...params.usage, model: "unknown-fixture-model" } });
     expect(await internals.buildTokenMiserThreadSavings(savingsParams)).toBeUndefined();
+  });
+
+  it.each(["claude", "acp:grok", "openai"] as const)("charges %s capture usage to the executing account on the calling thread", async (target) => {
+    await registry.close();
+    stateDb.close();
+    stateDb = StateDb.open(path.join(directory, "capture-usage.db"));
+    store = new SqliteOverlayStore(stateDb);
+    let grokEnabled = true;
+    const group = "helper account at dispatch";
+    let currentGroup = group;
+    const model = target === "acp:grok" ? "grok-4.7" : "uncatalogued-claude";
+    registry = createDesktopBackendRegistry({
+      codexClient: { close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
+        listThreads: async () => [], onNotification: () => () => {}, onPendingRequest: () => () => {} } as never,
+      overlayStore: store, resolveAcpHelperWorkspace: async () => directory,
+      isAcpAgentEnabled: (id) => id !== "grok" || grokEnabled,
+      resolveUsageAccountGroups: () => ({ [target]: currentGroup, codex: "parent account" }),
+    });
+    const internals = registry as unknown as {
+      resolveBoundedCommandHelper(caller: BoundedCommandCaller): BoundedCommandHelper | undefined;
+      subAgentStartupReconciliation: Promise<void>; usageTurnStartupRepair: Promise<void>;
+    };
+    await Promise.all([internals.subAgentStartupReconciliation, internals.usageTurnStartupRepair]);
+    const caller = { backend: "codex" as const, threadId: "calling-thread", turnId: "parent-turn" };
+    const apiKey = "synthetic-decisions-key";
+    const secretStore = new MemoryDesktopSecretStore();
+    await secretStore.setSecret("openaiDecisionsApiKey", apiKey);
+    const service = new DesktopSettingsService({ configPath: path.join(directory, "config.toml"), env: {}, secretStore });
+    await service.writeConfigPatchTargeted({
+      experimental: { tokenMiserBoundedHelper: target === "openai" ? "openai" : "configured" },
+      models: { helperModels: { helpers: target === "openai" ? {} : { token_miser_capture_codex: { backend: target, model } } } },
+    });
+    const settings = vi.spyOn(settingsOwner, "getDesktopSettingsService").mockReturnValue(service);
+    const claude = vi.spyOn(ClaudeBackend.prototype, "selectCaptureExcerpt").mockImplementation(async () => {
+      currentGroup = "account after dispatch";
+      return { status: "failed", model, reason: "error_max_turns", helperThreadId: "sdk-run",
+        tokenUsage: { last: { inputTokens: 17, outputTokens: 2, totalTokens: 19 }, claudeCostUSD: 0.021 } };
+    });
+    const grok = vi.spyOn(AcpBackendAdapter.prototype, "runEphemeralPrompt").mockResolvedValue({
+      refusedRequests: 0, text: '{"choice":"1"}', model, tokenUsage: { inputTokens: 17, totalTokens: 19, outputTokens: 2 },
+    });
+    const metered = { model: OPENAI_DECISIONS_MODEL, usage: { input_tokens: 17, output_tokens: 2, cached_tokens: 3 } };
+    const http = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ ...metered, error: { code: "server_is_overloaded" } },
+        { status: 503, headers: { "retry-after": "0", "x-request-id": "retry" } }))
+      .mockResolvedValueOnce(Response.json({ ...metered, answers: [] }, { headers: { "x-request-id": "final" } }));
+    try {
+      const helper = internals.resolveBoundedCommandHelper(caller)!;
+      const select = () => helper.select("git diff", ["first", "second"], new AbortController().signal);
+      if (target === "acp:grok") {
+        grokEnabled = false;
+        expect(internals.resolveBoundedCommandHelper(caller)).toBeUndefined();
+        expect(await select()).toBeUndefined();
+        grokEnabled = true;
+        const host = ownerHost.getOwnerHostServices();
+        const hostGate = vi.spyOn(ownerHost, "getOwnerHostServices").mockReturnValue({
+          ...host, runtimePolicy: { enabledBackends: ["codex"], memberRole: "full", executionModes: [],
+            approvals: "ask", sandboxByMode: {}, codexProtectedRoots: [], codexReadOnlyRoots: [] },
+        });
+        try {
+          expect(internals.resolveBoundedCommandHelper(caller)).toBeUndefined();
+          expect(await select()).toBeUndefined();
+        } finally { hostGate.mockRestore(); }
+        expect(grok).not.toHaveBeenCalled();
+      }
+      if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: stateDb.raw, dbPath: stateDb.raw.name });
+      const { result, writes } = await measureSqliteWrites(select);
+      const { lines } = await store.readThreadPricing(caller);
+      expect(result).toBe(target === "acp:grok" ? 1 : undefined);
+      if (target === "openai") {
+        expect(http).toHaveBeenCalledTimes(2);
+        const safetyId = createHash("sha256").update(openAIDecisionSafetyMaterial({
+          profileId: resolveActiveProfileName(), backend: caller.backend, threadId: caller.threadId,
+        })).digest("hex");
+        expect(JSON.parse(String(http.mock.calls[0]![1]?.body)).safety_identifier).toBe(safetyId);
+        expect(lines.map(line => line.sourceItemId).sort()).toEqual(["system-token-miser-capture:1:final", "system-token-miser-capture:1:retry"]);
+        for (const line of lines) expect(line).toMatchObject({ accountKey: codexModelProviderAccountKey(OPENAI_DECISIONS_ORIGIN, apiKey),
+          parentThreadId: caller.threadId, provider: "openai_decisions", pricingBasis: "decisions-output-uncharged",
+          priceStatus: "priced", inputTokens: 17, cachedInputTokens: 3, outputTokens: 2, outputCostMicros: 0 });
+      } else {
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatchObject({ accountKey: usageAccountKey(undefined, group), parentThreadId: caller.threadId,
+          model, inputTokens: 17, outputTokens: 2, priceStatus: "priced" });
+        if (target === "claude") expect(lines[0]).toMatchObject({ totalCostMicros: 21000, pricingBasis: "provider-reported" });
+      }
+      expectSqliteWriteBudget({ scenario: `bounded-command-${target === "acp:grok" ? "grok" : target}-capture-usage`,
+        writes, note: target === "openai" ? "Two billed Decisions attempts are recorded in one transaction even without a selected excerpt."
+          : "One capture inference writes one usage line on its parent thread using the executing account." });
+    } finally {
+      http.mockRestore();
+      grok.mockRestore();
+      claude.mockRestore();
+      settings.mockRestore();
+      await service.closeCommandDiscovery();
+    }
   });
 
   it("releases previous originals on turn start, while completion leaves them readable", async () => {

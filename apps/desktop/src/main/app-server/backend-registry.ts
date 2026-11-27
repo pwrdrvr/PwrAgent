@@ -2405,6 +2405,7 @@ export class DesktopBackendRegistry {
       recordCodexWorktreeOwnerThread: (...args: Parameters<typeof this.recordCodexWorktreeOwnerThread>) => this.recordCodexWorktreeOwnerThread(...args),
       recordMissingCodexThread: (...args: Parameters<typeof this.recordMissingCodexThread>) => this.recordMissingCodexThread(...args),
       recordQueuedMessageTitle: (...args: Parameters<typeof this.recordQueuedMessageTitle>) => this.recordQueuedMessageTitle(...args),
+      recordOpenAIDecisionsUsageLines: (lines: ThreadUsageLineRecord[]) => this.recordOpenAIDecisionsUsageLines(lines),
       recordTokenMiserHelperInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserHelperInference"]>) => this.threadUsageLedger.recordTokenMiserHelperInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
       refreshCodexProviderCatalogs: (...args: Parameters<typeof this.refreshCodexProviderCatalogs>) => this.refreshCodexProviderCatalogs(...args),
