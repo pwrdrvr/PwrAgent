@@ -1975,11 +1975,11 @@ describe("DesktopSettingsService", () => {
       } } });
       expect(service.resolveHelperModelSettings().helpers.token_miser_capture_codex).toEqual({ backend: "claude" });
       expect(service.resolveTokenMiserBoundedHelper()).toBe("deterministic");
-      for (const helper of ["configured", "openai", "jev", "local", "decision", "codex", "deterministic"] as const) {
-        await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedHelper: helper } });
-        expect(service.resolveTokenMiserBoundedHelper()).toBe(helper);
-        expect((await service.readSettingsProjection()).experimental.tokenMiserBoundedHelper).toEqual({ value: helper, source: "config" });
-      }
+      // A stale viewer's excerpt-selector patch cannot broaden inference or introduce a retired key.
+      await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedHelper: "openai" } });
+      expect(service.resolveTokenMiserGate()).toBe("none");
+      expect(service.resolveTokenMiserSummarizer()).toBe("off");
+      expect(fs.readFileSync(configPath, "utf8")).not.toContain("token_miser_bounded_helper");
       await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedCommands: false } });
       expect(service.resolveTokenMiserBoundedCommands()).toBe(false);
       await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedCommands: true } });
@@ -1988,6 +1988,33 @@ describe("DesktopSettingsService", () => {
       await service.refreshCodexDiscovery(issueProviderDiscoveryPermit("settings-user-action"));
       await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: "/path/codex" });
       expect(ensureManaged).not.toHaveBeenCalled();
+    });
+
+    it("only authorizes the new inference frequency from an explicit split setting", async () => {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      for (const legacy of ["deterministic", "configured", "openai", "jev", "local", "codex", "decision"]) {
+        const raw = `[experimental]\n# keep me\ntoken_miser_bounded_helper = "${legacy}"\ntoken_miser_gate = 42\n`;
+        fs.writeFileSync(configPath, raw);
+        const { service } = buildService(configPath);
+        expect(service.resolveTokenMiserGate()).toBe("none");
+        expect(service.resolveTokenMiserSummarizer()).toBe("off");
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        await service.writeConfigPatchTargeted({ experimental: { tokenMiserSummarizer: "configured" } });
+        expect(service.resolveTokenMiserBoundedHelper()).toBe("configured");
+        await service.writeConfigPatchTargeted({ experimental: { tokenMiserGate: "jev" } });
+        const saved = fs.readFileSync(configPath, "utf8");
+        expect(saved).toContain('# keep me');
+        expect(saved.match(/pwragent-legacy-settings key=token_miser_bounded_helper/g)).toHaveLength(1);
+        expect(saved).toMatch(/kept_for_older_clients\ntoken_miser_bounded_helper = "jev"/u);
+        const reloaded = buildService(configPath).service;
+        expect(reloaded.resolveTokenMiserGate()).toBe("jev");
+        expect(reloaded.resolveTokenMiserSummarizer()).toBe("configured");
+      }
+      fs.writeFileSync(configPath, "");
+      const { service } = buildService(configPath);
+      await service.writeConfigPatchTargeted({ experimental: { tokenMiserGate: "local" } });
+      expect(fs.readFileSync(configPath, "utf8")).not.toContain("token_miser_bounded_helper");
+      expect((await service.readSettingsProjection()).experimental.tokenMiserGate?.value).toBe("local");
     });
 
     it("downloads and selects the build without Token Miser", async () => {

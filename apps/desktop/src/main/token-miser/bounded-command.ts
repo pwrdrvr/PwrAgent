@@ -3,11 +3,13 @@ import { lstat, open, opendir, unlink, type FileHandle } from "node:fs/promises"
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import { splitMcpCommandLine } from "@pwragent/shared/contracts/mcp-connections";
+import { readRecord } from "../app-server/backend-registry-notification-values";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { TOKEN_MISER_OUTPUT_TTL_MS } from "./token-miser-output-cache";
 import { takeUtf8Prefix } from "./token-miser-types";
 import { BoundedCommandLines } from "./bounded-command-lines";
-import { BOUNDED_HELPER_TIMEOUT_MS, type BoundedCommandHelper } from "./bounded-command-helper";
+import type { BoundedCommandHelper } from "./bounded-command-helper";
 
 export type BoundedCommandCaller = Pick<AgentToolCallContext, "backend" | "threadId" | "turnId">;
 type Ticket = {
@@ -25,6 +27,7 @@ type Ticket = {
   status?: number;
   summary?: Promise<string>;
   helperIdentity?: string;
+  intent?: string;
   lifetime: AbortController;
   timer: NodeJS.Timeout;
 };
@@ -36,13 +39,20 @@ const isCommand = (value: string) =>
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const scope = ({ backend, threadId, turnId }: BoundedCommandCaller) => JSON.stringify([backend, threadId, turnId]);
 
-async function commandSummary(ticket: Ticket, resolveHelper: (caller: BoundedCommandCaller) => BoundedCommandHelper | undefined) {
+function endsWithHighSurrogate(text: string) {
+  const unit = text.charCodeAt(text.length - 1);
+  return unit >= 0xd800 && unit <= 0xdbff;
+}
+
+async function commandSummary(ticket: Ticket, resolveHelper: (caller: BoundedCommandCaller) => BoundedCommandHelper | undefined,
+  eligible: (caller: BoundedCommandCaller) => Promise<boolean>) {
   const sections: Array<{ heading: string; lines: string[]; removed: number; added: number }> = [];
   const isDiff = ticket.command.startsWith("git diff");
   let fileHeading = "";
   let collecting = false;
   let previous = "";
   let repeats = 0;
+  let zeroTests = false;
   const headings = new Set<string>();
   const diagnostics = new Set<string>();
   const head: string[] = [];
@@ -53,7 +63,8 @@ async function commandSummary(ticket: Ticket, resolveHelper: (caller: BoundedCom
     lines++;
     const preview = line.slice(0, 220);
     if (ticket.helperIdentity) {
-      if (preview === previous) repeats++;
+      if (lines > 1 && preview === previous) repeats++;
+      if (!isDiff && /^(?:# tests 0\s*$|1\.\.0\s*$|\s*No test files found\b|\s*No tests found\b)/iu.test(preview)) zeroTests = true;
       previous = preview;
       if (isDiff && line.startsWith("diff --git ")) {
         fileHeading = preview;
@@ -85,36 +96,37 @@ async function commandSummary(ticket: Ticket, resolveHelper: (caller: BoundedCom
     if (tail.at(-1) !== preview) tail.push(preview);
     if (tail.length > 14) tail.shift();
   }
-  let selected: string | undefined;
-  if (ticket.helperIdentity && sections.length > 1 && repeats < lines / 2
-    && Buffer.byteLength([...diagnostics].join("\n")) < 900 && (await ticket.file.stat()).size >= 8192) {
-    const helper = resolveHelper(ticket.caller);
-    if (helper?.identity === ticket.helperIdentity && !ticket.lifetime.signal.aborted) {
-      const signal = AbortSignal.any([ticket.lifetime.signal, AbortSignal.timeout(BOUNDED_HELPER_TIMEOUT_MS)]);
-      const aborted = Promise.withResolvers<undefined>();
-      const finish = () => aborted.resolve(undefined);
-      signal.addEventListener("abort", finish, { once: true });
-      try {
-        const excerpts = sections.map((section) => takeUtf8Prefix([section.heading, ...section.lines].join("\n"), 460));
-        if (Buffer.byteLength(JSON.stringify({ command: ticket.command, excerpts })) <= 4096) {
-          const index = await Promise.race([helper.select(ticket.command, excerpts, signal), aborted.promise]);
-          if (index !== undefined && Number.isInteger(index)) selected = excerpts[index];
-        }
-      } catch {
-        // The deterministic result remains available when the chosen provider fails.
-      } finally {
-        signal.removeEventListener("abort", finish);
-      }
-    }
+  const header = `${ticket.command} exited ${ticket.status}. ${lines} lines. Exact output: ${ticket.handle}.`;
+  const facts = [...new Set([...diagnostics, ...headings, ...head, ...tail])].join("\n");
+  let digest = header + "\n" + facts;
+  if (Buffer.byteLength(digest) > 1450) {
+    const first = takeUtf8Prefix(head[0] ?? "", 160);
+    const last = takeUtf8Prefix(tail.at(-1) ?? "", 160);
+    const middle = takeUtf8Prefix(facts, 1450 - Buffer.byteLength(header + first + last) - 3);
+    digest = [header, first, middle, last].filter(Boolean).join("\n");
   }
-  const facts = new Set([...diagnostics, selected, ...headings, ...head, ...tail].filter(Boolean));
-  return takeUtf8Prefix(`${ticket.command} exited ${ticket.status}. ${lines} lines.\n${[...facts].join("\n")}`, 1450);
+  if (!ticket.helperIdentity || ticket.lifetime.signal.aborted || !await eligible(ticket.caller).catch(() => false)) return digest;
+  const helper = resolveHelper(ticket.caller);
+  if (helper?.identity !== ticket.helperIdentity) return digest;
+  const excerpts = sections.map(section => takeUtf8Prefix([section.heading, ...section.lines].join("\n"), 240));
+  // Keep room for diagnostics, changes away from the first hunk, and the actual tail.
+  const detail = [takeUtf8Prefix([...diagnostics].join("\n"), 480), excerpts.join("\n"),
+    takeUtf8Prefix(head.join("\n"), 240), takeUtf8Prefix(tail.slice(-4).join("\n"), 320)].filter(Boolean).join("\n");
+  const sample = [takeUtf8Prefix([...diagnostics].join("\n"), 180), takeUtf8Prefix(head.join("\n"), 150),
+    takeUtf8Prefix(tail.slice(-3).join("\n"), 180)].filter(Boolean).join("\n");
+  const note = await helper.enrich({
+    command: ticket.command, exitCode: ticket.status!, lines, bytes: (await ticket.file.stat()).size,
+    repeatedLines: repeats, zeroTests, intent: ticket.intent, sample, detail,
+  }, ticket.lifetime.signal, () => eligible(ticket.caller)).catch(() => undefined);
+  return note ? digest + "\n" + note : digest;
 }
 
 /** Execution stays in the native shell. The owner only reads its own open file descriptor. */
 export class BoundedCommandCapture {
   private readonly tickets = new Map<string, Ticket>();
   private readonly idsByHandle = new Map<string, string>();
+  // Live assistant text is transient and scoped to the exact originating turn.
+  private readonly intents = new Map<string, { itemId: string; text: string; bytes: number; full: boolean }>();
   private preparing = 0;
   private closed = false;
   private nextSweepAt = 0;
@@ -128,7 +140,63 @@ export class BoundedCommandCapture {
 
   get pending() { return this.tickets.size > 0; }
 
+  observeIntent({ backend, federationTarget, notification }: AgentEvent, captureEnabled: () => boolean) {
+    if (federationTarget || (backend !== "codex" && backend !== "claude" && backend !== "acp:antigravity")) return;
+    if (notification.method === "turn/started") {
+      if (this.closed || this.intents.size >= 256 || !captureEnabled()) return;
+      const turnId = readRecord(notification.params.turn)?.id;
+      // A Codex start reservation has no assistant messages or matching native terminal event.
+      if (typeof turnId !== "string" || (backend === "codex" && turnId.startsWith("pending:"))) return;
+      const key = scope({ backend, threadId: notification.params.threadId, turnId });
+      if (!this.intents.has(key)) this.intents.set(key, { itemId: "", text: "", bytes: 0, full: false });
+      return;
+    }
+    if (!this.intents.size) return;
+    if (notification.method !== "item/agentMessage/delta" && notification.method !== "item/completed") return;
+    const { threadId, turnId } = notification.params;
+    if (!turnId) return;
+    const intent = this.intents.get(scope({ backend, threadId, turnId }));
+    if (!intent) return;
+    let text: string;
+    let append = false;
+    let itemId: string;
+    if (notification.method === "item/agentMessage/delta") {
+      const params = notification.params;
+      // Antigravity also surfaces thought chunks as commentary. Only its message chunks are eligible.
+      if (typeof params.delta !== "string" || typeof params.itemId !== "string" || params.stream || (backend === "acp:antigravity" && params.phase !== "final")) return;
+      append = intent.itemId === params.itemId;
+      if (append && intent.full) return;
+      text = params.delta;
+      itemId = params.itemId;
+    } else {
+      const item = "item" in notification.params ? readRecord(notification.params.item) : undefined;
+      if (backend === "acp:antigravity" || item?.type !== "agentMessage" || typeof item.id !== "string"
+        || typeof item.text !== "string" || !item.text) return;
+      text = item.text;
+      itemId = item.id;
+    }
+    if (!append) {
+      intent.text = "";
+      intent.bytes = 0;
+    } else if (endsWithHighSurrogate(intent.text)) {
+      // A UTF-16 surrogate pair may straddle two stream events. Revisit only that unit.
+      text = intent.text.slice(-1) + text.slice(0, 385);
+      intent.text = intent.text.slice(0, -1);
+      intent.bytes -= 3;
+    }
+    const piece = takeUtf8Prefix(text, 384 - intent.bytes);
+    intent.text += piece;
+    intent.bytes += Buffer.byteLength(piece);
+    intent.itemId = itemId;
+    intent.full = piece.length < text.length || (intent.bytes === 384 && !endsWithHighSurrogate(intent.text));
+  }
+
+  forgetIntent(caller: BoundedCommandCaller) {
+    if (this.intents.size) this.intents.delete(scope(caller));
+  }
+
   async prepare(caller: BoundedCommandCaller, command: string) {
+    const intent = this.intents.get(scope(caller))?.text.trim() || undefined;
     if (!caller.turnId || process.platform === "win32" || !isCommand(command)
       || !["acp:antigravity", "claude", "codex"].includes(caller.backend)
       || !await this.eligible(caller)) throw new Error("Bounded command unavailable for this turn or command.");
@@ -155,7 +223,7 @@ export class BoundedCommandCapture {
       // The receipt is emitted only after the command returns, including on failure.
       const shell = `test -f ${target} || exit 125; { if ${command}; then rc=0; else rc=$?; fi; } > ${target} 2>&1 || exit 125; echo pwragent-${receipt}:$rc; exit "$rc"`;
       const timer = this.expireAfterRetention(id);
-      this.tickets.set(id, { handle, receipt, caller: { backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId }, command, shell, filename, file, lines: new BoundedCommandLines(file), timer, helperIdentity: helper?.identity, lifetime: new AbortController() });
+      this.tickets.set(id, { handle, receipt, caller: { backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId }, command, shell, filename, file, lines: new BoundedCommandLines(file), timer, intent, helperIdentity: helper?.identity, lifetime: new AbortController() });
       this.idsByHandle.set(handle, id);
       try {
         if (this.closed || !await this.eligible(caller) || !this.tickets.has(id)) throw new Error("Capture closed.");
@@ -189,6 +257,10 @@ export class BoundedCommandCapture {
       const receipt = new RegExp(`(?:^|\\n)pwragent-${ticket.receipt}:(\\d{1,3})(?:\\r?\\n|$)`, "u").exec(item.output ?? "");
       if (!item.rejected && receipt && Number(receipt[1]) <= 255) {
         ticket.status = Number(receipt[1]);
+        // Start once at native completion, even when the parent never asks to inspect.
+        ticket.summary = commandSummary(ticket, this.resolveHelper, this.eligible);
+        // A turn can end and close the descriptor before any reader joins this promise.
+        void ticket.summary.catch(() => {});
         ticket.timer = this.expireAfterRetention(id);
         // Readers use the owner's original descriptor. Remove the directory
         // entry as soon as the writer has finished, including on test failure.
@@ -200,6 +272,7 @@ export class BoundedCommandCapture {
   }
 
   async endTurn(caller: BoundedCommandCaller, stop?: (matches: (terminal: { itemId: string; processId: string; command: string }) => boolean) => Promise<void>) {
+    this.forgetIntent(caller);
     const owned = [...this.tickets].filter(([, ticket]) => scope(caller) === scope(ticket.caller));
     const running = owned.map(([, ticket]) => ticket).filter((ticket) => ticket.status === undefined && ticket.itemId && ticket.processId);
     const cleanup = owned.map(([id]) => this.remove(id));
@@ -233,10 +306,7 @@ export class BoundedCommandCapture {
   async inspect(caller: BoundedCommandCaller, id: string, range?: { start: number; end?: number; query?: string }) {
     const ticket = await this.retained(caller, id);
     if (!range) {
-      const text = await (ticket.summary ??= commandSummary(ticket, this.resolveHelper).catch((error) => {
-        ticket.summary = undefined;
-        throw error;
-      }));
+      const text = await ticket.summary!;
       if (ticket.lifetime.signal.aborted || !await this.eligible(caller)) throw new Error("Output expired or unavailable for this turn.");
       return text;
     }
@@ -279,6 +349,7 @@ export class BoundedCommandCapture {
 
   async close() {
     this.closed = true;
+    this.intents.clear();
     await Promise.all([...this.tickets.keys()].map((id) => this.remove(id)));
   }
 }

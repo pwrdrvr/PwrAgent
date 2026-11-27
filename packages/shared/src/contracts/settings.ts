@@ -619,7 +619,12 @@ export type DesktopSettingsSource =
   | DesktopSettingsNonSecretSource
   | DesktopSettingsSecretSource;
 
-/** "codex" and "decision" keep the meaning of already-saved v2 selections. */
+export const TOKEN_MISER_GATE_PROVIDERS = ["none", "openai", "jev", "local"] as const;
+export type TokenMiserGateProvider = (typeof TOKEN_MISER_GATE_PROVIDERS)[number];
+export const TOKEN_MISER_SUMMARIZER_MODES = ["off", "configured"] as const;
+export type TokenMiserSummarizerMode = (typeof TOKEN_MISER_SUMMARIZER_MODES)[number];
+
+/** Legacy excerpt selection. Its consent covered only ambiguous large captures. */
 export const BOUNDED_COMMAND_HELPER_MODES = ["deterministic", "configured", "openai", "jev", "local", "codex", "decision"] as const;
 export type BoundedCommandHelperMode = (typeof BOUNDED_COMMAND_HELPER_MODES)[number];
 
@@ -1599,6 +1604,8 @@ export type DesktopSettingsSnapshot = {
     tokenMiserEnabled: DesktopSettingsValue<boolean>;
     tokenMiserBoundedCommands?: DesktopSettingsValue<boolean>;
     tokenMiserBoundedHelper?: DesktopSettingsValue<BoundedCommandHelperMode>;
+    tokenMiserGate?: DesktopSettingsValue<TokenMiserGateProvider>;
+    tokenMiserSummarizer?: DesktopSettingsValue<TokenMiserSummarizerMode>;
     /**
      * Inherited Token Miser state for Codex threads without a per-thread
      * override. This only has an effect while the experiment gate is enabled.
@@ -2011,6 +2018,8 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserEnabled?: boolean;
     tokenMiserBoundedCommands?: boolean;
     tokenMiserBoundedHelper?: BoundedCommandHelperMode;
+    tokenMiserGate?: TokenMiserGateProvider;
+    tokenMiserSummarizer?: TokenMiserSummarizerMode;
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
     researchEnabled?: boolean;

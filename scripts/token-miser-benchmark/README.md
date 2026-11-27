@@ -47,15 +47,14 @@ With PwrAgent's production deferred catalog, both builds first searched for the 
 
 The Claude Agent SDK 0.3.330 init catalog contained 32 tools with the native Code Mode opt-in environment variable set. It included Bash, Workflow and the PwrAgent capture tool. It omitted REPL and Claude answered `CODE_MODE_UNAVAILABLE`. The direct Bash/MCP flow is verified in the earlier table. Antigravity 1.5.18 accepted an exact approved Python `run_workflow` probe. Both the call to PwrAgent capture and the call to `run_command` reported that `call_tool` was undefined. Use the direct ACP flow on that build. The installed workflow guide makes direct calls conditional on the workflow's advertised tool list. [Claude Code Mode documentation](https://code.claude.com/docs/en/code-mode)
 
-## Helper selection and cost
+## Capture gate and summarizer
 
-The owner reads `[experimental].token_miser_bounded_helper`. The default, `deterministic`, counts repeated lines and keeps diagnostics, hunk headers and exit status without inference. With `configured`, `[[models.helper_models]]` rows select a helper for each capture origin: `token_miser_capture_codex`, `token_miser_capture_claude`, or `token_miser_capture_antigravity`. A row names the helper backend (`codex`, `claude`, or `acp:grok`), model and optional reasoning effort. The Codex origin can inherit an explicitly saved global Codex helper model. An Antigravity row requires an explicit helper backend. An absent model, unsupported route or expired approval leaves the local summary available.
-
-For a decision classifier choose `openai` (OpenAI Decisions), `jev` (the configured Jev model), or `local` (the configured Clef endpoint and model). Each selection uses that provider even when the profile's default decision provider differs. The provider must be enabled and have its required credentials. Existing `codex` and `decision` settings retain their original meanings. The settings redesign is separate from the routing contract.
+Each native completion receipt starts one owner-side digest. It includes exit status, diagnostics, head and tail lines, and the handle for exact retrieval. Concurrent summary reads join the same work. Inference requires an explicit choice in the two experimental settings. The older excerpt-selector key grants neither choice. Saving either new setting writes the canonical pair and updates an existing legacy key for downgrade compatibility.
 
 ```toml
 [experimental]
-token_miser_bounded_helper = "configured"
+token_miser_gate = "local"
+token_miser_summarizer = "configured"
 
 [[models.helper_models]]
 helper = "token_miser_capture_antigravity"
@@ -64,11 +63,30 @@ model = "haiku"
 reasoning_effort = "low"
 ```
 
-Small logs, one-hunk diffs and repetitive test progress use local rules. For a large ambiguous result the approval names the selected helper. It receives at most six source excerpts, bounded to 4,096 bytes for the serialized command and evidence. It can choose one source excerpt. The owner supplies the exit status, diagnostics and retrieval handle. Each capture memoizes the result. A disabled or unavailable provider, invalid selection or eight-second deadline leaves the deterministic summary available. No provider key is handed to the shell. Internal decision calls use the owner's selected provider client and create no entry in the sidebar decisions registry.
+| Capture policy | Delivered result |
+| --- | --- |
+| Defaults (`none` and `off`) | Deterministic digest |
+| Gate selected | One request per completed capture to the selected OpenAI Decisions, Jev or local Clef provider |
+| Miss probability ≥ 0.70 | Digest, all three scores and a fixed inspection/retry note |
+| Miss below 0.70 and summary probability ≥ 0.70 | Digest plus a written summary when the configured helper succeeds |
+| Other scores, invalid response, provider failure or gate deadline | Digest |
+| No gate and summarizer configured | Digest plus a written summary for outputs of at least 8,192 bytes |
 
-A separate live stock Code Mode run added a second diff hunk to exercise the subscription path. The isolated `gpt-6-luna` helper received 375 bytes of evidence once, took 3.90 seconds and reported 4,479 input tokens, including 3,200 cached, and 64 output tokens. Both noisy tests took zero helper calls. The parent answered correctly and all three logs were retrieved. The local decision path was exercised against a loopback System One fixture. The Jev request and key routing were verified with a synthetic credential and intercepted HTTP transport. Hosted Jev latency, token use, billing and selection quality were not measured.
+Noise is a score from zero to one. Noise alone does not trigger a second inference. The gate receives counts, exit status, the command, at most 512 UTF-8 bytes of output, and up to 384 bytes of the latest available pre-command assistant message from the originating live turn. The owner retains this message in memory only and excludes reasoning and Antigravity thought chunks. Gate and summary deadlines are three and eight seconds respectively. Gate failures cause no retry or provider substitution. Decision requests bypass sidebar registration.
 
-The Codex selector records its returned model, account and tokens on the invoking backend and thread. One measured invocation committed one usage line (82,400 WAL bytes, approximately 1.65 MB/day at 20 invocations/day). Managed single-result acceptance took two commits with the initial handle reservation and one with a warm block. Grouped acceptance, including the cell observation, took three and two respectively. Persisting an explicit launchpad override for a new capture thread took one commit and 20,600 WAL bytes (0.41 MB/day at 20 new overrides/day).
+The summarizer receives the same command signals and at most 2,048 bytes of output sampled from diagnostics, diff hunks or test sections, and head/tail lines. It may return up to 640 bytes of summary or return an empty summary when evidence is insufficient. These limits apply to supplied evidence. Harness instructions and protocol framing contribute additional model input. The legacy managed-Codex reducer accepted optional parent intent and used a 20,000-estimated-token ceiling for its whole helper prompt.
+
+The capture rows are `token_miser_capture_codex`, `token_miser_capture_claude` and `token_miser_capture_antigravity`. The named Codex, Claude or Grok model runs through its owning harness. A Codex-origin capture can inherit an explicitly saved global Codex helper model. An Antigravity-origin capture requires an explicit helper backend. The prepare prompt names the approved providers.
+
+On November 27 the stock Codex Code Mode fixture ran with the gate off and `gpt-6-luna` selected as the summarizer. The parent supplied the filename, test names, expected and actual values, and exit status. The fixture verified literal searches, line ranges and exact byte retrieval for all three handles. The parent reported 20,631 input tokens on its first request, a peak of 23,161, and 109,261 total input across five requests (86,272 cached and 22,989 uncached). Its four Code Mode cells returned 4,251 bytes in total.
+
+| Capture | Exact bytes | Helper prompt bytes | Helper input tokens | Helper output tokens | Helper elapsed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Two-hunk diff, exit 0 | 87,817 | 946 | 4,679 | 68 | 3.40 s |
+| Passing test, exit 0 | 33,153 | 587 | 4,477 | 48 | 2.39 s |
+| Failing test, exit 1 | 33,685 | 1,203 | 4,670 | 47 | 2.26 s |
+
+Each helper call included harness overhead. The three written summaries added 13,826 helper input tokens and 163 output tokens across the fixture. Decision-gate transport and routing checks used synthetic provider responses. In the SQLite fixture a billed OpenAI gate used one commit and 78,312 WAL bytes. A billed gate followed by a metered Claude summary used two commits and 156,560 bytes, about 3.13 MB/day at 20 such captures per day.
 
 ## Ownership and permission
 
@@ -76,7 +94,7 @@ Enable **Settings → Experimental → Token Miser → Capture foreground comman
 
 `capture_token_miser_command` accepts `git diff`, `git diff --cached`, `node --test FILE.test.js|cjs|mjs` or `pnpm exec vitest run FILE.test.ts|tsx` on POSIX. The owner checks a live backend, thread, turn and policy, then requests one explicit approval for the named command's output. A rejection returns no ticket. Approval prepares a private file and returns a complete native shell command with redirection visible. The harness chooses the cwd, environment, sandbox and native approval for that command. The owner never launches Git or a project test process. The tool does not ask the shell for escalation. The harness may refuse access to the capture file.
 
-The owner accepts a receipt only from the matching native command and item in the issuing turn. The receipt is emitted after successful redirection and preserves the executed program's status. The owner reads its original descriptor, unlinks the pathname at completion and can return deterministic diagnostics, a literal search, an inclusive line range or lossless 1,024-byte base64 pages. Exact retrieval includes stdout and stderr merged in shell order. Summary and query text are bounded to 1,450 bytes. Search covers the first 2,048 characters of each line. This retrieval interface checks the backend, thread and invoking turn. The existing managed Codex retrieval store uses different object ownership, so the dedicated tool serves these handles. Completed handles expire after five minutes or at turn end. Pending execution has a five-minute start deadline. Foreground execution can exceed five minutes once observed. The shell receives the command and capture destination. Only the owner can send excerpts to a selected helper.
+The owner accepts a receipt only from the matching native command and item in the issuing turn. The receipt is emitted after successful redirection and preserves the executed program's status. The owner reads its original descriptor, unlinks the pathname at completion and can return deterministic diagnostics, a literal search, an inclusive line range or lossless 1,024-byte base64 pages. Exact retrieval includes stdout and stderr merged in shell order. The digest and each line query are bounded to 1,450 bytes. A summary or missed-mark note is appended to the digest. Search covers the first 2,048 characters of each line. This retrieval interface checks the backend, thread and invoking turn. The existing managed Codex retrieval store uses different object ownership, so the dedicated tool serves these handles. Completed handles expire after five minutes or at turn end. Pending execution has a five-minute start deadline. Foreground execution can exceed five minutes once observed. The shell receives the command and capture destination. Only the owner can send excerpts to a selected helper.
 
 Fresh denial and cancellation controls on stock Codex, Claude and Antigravity each recorded the native approval for the exact prepared command and the client decision. All six finished without creating the execution marker or yielding a usable receipt. Antigravity and Claude also stopped the child on interruption. On macOS the desktop registry sent `turn/interrupt` for the correct thread and turn. Stock Codex 0.169.0 and managed v0.171.0-pwragent.5 kept a registered resumable command alive before its first yield. Both wrote the marker after interruption with App Server still running. An earlier yielded terminal and a concurrent turn survived. A completion-only command exited before marker release in the debug App Server control. This is the native `interrupt-raw` baseline. [Upstream Unified Exec behavior](https://github.com/openai/codex/pull/14602)
 

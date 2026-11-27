@@ -43,6 +43,8 @@ import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import { diagnosticExcerpt, TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
 
+const capturedEvidence = { command: "git diff", exitCode: 0, bytes: 8192, lines: 64, repeatedLines: 0, zeroTests: false, sample: "first", detail: "first and second" };
+
 describe("DesktopBackendRegistry Token Miser ledger", () => {
   let directory: string;
   let registry: DesktopBackendRegistry;
@@ -312,14 +314,16 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(before.savingsMicros - after.savingsMicros).toBe(pricing.lines[0]!.totalCostMicros);
     expect((await store.readThreadPricing({ backend: "codex", threadId: "unrelated" })).lines).toHaveLength(0);
     const helper = boundedCommandHelper({
-      resolveTokenMiserBoundedHelper: () => "codex", resolveDecisionModelSettings: () => ({}),
-      resolveDecisionApiKey: async () => undefined,
-    }, { generateStructuredObject: async () => ({ ...params.usage, accountKey: "fixture-account", object: { choice: "0" } }) },
-    (usage) => internals.recordTokenMiserHelperInference({ ...params, usage, inferenceId: "bounded" }, "claude"));
-    const charged = await measureSqliteWrites(() => helper!.select("git diff", ["a", "b"], new AbortController().signal));
-    expect(charged.result).toBe(0);
+      resolveTokenMiserGate: () => "none", resolveTokenMiserSummarizer: () => "configured",
+      resolveHelperModelSettings: () => ({ helpers: { token_miser_capture_claude: { backend: "codex", model: "gpt-6-luna" } } }),
+      resolveDecisionModelSettings: () => ({}), resolveDecisionApiKey: async () => undefined,
+    }, { generateStructuredObject: async () => ({ ...params.usage, accountKey: "fixture-account", object: { summary: "footer changed" } }) },
+    (usage) => internals.recordTokenMiserHelperInference({ ...params, usage, inferenceId: "bounded" }, "claude"),
+    { origin: "claude", threadId: "thread-parent", claude: {} });
+    const charged = await measureSqliteWrites(() => helper!.enrich(capturedEvidence, new AbortController().signal));
+    expect(charged.result).toContain("footer changed");
     expectSqliteWriteBudget({ scenario: "bounded-command-codex-helper-usage", writes: charged.writes,
-      note: "One Codex selector inference writes one usage line to its invoking Claude thread." });
+      note: "One Codex summarizer inference writes one usage line to its invoking Claude thread." });
     const capturePricing = await store.readThreadPricing({ backend: "claude", threadId: "thread-parent" });
     expect(capturePricing.lines).toHaveLength(1);
     expect(capturePricing.lines[0]).toMatchObject({ accountKey: "fixture-account", model: "gpt-6-luna", inputTokens: 2000,
@@ -355,17 +359,17 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await secretStore.setSecret("openaiDecisionsApiKey", apiKey);
     const service = new DesktopSettingsService({ configPath: path.join(directory, "config.toml"), env: {}, secretStore });
     await service.writeConfigPatchTargeted({
-      experimental: { tokenMiserBoundedHelper: target === "openai" ? "openai" : "configured" },
+      experimental: { tokenMiserGate: target === "openai" ? "openai" : "none", tokenMiserSummarizer: target === "openai" ? "off" : "configured" },
       models: { helperModels: { helpers: target === "openai" ? {} : { token_miser_capture_codex: { backend: target, model } } } },
     });
     const settings = vi.spyOn(settingsOwner, "getDesktopSettingsService").mockReturnValue(service);
-    const claude = vi.spyOn(ClaudeBackend.prototype, "selectCaptureExcerpt").mockImplementation(async () => {
+    const claude = vi.spyOn(ClaudeBackend.prototype, "summarizeCapture").mockImplementation(async () => {
       currentGroup = "account after dispatch";
       return { status: "failed", model, reason: "error_max_turns", helperThreadId: "sdk-run",
         tokenUsage: { last: { inputTokens: 17, outputTokens: 2, totalTokens: 19 }, claudeCostUSD: 0.021 } };
     });
     const grok = vi.spyOn(AcpBackendAdapter.prototype, "runEphemeralPrompt").mockResolvedValue({
-      refusedRequests: 0, text: '{"choice":"1"}', model, tokenUsage: { inputTokens: 17, totalTokens: 19, outputTokens: 2 },
+      refusedRequests: 0, text: '{"summary":"footer changed"}', model, tokenUsage: { inputTokens: 17, totalTokens: 19, outputTokens: 2 },
     });
     const metered = { model: OPENAI_DECISIONS_MODEL, usage: { input_tokens: 17, output_tokens: 2, cached_tokens: 3 } };
     const http = vi.spyOn(globalThis, "fetch")
@@ -374,7 +378,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       .mockResolvedValueOnce(Response.json({ ...metered, answers: [] }, { headers: { "x-request-id": "final" } }));
     try {
       const helper = internals.resolveBoundedCommandHelper(caller)!;
-      const select = () => helper.select("git diff", ["first", "second"], new AbortController().signal);
+      const select = () => helper.enrich(capturedEvidence, new AbortController().signal);
       if (target === "acp:grok") {
         grokEnabled = false;
         expect(internals.resolveBoundedCommandHelper(caller)).toBeUndefined();
@@ -394,14 +398,14 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: stateDb.raw, dbPath: stateDb.raw.name });
       const { result, writes } = await measureSqliteWrites(select);
       const { lines } = await store.readThreadPricing(caller);
-      expect(result).toBe(target === "acp:grok" ? 1 : undefined);
+      expect(result).toBe(target === "acp:grok" ? "Summary: footer changed" : undefined);
       if (target === "openai") {
-        expect(http).toHaveBeenCalledTimes(2);
+        expect(http).toHaveBeenCalledTimes(1);
         const safetyId = createHash("sha256").update(openAIDecisionSafetyMaterial({
           profileId: resolveActiveProfileName(), backend: caller.backend, threadId: caller.threadId,
         })).digest("hex");
         expect(JSON.parse(String(http.mock.calls[0]![1]?.body)).safety_identifier).toBe(safetyId);
-        expect(lines.map(line => line.sourceItemId).sort()).toEqual(["system-token-miser-capture:1:final", "system-token-miser-capture:1:retry"]);
+        expect(lines.map(line => line.sourceItemId).sort()).toEqual(["system-token-miser-capture:1:retry"]);
         for (const line of lines) expect(line).toMatchObject({ accountKey: codexModelProviderAccountKey(OPENAI_DECISIONS_ORIGIN, apiKey),
           parentThreadId: caller.threadId, provider: "openai_decisions", pricingBasis: "decisions-output-uncharged",
           priceStatus: "priced", inputTokens: 17, cachedInputTokens: 3, outputTokens: 2, outputCostMicros: 0 });
@@ -412,8 +416,23 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         if (target === "claude") expect(lines[0]).toMatchObject({ totalCostMicros: 21000, pricingBasis: "provider-reported" });
       }
       expectSqliteWriteBudget({ scenario: `bounded-command-${target === "acp:grok" ? "grok" : target}-capture-usage`,
-        writes, note: target === "openai" ? "Two billed Decisions attempts are recorded in one transaction even without a selected excerpt."
+        writes, note: target === "openai" ? "One billed gate request is recorded even when the provider fails."
           : "One capture inference writes one usage line on its parent thread using the executing account." });
+      if (target === "claude") {
+        await service.writeConfigPatchTargeted({ experimental: { tokenMiserGate: "openai" } });
+        http.mockReset().mockResolvedValueOnce(Response.json({ ...metered, answers: [
+          { type: "predicate", name: "miss", probability: 0 }, { type: "predicate", name: "summary", probability: 1 },
+          { type: "score", name: "noise", score: 1 },
+        ] }, { headers: { "x-request-id": "combined" } }));
+        const parent = { ...caller, threadId: "two-stage-parent" };
+        const combined = internals.resolveBoundedCommandHelper(parent)!;
+        const both = await measureSqliteWrites(() => combined.enrich(capturedEvidence, new AbortController().signal));
+        expect(both.result).toBeUndefined(); // Claude's metered error still leaves the digest available.
+        const pricing = await store.readThreadPricing(parent);
+        expect(pricing.lines.map(line => line.provider).sort()).toEqual(["anthropic", "openai_decisions"]);
+        expectSqliteWriteBudget({ scenario: "bounded-command-gate-and-summary", writes: both.writes,
+          note: "One billed Decisions gate and one metered Claude summary write their own account-attributed usage lines." });
+      }
     } finally {
       http.mockRestore();
       grok.mockRestore();

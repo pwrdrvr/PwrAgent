@@ -1786,14 +1786,14 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
             const accountKey = await ports.captureUsageAccount("acp:grok");
             const result = await generateAcpStructuredObject({
               ...request, backend: "acp:grok", cwd: await resolveAcpHelperWorkspace(),
-              system: request.system ?? "", turnTimeoutMs: BOUNDED_HELPER_TIMEOUT_MS, maxOutputChars: 256,
+              system: request.system ?? "", turnTimeoutMs: BOUNDED_HELPER_TIMEOUT_MS, maxOutputChars: 1024,
               run: (prompt) => acpBackend.runEphemeralPrompt("acp:grok", { ...prompt, allowPrompt: grokHelperEnabled }),
             });
             return { ...result, accountKey };
           } },
           claude: { generateStructuredObject: async (request) => {
             const accountKey = await ports.captureUsageAccount("claude");
-            const result = await claudeBackend.selectCaptureExcerpt(request, await resolveAcpHelperWorkspace());
+            const result = await claudeBackend.summarizeCapture(request, await resolveAcpHelperWorkspace());
             return { ...result, accountKey };
           } },
         });

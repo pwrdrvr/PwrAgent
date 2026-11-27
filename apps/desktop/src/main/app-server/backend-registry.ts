@@ -1982,7 +1982,7 @@ export class DesktopBackendRegistry {
         threadId: caller.threadId, turnId: caller.turnId ?? "",
         requestId: `bounded-command-${randomUUID()}`, serverName: "PwrAgent Token Miser",
         mode: "form", requestedSchema: { type: "object", properties: {} },
-        message: `Allow Token Miser to retain output from one native shell invocation of ${command}? The command uses the shell's working directory and permissions. Its full output will be available to this turn for up to five minutes.${helper ? ` Relevant excerpts may be sent to ${helper}.` : ""}`,
+        message: `Allow Token Miser to retain output from one native shell invocation of ${command}? The command uses the shell's working directory and permissions. Its full output will be available to this turn for up to five minutes.${helper ? ` The command, bounded output, and recent assistant message may be sent to ${helper}.` : ""}`,
         _meta: null,
       },
     });
@@ -23504,6 +23504,7 @@ export class DesktopBackendRegistry {
 
   private async emit(event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt): Promise<void> {
     const notification = event.notification;
+    this.boundedCommandCapture.observeIntent(event, this.resolveTokenMiserBoundedCommands);
     if (!event.federationTarget && this.boundedCommandCapture.pending
       && (notification.method === "item/started" || notification.method === "item/completed")) {
       const item = readRecord(notification.params.item);
@@ -23526,6 +23527,7 @@ export class DesktopBackendRegistry {
     if (isTerminal && !event.federationTarget) {
       const turnId = turnIdFromTerminalNotification(notification);
       if (turnId) {
+        this.boundedCommandCapture.forgetIntent({ backend: event.backend, threadId: notification.params.threadId, turnId });
         if (this.boundedCommandCapture.pending) {
           const threadId = notification.params.threadId;
           releaseBoundedCommands = this.boundedCommandCapture.endTurn({ backend: event.backend, threadId, turnId },

@@ -24,7 +24,7 @@ export async function runClaudeExcerptQuery(
     ...(effort === "low" || effort === "medium" || effort === "high" || effort === "xhigh" || effort === "max" ? { effort } : {}),
     systemPrompt: request.system, tools: [], strictMcpConfig: true, mcpServers: {}, plugins: [],
     settingSources: ["user"], settings: { disableAllHooks: true, disableSkillShellExecution: true },
-    canUseTool: async () => ({ behavior: "deny", message: "This classifier has no tools." }),
+    canUseTool: async () => ({ behavior: "deny", message: "This capture summarizer has no tools." }),
     persistSession: false, maxTurns: 1, abortController: controller,
   };
   const session = start({ prompt: request.prompt + "\nReturn only JSON matching " + JSON.stringify(request.schema), options });
@@ -50,7 +50,7 @@ export async function runClaudeExcerptQuery(
         ...inference,
       };
     }
-    return { status: "failed", reason: "no_classifier_result" };
+    return { status: "failed", reason: "no_summary_result" };
   } finally {
     request.signal?.removeEventListener("abort", abort);
     session.close();

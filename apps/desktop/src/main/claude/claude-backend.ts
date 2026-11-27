@@ -3813,8 +3813,8 @@ export class ClaudeBackend {
     }
   }
 
-  /** Run an isolated, single-answer classifier through the owning Claude installation. */
-  async selectCaptureExcerpt(params: ClaudeExcerptRequest, cwd: string) {
+  /** Summarize bounded command evidence through the owning Claude installation. */
+  async summarizeCapture(params: ClaudeExcerptRequest, cwd: string) {
     const { executable } = await this.requireInstallation();
     const startQuery = this.options.query ?? (await loadClaudeAgentSdk()).query;
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
