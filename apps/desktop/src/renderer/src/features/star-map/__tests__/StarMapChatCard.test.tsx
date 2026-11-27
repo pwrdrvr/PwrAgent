@@ -14,10 +14,9 @@ import {
 import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
-import type { AppServerReadThreadResponse } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerReadThreadResponse, ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import type { BackendCapabilities } from "@pwragent/shared/contracts/backend";
 import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
-import type { DesktopSettingsSnapshot } from "@pwragent/shared/contracts/settings";
 import type {
   NavigationThreadSummary,
   NavigationQueryRequest,
@@ -42,6 +41,13 @@ import {
   openModelSettings,
 } from "../../../test/model-settings";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
+import {
+  accessTrigger,
+  allowAccessStop,
+  chooseAccessStop,
+  openAccessPicker,
+  queryAccessTriggers,
+} from "../../../test/access-picker";
 import { StarMapChatCard } from "../StarMapChatCard";
 import {
   useComposerDraftStore,
@@ -3513,11 +3519,13 @@ describe("StarMapChatCard settings menu", () => {
   /**
    * The Full Access confirmation is the shared renderer gate, not the
    * composer's own state: this chip escalated a thread in one un-gated
-   * click for as long as the dialog lived inside `Composer`.
+   * click for as long as the dialog lived inside `Composer`. The strip's
+   * access picker now confirms inline, as the composer's does, asking the
+   * gate whether to and committing through it.
    */
-  async function chooseAccessMode(label: string): Promise<void> {
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Access/ }));
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: label }));
+  async function chooseAccessMode(value: ThreadExecutionMode): Promise<void> {
+    await screen.findByRole("button", { name: /^Access: / });
+    chooseAccessStop(value);
   }
 
   /** Settings reads resolve a tick after mount; the gate reads false until then. */
@@ -3542,27 +3550,24 @@ describe("StarMapChatCard settings menu", () => {
     } as unknown as Partial<DesktopApi>);
   }
 
-  it("confirms the first escalation to Full Access before applying it", async () => {
+  it("confirms the first escalation to Full Access inline before applying it", async () => {
     const desktopApi = settingsApi();
     renderCard({
       desktopApi,
       thread: localThread({ executionMode: "default", model: "gpt-5-codex" }),
     });
-    await openSettingsMenu();
-    await chooseAccessMode("Full Access");
+    await chooseAccessMode("full-access");
 
-    const dialog = await screen.findByRole("dialog", {
-      name: "Enable Full Access?",
-    });
-    expect(dialog.textContent).toContain("network access");
-    expect(dialog.textContent).toContain("supply chain attack");
+    const panel = openAccessPicker();
+    expect(panel.textContent).toContain("reach the network");
+    expect(
+      screen.queryByRole("dialog", { name: "Enable Full Access?" }),
+    ).toBeNull();
     expect(desktopApi.setThreadExecutionMode).not.toHaveBeenCalled();
+    // The level holds until Allow.
+    expect(accessTrigger().getAttribute("aria-label")).toBe("Access: Default Access");
 
-    fireEvent.click(
-      within(dialog).getByRole("button", {
-        name: "I Understand and Accept the Risks",
-      }),
-    );
+    allowAccessStop();
     await waitFor(() => {
       expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith({
         backend: "codex",
@@ -3601,13 +3606,10 @@ describe("StarMapChatCard settings menu", () => {
     expect(onPointerDown).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the warning's input off the map behind it", async () => {
-    // The dialog portals out of the card's DOM but not out of its React
-    // tree, and in the Star Map window its ancestors are the map's own
-    // `onPointerDown` (canvas pan, marquee, click-to-drop-selection) and
-    // `onKeyDown` (Escape unwinds the selection). The dialog sits outside
-    // every `.star-map-*` container `shouldStartCanvasPan` tests for, so
-    // without containment a drag on the scrim pans the map underneath it.
+  it("keeps the access panel's input off the map behind it", async () => {
+    // Like the model pill's, the access panel portals out of the card's DOM
+    // but not out of its React tree, and the Star Map's ancestors pan the
+    // canvas on pointerdown and unwind the selection on Escape.
     const onPointerDown = vi.fn();
     const onKeyDown = vi.fn();
     const desktopApi = settingsApi();
@@ -3622,63 +3624,55 @@ describe("StarMapChatCard settings menu", () => {
         })}
       </div>,
     );
-    await openSettingsMenu();
-    await chooseAccessMode("Full Access");
-
-    const dialog = await screen.findByRole("dialog", {
-      name: "Enable Full Access?",
-    });
-    const scrim = dialog.closest(".full-access-warning-modal");
-    expect(scrim).not.toBeNull();
+    await chooseAccessMode("full-access");
+    const panel = openAccessPicker();
+    const track = within(panel).getByRole("slider", { name: "Access level" });
+    expect(shouldStartCanvasPan(track)).toBe(true);
     onPointerDown.mockClear();
     onKeyDown.mockClear();
 
-    fireEvent.pointerDown(scrim as Element, { button: 0 });
-    fireEvent.keyDown(scrim as Element, { key: "Escape" });
+    // Allow first: a press on the bar chooses a stop, which drops the
+    // pending Full Access and its Allow.
+    fireEvent.pointerDown(within(panel).getByRole("button", { name: /^Allow / }), { button: 0 });
+    fireEvent.pointerDown(track, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(track, { button: 0, pointerId: 1 });
+    fireEvent.keyDown(panel, { key: "a" });
 
     expect(onPointerDown).not.toHaveBeenCalled();
     expect(onKeyDown).not.toHaveBeenCalled();
+    // The trigger itself still reaches the card, which raises on press.
+    fireEvent.pointerDown(accessTrigger(), { button: 0 });
+    expect(onPointerDown).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the thread on Default Access when the warning is cancelled", async () => {
+  it("leaves the thread on Default Access when the confirmation is cancelled", async () => {
     const desktopApi = settingsApi();
     renderCard({
       desktopApi,
       thread: localThread({ executionMode: "default", model: "gpt-5-codex" }),
     });
-    await openSettingsMenu();
-    await chooseAccessMode("Full Access");
+    await chooseAccessMode("full-access");
 
-    const dialog = await screen.findByRole("dialog", {
-      name: "Enable Full Access?",
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const panel = openAccessPicker();
+    fireEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
 
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("dialog", { name: "Enable Full Access?" }),
-      ).toBeNull();
-    });
+    expect(within(panel).queryByRole("button", { name: /^Allow / })).toBeNull();
     expect(desktopApi.setThreadExecutionMode).not.toHaveBeenCalled();
-    // The chip carries the mode in its accessible name, so this is the
-    // operator's own view of the thread still being on Default Access —
-    // the optimistic patch must not have run either.
-    const chip = await screen.findByRole("button", {
-      name: /^Thread settings/,
-    });
-    expect(chip.getAttribute("aria-label")).toContain("Default Access");
+    // The trigger carries the level in its accessible name, so this is the
+    // operator's own view of the thread still being on Default Access.
+    expect(accessTrigger().getAttribute("aria-label")).toBe("Access: Default Access");
   });
 
-  it("skips the warning once the operator dismissed it on this desktop", async () => {
+  it("skips the confirmation once the operator dismissed it on this desktop", async () => {
     const desktopApi = settingsSnapshotApi(true);
     renderCard({
       desktopApi,
       thread: localThread({ executionMode: "default", model: "gpt-5-codex" }),
     });
     await settleDismissedRead(desktopApi);
-    await openSettingsMenu();
-    await chooseAccessMode("Full Access");
+    await chooseAccessMode("full-access");
 
+    expect(screen.queryByRole("button", { name: /^Allow / })).toBeNull();
     expect(
       screen.queryByRole("dialog", { name: "Enable Full Access?" }),
     ).toBeNull();
@@ -3692,21 +3686,10 @@ describe("StarMapChatCard settings menu", () => {
     });
   });
 
-  it("persists the dismissal this window from the card's own dialog", async () => {
-    // No `App` above this window to own the preference, so the gate reads
-    // and writes the setting itself.
-    const writeSettingsConfig = vi.fn(async () => ({
-      update: {
-        version: 2,
-        configRevision: "next",
-        changedDomains: ["experimental"] as const,
-        normalizedPatch: {
-          experimental: { fullAccessRiskWarningDismissed: true },
-        },
-        scheduledProviderRefreshes: [],
-      },
-      snapshot: {} as DesktopSettingsSnapshot,
-    }));
+  it("allows one escalation without dismissing the warning for later ones", async () => {
+    // The inline confirmation has no "Do not warn me again": Allow confirms
+    // this change only, and the preference stays where it was.
+    const writeSettingsConfig = vi.fn();
     const desktopApi = settingsSnapshotApi(false, {
       writeSettingsConfig,
     } as unknown as Partial<DesktopApi>);
@@ -3715,29 +3698,15 @@ describe("StarMapChatCard settings menu", () => {
       thread: localThread({ executionMode: "default", model: "gpt-5-codex" }),
     });
     await settleDismissedRead(desktopApi);
-    await openSettingsMenu();
-    await chooseAccessMode("Full Access");
-
-    const dialog = await screen.findByRole("dialog", {
-      name: "Enable Full Access?",
-    });
-    fireEvent.click(
-      within(dialog).getByLabelText("Do not warn me again on this desktop."),
-    );
-    fireEvent.click(
-      within(dialog).getByRole("button", {
-        name: "I Understand and Accept the Risks",
-      }),
-    );
+    await chooseAccessMode("full-access");
+    allowAccessStop();
 
     await waitFor(() => {
-      expect(writeSettingsConfig).toHaveBeenCalledWith({
-        patch: { experimental: { fullAccessRiskWarningDismissed: true } },
-      });
       expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith(
         expect.objectContaining({ executionMode: "full-access" }),
       );
     });
+    expect(writeSettingsConfig).not.toHaveBeenCalled();
   });
 
   it("drops back to Default Access without a confirmation", async () => {
@@ -3751,9 +3720,9 @@ describe("StarMapChatCard settings menu", () => {
         model: "gpt-5-codex",
       }),
     });
-    await openSettingsMenu();
-    await chooseAccessMode("Default Access");
+    await chooseAccessMode("default");
 
+    expect(screen.queryByRole("button", { name: /^Allow / })).toBeNull();
     expect(
       screen.queryByRole("dialog", { name: "Enable Full Access?" }),
     ).toBeNull();
@@ -3776,24 +3745,15 @@ describe("StarMapChatCard settings menu", () => {
         model: "gpt-5-codex",
       }),
     });
-    await openSettingsMenu();
-    await chooseAccessMode("Auto");
+    await chooseAccessMode("auto");
 
     await waitFor(() => {
       expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith(
         expect.objectContaining({ executionMode: "auto" }),
       );
     });
-    await openSettingsMenu();
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Access/ }));
-    expect(
-      (await screen.findByRole("menuitemradio", { name: "Full Access" }))
-        .getAttribute("aria-checked"),
-    ).toBe("true");
-    expect(
-      screen.getByRole("menuitemradio", { name: "Auto" })
-        .getAttribute("aria-checked"),
-    ).toBe("false");
+    expect(accessTrigger().getAttribute("aria-label")).toBe("Access: Full Access");
+    expect(accessTrigger().getAttribute("value")).toBe("full-access");
   });
 
   it("hides Access when the backend describes only one available mode", async () => {
@@ -3832,8 +3792,7 @@ describe("StarMapChatCard settings menu", () => {
       expect(within(openModelSettings()).queryByRole("radio", { name: "Fast" })).toBeTruthy();
     });
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
-    await openSettingsMenu();
-    expect(screen.queryByRole("menuitem", { name: /Access/ })).toBeNull();
+    expect(queryAccessTriggers()).toEqual([]);
   });
 
   it("offers no Fast where the account may not use it", async () => {

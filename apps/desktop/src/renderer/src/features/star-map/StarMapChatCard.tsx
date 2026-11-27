@@ -39,6 +39,7 @@ import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   CompactComposer,
+  type CompactComposerAccess,
   type CompactComposerAction,
   type CompactComposerDraftRestore,
   type CompactComposerModelSettings,
@@ -1715,7 +1716,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     },
     [desktopApi, federationTarget, threadId, threadSource],
   );
-  const { fullAccessRiskDialog, requestExecutionModeSelection } =
+  const {
+    confirmExecutionModeSelection,
+    fullAccessRiskDialog,
+    requestExecutionModeSelection,
+    requiresConfirmation: requiresExecutionModeConfirmation,
+  } =
     useExecutionModeSelection({
       applyExecutionMode,
       currentExecutionMode: threadExecutionMode,
@@ -1910,16 +1916,18 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   ]);
 
   /**
-   * The settings chip's menu: the same access control the full composer
-   * offers, minus what a floating card cannot honestly host (workspace
-   * handoff and environments need the handoff dialog and launchpad state —
-   * those stay behind Open in full view).
+   * The strip's access picker: the same control the full composer offers,
+   * minus what a floating card cannot honestly host (workspace handoff and
+   * environments need the handoff dialog and launchpad state — those stay
+   * behind Open in full view). Choosing Full Access confirms inline, with
+   * Allow and Cancel under the level bar; the gate still owns the rule and
+   * the dismissed-forever preference.
    */
   const settingsMenu = useMemo<CompactComposerSettingsMenu | undefined>(() => {
     if (!desktopApi) return undefined;
     const setExecutionMode = desktopApi.setThreadExecutionMode;
     // Use the shared provider access control so Star Map cards offer the exact
-    // same single Access menu as the full composer (including Antigravity's
+    // same single Access control as the full composer (including Antigravity's
     // unified Default Access / native modes / Full Access list).
     const accessControl = resolveProviderAccessControl({
       backend: backendSummary,
@@ -1931,52 +1939,48 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         },
       },
     });
-    const availableExecutionModes =
-      accessControl && accessControl.kind !== "acp"
-        ? accessControl.options
-            .filter((option) => option.available)
-            .map((option) => ({
-              label: option.label,
-              mode: option.executionMode,
-              value: option.value,
-              selected: option.value === accessControl.value,
-              danger: option.tone === "danger",
-            }))
+    const access: CompactComposerAccess | undefined =
+      setExecutionMode
+      && accessControl
+      && accessControl.kind !== "acp"
+      // One mode the thread can actually run at leaves nothing to choose.
+      && accessControl.options.filter((option) => option.available).length > 1
+        ? {
+            backend: backendSummary?.kind ?? threadSource,
+            control: accessControl,
+            needsConfirmation: (option) =>
+              option.requiresFullAccessConfirmation
+              && requiresExecutionModeConfirmation(option.executionMode),
+            onCommit: (option, confirmed) => {
+              pendingAccessAcpOptionRef.current = option.acpOption;
+              if (!option.requiresFullAccessConfirmation) {
+                applyExecutionMode(option.executionMode);
+              } else if (confirmed) {
+                confirmExecutionModeSelection(option.executionMode);
+              } else {
+                // The gate decides between prompting and applying; the
+                // apply half is `applyExecutionMode` above.
+                requestExecutionModeSelection(option.executionMode);
+              }
+            },
+          }
         : undefined;
     return {
       onOpen: onSettingsMenuOpen,
-      executionModes: setExecutionMode ? availableExecutionModes : undefined,
-      accessLabel:
-        accessControl && accessControl.kind !== "acp"
-          ? accessControl.selectedOption?.label
-          : undefined,
-      // The gate decides between prompting and applying; the apply half
-      // is `applyExecutionMode` above.
-      onSelectExecutionMode: setExecutionMode
-        ? requestExecutionModeSelection
-        : undefined,
-      onSelectAccessOption: setExecutionMode && accessControl && accessControl.kind !== "acp"
-        ? (value: string) => {
-            const option = accessControl.options.find((candidate) => candidate.value === value);
-            if (!option) return;
-            pendingAccessAcpOptionRef.current = option.acpOption;
-            if (option.requiresFullAccessConfirmation) {
-              requestExecutionModeSelection(option.executionMode);
-              return;
-            }
-            applyExecutionMode(option.executionMode);
-          }
-        : undefined,
+      ...(access ? { access } : {}),
     };
   }, [
     applyExecutionMode,
     backendSummary,
+    confirmExecutionModeSelection,
     desktopApi,
     onSettingsMenuOpen,
     requestExecutionModeSelection,
+    requiresExecutionModeConfirmation,
     threadAcpCurrentModeId,
     threadAcpModeConfigValue,
     threadExecutionMode,
+    threadSource,
   ]);
 
   /**

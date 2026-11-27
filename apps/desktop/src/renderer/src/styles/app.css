@@ -27085,7 +27085,18 @@ button.stack-display__thread,
   flex: 1 1 auto;
 }
 
+/* On a narrow card the model pill gives way first, down to a floor that
+   still shows the start of the model's name; only then does the access
+   chip's level name shorten. Flex shrinks in proportion to basis × factor,
+   so the pill's large factor leaves the chip whole (to the pixel) while the
+   pill is above its floor. */
 .compact-composer__model {
+  display: flex;
+  flex: 0 100000 auto;
+  min-width: 72px;
+}
+
+.compact-composer__access {
   display: flex;
   flex: 0 1 auto;
   min-width: 0;
@@ -53389,6 +53400,42 @@ button.stepped-bar__tick:focus-visible {
   opacity: 0.9;
 }
 
+/* A to-do card's or Star Map chat card's 22px chip: the shield, then the
+   level by name, the same height and type as the card's model pill. */
+.access-picker--card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.access-picker--card .access-picker__trigger {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  min-height: 22px;
+  box-sizing: border-box;
+  gap: 5px;
+  padding: 0 7px 0 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.access-picker__trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.access-picker__trigger-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: inherit;
+  line-height: 0;
+  opacity: 0.7;
+}
+
 .access-picker__panel {
   position: absolute;
   z-index: 30;
@@ -53405,6 +53452,15 @@ button.stepped-bar__tick:focus-visible {
   color: var(--text-primary);
   font-family: var(--font-sans);
   white-space: normal;
+}
+
+/* Portalled under a card; placed from the trigger. */
+.access-picker__panel--below {
+  position: fixed;
+  z-index: 150;
+  bottom: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .access-picker__head {

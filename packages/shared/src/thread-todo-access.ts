@@ -172,7 +172,7 @@ export function resolveThreadTodoStartAccess(input: {
   const options: ThreadTodoAccessOption[] = acpNativeAccessOptions(runtime)
     .map((option) => ({ kind: "native", ...option }));
   // The Full Access gate judges the card's mode, so a pick above it, which
-  // the card's own Access menu never stores, is not honored.
+  // the card's own access picker never stores, is not honored.
   const picked = card.nativeAccessMode?.backend === input.destinationBackend
     ? options.find((option) => option.kind === "native" && option.id === card.nativeAccessMode?.id
       && (option.executionMode === undefined || threadExecutionModeRank(option.executionMode) <= threadExecutionModeRank(wanted)))
