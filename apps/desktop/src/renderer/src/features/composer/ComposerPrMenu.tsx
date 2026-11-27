@@ -86,7 +86,12 @@ export function ComposerPrMenu(props: {
     setError(undefined);
     setOpen(true);
   }, []);
+  // Only a request made after mount opens the menu: a remount (a thread
+  // switch, a refold) keeps the last count and must not reopen it.
+  const handledOpenRequestRef = useRef(props.openRequest);
   useEffect(() => {
+    if (props.openRequest === handledOpenRequestRef.current) return;
+    handledOpenRequestRef.current = props.openRequest;
     if (!props.openRequest) return;
     setAnchored(true);
     openMenu();

@@ -4893,8 +4893,10 @@ function useComposerController(props: ComposerProps) {
       window.removeEventListener("focus", revalidate);
     };
   }, [pdfPreviewPathsKey, props.pdfAnalysisEnabled, requestComposerPdfPreview]);
+  // A bare /plan has nothing to send: only its prompt counts as content.
   const hasComposerContent =
-    draft.trim().length > 0 || skillTokens.length > 0;
+    (planCommand ? planCommand.prompt.length > 0 : draft.trim().length > 0)
+    || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
   const nextReleasableQueuedTurn = getNextReleasableQueuedTurn(queuedTurns);
   const ownerCanMoveQueuedTurns = queuedTurnOwnerCanMove(props.desktopApi, props.thread);
@@ -9630,7 +9632,7 @@ function useComposerController(props: ComposerProps) {
       let input: AppServerTurnInputItem[] | undefined;
       if (!reviewTarget) {
         const payloadOrPromise = buildTurnPayload(
-          canonicalDraft,
+          turnDraft,
           imageAttachments,
           fileAttachments,
           skillTokens,
@@ -13781,7 +13783,7 @@ function useComposerController(props: ComposerProps) {
       activeReviewerRecentIndex,
       patchReviewer,
       workspaceLabel,
-        supportsSteering,
+      supportsSteering,
       supportsInterruptSteer,
       launchpadSubmitting,
       subthreadParentTitle,
@@ -16073,7 +16075,11 @@ function useComposerController(props: ComposerProps) {
 
     if (composerTierFolded("details")) {
       if (props.thread && props.onPickAndAttachDirectoryToThread) {
-        actions.push(action("add-directory", "Add directory…", () => {
+        // The row's control explains in a tooltip why a remote thread can't
+        // add one; a menu row has no tooltip, so it says so itself.
+        actions.push(action("add-directory", filesystemFederationTarget
+          ? "Add directory… (local instance only)"
+          : "Add directory…", () => {
           props.onClearPickDirectoryError?.();
           props.onPickAndAttachDirectoryToThread?.();
         }, props.pickingDirectory || Boolean(filesystemFederationTarget)));

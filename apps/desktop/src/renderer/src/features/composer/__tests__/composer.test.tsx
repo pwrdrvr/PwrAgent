@@ -924,6 +924,35 @@ describe("Composer", () => {
     ]);
   });
 
+  it("schedules a new thread from /plan with the message alone, in Plan mode", async () => {
+    const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={retargetingPwrSnap}
+        launchpad={createRetargetingLaunchpad(retargetingPwrSnap, "")}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        skills={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "/plan Investigate the build" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule thread" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Start in 15m" }));
+    });
+
+    await waitFor(() => expect(onMaterializeLaunchpad).toHaveBeenCalledTimes(1));
+    expect(onMaterializeLaunchpad.mock.calls[0]).toEqual([
+      retargetingPwrSnap.key,
+      [{ type: "text", text: "Investigate the build" }],
+      { mode: "plan", settings: { developerInstructions: null } },
+      undefined,
+      [],
+      expect.any(Number),
+    ]);
+  });
+
   it("reloads a failed configuration read after returning to a project draft", async () => {
     const store = createComposerDraftStore();
     let readsOfFirst = 0;
@@ -29929,6 +29958,36 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(screen.getByLabelText("Reply")).toHaveValue("");
     });
+  });
+
+  it("keeps Send disabled for a bare /plan, which has no message to send", async () => {
+    const startTurn = vi.fn().mockResolvedValue({ backend: "claude", threadId: "thread-1", turnId: "turn-1" });
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Plan mode",
+          titleSource: "explicit",
+          source: "claude",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const reply = screen.getByLabelText("Reply");
+    for (const draft of ["/plan", "/plan   ", "/PLAN\n"]) {
+      fireEvent.change(reply, { target: { value: draft } });
+      expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    }
+    fireEvent.keyDown(reply, { key: "Enter" });
+    expect(startTurn).not.toHaveBeenCalled();
+
+    fireEvent.change(reply, { target: { value: "/plan Plan this change" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
   it("offers /plan on Claude threads, sends it for one turn, and leaves other providers without it", async () => {

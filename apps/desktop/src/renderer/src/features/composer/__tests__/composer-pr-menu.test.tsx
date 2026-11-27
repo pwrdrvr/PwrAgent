@@ -63,6 +63,39 @@ describe("composer PR menu", () => {
     });
   });
 
+  it("opens from ⋮ only on a new request, not when it remounts with the last one", async () => {
+    const anchor = document.createElement("button");
+    document.body.append(anchor);
+    const anchorRef = { current: anchor };
+    const menu = (openRequest: number, key: string) => (
+      <ComposerPrMenu
+        key={key}
+        thread={thread}
+        desktopApi={{ manageThreadDependencies: vi.fn(async () => ({ dependencies: [] })) } as unknown as DesktopApi}
+        watchMergeBuildsDefault
+        prUrl={PR_URL}
+        className="composer__toggle"
+        tooltip="Auto-fix PR"
+        anchorRef={anchorRef}
+        openRequest={openRequest}
+        autoFix={{ checked: true, available: true, onToggle: vi.fn() }}
+      />
+    );
+    const { rerender } = render(menu(0, "first"));
+    expect(screen.queryByRole("menu", { name: "Pull request automation" })).toBeNull();
+    rerender(menu(1, "first"));
+    await screen.findByRole("menuitemcheckbox", { name: /Watch merge build/ });
+    fireEvent.keyDown(screen.getByRole("menu", { name: "Pull request automation" }), { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Pull request automation" })).toBeNull();
+
+    // A thread switch or refold remounts the menu with the count it last saw.
+    rerender(menu(1, "remounted"));
+    expect(screen.queryByRole("menu", { name: "Pull request automation" })).toBeNull();
+    rerender(menu(2, "remounted"));
+    await screen.findByRole("menuitemcheckbox", { name: /Watch merge build/ });
+    anchor.remove();
+  });
+
   it("strips Electron's IPC wrapper when showing a Watch merge build error", async () => {
     const manageThreadDependencies = vi.fn(async (request: ManageThreadDependenciesRequest): Promise<ManageThreadDependenciesResponse> => {
       if (request.action === "list") return { dependencies: [] };
