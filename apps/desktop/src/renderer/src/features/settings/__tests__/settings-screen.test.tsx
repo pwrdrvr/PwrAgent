@@ -5188,7 +5188,7 @@ describe("SettingsScreen", () => {
       .getByRole("button", { name: /Token Miser \(v2\).*Unavailable/ })).toBeInTheDocument();
   });
 
-  it("saves a bounded-command helper with stock Codex while managed Token Miser is off", async () => {
+  it("saves the gate and summarizer separately with stock Codex while managed Token Miser is off", async () => {
     const snapshot = createSnapshot();
     snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
     snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
@@ -5203,21 +5203,44 @@ describe("SettingsScreen", () => {
     expect(switches[0]).toBeChecked();
     // Legacy lives in its own card under Soon to be removed.
     expect(within(section).queryByText("Reduce tool output in managed Codex")).not.toBeInTheDocument();
-    const picker = within(section).getByRole("combobox", { name: "Pick an excerpt with a model" });
-    expect(picker).toHaveTextContent("Don’t use a model");
-    expect(within(section).getByText(/Rules on this Mac pick what the agent sees/)).toBeInTheDocument();
-    fireEvent.click(picker);
-    // Older choices are never offered to a profile that did not save them.
-    expect(screen.queryByRole("option", { name: /saved earlier/ })).not.toBeInTheDocument();
+    const gate = within(section).getByRole("combobox", { name: "Check each result with a decision model" });
+    const summarizer = within(section).getByRole("combobox", { name: "Summarize with a helper model" });
+    expect(gate).toHaveTextContent("Don’t check");
+    expect(summarizer).toHaveTextContent("Off");
+    expect(within(section).getByText(/No check runs/)).toBeInTheDocument();
+    expect(within(section).getByText(/every capture of 8 KB or more/)).toBeInTheDocument();
+    expect(within(section).queryByText(/Earlier you chose/)).not.toBeInTheDocument();
+
+    fireEvent.click(gate);
     fireEvent.click(screen.getByRole("option", { name: /^OpenAI Decisions/ }));
-    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserBoundedHelper: "openai" } }));
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserGate: "openai" } }));
+    fireEvent.click(summarizer);
+    fireEvent.click(screen.getByRole("option", { name: /^Helper model for each thread type/ }));
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserSummarizer: "configured" } }));
+    // Each control writes only its own key.
+    expect(settings.writeConfig).toHaveBeenCalledTimes(2);
   });
 
-  it("shows what each thread type's excerpt picker runs and saves one row without touching the others", async () => {
+  it("summarizes only what the gate flags once a decision model is chosen", () => {
     const snapshot = createSnapshot();
     snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
     snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
-    snapshot.experimental.tokenMiserBoundedHelper = { value: "configured", source: "config" };
+    snapshot.experimental.tokenMiserGate = { value: "local", source: "config" };
+    snapshot.experimental.tokenMiserSummarizer = { value: "off", source: "config" };
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+    const section = within(screen.getByRole("region", { name: "Token Miser (v2)" }));
+    expect(section.getByRole("combobox", { name: "Check each result with a decision model" }))
+      .toHaveTextContent("Local decision model");
+    expect(section.getByText(/summarizes only the captures the decision model scores/)).toBeInTheDocument();
+    expect(section.queryByText(/every capture of 8 KB or more/)).not.toBeInTheDocument();
+  });
+
+  it("shows what each thread type's summarizer runs and saves one row without touching the others", async () => {
+    const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserSummarizer = { value: "configured", source: "config" };
     const helperModels = {
       defaultModel: "gpt-5.5",
       helpers: {
@@ -5243,16 +5266,16 @@ describe("SettingsScreen", () => {
     render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
       cachedBackends={backends} initialSection="experimental" settings={settings} onClose={() => undefined} />);
     const section = within(screen.getByRole("region", { name: "Token Miser (v2)" }));
-    expect(section.getByRole("combobox", { name: "Pick an excerpt with a model" }))
+    expect(section.getByRole("combobox", { name: "Summarize with a helper model" }))
       .toHaveTextContent("Helper model for each thread type");
     // Only Codex threads inherit the saved Helper model.
     expect(section.getByText(/your Helper model from AI Providers → Helpers/)).toHaveTextContent("Runs GPT-5.5 on Codex");
     expect(section.getByText(/Choose a model on Claude/)).toHaveTextContent(
-      "Until then Claude threads get the no-model result.",
+      "Until then Claude threads get the digest only.",
     );
     expect(section.getByText(/on Grok, low effort/)).toHaveTextContent("Runs Grok Fast on Grok, low effort.");
 
-    chooseModelSettingsOption("Model", /Haiku 5\.5/, "Excerpt picker for Claude threads");
+    chooseModelSettingsOption("Model", /Haiku 5\.5/, "Summarizer for Claude threads");
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
       models: {
         helperModels: {
@@ -5264,30 +5287,47 @@ describe("SettingsScreen", () => {
   });
 
   it.each([
-    ["codex", "Codex Token Miser helper (saved earlier)", /Output evaluation helper on Codex/],
-    ["decision", "Default decision model (saved earlier)", /follows AI Providers → Decisions/],
-  ] as const)("keeps a saved %s helper choice as saved, without offering it again", (saved, label, line) => {
+    ["configured", "a Helper model for each thread type"],
+    ["codex", "the Codex Token Miser helper"],
+    ["decision", "your default decision model"],
+    ["openai", "OpenAI Decisions"],
+    ["jev", "TypeSafe Jev"],
+    ["local", "the local decision model"],
+  ] as const)("reports an earlier %s excerpt choice without selecting a gate or summarizer", (saved, label) => {
     const snapshot = createSnapshot();
     snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
     snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
     snapshot.experimental.tokenMiserBoundedHelper = { value: saved, source: "config" };
-    snapshot.models.decisionModels = { model: "jev" };
-    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+    // Every provider ready, so nothing but the new keys could select one.
+    snapshot.models.decisionModels = { model: "jev", local: { enabled: true } };
+    snapshot.models.decisionSecrets = {
+      localApiKey: { configured: true, source: "keychain", writable: true },
+      jevApiKey: { configured: true, source: "keychain", writable: true },
+    };
+    snapshot.models.openaiDecisions = { apiKey: { configured: true, source: "keychain", writable: true } };
+    const view = render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
       initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
-    const section = within(screen.getByRole("region", { name: "Token Miser (v2)" }));
-    const picker = section.getByRole("combobox", { name: "Pick an excerpt with a model" });
-    expect(picker).toHaveTextContent(label);
-    expect(section.getByText(line)).toBeInTheDocument();
-    expect(section.getByText("Kept as you saved it. Choosing another option replaces it.")).toBeInTheDocument();
-    const options = selectOptionLabels(picker);
-    expect(options.filter((option) => option.includes("saved earlier"))).toEqual([label]);
+    const section = () => within(screen.getByRole("region", { name: "Token Miser (v2)" }));
+    expect(section().getByRole("combobox", { name: "Check each result with a decision model" }))
+      .toHaveTextContent("Don’t check");
+    expect(section().getByRole("combobox", { name: "Summarize with a helper model" })).toHaveTextContent("Off");
+    expect(section().getByText(/That no longer runs/)).toHaveTextContent(
+      `Earlier you chose ${label} to pick an excerpt. That no longer runs.`,
+    );
+    expect(section().queryByText(/API key stored/)).not.toBeInTheDocument();
+
+    // An explicit choice of either new setting retires the note.
+    snapshot.experimental.tokenMiserSummarizer = { value: "off", source: "config" };
+    view.rerender(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState({ ...snapshot })} onClose={() => undefined} />);
+    expect(section().queryByText(/That no longer runs/)).not.toBeInTheDocument();
   });
 
   it("names the decision provider, its model, readiness and cost without falling back to another", () => {
     const snapshot = createSnapshot();
     snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
     snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
-    snapshot.experimental.tokenMiserBoundedHelper = { value: "openai", source: "config" };
+    snapshot.experimental.tokenMiserGate = { value: "openai", source: "config" };
     // A ready Jev must not stand in for an OpenAI choice that has no key.
     snapshot.models.decisionModels = { model: "jev" };
     snapshot.models.decisionSecrets = {
@@ -5299,12 +5339,12 @@ describe("SettingsScreen", () => {
       initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
     const section = () => within(screen.getByRole("region", { name: "Token Miser (v2)" }));
     expect(section().getByText(/needs an API key in AI Providers → OpenAI Decisions/)).toHaveTextContent(
-      "gpt-6-luna needs an API key in AI Providers → OpenAI Decisions. Until then the agent gets the no-model result.",
+      "gpt-6-luna needs an API key in AI Providers → OpenAI Decisions. Until then the agent gets the digest only.",
     );
     expect(section().getByText(/Paid per call to your OpenAI API project/)).toHaveTextContent("$0.10 per");
     expect(section().queryByText(/TypeSafe Jev\. API key stored/)).not.toBeInTheDocument();
 
-    snapshot.experimental.tokenMiserBoundedHelper = { value: "local", source: "config" };
+    snapshot.experimental.tokenMiserGate = { value: "local", source: "config" };
     snapshot.models.decisionModels = { model: "jev", local: { enabled: false } };
     view.rerender(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
       initialSection="experimental" settings={createSettingsState({ ...snapshot })} onClose={() => undefined} />);

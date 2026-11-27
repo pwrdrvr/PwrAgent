@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import { BOUNDED_COMMAND_HELPER_MODES } from "@pwragent/shared/contracts/settings";
 import {
   CAPTURE_HELPER_IDS,
   type DesktopHelperModelChoice,
@@ -9,6 +10,7 @@ import {
 import {
   CAPTURE_ORIGINS,
   captureRowState,
+  tokenMiserModelChoices,
   withCaptureRow,
   type CaptureOrigin,
 } from "../../renderer/src/features/settings/token-miser-capture-helpers";
@@ -58,13 +60,17 @@ const settingsArbitrary = fc.record({
   };
 });
 
-function ownerRoute(settings: DesktopHelperModelSettings, origin: CaptureOrigin) {
+function ownerRoute(settings: DesktopHelperModelSettings, origin: CaptureOrigin, grokEnabled = true) {
+  // No gate, summarizer on: the owner routes to the thread type's row alone.
   return boundedCommandHelper({
-    resolveTokenMiserBoundedHelper: () => "configured",
+    resolveTokenMiserGate: () => "none",
+    resolveTokenMiserSummarizer: () => "configured",
     resolveHelperModelSettings: () => settings,
     resolveDecisionModelSettings: () => ({}),
     resolveDecisionApiKey: async () => undefined,
-  }, client(), undefined, { origin, threadId: "thread", claude: client(), grok: client() });
+  }, client(), undefined, {
+    origin, threadId: "thread", claude: client(), grok: client(), grokEnabled: () => grokEnabled,
+  });
 }
 
 describe("Token Miser (v2) capture rows in Settings", () => {
@@ -78,7 +84,7 @@ describe("Token Miser (v2) capture rows in Settings", () => {
         expect(state.status.kind === "ready").toBe(owner !== undefined);
         if (owner) {
           expect(owner.identity).toBe(JSON.stringify([
-            "configured", state.helper, state.backend, state.model, state.effort,
+            "none", undefined, state.helper, state.backend, state.model, state.effort,
           ]));
         }
       }
@@ -127,5 +133,48 @@ describe("Token Miser (v2) capture rows in Settings", () => {
     };
     const withoutGrok = BACKENDS.filter((backend) => backend.kind !== "acp:grok");
     expect(captureRowState("acp:antigravity", settings, withoutGrok).status.kind).toBe("backend-unavailable");
+    // A disabled Grok is not connected in Settings, and the owner skips it too.
+    expect(ownerRoute(settings, "acp:antigravity", false)).toBeUndefined();
+  });
+});
+
+describe("Token Miser (v2) gate and summarizer in Settings", () => {
+  const source = fc.constantFrom("default" as const, "config" as const);
+  const setting = <T extends string>(values: readonly T[]) => fc.option(
+    fc.record({ value: fc.constantFrom(...values), source }),
+    { nil: undefined },
+  );
+
+  // The earlier excerpt-picker key must never choose a gate or summarizer:
+  // only an explicit save of the new keys does.
+  it("selects a gate or summarizer only from its own key, and reports an earlier choice until one is made", () => {
+    fc.assert(fc.property(
+      setting(BOUNDED_COMMAND_HELPER_MODES),
+      setting(["none", "openai", "jev", "local"] as const),
+      setting(["off", "configured"] as const),
+      (legacy, gate, summarizer) => {
+        const choices = tokenMiserModelChoices({
+          tokenMiserBoundedHelper: legacy,
+          tokenMiserGate: gate,
+          tokenMiserSummarizer: summarizer,
+        });
+        expect(choices.gate.value).toBe(gate?.value ?? "none");
+        expect(choices.summarizer.value).toBe(summarizer?.value ?? "off");
+        const chosen = (gate?.source ?? "default") !== "default"
+          || (summarizer?.source ?? "default") !== "default";
+        const saved = legacy && legacy.source !== "default" && legacy.value !== "deterministic";
+        expect(choices.earlier).toBe(!chosen && saved ? legacy.value : undefined);
+      },
+    ));
+  });
+
+  it("leaves an upgraded profile with a saved OpenAI excerpt picker on no gate and no summarizer", () => {
+    expect(tokenMiserModelChoices({
+      tokenMiserBoundedHelper: { value: "openai", source: "config" },
+    })).toEqual({
+      gate: { value: "none", source: "default" },
+      summarizer: { value: "off", source: "default" },
+      earlier: "openai",
+    });
   });
 });

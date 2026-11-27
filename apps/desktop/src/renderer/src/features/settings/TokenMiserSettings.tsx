@@ -1,10 +1,11 @@
 import { formatFilesystemPath } from "@pwragent/shared/path-display";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import {
-  type BoundedCommandHelperMode,
   type DesktopSettingsConfigPatch,
   type DesktopSettingsSnapshot,
   type DesktopTokenMiserUsage,
+  type TokenMiserGateProvider,
+  type TokenMiserSummarizerMode,
 } from "@pwragent/shared/contracts/settings";
 import { resolveDecisionModelSettings } from "@pwragent/shared/decision-models";
 import {
@@ -35,10 +36,11 @@ import {
   CAPTURE_RUNNERS,
   captureRowState,
   captureRunnerLabel,
-  isSavedEarlierHelperMode,
+  tokenMiserModelChoices,
   withCaptureRow,
   type CaptureOrigin,
   type CaptureRowState,
+  type TokenMiserModelChoices,
 } from "./token-miser-capture-helpers";
 
 const PICKER_CLASS = "settings-select settings-select--chip";
@@ -81,27 +83,27 @@ function openAIInputRate(): string {
 type ProviderStatus = { ready: boolean; lines: ReactNode[] };
 
 /**
- * The selected decision provider, its model, whether a pick can run now and
- * what one costs. Mirrors the owner's checks in `bounded-command-helper.ts`;
- * a provider that is not ready leaves the agent with the no-model result.
+ * The selected decision provider, its model, whether it can score now and
+ * what a call costs. Mirrors the owner's provider checks; a provider that is
+ * not ready leaves the agent with the digest only.
  */
 function decisionProviderStatus(
-  provider: "openai" | "jev" | "local",
+  provider: Exclude<TokenMiserGateProvider, "none">,
   snapshot: DesktopSettingsSnapshot,
 ): ProviderStatus {
   const models = snapshot.models;
   const decisions = resolveDecisionModelSettings(models.decisionModels);
-  const fallback = "Until then the agent gets the no-model result.";
+  const fallback = "Until then the agent gets the digest only.";
   if (provider === "openai") {
     const account = models.openaiDecisions;
     const cost = (
       <Line key="cost">
         Paid per call to your OpenAI API project, not a ChatGPT plan, at {openAIInputRate()} per
-        million input tokens. One pick sends about 1,500 tokens, well under $0.001.
+        million input tokens. Every finished capture is one call.
       </Line>
     );
     if (!account) {
-      return { ready: false, lines: [<Line key="state" warn>This build cannot reach OpenAI Decisions. The agent gets the no-model result.</Line>, cost] };
+      return { ready: false, lines: [<Line key="state" warn>This build cannot reach OpenAI Decisions. The agent gets the digest only.</Line>, cost] };
     }
     if (account.enabled === false) {
       return { ready: false, lines: [<Line key="state" warn>OpenAI Decisions is off in {PROVIDERS_PAGE} → OpenAI Decisions. {fallback}</Line>, cost] };
@@ -112,7 +114,7 @@ function decisionProviderStatus(
     return { ready: true, lines: [<Line key="state">Runs <strong>{OPENAI_DECISIONS_MODEL}</strong> on OpenAI Decisions. API key stored.</Line>, cost] };
   }
   if (provider === "jev") {
-    const cost = <Line key="cost">Billed by TypeSafe per call to your Jev account.</Line>;
+    const cost = <Line key="cost">Billed by TypeSafe per call to your Jev account. Every finished capture is one call.</Line>;
     if (!decisions.enabled.jev) {
       return { ready: false, lines: [<Line key="state" warn>TypeSafe Jev is off in {PROVIDERS_PAGE} → TypeSafe Jev. {fallback}</Line>, cost] };
     }
@@ -121,73 +123,21 @@ function decisionProviderStatus(
     }
     return { ready: true, lines: [<Line key="state">Runs <strong>{decisions.jevModel}</strong> on TypeSafe Jev. API key stored.</Line>, cost] };
   }
-  const cost = <Line key="cost">Free. If the server does not answer within 8 seconds, the agent gets the no-model result.</Line>;
+  const cost = <Line key="cost">Free. If the server does not answer within 3 seconds, the agent gets the digest only.</Line>;
   if (!decisions.enabled.local) {
     return { ready: false, lines: [<Line key="state" warn>The local decision model is off in {PROVIDERS_PAGE} → Local decision model. {fallback}</Line>, cost] };
   }
   return { ready: true, lines: [<Line key="state">Runs <strong>{decisions.localModel}</strong> on this Mac at {decisions.localEndpoint}.</Line>, cost] };
 }
 
-/** A saved `decision` mode follows Defaults → Decisions; say where it goes now. */
-function savedDecisionStatus(snapshot: DesktopSettingsSnapshot): ProviderStatus {
-  const decisions = resolveDecisionModelSettings(snapshot.models.decisionModels);
-  const intro = `Your earlier choice follows ${PROVIDERS_PAGE} → Decisions.`;
-  if (decisions.model === "off") {
-    return {
-      ready: false,
-      lines: [
-        <Line key="state" warn>
-          {intro} No decision model is in use there, so the agent gets the no-model result. Choose a provider here to pick one.
-        </Line>,
-      ],
-    };
-  }
-  const status = decisionProviderStatus(decisions.model, snapshot);
-  return {
-    ready: status.ready,
-    lines: [
-      <Line key="intro">{intro} It now uses {decisions.model === "jev" ? "TypeSafe Jev" : "the local decision model"}.</Line>,
-      ...status.lines,
-    ],
-  };
-}
-
-/** A saved `codex` mode runs the Output evaluation helper on Codex for every thread type. */
-function savedCodexStatus(
-  helperModels: DesktopHelperModelSettings,
-  backends: readonly BackendSummary[],
-): ProviderStatus {
-  const codex = backends.find((backend) => backend.kind === "codex");
-  const intro = "Your earlier choice runs the Output evaluation helper on Codex for Codex, Claude and Antigravity threads.";
-  if (!codex?.available) {
-    return {
-      ready: false,
-      lines: [<Line key="state" warn>{intro} Codex is not connected, so the agent gets the no-model result.</Line>],
-    };
-  }
-  const models = codex.launchpadOptions?.models ?? [];
-  const resolved = resolveHelperModel({
-    helper: "token_miser_evaluation",
-    settings: helperModels,
-    backend: "codex",
-    models: models.map((model) => ({
-      ...model,
-      reasoningEfforts: model.reasoningEfforts ?? codex.launchpadOptions?.reasoningEfforts,
-    })),
-    catalogRead: !codex.discoveryPending,
-  });
-  return {
-    ready: Boolean(resolved.model),
-    lines: [
-      <Line key="state" warn={!resolved.model}>
-        {intro}{" "}
-        {resolved.model
-          ? <>It runs <strong>{modelLabel(resolved.model, models)}</strong>, set in {PROVIDERS_PAGE} → Helpers.</>
-          : "Codex offers no model for it, so the agent gets the no-model result."}
-      </Line>,
-    ],
-  };
-}
+const EARLIER_CHOICE_LABELS: Record<NonNullable<TokenMiserModelChoices["earlier"]>, string> = {
+  configured: "a Helper model for each thread type",
+  codex: "the Codex Token Miser helper",
+  decision: "your default decision model",
+  openai: "OpenAI Decisions",
+  jev: "TypeSafe Jev",
+  local: "the local decision model",
+};
 
 function captureRowLine(
   state: CaptureRowState,
@@ -195,12 +145,12 @@ function captureRowLine(
   backends: readonly BackendSummary[],
 ): ReactNode {
   const runner = captureRunnerLabel(state.backend, backends);
-  const fallback = `Until then ${harness} threads get the no-model result.`;
+  const fallback = `Until then ${harness} threads get the digest only.`;
   switch (state.status.kind) {
     case "needs-backend":
-      return <Line warn>Antigravity can’t run the picker. Choose Codex, Claude or Grok to run it. {fallback}</Line>;
+      return <Line warn>Antigravity can’t run the summarizer. Choose Codex, Claude or Grok to run it. {fallback}</Line>;
     case "unsupported-backend":
-      return <Line warn>{runner} can’t run the picker. Choose Codex, Claude or Grok. {fallback}</Line>;
+      return <Line warn>{runner} can’t run the summarizer. Choose Codex, Claude or Grok. {fallback}</Line>;
     case "needs-model":
       return state.origin === "codex" && state.backend === "codex"
         ? <Line warn>Choose a model, or save a Helper model in {PROVIDERS_PAGE} → Helpers. {fallback}</Line>
@@ -208,9 +158,9 @@ function captureRowLine(
     case "backend-loading":
       return <Line>Checking {runner} models…</Line>;
     case "backend-unavailable":
-      return <Line warn>{runner} is not connected. {harness} threads get the no-model result until it is.</Line>;
+      return <Line warn>{runner} is not connected. {harness} threads get the digest only until it is.</Line>;
     case "model-not-offered":
-      return <Line warn>{runner} does not offer {state.model}. {harness} threads get the no-model result.</Line>;
+      return <Line warn>{runner} does not offer {state.model}. {harness} threads get the digest only.</Line>;
     case "ready": {
       const name = modelLabel(state.model ?? "", state.models);
       return state.modelSource === "helper-default"
@@ -220,7 +170,7 @@ function captureRowLine(
   }
 }
 
-/** One capture origin's picker: the backend that runs the pick, its model and effort. */
+/** One capture origin's summarizer: the backend that runs it, its model and effort. */
 function CaptureOriginRow(props: {
   origin: CaptureOrigin;
   label: string;
@@ -268,7 +218,7 @@ function CaptureOriginRow(props: {
       </span>
       <div className="settings-token-miser__origin-cell">
         <ModelSettingsPicker
-          ariaLabel={`Excerpt picker for ${props.label}`}
+          ariaLabel={`Summarizer for ${props.label}`}
           disabled={props.disabled}
           size="setting"
           provider={{
@@ -357,18 +307,10 @@ function CaptureOriginRow(props: {
   );
 }
 
-function helperOptions(
-  saved: BoundedCommandHelperMode,
-  snapshot: DesktopSettingsSnapshot,
-): SelectOption<BoundedCommandHelperMode>[] {
+function gateOptions(snapshot: DesktopSettingsSnapshot): SelectOption<TokenMiserGateProvider>[] {
   const decisions = resolveDecisionModelSettings(snapshot.models.decisionModels);
-  const options: SelectOption<BoundedCommandHelperMode>[] = [
-    { value: "deterministic", label: "Don’t use a model", description: "Rules on this Mac only. Free." },
-    {
-      value: "configured",
-      label: "Helper model for each thread type",
-      description: "Choose a model for Codex, Claude and Antigravity threads.",
-    },
+  return [
+    { value: "none", label: "Don’t check", description: "The agent gets the digest. Free." },
     {
       value: "openai",
       label: "OpenAI Decisions",
@@ -388,31 +330,21 @@ function helperOptions(
       group: "Decision providers",
     },
   ];
-  // Older choices stay listed only while saved, so they keep their meaning
-  // and are never offered as a new choice.
-  if (saved === "codex") {
-    options.push({
-      value: "codex",
-      label: "Codex Token Miser helper (saved earlier)",
-      description: "Runs the Output evaluation helper on Codex.",
-      group: "Saved earlier",
-    });
-  }
-  if (saved === "decision") {
-    options.push({
-      value: "decision",
-      label: "Default decision model (saved earlier)",
-      description: "Follows AI Providers → Decisions.",
-      group: "Saved earlier",
-    });
-  }
-  return options;
 }
+
+const SUMMARIZER_OPTIONS: SelectOption<TokenMiserSummarizerMode>[] = [
+  { value: "off", label: "Off", description: "The agent gets the digest." },
+  {
+    value: "configured",
+    label: "Helper model for each thread type",
+    description: "Choose a model for Codex, Claude and Antigravity threads.",
+  },
+];
 
 /**
  * Settings → Experimental → Token Miser (v2): command capture in Codex,
- * Claude and Antigravity threads, and the model that may pick one excerpt
- * from large ambiguous output.
+ * Claude and Antigravity threads, the decision model that scores each
+ * finished capture, and the helper model that summarizes.
  */
 export function TokenMiserV2Settings(props: {
   saving: boolean;
@@ -424,25 +356,13 @@ export function TokenMiserV2Settings(props: {
 }) {
   const experimental = props.snapshot.experimental;
   const boundedCommands = experimental.tokenMiserBoundedCommands ?? DEFAULT_TOKEN_MISER_ENABLED;
-  const boundedHelper = experimental.tokenMiserBoundedHelper
-    ?? { value: "deterministic", source: "default" } as const;
   const tokenMiserEnabled = experimental.tokenMiserEnabled ?? DEFAULT_TOKEN_MISER_ENABLED;
   const defaultEnabled = experimental.tokenMiserDefaultEnabled ?? DEFAULT_TOKEN_MISER_DEFAULT_ENABLED;
   const captureSupported = props.snapshot.runtime.tokenMiser?.boundedCommandsSupported === true;
   const captureEnabled = captureSupported && boundedCommands.value;
   const helperModels = props.snapshot.models.helperModels ?? { helpers: {} };
-  const mode = boundedHelper.value;
-
-  let modeLines: ReactNode[] = [];
-  if (mode === "deterministic") {
-    modeLines = [<Line key="state">Rules on this Mac pick what the agent sees. Free, and nothing leaves this Mac.</Line>];
-  } else if (mode === "openai" || mode === "jev" || mode === "local") {
-    modeLines = decisionProviderStatus(mode, props.snapshot).lines;
-  } else if (mode === "decision") {
-    modeLines = savedDecisionStatus(props.snapshot).lines;
-  } else if (mode === "codex") {
-    modeLines = savedCodexStatus(helperModels, props.backends).lines;
-  }
+  const { gate, summarizer, earlier } = tokenMiserModelChoices(experimental);
+  const controlsDisabled = props.saving || !captureEnabled;
 
   return (
     <SettingsSection
@@ -468,74 +388,112 @@ export function TokenMiserV2Settings(props: {
         />
         <SettingsField
           label="What the agent gets"
-          sub="A result of about 1.4 KB plus a handle. The agent reads more by asking for exact lines with the handle, for up to five minutes."
+          sub="After the command finishes, a digest of about 1.4 KB plus a handle. The agent reads exact lines with the handle for up to five minutes."
           control={
             <div className="settings-token-miser__examples">
               <div className="settings-token-miser__example">
                 <p className="settings-token-miser__example-title">A test prints 1,100 progress lines and fails twice</p>
                 <p>
-                  The exit status, the failing tests with the lines around each error, and the first and last lines, with repeats
-                  collapsed. No model is asked: repetitive output never is.
+                  The digest: the exit status, each failing test with the lines around its error, and the first and last lines,
+                  with repeats collapsed. Rules on this Mac write it. No model is needed.
                 </p>
               </div>
               <div className="settings-token-miser__example">
                 <p className="settings-token-miser__example-title">A diff touches 40 files and 9,000 lines</p>
                 <p>
-                  The exit status, the first file names, and the first and last lines. With a model chosen below, it adds the one
-                  hunk the model judges most important. Nothing is rewritten or summarized.
+                  With the summarizer on, the thread’s helper model writes a short summary before the agent sees the result. With
+                  a decision model too, only when it scores the output as needing one.
+                </p>
+              </div>
+              <div className="settings-token-miser__example">
+                <p className="settings-token-miser__example-title">The command missed what the agent wanted</p>
+                <p>
+                  With a decision model, the agent gets its scores and a note: read exact lines with the handle, or run a
+                  corrected command. Nothing is summarized.
                 </p>
               </div>
             </div>
           }
         />
         <SettingsField
-          label="Pick an excerpt with a model"
-          labelId="token-miser-helper-label"
-          sub="Only after a command finishes, and only for output of 8 KB or more with several diff hunks or failing tests and no clear error message."
-          source={sourceBadge(boundedHelper)}
+          label="Check each result with a decision model"
+          labelId="token-miser-gate-label"
+          sub="Scores every finished capture once: does it need a summary, did it miss what the agent asked for, is it too noisy. The model sees the command, its exit status and line counts, up to 384 bytes of what the agent said just before, and up to 512 bytes of the output, never the full output."
+          source={sourceBadge(gate)}
           control={
-            <Select<BoundedCommandHelperMode>
-              aria-labelledby="token-miser-helper-label"
+            <Select<TokenMiserGateProvider>
+              aria-labelledby="token-miser-gate-label"
               className={PICKER_CLASS}
-              disabled={props.saving || !captureEnabled}
-              value={mode}
-              options={helperOptions(mode, props.snapshot)}
-              onChange={(helper) => {
-                if (helper === mode) return;
-                void props.onWriteConfig({ experimental: { tokenMiserBoundedHelper: helper } });
+              disabled={controlsDisabled}
+              value={gate.value}
+              options={gateOptions(props.snapshot)}
+              onChange={(next) => {
+                if (next === gate.value && gate.source !== "default") return;
+                void props.onWriteConfig({ experimental: { tokenMiserGate: next } });
               }}
             />
           }
           actions={
-            // A div, not the field's help span: the thread-type rows hold
-            // block content that phrasing content cannot contain.
+            // A div, not the field's help span: status lines are blocks.
             <div className="settings-field__help settings-token-miser__status">
-              {mode === "deterministic" ? null : (
-                <Line>
-                  The model sees up to six short excerpts, 4 KB in all, never the full output, and picks one. It cannot look at
-                  output while a command runs. If it fails or takes over 8 seconds, the agent gets the no-model result.
+              {earlier ? (
+                <Line key="earlier">
+                  Earlier you chose {EARLIER_CHOICE_LABELS[earlier]} to pick an excerpt. That no longer runs. Choose a decision
+                  model here or a summarizer below to use a model again.
                 </Line>
+              ) : null}
+              {gate.value === "none"
+                ? <Line key="state">No check runs. Free, and nothing leaves this Mac.</Line>
+                : decisionProviderStatus(gate.value, props.snapshot).lines}
+            </div>
+          }
+        />
+        <SettingsField
+          label="Summarize with a helper model"
+          labelId="token-miser-summarizer-label"
+          sub={gate.value === "none"
+            ? "When on, summarizes every capture of 8 KB or more before the agent sees it, since no decision model is checking."
+            : "When on, summarizes only the captures the decision model scores as needing a summary, before the agent sees them."}
+          source={sourceBadge(summarizer)}
+          control={
+            <Select<TokenMiserSummarizerMode>
+              aria-labelledby="token-miser-summarizer-label"
+              className={PICKER_CLASS}
+              disabled={controlsDisabled}
+              value={summarizer.value}
+              options={SUMMARIZER_OPTIONS}
+              onChange={(next) => {
+                if (next === summarizer.value && summarizer.source !== "default") return;
+                void props.onWriteConfig({ experimental: { tokenMiserSummarizer: next } });
+              }}
+            />
+          }
+          actions={
+            <div className="settings-field__help settings-token-miser__status">
+              {summarizer.value === "configured" ? (
+                <>
+                  <Line>
+                    Reads up to 2 KB of the output and writes a summary of at most 640 bytes, in its own turn on the backend you
+                    choose, not in the thread. If a thread type has no model that can run, that thread type gets the digest only.
+                  </Line>
+                  <div className="settings-token-miser__origins">
+                    {CAPTURE_ORIGINS.map((entry) => (
+                      <CaptureOriginRow
+                        key={entry.origin}
+                        origin={entry.origin}
+                        label={entry.label}
+                        harness={entry.harness}
+                        backends={props.backends}
+                        helperModels={helperModels}
+                        disabled={controlsDisabled}
+                        onSave={(next) => { void props.onSaveHelperModels(next); }}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <Line>Off. No summary is written.</Line>
               )}
-              {modeLines}
-              {isSavedEarlierHelperMode(mode) ? (
-                <Line>Kept as you saved it. Choosing another option replaces it.</Line>
-              ) : null}
-              {mode === "configured" ? (
-                <div className="settings-token-miser__origins">
-                  {CAPTURE_ORIGINS.map((entry) => (
-                    <CaptureOriginRow
-                      key={entry.origin}
-                      origin={entry.origin}
-                      label={entry.label}
-                      harness={entry.harness}
-                      backends={props.backends}
-                      helperModels={helperModels}
-                      disabled={props.saving || !captureEnabled}
-                      onSave={(next) => { void props.onSaveHelperModels(next); }}
-                    />
-                  ))}
-                </div>
-              ) : null}
             </div>
           }
         />

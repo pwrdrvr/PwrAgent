@@ -1,5 +1,11 @@
 import type { BackendModelOption, BackendSummary } from "@pwragent/shared/contracts/backend";
-import type { BoundedCommandHelperMode } from "@pwragent/shared/contracts/settings";
+import type {
+  BoundedCommandHelperMode,
+  DesktopSettingsSnapshot,
+  DesktopSettingsValue,
+  TokenMiserGateProvider,
+  TokenMiserSummarizerMode,
+} from "@pwragent/shared/contracts/settings";
 import {
   CAPTURE_HELPER_IDS,
   getHelperModelDefinition,
@@ -18,8 +24,8 @@ export const CAPTURE_ORIGINS: readonly { origin: CaptureOrigin; label: string; h
 ];
 
 /**
- * Backends that can run an isolated excerpt-picking turn. Antigravity is a
- * capture origin only; it never runs the picker.
+ * Backends that can run an isolated summarizing turn. Antigravity is a
+ * capture origin only; it never runs the summarizer.
  */
 export const CAPTURE_RUNNERS = ["codex", "claude", "acp:grok"] as const;
 export type CaptureRunner = (typeof CAPTURE_RUNNERS)[number];
@@ -43,21 +49,44 @@ export function captureRunnerLabel(
     ?? (isCaptureRunner(backend) ? RUNNER_FALLBACK_LABELS[backend] : backend);
 }
 
-/** The modes Settings offers for a new choice, in display order. */
-export const BOUNDED_HELPER_CHOICES = ["deterministic", "configured", "openai", "jev", "local"] as const;
+export type TokenMiserModelChoices = {
+  gate: DesktopSettingsValue<TokenMiserGateProvider>;
+  summarizer: DesktopSettingsValue<TokenMiserSummarizerMode>;
+  /**
+   * An excerpt-picker choice saved by an earlier build. It no longer runs and
+   * is reported only until the operator chooses a gate or a summarizer.
+   */
+  earlier?: Exclude<BoundedCommandHelperMode, "deterministic">;
+};
 
-/** Modes only a profile that saved them shows; they keep their saved meaning. */
-export function isSavedEarlierHelperMode(mode: BoundedCommandHelperMode): boolean {
-  return mode === "codex" || mode === "decision";
+/**
+ * The gate and summarizer Settings shows. Each comes only from its own key,
+ * defaulting to none and off; the earlier `token_miser_bounded_helper` choice
+ * never selects either, whatever it names.
+ */
+export function tokenMiserModelChoices(
+  experimental: Pick<
+    DesktopSettingsSnapshot["experimental"],
+    "tokenMiserBoundedHelper" | "tokenMiserGate" | "tokenMiserSummarizer"
+  >,
+): TokenMiserModelChoices {
+  const gate = experimental.tokenMiserGate ?? { value: "none", source: "default" };
+  const summarizer = experimental.tokenMiserSummarizer ?? { value: "off", source: "default" };
+  const legacy = experimental.tokenMiserBoundedHelper;
+  const chosen = gate.source !== "default" || summarizer.source !== "default";
+  const earlier = !chosen && legacy && legacy.source !== "default" && legacy.value !== "deterministic"
+    ? legacy.value
+    : undefined;
+  return { gate, summarizer, ...(earlier ? { earlier } : {}) };
 }
 
 export type CaptureRowStatus =
   | { kind: "ready" }
   /** No model on the row, and nothing it may inherit. */
   | { kind: "needs-model" }
-  /** Antigravity rows must name the backend that runs the picker. */
+  /** Antigravity rows must name the backend that runs the summarizer. */
   | { kind: "needs-backend" }
-  /** The saved backend is not one that can run the picker. */
+  /** The saved backend is not one that can run the summarizer. */
   | { kind: "unsupported-backend" }
   | { kind: "backend-loading" }
   | { kind: "backend-unavailable" }
