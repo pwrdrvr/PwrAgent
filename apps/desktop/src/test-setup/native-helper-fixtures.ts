@@ -62,7 +62,7 @@ async function prepareHelper(root: string, consumer: Consumer): Promise<FixtureP
     await runNativeFixtureCommand(compiler, [
       "/nologo", "/platform:x64", "/r:System.Web.Extensions.dll", `/out:${executable}`,
       path.join(desktop, "scripts/windows-pipe-diagnostics.cs"),
-    ]);
+    ], AbortSignal.timeout(20_000));
     await access(executable);
     return { windowsPipeProbe: executable };
   }
@@ -77,7 +77,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
   const dispose = async (): Promise<void> => {
     await Promise.all([...fixtures.values()].map((fixture) => fixture.dispose()));
   };
-  const prepare = async (specifications: TestSpecification[]): Promise<void> => {
+  const prepare = async (specifications: TestSpecification[], rerun = false): Promise<void> => {
     // Vitest applies sharding inside the pool, after global setup. Follow the
     // configured sequencer, as the CI completeness reporter does.
     const selected = project.vitest.config.shard
@@ -86,6 +86,12 @@ export default async function setup(project: TestProject): Promise<() => Promise
     const required = nativeHelperConsumers(selected.filter((spec) => spec.project === project).map((spec) => spec.moduleId));
     await Promise.all(required.map(async (consumer) => {
       let fixture = fixtures.get(consumer);
+      // These suites used to compile on every rerun. Build selected Windows
+      // helpers again so edits to native sources or their builders are tested.
+      if (fixture && rerun && (consumer === "windowsGitJobLauncher" || consumer === "windowsPipeProbe")) {
+        await fixture.dispose();
+        fixture = undefined;
+      }
       if (!fixture) {
         console.info(`[native-helper-fixtures] preparing ${consumer}`);
         fixture = createNativeHelperFixture((root) => prepareHelper(root, consumer));
@@ -108,6 +114,6 @@ export default async function setup(project: TestProject): Promise<() => Promise
     await dispose();
     throw error;
   }
-  project.onTestsRerun(prepare);
+  project.onTestsRerun((specifications) => prepare(specifications, true));
   return dispose;
 }

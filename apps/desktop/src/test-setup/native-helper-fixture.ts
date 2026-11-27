@@ -1,17 +1,22 @@
 import { spawn } from "node:child_process";
+import { addAbortListener } from "node:events";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout } from "node:timers/promises";
-import { wrapCommandInWindowsJob } from "../main/windows-job-wrapper";
+import { windowsJobCleanupVerified, wrapCommandInWindowsJob } from "../main/windows-job-wrapper";
 
-export async function runNativeFixtureCommand(command: string, args: string[]): Promise<void> {
-  const launch = process.platform === "win32"
-    ? wrapCommandInWindowsJob({ command, args, env: process.env, terminateDescendantsOnExit: true })
-    : { command, args, env: process.env, cleanup: () => {} };
+class NativeFixtureDrainUnconfirmedError extends Error {}
+
+export async function runNativeFixtureCommand(command: string, args: string[], signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  const windowsJob = process.platform === "win32"
+    ? wrapCommandInWindowsJob({ command, args, env: process.env, terminateDescendantsOnExit: true, keepDrainEvidenceOnStop: Boolean(signal) })
+    : undefined;
+  let preserveJobEvidence = false;
   try {
-    const child = spawn(launch.command, launch.args, {
-      env: launch.env,
+    const child = spawn(windowsJob?.command ?? command, windowsJob?.args ?? args, {
+      env: windowsJob?.env ?? process.env,
       detached: process.platform !== "win32",
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -22,6 +27,24 @@ export async function runNativeFixtureCommand(command: string, args: string[]): 
     child.stderr.on("data", record);
     let error: Error | undefined;
     child.on("error", (cause) => { error = cause; });
+    using _stop = signal && addAbortListener(signal, () => {
+      if (!child.pid) return;
+      if (windowsJob) {
+        try {
+          windowsJob.requestStop!();
+        } catch {
+          // Closing the wrapper still closes its kill-on-close Job handle.
+          // Preserve the outputs below if we cannot verify the drain.
+          child.kill("SIGKILL");
+        }
+      } else {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (cause) {
+          if ((cause as NodeJS.ErrnoException).code !== "ESRCH") error = cause as Error;
+        }
+      }
+    });
     const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
     // On Windows, the wrapper closes only after the kernel reports zero Job
     // members. POSIX owns a fresh process group, including descendants that
@@ -39,10 +62,15 @@ export async function runNativeFixtureCommand(command: string, args: string[]): 
         await setTimeout(10);
       }
     }
+    if (signal?.aborted && windowsJob && child.pid && !windowsJobCleanupVerified(windowsJob)) {
+      preserveJobEvidence = true;
+      throw new NativeFixtureDrainUnconfirmedError("The native fixture Job exited without confirming cleanup", { cause: signal.reason });
+    }
     if (error) throw error;
+    signal?.throwIfAborted();
     if (code !== 0) throw new Error(`Native fixture build exited ${code}: ${output}`);
   } finally {
-    launch.cleanup();
+    if (!preserveJobEvidence) windowsJob?.cleanup();
   }
 }
 
@@ -58,7 +86,11 @@ export function createNativeHelperFixture<T>(build: (root: string) => Promise<T>
     ready,
     dispose(): Promise<void> {
       disposal ??= (async () => {
-        await ready.catch(() => {});
+        try {
+          await ready;
+        } catch (error) {
+          if (error instanceof NativeFixtureDrainUnconfirmedError) return;
+        }
         rmSync(root, { recursive: true, force: true });
       })();
       return disposal;
