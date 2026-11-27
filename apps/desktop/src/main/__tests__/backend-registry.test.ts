@@ -1088,8 +1088,8 @@ describe("DesktopBackendRegistry", () => {
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     const preparing = createDeferred<void>();
     const ready = createDeferred<string | undefined>();
-    const internals = registry as unknown as { resolveThreadEnvironmentCwd: () => Promise<string | undefined> };
-    vi.spyOn(internals, "resolveThreadEnvironmentCwd").mockImplementationOnce(async () => {
+    const internals = registry as unknown as { resolveCodexTurnCwd: () => Promise<string | undefined> };
+    vi.spyOn(internals, "resolveCodexTurnCwd").mockImplementationOnce(async () => {
       preparing.resolve();
       return await ready.promise;
     });
@@ -9732,7 +9732,8 @@ describe("DesktopBackendRegistry", () => {
   it("ignores legacy launchpad environment actions until the thread exists", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-action-failure-"));
     const repoPath = path.join(root, "repo");
-    const worktreePath = path.join(root, "missing-worktree");
+    const worktreePath = path.join(root, "worktree");
+    await mkdir(worktreePath);
     await mkdir(path.join(repoPath, ".codex", "environments"), { recursive: true });
     await writeFile(
       path.join(repoPath, ".codex", "environments", "environment.toml"),

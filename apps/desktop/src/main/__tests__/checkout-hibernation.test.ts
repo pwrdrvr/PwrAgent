@@ -626,6 +626,25 @@ describe("idle checkout hibernation and restore", () => {
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
   }));
 
+  it("starts from the main checkout when a hibernated Codex worktree lost its checkpoint and branch", ownFixtureTest(async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open();
+    expect(await sweep(registry)).toMatchObject({ hibernated: 1 });
+    const saved = (await snapshotOf(store))!;
+    await git(fixture.repo, ["update-ref", "-d", saved.snapshotRef]);
+    await git(fixture.repo, ["branch", "-D", "owned"]);
+    await store.upsertWorktreeSnapshot({ ...identity, snapshot: {
+      ...saved, snapshotCommit: "f".repeat(40), sourceHead: "e".repeat(40),
+    } });
+    const start = stubProviderTurnStart(registry);
+    await registry.startTurn({ ...identity, input: [{ type: "text", text: "Continue" }] });
+    expect(start).toHaveBeenCalledOnce();
+    expect((await git(fixture.worktree, ["rev-parse", "HEAD"])).trim())
+      .toBe((await git(fixture.repo, ["rev-parse", "HEAD"])).trim());
+    expect((await git(fixture.worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()).toBe("HEAD");
+    expect(await snapshotOf(store)).toMatchObject({ state: "restored" });
+  }));
+
   it.each([false, true])("keeps a queued send behind its own checkout restore (delayed acknowledgement: %s)", ownFixtureTest(async (delayAcknowledgement) => {
     // Each provider inventory has one registry owner. The preceding direct
     // sends must settle and close before a queued-send fixture replaces it.

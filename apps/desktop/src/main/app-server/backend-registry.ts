@@ -661,6 +661,7 @@ import {
 } from "./thread-working-state-refresh-policy";
 import type { AcpAvailableCommandsStorage } from "@pwragent/owner-core/acp-storage";
 import { WorktreeArchiveService } from "./worktree-archive-service";
+import { checkWorktreeDirectory } from "./worktree-directory-probe";
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 
 import { CheckoutPathOwners } from "./checkout-path-owners";
@@ -956,13 +957,13 @@ import {
   isLikelyToolManagedWorktreePath,
   linkedDirectoryWorktreePath,
   normalizeLinkedDirectoryKind,
+  normalizeWorktreePathForComparison,
   overlayHasHandoffWorkspace,
   pendingStartedThreadMatchesFilter,
   pendingStartedThreadWorkspaceMatches,
   readCurrentGitBranch,
   resolveBranchDriftExpectedBranch,
   resolveExpectedThreadBranch,
-  resolveLinkedDirectoryWorkspaceCwd,
   resolveThreadWorkspaceCwd,
   retainPendingStartedThreadWorkspace,
   toForwardSlashes,
@@ -12648,11 +12649,8 @@ export class DesktopBackendRegistry {
         // bridge result, and only config inventory needs the resolved cwd.
         const cwdPreparation =
           params.backend === "codex"
-            ? this.resolveThreadEnvironmentCwd(
-                params.backend,
-                params.threadId,
-                overlay,
-              )
+            ? this.resolveCodexTurnCwd(params.threadId, overlay, params.messageOrigin?.operatorApproved === true
+              && (Boolean(params.messageOrigin.threadTodo) || params.agentMessageOrigins?.some((origin) => origin.threadTodo) === true))
             : Promise.resolve(undefined);
         const runtimePreparation = tokenMiserEnabledForThread
           ? this.prepareTokenMiserRuntime()
@@ -19959,35 +19957,56 @@ export class DesktopBackendRegistry {
     threadId: string,
     overlay?: ThreadOverlayState,
   ): Promise<string | undefined> {
-    const pendingThread = this.pendingStartedThreads.get(
-      buildThreadIdentityKey(backend, threadId),
-    );
-    if (pendingThread) {
-      const pendingCwd = resolveThreadWorkspaceCwd(
-        pendingThread,
-        overlay?.extraLinkedDirectories,
-      );
-      if (pendingCwd?.trim()) {
-        return pendingCwd.trim();
-      }
-    }
+    return (await this.resolveThreadEnvironmentWorkspace(backend, threadId, overlay)).cwd;
+  }
 
+  private async resolveThreadEnvironmentWorkspace(
+    backend: AppServerBackendKind,
+    threadId: string,
+    overlay?: ThreadOverlayState,
+  ): Promise<{ cwd?: string; thread?: AppServerThreadSummary }> {
+    const pending = this.pendingStartedThreads.get(buildThreadIdentityKey(backend, threadId));
+    const directories = overlay?.extraLinkedDirectories;
+    const pendingCwd = pending && resolveThreadWorkspaceCwd(pending, directories)?.trim();
+    if (pendingCwd) return { cwd: pendingCwd, thread: pending };
     const thread = await this.findThreadForWorkspaceHandoff({
-      backend,
-      callerReason: "turn-cwd",
-      freshness: "last-known",
-      threadId,
+      backend, callerReason: "turn-cwd", freshness: "last-known", threadId,
     });
-    const threadCwd = resolveThreadWorkspaceCwd(
-      thread,
-      overlay?.extraLinkedDirectories,
-    );
-    if (threadCwd?.trim()) {
-      return threadCwd.trim();
-    }
+    const cwd = resolveThreadWorkspaceCwd(thread, directories)?.trim() || undefined;
+    return { cwd, thread };
+  }
 
-    return resolveLinkedDirectoryWorkspaceCwd(overlay?.extraLinkedDirectories)?.trim() ||
-      undefined;
+  private async resolveCodexTurnCwd(threadId: string, overlay?: ThreadOverlayState, recreateMissing = false): Promise<string | undefined> {
+    const { cwd, thread } = await this.resolveThreadEnvironmentWorkspace("codex", threadId, overlay);
+    if (!cwd) return undefined;
+    const target = normalizeWorktreePathForComparison(cwd);
+    const directory = [...(overlay?.extraLinkedDirectories ?? []), ...(thread?.linkedDirectories ?? [])].find((candidate) => {
+      const worktreePath = linkedDirectoryWorktreePath(candidate);
+      return worktreePath !== undefined && normalizeWorktreePathForComparison(worktreePath) === target;
+    });
+    if (!directory && !isLikelyToolManagedWorktreePath(cwd)) return cwd;
+    // Check the actual turn cwd after any in-flight recovery of this checkout.
+    return await this.threadArchiveCoordinator.withCheckoutRecovery(cwd, async () => {
+      const status = await checkWorktreeDirectory(cwd);
+      switch (status) {
+        case "missing":
+          if (recreateMissing && directory?.kind === "worktree" && directory.worktreePath
+            && path.isAbsolute(directory.path) && normalizeWorktreePathForComparison(directory.path) !== target
+            && await this.threadWorkspaceService.recoverMissingCodexWorktreeForTurn({ backend: "codex", threadId, worktreePath: cwd })) {
+            return cwd;
+          }
+          throw new Error(`The thread's worktree is missing. Open the thread to recover its workspace: ${cwd}`);
+        case "not-directory":
+          throw new Error(`A file blocks the thread's worktree path. Open the thread to recover its workspace: ${cwd}`);
+        case "not-responding":
+          throw new Error(`The thread's worktree is not responding. Check the drive or network mount and retry: ${cwd}`);
+        case "busy":
+          throw new Error("Worktree checks are busy. Try again shortly.");
+        case "unavailable":
+          throw new Error(`Could not access the thread's worktree. Check its permissions and retry: ${cwd}`);
+      }
+      return cwd;
+    });
   }
 
   private async recordCodexWorktreeOwnerThread(params: {

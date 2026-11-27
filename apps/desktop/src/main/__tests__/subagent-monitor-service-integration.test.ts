@@ -333,6 +333,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("runs explicit PwrAgent Sub Agent as one child turn and attributes usage to it", async () => {
+    await mockArchiveWorktreePresence(["/repo/worktree"]);
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
       models: [

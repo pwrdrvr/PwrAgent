@@ -9,6 +9,11 @@ import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { WorktreeRecoveryService } from "../app-server/worktree-recovery-service";
 import { PWRAGENT_WORKTREE_LOCK_REASON } from "../app-server/worktree-volume-lock";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, realpath: vi.fn(actual.realpath) };
+});
+
 const execFileAsync = promisify(execFile);
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -66,11 +71,56 @@ describe("WorktreeRecoveryService", () => {
     await rm(worktreePath, { recursive: true, force: true });
   }
 
+  it("shares overlapping inventory reads and reads again for a later recovery", async () => {
+    const slots = service as unknown as { listRecords(repositoryPath: string): Promise<unknown[]> };
+    const list = slots.listRecords.bind(service);
+    const joined = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runGit = gitBoundary.runGitCommand;
+    const observer = vi.spyOn(slots, "listRecords").mockImplementation((repositoryPath) => {
+      const result = list(repositoryPath);
+      if (observer.mock.calls.length === 2) joined.resolve();
+      return result;
+    });
+    let inventoryReads = 0;
+    const boundary = vi.spyOn(gitBoundary, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        inventoryReads++;
+        await release.promise;
+      }
+      return await runGit(cwd, args, options);
+    });
+    const recreate = (name: string) => service.recreate({
+      backend: "codex", threadId: "t1", repositoryPath: repoPath,
+      worktreePath: path.join(root, name), skipCheckpoint: true,
+    });
+    const first = recreate("first");
+    const second = recreate("second");
+    const overlapping = Promise.all([first, second]);
+    try {
+      await Promise.race([joined.promise, first, second]);
+      release.resolve();
+      expect((await overlapping).map((result) => result.status)).toEqual(["recreated", "recreated"]);
+      expect(inventoryReads).toBe(1);
+      expect(await recreate("later")).toMatchObject({ status: "recreated" });
+      expect(inventoryReads).toBe(2);
+    } finally {
+      release.resolve();
+      await overlapping.catch(() => {});
+      boundary.mockRestore();
+      observer.mockRestore();
+    }
+  });
+
   it("recreates a folder deleted outside Git on its branch, clearing only its stale record", async () => {
     const otherPath = path.join(root, "worktrees", "other", "atlas");
+    const healthyPath = path.join(root, "worktrees", "healthy", "atlas");
     await git(repoPath, ["worktree", "add", "--detach", otherPath]);
+    await git(repoPath, ["worktree", "add", "--detach", healthyPath]);
     await rm(otherPath, { recursive: true, force: true });
     await deleteOutsideGit();
+    const resolvePath = vi.mocked(realpath);
+    resolvePath.mockClear();
 
     const result = await service.recreate({
       backend: "codex", threadId: "t1", repositoryPath: repoPath, worktreePath,
@@ -82,6 +132,7 @@ describe("WorktreeRecoveryService", () => {
     expect(result.branch).toBe("fix/retry-backoff");
     expect(result.checkpoint).toBeUndefined();
     expect(result.steps.find((step) => step.id === "clear-record")?.status).toBe("done");
+    expect(resolvePath).not.toHaveBeenCalledWith(healthyPath);
     expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("fix/retry-backoff");
     // Another thread's stale record is not ours to clear.
     expect(await records(repoPath)).toContain(otherPath);
@@ -372,6 +423,20 @@ describe("WorktreeRecoveryService", () => {
     expect(recreated.status).toBe("recreated");
     expect(recreated.status === "recreated" ? recreated.checkpoint : "x").toBeUndefined();
     expect(await readFile(path.join(worktreePath, "deliver.ts"), "utf8")).toBe("export const delay = 1;\n");
+  });
+
+  it("uses the retained checkpoint commit when its reference and branch are gone", async () => {
+    await writeFile(path.join(worktreePath, "deliver.ts"), "saved changes\n");
+    const snapshot = await new WorktreeArchiveService().archive({
+      backend: "codex", threadId: "t1", repositoryPath: repoPath, worktreePath,
+    });
+    await git(repoPath, ["update-ref", "-d", snapshot.snapshotRef]);
+    await git(repoPath, ["branch", "-D", "fix/retry-backoff"]);
+    await expect(service.recreate({
+      backend: "codex", threadId: "t1", repositoryPath: repoPath, worktreePath,
+      branch: "fix/retry-backoff", checkpoint: snapshot, fallbackMissingSources: true,
+    })).resolves.toMatchObject({ status: "recreated", checkpoint: { restored: true } });
+    expect(await readFile(path.join(worktreePath, "deliver.ts"), "utf8")).toBe("saved changes\n");
   });
 
   it("leaves the worktree clean and keeps the commit when the checkpoint conflicts", async () => {

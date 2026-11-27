@@ -4,6 +4,7 @@ import {
   createAgentOverlay,
   createDeferred,
   git,
+  mockArchiveWorktreePresence,
   pathExists,
   createOverlayStoreMock,
   MockBackendClient,
@@ -544,6 +545,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("resumes Codex turns in the current handoff worktree cwd", async () => {
+    await mockArchiveWorktreePresence(["/repo/app/.worktrees/thread-1/app"]);
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
@@ -2952,6 +2954,7 @@ script = "printf setup"
   });
 
   it("reports running workspace moves as in-progress quit work", async () => {
+    await mockArchiveWorktreePresence(["/repo/app/.worktrees/app-feature-handoff"]);
     const handoffDeferred = createDeferred<{
       backend: "codex";
       threadId: string;
@@ -3213,6 +3216,7 @@ script = "printf setup"
   });
 
   it("runs queued same-thread workspace moves after the invoking turn ends", async () => {
+    await mockArchiveWorktreePresence(["/repo/app/.worktrees/app-feature-handoff"]);
     const thread: AppServerThreadSummary = {
       id: "ordinary-thread",
       title: "Parent Thread",
@@ -3640,6 +3644,7 @@ script = "printf setup"
   });
 
   it("starts the workspace move continuation before queued same-thread turns", async () => {
+    await mockArchiveWorktreePresence(["/repo/app/.worktrees/app-feature-handoff"]);
     const thread: AppServerThreadSummary = {
       id: "ordinary-thread",
       title: "Parent Thread",
@@ -4062,6 +4067,7 @@ script = "printf setup"
   });
 
   it("retains queued turns when success continuation cannot start", async () => {
+    await mockArchiveWorktreePresence(["/repo/app/.worktrees/app-feature-handoff"]);
     const thread: AppServerThreadSummary = {
       id: "ordinary-thread",
       title: "Parent Thread",
@@ -6229,6 +6235,7 @@ script = "printf setup"
 
   it.each(["local", "worktree"] as const)("moves a scratch Codex conversation to another project and starts its next turn there: %s", async (workMode) => {
     const targetPath = workMode === "local" ? "/projects/demo" : "/worktrees/demo";
+    await mockArchiveWorktreePresence([targetPath]);
     const thread: AppServerThreadSummary = {
       id: "thread-1", title: "Research", titleSource: "explicit", source: "codex",
       projectKey: "/scratch/research", linkedDirectories: [], updatedAt: 2,
@@ -7705,6 +7712,29 @@ describe("DesktopBackendRegistry workspace recovery", () => {
       expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
         threadId: "thread-1", gitInfo: { branch: "HEAD" },
       });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])("moves to the main checkout while keeping an obstructing file (ancestor: %s)", async (ancestor) => {
+    const { root, repo, worktree } = await mainCheckout();
+    const file = ancestor ? path.dirname(worktree) : worktree;
+    const archive = vi.fn();
+    const { registry, codexClient } = registryFor(worktreeThread(repo, worktree), {
+      recovery: { releaseMissingWorktree: vi.fn(async () => true) },
+      archive: { archive },
+    });
+    try {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, "keep");
+      await expect(registry.moveThreadToMainCheckout({
+        backend: "codex", threadId: "thread-1", worktreePath: worktree,
+      })).resolves.toMatchObject({ repositoryPath: repo });
+      expect(archive).not.toHaveBeenCalled();
+      expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({ threadId: "thread-1", cwd: repo });
+      expect(await readFile(file, "utf8")).toBe("keep");
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true });

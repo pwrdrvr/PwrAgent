@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   AppServerThreadSummary,
   WorktreeSnapshotSummary,
@@ -32,6 +35,21 @@ function snapshot(overrides: Partial<WorktreeSnapshotSummary> = {}): WorktreeSna
 }
 
 describe("detectMissingThreadWorkspace", () => {
+  it.each([false, true])("reports a file obstructing the worktree (ancestor: %s)", async (ancestor) => {
+    const repositoryPath = await mkdtemp(join(tmpdir(), "pwragent-worktree-obstruction-"));
+    try {
+      const filePath = join(repositoryPath, "file");
+      await writeFile(filePath, "keep");
+      const worktreePath = ancestor ? join(filePath, "checkout") : filePath;
+      const selected = thread({
+        linkedDirectories: [{ id: "wt", label: "Checkout", kind: "worktree", path: repositoryPath, worktreePath }],
+      });
+      expect(await detectMissingThreadWorkspace(selected)).toMatchObject({ worktreePath, repositoryAvailable: true });
+    } finally {
+      await rm(repositoryPath, { recursive: true, force: true });
+    }
+  });
+
   it("says nothing while the worktree folder exists, without reading the main checkout", async () => {
     const readBranch = vi.fn(async () => "main");
     expect(await detectMissingThreadWorkspace(thread(), {

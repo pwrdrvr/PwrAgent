@@ -458,10 +458,14 @@ export class NavigationDetailService {
     // A hibernated checkout is not missing until a restore of it has failed.
     const checkoutHibernation = this.registry.readCheckoutHibernation({ backend: summary.source, threadId: summary.id });
     const worktreePath = primaryThreadWorktree(thread)?.worktreePath;
+    const restoringPath = checkoutHibernation.progress?.worktreePath;
     const failedRestorePath = checkoutHibernation.restoreFailure?.worktreePath;
+    // A retry takes precedence over the prior refusal for the same checkout.
+    const restoringWorktree = worktreePath && restoringPath
+      && normalizeWorktreePathForComparison(worktreePath) === normalizeWorktreePathForComparison(restoringPath);
     const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories, primaryGitRepository] = await Promise.all([
       this.subAgentCollectionManifest(request.ref, summary),
-      detectMissingThreadWorkspace(thread, {
+      restoringWorktree ? undefined : detectMissingThreadWorkspace(thread, {
         readBranch: async (repositoryPath) =>
           (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
         includeHibernated: Boolean(worktreePath && failedRestorePath
