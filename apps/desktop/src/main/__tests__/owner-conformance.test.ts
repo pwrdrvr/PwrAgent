@@ -15,7 +15,7 @@ import { beforeAll, describe, expect, inject, it, vi } from "vitest";
 import type { OwnerFixtures } from "../../test-setup/owner-conformance-fixtures";
 import type { AgentEvent, InterruptTurnRequest } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import type { FederationCapability } from "@pwragent/shared/contracts/federation";
+import { FEDERATION_INVITE_VERSION, type FederationCapability } from "@pwragent/shared/contracts/federation";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { registryModules } from "../app-server/backend-registry-wiring";
 import {
@@ -24,6 +24,7 @@ import {
   registerFederationBackendHandlers,
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
+import { encodeFederationInvite } from "../federation/federation-enrollment";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import {
   DesktopFederationRuntime,
@@ -206,7 +207,7 @@ async function startDesktopOwner(
 /** The Outpost daemon on its Codex fixture, enrolled through a real invite. */
 async function startOutpostOwner(
   hostKind: "desktop" | "headless" = "headless",
-  options: Pick<NonNullable<Parameters<typeof startOutpostDaemon>[0]>, "env" | "waitForCodexCommand" | "beforeFailedStartupClose"> = {},
+  options: Pick<NonNullable<Parameters<typeof startOutpostDaemon>[0]>, "env" | "signal" | "waitForCodexCommand" | "beforeFailedStartupClose"> = {},
 ): Promise<OwnerHost & Pick<OutpostViewer, "waitForEvent">> {
   const outpost = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, hostKind, ...options });
   outpost.subscribe(EVENT_CLASSES);
@@ -664,10 +665,13 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   });
 
   const explicitRetryTest = it.extend("ownerParity", ({ signal, onTestFinished }) =>
-    prepareOwnerParity({ signal, onTestFinished }, parityOwnerStarters, (run) => withAmbientShellCanary(signal, run)));
+    prepareOwnerParity({ signal, onTestFinished }, [
+      () => startDesktopOwner(),
+      (startupSignal) => startOutpostOwner("headless", { signal: startupSignal, waitForCodexCommand: true }),
+    ], (run) => withAmbientShellCanary(signal, run)));
   explicitRetryTest.beforeEach(async ({ ownerParity }) => {
-    // Cold daemon boot and viewer enrollment are fixture setup. Await them
-    // only for the case that declares this fixture, before its RPC deadline.
+    // This case waits for cold boot, enrollment and Codex command selection
+    // before its RPC deadline starts.
     await ownerParity?.ready;
   });
 
@@ -2971,6 +2975,44 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         await rm(directory, { recursive: true, force: true });
       }
     }
+  });
+
+  it("joins the daemon when startup is aborted during viewer enrollment", async ({ onTestFinished }) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pa-conformance-abort-"));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const gateway = await openCodexGate();
+    let starting: ReturnType<typeof startOutpostDaemon> | undefined;
+    onTestFinished(async () => {
+      await gateway.close();
+      await starting?.then((owner) => owner.close(), () => undefined);
+    });
+    const marker = path.join(directory, "profile-root");
+    const invite = encodeFederationInvite({
+      version: FEDERATION_INVITE_VERSION, token: "fixture-token", gatewayInstanceId: "fixture-gateway",
+      gatewayPublicKeyPem: "", gatewayNoisePublicKey: "", gatewayUrl: `ws://127.0.0.1:${gateway.port}`,
+      expiresAt: Date.now() + 60_000,
+    });
+    await mkdir(path.join(directory, "bin"));
+    await writeFile(path.join(directory, "bin", "pwragent.js"), `
+      if (process.argv[2] === "serve") {
+        require("node:fs").writeFileSync(${JSON.stringify(marker)}, process.env.PWRAGENT_HOME);
+        console.log('{"ready":true}');
+        setInterval(() => {}, 1000);
+      } else {
+        console.log(${JSON.stringify(JSON.stringify({ invite }))});
+      }
+    `);
+    const startup = new AbortController();
+    starting = startOutpostDaemon({ packageRoot: directory, signal: startup.signal });
+    const outcome = starting.catch((error: unknown) => error);
+    const [socket] = await gateway.held;
+    const closed = once(socket, "close");
+    socket.resume();
+    const failure = new Error("Sibling owner could not start");
+    startup.abort(failure);
+    expect(await outcome).toBe(failure);
+    await closed;
+    expect(existsSync(readFileSync(marker, "utf8"))).toBe(false);
   });
 
   // Keep each publication order across the real Outpost boundary. The registry

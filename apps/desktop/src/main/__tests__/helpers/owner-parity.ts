@@ -30,7 +30,8 @@ function runOwnerParity<Host extends { close(): Promise<void> }>(
         await host.close();
       }
     }));
-    const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+    // A cancelled sibling can propagate the original startup failure.
+    const failures = [...new Set(results.filter((result) => result.status === "rejected").map((result) => result.reason))];
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, "Both owner parity checks failed");
   };
@@ -56,21 +57,27 @@ export function checkOwnerParity<Host extends { close(): Promise<void> }>(
 /** Starts isolated owners in the setup hook, then exercises them in the test. */
 export function prepareOwnerParity<Host extends { close(): Promise<void> }>(
   { signal, onTestFinished }: TestLifetime,
-  startOwners: ReadonlyArray<() => Promise<Host>>,
+  startOwners: ReadonlyArray<(signal: AbortSignal) => Promise<Host>>,
   withFixture: FixtureScope,
 ) {
+  const startup = new AbortController();
+  const fixtureSignal = AbortSignal.any([signal, startup.signal]);
   const ready = Promise.withResolvers<void>();
   const exercise = Promise.withResolvers<OwnerCheck<Host> | undefined>();
-  const running = runOwnerParity(signal, startOwners, async (host) => {
+  const running = runOwnerParity(fixtureSignal, startOwners.map((start) => () => start(fixtureSignal)), async (host) => {
     const check = await exercise.promise;
-    signal.throwIfAborted();
+    fixtureSignal.throwIfAborted();
     await check?.(host);
   }, withFixture, (starting) => {
     void Promise.all(starting).then(() => {
-      signal.throwIfAborted();
-      ready.resolve();
-    }).catch(ready.reject);
+      if (!fixtureSignal.aborted) ready.resolve();
+    }, (error: unknown) => {
+      startup.abort(error);
+      exercise.resolve(undefined);
+    });
   });
+  // Report a startup failure only after both branches and the shell scope
+  // have closed. Vitest starts its cleanup deadline when setup rejects.
   void running.catch(ready.reject);
   onTestFinished(async () => {
     // Setup can fail or time out before the test has supplied its checks.
