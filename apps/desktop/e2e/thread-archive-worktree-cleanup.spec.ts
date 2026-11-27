@@ -185,7 +185,7 @@ test("archiving a replay-backed thread removes its real Git worktree", async () 
     // The row proves the active listing reached the renderer, so every read
     // after the archive sees the thread only in the archived listing.
     await expect(
-      app.window.getByRole("button", { name: /Archive worktree cleanup/i }),
+      app.window.getByRole("button", { name: "Archive worktree cleanup", exact: true }),
     ).toBeVisible();
     // The archive response owns the Git cleanup. A first Windows Job-wrapper
     // launch can still be compiling after the UI optimistically hides the row.
