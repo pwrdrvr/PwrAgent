@@ -1,4 +1,10 @@
 {
+  "token-miser-launchpad-override": {"commits": 1, "note": "Persist an explicit capture override on a new thread.", "observedWalBytes": 20600, "rowsChanged": 1, "statements": 1},
+  "bounded-command-codex-helper-usage": {"commits": 1, "note": "One Codex selector inference writes one usage line to its invoking Claude thread.", "observedWalBytes": 82400, "rowsChanged": 3, "statements": 3},
+  "token-miser-managed-group-warm": {"commits": 2, "note": "Managed group proposal and acceptance with a warm output handle block.", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2},
+  "token-miser-managed-group-cold": {"commits": 3, "note": "Managed group proposal and acceptance with a cold output handle block.", "observedWalBytes": 32992, "rowsChanged": 3, "statements": 3},
+  "token-miser-managed-single-warm": {"commits": 1, "note": "Managed single proposal and acceptance with a warm output handle block.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "token-miser-managed-single-cold": {"commits": 2, "note": "Managed single proposal and acceptance with a cold output handle block.", "observedWalBytes": 20632, "rowsChanged": 2, "statements": 2},
   "bounded-command-warm-approval": {"commits": 0, "note": "Preparing another approved capture within the reserved block adds zero commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "bounded-command-retention-approval": {"commits": 1, "note": "First approved capture reserves a block of 256 profile-wide output handles.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "acp-subagent-cards": {"commits": 2, "note": "four parallel Antigravity invoke_subagent session/updates coalesced into 1 launch commit + 1 turn-settlement commit through AcpBackendAdapter (2 commits total; ~1.0 MB/day at 20 batches/day, zero progress/idle writes)", "observedWalBytes": 49472, "rowsChanged": 8, "statements": 8},

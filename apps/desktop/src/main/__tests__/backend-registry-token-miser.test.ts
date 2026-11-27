@@ -1,4 +1,5 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+import { boundedCommandHelper } from "../token-miser/bounded-command-helper";
 import type { TokenMiserServiceOptions } from "../token-miser/token-miser-service";
 import { buildTokenMiserSavingsSummary } from "@pwragent/shared/token-miser-savings-summary";
 import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
@@ -274,7 +275,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     const startup = registry as unknown as { subAgentStartupReconciliation: Promise<void>; usageTurnStartupRepair: Promise<void> };
     await Promise.all([startup.subAgentStartupReconciliation, startup.usageTurnStartupRepair]);
     const internals = registryModules(registry).threadUsageLedger as unknown as {
-      recordTokenMiserFocusedInference: NonNullable<TokenMiserServiceOptions["onFocusedInference"]>;
+      recordTokenMiserHelperInference: (request: Parameters<NonNullable<TokenMiserServiceOptions["onFocusedInference"]>>[0], captureBackend?: "claude") => Promise<void>;
       buildTokenMiserThreadSavings(params: { backend: "codex"; threadId: string; entries: TokenMiserObjectMetadata[]; replays: ReturnType<typeof indexTokenMiserCachedReplays> }): Promise<{ gateCostMicros: number; savingsMicros: number }>;
     };
     const tokenMiserStore = new TokenMiserStore(path.join(directory, "focused-store"));
@@ -289,9 +290,9 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         tokenUsage: { inputTokens: 2000, outputTokens: 100, totalTokens: 2100 } },
     };
     if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: stateDb.raw, dbPath: stateDb.raw.name });
-    const { writes } = await measureSqliteWrites(() => internals.recordTokenMiserFocusedInference(params));
+    const { writes } = await measureSqliteWrites(() => internals.recordTokenMiserHelperInference(params));
     expectSqliteWriteBudget({ scenario: "token-miser-focused-inference", note: "One actual focused helper inference writes one parent-attributed usage line, independent of answer delivery.", writes });
-    await internals.recordTokenMiserFocusedInference(params);
+    await internals.recordTokenMiserHelperInference(params);
     const pricing = await store.readThreadPricing({ backend: "codex", threadId: "thread-parent" });
     expect(pricing.lines).toHaveLength(1);
     expect(pricing.lines[0]).toMatchObject({ parentThreadId: "thread-parent", threadId: "focused-helper", model: "gpt-6-luna", inputTokens: 2000, outputTokens: 100 });
@@ -300,7 +301,20 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(after.gateCostMicros - before.gateCostMicros).toBe(pricing.lines[0]!.totalCostMicros);
     expect(before.savingsMicros - after.savingsMicros).toBe(pricing.lines[0]!.totalCostMicros);
     expect((await store.readThreadPricing({ backend: "codex", threadId: "unrelated" })).lines).toHaveLength(0);
-    await internals.recordTokenMiserFocusedInference({ ...params, inferenceId: "unpriced-inference", usage: { ...params.usage, model: "unknown-fixture-model" } });
+    const helper = boundedCommandHelper({
+      resolveTokenMiserBoundedHelper: () => "codex", resolveDecisionModelSettings: () => ({}),
+      resolveDecisionApiKey: async () => undefined,
+    }, { generateStructuredObject: async () => ({ ...params.usage, accountKey: "fixture-account", object: { choice: "0" } }) },
+    (usage) => internals.recordTokenMiserHelperInference({ ...params, usage, inferenceId: "bounded" }, "claude"));
+    const charged = await measureSqliteWrites(() => helper!.select("git diff", ["a", "b"], new AbortController().signal));
+    expect(charged.result).toBe(0);
+    expectSqliteWriteBudget({ scenario: "bounded-command-codex-helper-usage", writes: charged.writes,
+      note: "One Codex selector inference writes one usage line to its invoking Claude thread." });
+    const capturePricing = await store.readThreadPricing({ backend: "claude", threadId: "thread-parent" });
+    expect(capturePricing.lines).toHaveLength(1);
+    expect(capturePricing.lines[0]).toMatchObject({ accountKey: "fixture-account", model: "gpt-6-luna", inputTokens: 2000,
+      backend: "claude", parentThreadId: "thread-parent", sourceItemId: "system:token-miser-capture:bounded" });
+    await internals.recordTokenMiserHelperInference({ ...params, inferenceId: "unpriced-inference", usage: { ...params.usage, model: "unknown-fixture-model" } });
     expect(await internals.buildTokenMiserThreadSavings(savingsParams)).toBeUndefined();
   });
 

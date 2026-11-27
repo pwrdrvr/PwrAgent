@@ -23,6 +23,9 @@ import {
   utf8ByteLength,
 } from "../token-miser/token-miser-types";
 
+import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+
 const temporaryDirectories: string[] = [];
 const BEHAVIOR_PRIMING_LANGUAGE =
   /token miser|reduc\w*|model-visible cap|output limit|\bbounded\b|\bcompact\b|\bnarrow\b|context savings/i;
@@ -36,6 +39,35 @@ afterEach(async () => {
 });
 
 describe("TokenMiserService", () => {
+  it.each(["single", "group"] as const)("budgets cold and warm managed %s reductions through acceptance", async (mode) => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store, isEnabled: () => true, thresholdCharacters: 1, codeModeGroupingVersion: () => 1,
+      generateSummary: async () => ({ status: "ok", object: {
+        disposition: "summarize", summary: "Summary", usefulDetails: [],
+        ...(mode === "group" ? { members: [{ toolCallId: "nested", summary: "Nested output" }] } : {}),
+      } }),
+    });
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: store.stateDb.raw, dbPath: store.stateDb.raw.name });
+    for (const phase of ["cold", "warm"]) {
+      const { writes } = await measureSqliteWrites(async () => {
+        if (mode === "group") await service.captureNestedPostToolUse({
+          ...payload("nested output"), is_code_mode_nested: true, token_miser_grouping_version: 1,
+          code_mode_cell_id: phase, code_mode_tool_call_id: "nested",
+        });
+        const prepared = mode === "group"
+          ? await service.prepareCodeModeOutput({ ...codeModePayload([{ type: "input_text", text: "outer output" }]), call_id: phase, cell_id: phase })
+          : await service.preparePostToolUse({ ...payload("command output"), tool_use_id: phase });
+        expect(prepared).toBeDefined();
+        if (mode === "group") expect(prepared!.staged.metadata.groupId).toBe(phase);
+        await prepared!.staged.persist();
+        await prepared!.staged.commit();
+      });
+      expectSqliteWriteBudget({ scenario: `token-miser-managed-${mode}-${phase}`, writes,
+        note: `Managed ${mode} proposal and acceptance with a ${phase} output handle block.` });
+    }
+  });
+
   it.each([
     { toolName: "pwragent", input: { tool: "call_mcp_tool", connectionId: "one", toolName: "lookup" }, expected: 'mcp:["one","lookup"]' },
     { toolName: "pwragent", input: { tool: "call_mcp_tool", arguments: { connectionId: "one", toolName: "lookup" } }, expected: 'mcp:["one","lookup"]' },

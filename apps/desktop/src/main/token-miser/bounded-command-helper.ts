@@ -13,6 +13,8 @@ export type BoundedCommandHelper = {
   select: (command: string, excerpts: string[], signal: AbortSignal) => Promise<number | undefined>;
 };
 
+type UsageResult = Awaited<ReturnType<NonNullable<BackendClient["generateStructuredObject"]>>>;
+
 type Settings = Pick<DecisionSettingsReader, "resolveDecisionModelSettings" | "resolveDecisionApiKey"> & {
   resolveTokenMiserBoundedHelper: () => BoundedCommandHelperMode;
 };
@@ -24,7 +26,9 @@ function decisionIdentity(selected: DecisionModelResolution) {
 }
 
 /** Internal classifier. A stored credential alone never opts a thread into inference. */
-export function boundedCommandHelper(settings: Settings, codex: Pick<BackendClient, "generateStructuredObject">): BoundedCommandHelper | undefined {
+export function boundedCommandHelper(settings: Settings, codex: Pick<BackendClient, "generateStructuredObject">,
+  onUsage?: (result: Extract<UsageResult, { status: "ok" }>) => Promise<void>,
+): BoundedCommandHelper | undefined {
   const mode = settings.resolveTokenMiserBoundedHelper();
   if (mode === "codex" && codex.generateStructuredObject) {
     return {
@@ -39,7 +43,9 @@ export function boundedCommandHelper(settings: Settings, codex: Pick<BackendClie
           schema: { type: "object", properties: { choice: { type: "string", enum: choices } }, required: ["choice"], additionalProperties: false },
           isMatch: (record) => typeof record.choice === "string" && choices.includes(record.choice),
         });
-        if (signal.aborted || result.status !== "ok") return;
+        if (result.status !== "ok") return;
+        if (result.tokenUsage) await onUsage?.(result);
+        if (signal.aborted) return;
         const choice = (result.object as { choice?: unknown } | null)?.choice;
         if (typeof choice === "string" && choices.includes(choice)) return Number(choice);
       },

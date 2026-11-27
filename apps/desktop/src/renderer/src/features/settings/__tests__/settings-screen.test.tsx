@@ -5144,8 +5144,21 @@ describe("SettingsScreen", () => {
     await waitFor(() => expect(within(folderLine).getByRole("status")).toBeEmptyDOMElement());
   });
 
+  it("disables foreground capture when the owner cannot run it", () => {
+    const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: false };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+    const toggle = screen.getByRole("switch", { name: "Capture foreground command output" });
+    expect(toggle).toBeDisabled();
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText("Foreground command capture requires a supported POSIX owner.")).toBeVisible();
+  });
+
   it("saves a bounded-command helper with stock Codex while managed Token Miser is off", async () => {
     const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
     snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
     const settings = createSettingsState(snapshot);
     render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
@@ -5168,6 +5181,7 @@ describe("SettingsScreen", () => {
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
     snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
     snapshot.runtime.tokenMiser = {
+      boundedCommandsSupported: true,
       activation: { observedAt: 1_800_000_000_000, state: "unavailable" },
     };
     render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}

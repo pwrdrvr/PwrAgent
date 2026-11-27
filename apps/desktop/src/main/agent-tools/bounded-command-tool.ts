@@ -33,9 +33,9 @@ export function boundedCommandTools(capture?: BoundedCommandCapture, store?: Tok
             && (args.endLine === undefined || typeof args.endLine === "number")) {
             const start = args.startLine ?? 1;
             const text = await capture.inspect(context, args.objectId, keys.length === 1 ? undefined : {
-              start, end: args.endLine ?? start + 19, query: args.query,
+              start, end: args.endLine ?? (args.query === undefined ? start + 19 : undefined), query: args.query,
             });
-            const delivery = store && context.backend === "codex" && context.turnId
+            const delivery = store && context.backend === "codex" && context.transport === "codex_dynamic_tool" && context.turnId
               ? await store.prepareOwnerTextDelivery({ threadId: context.threadId, turnId: context.turnId, visibleText: text, allowJsonString: true })
               : undefined;
             return agentToolSuccess(text, { contentItems: [{ type: "inputText", text: delivery?.text ?? text }], mcpContentItems: [{ type: "text", text }] });

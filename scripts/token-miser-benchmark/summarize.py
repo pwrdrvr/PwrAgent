@@ -4,7 +4,6 @@ from itertools import chain
 import json
 from pathlib import Path
 import re
-import sqlite3
 
 
 def texts(value):
@@ -17,38 +16,7 @@ def texts(value):
         yield from texts(value.get("text", value.get("content")))
 
 
-def varint(blob, pos):
-    value = 0
-    for shift in range(0, 70, 7):
-        byte = blob[pos]
-        pos += 1
-        value |= (byte & 127) << shift
-        if byte < 128:
-            return value, pos
-    raise ValueError("Invalid generation counter")
-
-
-def field(blob, path):
-    """Read only the specified protobuf field in an agy 1.5.18 generation record."""
-    pos = 0
-    while pos < len(blob):
-        tag, pos = varint(blob, pos)
-        number, wire = divmod(tag, 8)
-        if wire == 0:
-            value, pos = varint(blob, pos)
-        else:
-            if wire == 2:
-                size, pos = varint(blob, pos)
-            else:
-                size = {1: 8, 5: 4}[wire]
-            value = memoryview(blob)[pos:pos + size]
-            pos += size
-        if number == path[0]:
-            return field(value, path[1:]) if len(path) > 1 else value
-    return 0
-
-
-def summarize(directory, agy_directory=None):
+def summarize(directory):
     run = json.loads((directory / "result.json").read_text())
     provider = run["provider"]
     first = peak = calls = cached = uncached = None
@@ -60,7 +28,7 @@ def summarize(directory, agy_directory=None):
     owner_bytes = 0
     largest_owner_result = 0
     answer = []
-    model = session = None
+    model = None
     fill = []
     with (directory / "frames.jsonl").open() as frames:
         for line in frames:
@@ -70,15 +38,16 @@ def summarize(directory, agy_directory=None):
                 owner_bytes += m["bytes"]
                 largest_owner_result = max(largest_owner_result, m["bytes"])
                 continue
+            if entry["type"] not in ("frame", "assistant", "user", "result") or not isinstance(m, dict):
+                continue
             method = m.get("method")
             params = m.get("params", {})
             r = m.get("result")
             if not isinstance(r, dict):
                 r = {}
             if provider == "agy":
-                if "sessionId" in r:
-                    session = r["sessionId"]
-                    model = r["models"]["currentModelId"]
+                if "models" in r:
+                    model = r["models"].get("currentModelId", model)
                 if "usage" in r:
                     cached = r["usage"].get("cachedReadTokens", 0)
                     uncached = r["usage"]["inputTokens"] + r["usage"].get("cachedWriteTokens", 0)
@@ -125,15 +94,7 @@ def summarize(directory, agy_directory=None):
                     cached = usage["cache_read_input_tokens"]
                     uncached = usage["input_tokens"] + usage["cache_creation_input_tokens"]
     if provider == "agy":
-        peak = max(fill)
-        if agy_directory:
-            filename = agy_directory / (session + ".db")
-            with sqlite3.connect(filename.resolve().as_uri() + "?mode=ro", uri=True) as db:
-                input_rows = [(field(row, (1, 4, 2)), field(row, (1, 4, 5))) for (row,) in
-                              db.execute("SELECT data FROM gen_metadata ORDER BY idx")]
-            inputs = [a + b for a, b in input_rows]
-            if (sum(a for a, _ in input_rows), sum(b for _, b in input_rows)) != (uncached, cached):
-                raise ValueError("ACP counts disagree with generation records")
+        peak = max(fill, default=None)
     elif provider == "claude":
         inputs = [u["input_tokens"] + u["cache_read_input_tokens"] + u["cache_creation_input_tokens"]
                   for u in usage_by_id.values()]
@@ -162,14 +123,13 @@ def summarize(directory, agy_directory=None):
     cell_stats = dict(cells=len(cell_sizes), cell_bytes=sum(cell_sizes), largest_cell=max(cell_sizes),
                       cell_progress_occurrences=cell_progress) if cell_sizes else {}
     return dict(**cell_stats, run=directory.name, model=model, first=first, peak=peak, cached=cached,
-                uncached=uncached, total=cached + uncached, calls=calls, tool_bytes=tool_bytes,
+                uncached=uncached, total=cached + uncached if cached is not None and uncached is not None else None, calls=calls, tool_bytes=tool_bytes,
                 largest_tool_result=largest_result, progress_occurrences=progress_lines, answer_fields=useful)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directories", type=Path, nargs="+")
-    parser.add_argument("--agy-conversations", type=Path, help="Optional local generation counters for the captured session")
     args = parser.parse_args()
     for directory in args.directories:
-        print(json.dumps(summarize(directory, args.agy_conversations)))
+        print(json.dumps(summarize(directory)))

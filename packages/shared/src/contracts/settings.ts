@@ -1503,6 +1503,7 @@ export type DesktopSettingsSnapshot = {
   configError?: string;
   runtime: {
     tokenMiser?: {
+      boundedCommandsSupported?: boolean;
       managedCodex?: ManagedCodexTrackTags & {
         state: "pending-switch" | "ready" | "unavailable";
         reason?: string;

@@ -22,7 +22,7 @@ const { AgentToolRouter, toMcpToolResponse } = await import("../src/main/agent-t
 const { buildTokenMiserToolDefinitions } = await import("../src/main/agent-tools/token-miser-agent-tools.ts");
 const { boundedCommandTools } = await import("../src/main/agent-tools/bounded-command-tool.ts");
 const { buildPwrAgentToolSearchDefinition, withPwrAgentToolDiscovery } = await import("../src/main/agent-tools/pwragent-tool-search.ts");
-const { BoundedCommandCapture } = await import("../src/main/token-miser/bounded-command.ts");
+const { BoundedCommandCapture, loginShellCommand } = await import("../src/main/token-miser/bounded-command.ts");
 const { acpToolUpdateNotifications } = await import("../src/main/acp/acp-live-notifications.ts");
 
 const [provider, variant, executable] = process.argv.slice(2);
@@ -139,6 +139,14 @@ const capture = new BoundedCommandCapture(() => captureStore.issueOutputHandle()
 let [definition] = boundedCommandTools(capture);
 const issues = [];
 const results = [];
+const negativeDecisions = new Map();
+function recordNativeDecision(display, decision, requestId) {
+  if (!negative || typeof display !== "string") return;
+  const issue = issues.find((entry) => entry.command === display || entry.command === loginShellCommand(display));
+  if (!issue) return;
+  negativeDecisions.set(issue.objectId, decision);
+  record("native_command_decision", { requestId, objectId: issue.objectId, command: display, decision });
+}
 
 async function verifyRetrieval(context, issue, summary) {
   const hash = createHash("sha256");
@@ -234,7 +242,8 @@ function observe(notification) {
   const item = notification.params.item;
   if (caller && item?.type === "commandExecution") {
     capture.observe(caller, { id: item.id, processId: item.processId, command: item.commandSource === "tool" ? undefined : item.command,
-      completed: notification.method === "item/completed" && !["declined", "interrupted", "cancelled"].includes(item.status),
+      completed: notification.method === "item/completed" && item.status !== "interrupted",
+      rejected: ["declined", "cancelled"].includes(item.status),
       output: item.aggregatedOutput ?? item.data?.output });
   }
 }
@@ -336,8 +345,18 @@ async function runRpc() {
       const outcome = !option || (!eligible && variant === "cancel") ? { outcome: "cancelled" }
         : { outcome: "selected", optionId: option.optionId };
       send({ id: m.id, result: { outcome } });
+      if (tool.name === "run_command" && p.sessionId === caller?.threadId) {
+        recordNativeDecision(tool.rawInput?.CommandLine,
+          outcome.outcome === "cancelled" ? "cancel" : option?.kind === "reject_once" ? "deny" : "allow", m.id);
+      }
     } else if (m.id !== undefined && m.method) {
-      if (m.method.endsWith("/requestApproval")) send({ id: m.id, result: { decision: "decline" } });
+      if (m.method.endsWith("/requestApproval")) {
+        const decision = variant === "cancel" ? "cancel" : "decline";
+        send({ id: m.id, result: { decision } });
+        if (m.method === "item/commandExecution/requestApproval" && p.threadId === caller?.threadId && p.turnId === caller?.turnId) {
+          recordNativeDecision(p.command, decision === "cancel" ? "cancel" : "deny", m.id);
+        }
+      }
       else send({ id: m.id, error: { code: -32601, message: "Unsupported benchmark client request." } });
     }
     return m;
@@ -430,8 +449,11 @@ async function runClaude() {
     canUseTool: createClaudePermissionHandler({ threadId: caller.threadId, turnId: () => caller.turnId,
       request: async (request) => {
         record("approval", request.params);
-        return { decision: request.params.toolName === "mcp__pwragent__capture_token_miser_command"
-          || allow(request.params.arguments?.command) ? "accept" : "decline" };
+        const decision = request.params.toolName === "mcp__pwragent__capture_token_miser_command"
+          || allow(request.params.arguments?.command) ? "accept" : variant === "cancel" ? "cancel" : "decline";
+        if (request.params.toolName === "Bash") recordNativeDecision(request.params.arguments?.command,
+          decision === "decline" ? "deny" : decision, request.params.requestId);
+        return { decision };
       }, cancelRequest: async () => {} }),
   } });
   const poll = interruptWhenRunning(() => { void session.interrupt().catch(() => controller.abort()); });
@@ -478,7 +500,8 @@ try {
       }
     }
   }
-  if (negative && (!issues.length || existsSync(path.join(cwd, "executed")))) throw new Error("Negative control failed.");
+  if (negative && (!issues.length || issues.some((issue) => negativeDecisions.get(issue.objectId) !== variant)
+    || existsSync(path.join(cwd, "executed")))) throw new Error("Missing exact native decision or negative control command executed.");
   if (codeMode && provider === "agy" && !(workflowApproved && workflowCompleted && /call_tool.*not defined/su.test(workflowAnswer))) {
     throw new Error("Antigravity workflow capability changed or the exact probe did not complete. Inspect the synthetic frames.");
   }

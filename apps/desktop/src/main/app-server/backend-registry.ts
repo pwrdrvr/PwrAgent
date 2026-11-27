@@ -1954,7 +1954,7 @@ export class DesktopBackendRegistry {
       },
     });
     return readRecord(response)?.action === "accept";
-  }, () => this.resolveBoundedCommandHelper());
+  }, (caller) => this.resolveBoundedCommandHelper(caller));
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserDiagnostics?: TokenMiserDiagnostics;
   private readonly tokenMiserService?: TokenMiserService;
@@ -2372,7 +2372,7 @@ export class DesktopBackendRegistry {
       recordCodexWorktreeOwnerThread: (...args: Parameters<typeof this.recordCodexWorktreeOwnerThread>) => this.recordCodexWorktreeOwnerThread(...args),
       recordMissingCodexThread: (...args: Parameters<typeof this.recordMissingCodexThread>) => this.recordMissingCodexThread(...args),
       recordQueuedMessageTitle: (...args: Parameters<typeof this.recordQueuedMessageTitle>) => this.recordQueuedMessageTitle(...args),
-      recordTokenMiserFocusedInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserFocusedInference"]>) => this.threadUsageLedger.recordTokenMiserFocusedInference(...args),
+      recordTokenMiserHelperInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserHelperInference"]>) => this.threadUsageLedger.recordTokenMiserHelperInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
       refreshCodexProviderCatalogs: (...args: Parameters<typeof this.refreshCodexProviderCatalogs>) => this.refreshCodexProviderCatalogs(...args),
       retryCodexProviderCatalogs: () => this.retryCodexProviderCatalogs(),
@@ -4928,17 +4928,20 @@ export class DesktopBackendRegistry {
   ): Pick<BackendSummary, "tokenMiser" | "modelDefaults" | "modelProviderDefaults" | "codexFastAllowed"> {
     const defaults = this.resolveProviderModelDefaultsFn();
     const showBackendDefaults = backend !== "codex" || this.codexOpenAiProviderEnabled;
+    const captureEnabled = process.platform !== "win32"
+      && ["codex", "claude", "acp:antigravity"].includes(backend)
+      && this.resolveTokenMiserBoundedCommands();
     return {
       modelDefaults: showBackendDefaults ? defaults[backend] : undefined,
       modelProviderDefaults: Object.fromEntries(Object.entries(defaults)
         .filter(([key]) => (showBackendDefaults && key === backend) || (backend === "codex" && key.startsWith("codex-provider:")))),
-      ...(backend === "codex" ? {
+      ...(backend === "codex" || captureEnabled ? {
         tokenMiser: {
-          enabled: this.resolveTokenMiserEnabledFn(),
+          enabled: captureEnabled || this.resolveTokenMiserEnabledFn(),
           defaultEnabled: this.resolveTokenMiserDefaultEnabledFn(),
         },
-        codexFastAllowed: this.resolveCodexFastAllowedFn(),
       } : {}),
+      ...(backend === "codex" ? { codexFastAllowed: this.resolveCodexFastAllowedFn() } : {}),
     };
   }
 
@@ -20855,8 +20858,12 @@ export class DesktopBackendRegistry {
       return await new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools, enabled ? this.tokenMiserStore : undefined))
         .handleDynamicToolCall({ backend, call: hostToolCall });
     }
+    const captureOnly = hostToolCall?.tool === "capture_token_miser_command"
+      && (!this.isLiveDynamicToolCall(backend, hostToolCall)
+        || !await this.isTokenMiserDynamicToolCallEnabled(backend, hostToolCall)
+        || !await this.withCodexThreadClient(hostToolCall.threadId, (client) => this.supportsTokenMiserCodeModeReducer(client)));
     const tokenMiserRouter = new AgentToolRouter(
-      buildTokenMiserToolDefinitions(this.tokenMiserStore, this.tokenMiserService?.focused, this.boundedCommandCapture),
+      buildTokenMiserToolDefinitions(captureOnly ? undefined : this.tokenMiserStore, this.tokenMiserService?.focused, this.boundedCommandCapture),
     );
     if (
       hostToolCall
@@ -23256,7 +23263,9 @@ export class DesktopBackendRegistry {
           backend: event.backend, threadId: notification.params.threadId, turnId: notification.params.turnId ?? undefined,
         }, {
           id: item.id, processId: readOptionalString(item.processId), command: shell ? readOptionalString(item.command) : undefined,
-          completed: notification.method === "item/completed" && item.status !== "declined" && item.status !== "cancelled" && item.status !== "interrupted",
+          // Interrupted Unified Exec terminals can still be running. Keep their stop identity for endTurn.
+          completed: notification.method === "item/completed" && item.status !== "interrupted",
+          rejected: item.status === "declined" || item.status === "cancelled",
           output: readOptionalString(item.aggregatedOutput) ?? readOptionalString(readRecord(item.data)?.output),
         });
       }

@@ -1,17 +1,27 @@
 import * as mcpConnections from "@pwragent/shared/contracts/mcp-connections";
+import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { boundedCommandTools } from "../agent-tools/bounded-command-tool";
 import { BoundedCommandLines } from "../token-miser/bounded-command-lines";
-import { BoundedCommandCapture } from "../token-miser/bounded-command";
+import { BoundedCommandCapture, loginShellCommand } from "../token-miser/bounded-command";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { TestTokenMiserStore } from "./token-miser-test-store";
 
 const caller = { backend: "acp:antigravity", threadId: "thread", turnId: "turn" } as const;
 const shell = "/bin/sh";
+
+it("recognizes only the configured nonstandard POSIX shell and its exact payload", () => {
+  vi.stubEnv("SHELL", "/opt/homebrew/bin/zsh");
+  try {
+    expect(loginShellCommand("/opt/homebrew/bin/zsh -lc 'git diff'")).toBe("git diff");
+    expect(loginShellCommand("/unrelated/bin/zsh -lc 'git diff'")).toBe("");
+    expect(loginShellCommand("/opt/homebrew/bin/zsh -lc 'git diff' extra")).toBe("");
+  } finally { vi.unstubAllEnvs(); }
+});
 
 it("keeps line previews equal to a full UTF-8 decode across block and range boundaries", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "bounded-line-pages-"));
@@ -84,8 +94,7 @@ it.skipIf(process.platform === "win32")("retains the native command's bytes and 
       // A different tool, thread, or item cannot turn its stdout into a completion receipt.
       capture.observe(caller, { id: "foreign", command: "echo", completed: true, output: result.stdout.toString() });
       await expect(capture.inspect(caller, objectId)).rejects.toThrow("completion receipt");
-      capture.observe(caller, { id: "call", command: native, completed: false });
-      capture.observe(caller, { id: "call", completed: true, output: `pwragent-${objectId}:0` });
+      capture.observe(caller, { id: "call", command: "/usr/bin/bash -lc " + mcpConnections.formatMcpCommandLine({ command: native, args: [] }), completed: false });
       await expect(capture.inspect(caller, objectId)).rejects.toThrow("completion receipt");
       capture.observe(caller, { id: "other", completed: true, output: result.stdout.toString() });
       await expect(capture.inspect(caller, objectId)).rejects.toThrow("completion receipt");
@@ -108,7 +117,8 @@ it.skipIf(process.platform === "win32")("retains the native command's bytes and 
       const first = await capture.inspect(caller, objectId, { start: 1, end: 1 });
       expect(first.split("\n")).toHaveLength(1);
       const needle = command === "git diff" ? "headers.css" : "expected sticky, got static";
-      expect(await capture.inspect(caller, objectId, { start: 1, end: 2, query: needle })).toContain(needle);
+      expect(await capture.inspect(caller, objectId, { start: 1, query: needle })).toContain(needle);
+      expect(await capture.inspect(caller, objectId, { start: 10, end: 12, query: needle })).toBe("");
       const chunks: Buffer[] = [];
       let offset = 0;
       for (;;) {
@@ -257,6 +267,31 @@ it.skipIf(process.platform === "win32")("classifies ambiguous hunks once within 
   }
 });
 
+it.skipIf(process.platform === "win32")("revisits a recent abandoned capture after the retention interval", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "capture-sweep-"));
+  const exited = spawnSync(shell, ["-c", "exit 0"]);
+  const abandoned = path.join(dir, `pwragent-capture-${exited.pid}-${randomUUID()}.log`);
+  let next = 0;
+  const capture = new BoundedCommandCapture(() => `o${++next}`, async () => true, async () => true);
+  vi.stubEnv("TMPDIR", dir);
+  try {
+    await writeFile(abandoned, "fixture");
+    const created = (await stat(abandoned)).birthtimeMs;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(created + 1000);
+    await capture.prepare(caller, "git diff");
+    expect(await stat(abandoned)).toBeDefined();
+    vi.setSystemTime(created + 302_000);
+    await capture.prepare(caller, "git diff");
+    await expect(stat(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    await capture.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 it.skipIf(process.platform === "win32")("keeps concurrent capture handles distinct through expiry and reissue", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "concurrent-captures-"));
   const store = new TestTokenMiserStore(dir);
@@ -273,6 +308,12 @@ it.skipIf(process.platform === "win32")("keeps concurrent capture handles distin
     for (const ticket of tickets) {
       await expect(capture.inspect({ ...caller, threadId: "foreign" }, ticket.objectId)).rejects.toThrow("unavailable");
     }
+    const rejected = tickets[1]!;
+    capture.observe(caller, { id: "denied", command: rejected.command, completed: true, rejected: true });
+    await expect(capture.inspect(caller, rejected.objectId)).rejects.toThrow("unavailable");
+    const replacement = await capture.prepare(caller, "git diff");
+    capture.observe(caller, { id: "failed", command: replacement.command, completed: true, output: "redirection failed" });
+    await expect(capture.inspect(caller, replacement.objectId)).rejects.toThrow("unavailable");
     const ticket = tickets[0]!;
     expect(spawnSync("git", ["init", "-q"], { cwd: dir }).status).toBe(0);
     const executed = spawnSync(shell, ["-c", ticket.command], { cwd: dir, encoding: "utf8" });

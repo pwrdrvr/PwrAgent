@@ -179,7 +179,9 @@ export function ExperimentalSettings(props: {
     : tokenMiserSwitchPending ? "Waiting for idle"
     : tokenMiserStarting ? "Starting"
     : undefined;
-  const tokenMiserAvailable = boundedCommands.value || (tokenMiserEnabled.value && !managedCodexStatus);
+  const captureSupported = props.snapshot.runtime.tokenMiser?.boundedCommandsSupported === true;
+  const captureEnabled = captureSupported && boundedCommands.value;
+  const tokenMiserAvailable = captureEnabled || (tokenMiserEnabled.value && !managedCodexStatus);
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
@@ -274,16 +276,17 @@ export function ExperimentalSettings(props: {
       >
         <div className="settings-fields">
           <ToggleField
-            checked={boundedCommands.value}
-            disabled={props.saving}
+            checked={captureEnabled}
+            disabled={props.saving || !captureSupported}
             label="Capture foreground command output"
-            sub="Offer approved Git diffs and focused tests with exact log retrieval on stock or managed Codex, Claude and Antigravity."
+            sub={captureSupported ? "Offer approved Git diffs and focused tests with exact log retrieval on stock or managed Codex, Claude and Antigravity."
+              : "Foreground command capture requires a supported POSIX owner."}
             source={sourceBadge(boundedCommands)}
             onChange={(enabled) => props.onWriteConfig({ experimental: { tokenMiserBoundedCommands: enabled } })}
           />
           <SegmentedField<BoundedCommandHelperMode>
             value={boundedHelper.value}
-            disabled={props.saving || !boundedCommands.value}
+            disabled={props.saving || !captureEnabled}
             label="Helper for ambiguous command output"
             sub="Repetitive progress is reduced locally. Codex uses your Token Miser helper. Decision model uses Defaults → Decisions and may incur per-call charges."
             options={[
@@ -296,7 +299,7 @@ export function ExperimentalSettings(props: {
           />
           <ToggleField
             checked={tokenMiserDefaultEnabled.value}
-            disabled={props.saving || (!tokenMiserEnabled.value && !boundedCommands.value)}
+            disabled={props.saving || (!tokenMiserEnabled.value && !captureEnabled)}
             label="Enable on threads by default"
             switchQualifier="Token Miser"
             sub="Apply enabled Token Miser features to threads without an override. Change individual threads from the composer menu."

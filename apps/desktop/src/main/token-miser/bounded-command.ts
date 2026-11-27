@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { lstat, open, opendir, unlink, type FileHandle } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import { splitMcpCommandLine } from "@pwragent/shared/contracts/mcp-connections";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
@@ -9,11 +9,11 @@ import { takeUtf8Prefix } from "./token-miser-types";
 import { BoundedCommandLines } from "./bounded-command-lines";
 import { BOUNDED_HELPER_TIMEOUT_MS, type BoundedCommandHelper } from "./bounded-command-helper";
 
-type Caller = Pick<AgentToolCallContext, "backend" | "threadId" | "turnId">;
+export type BoundedCommandCaller = Pick<AgentToolCallContext, "backend" | "threadId" | "turnId">;
 type Ticket = {
   handle: string;
   receipt: string;
-  caller: Caller;
+  caller: BoundedCommandCaller;
   command: string;
   shell: string;
   file: FileHandle;
@@ -34,9 +34,9 @@ const isCommand = (value: string) =>
   && /^(?:git diff(?: --cached)?|node --test [A-Za-z0-9_][A-Za-z0-9_./-]*\.test\.(?:js|cjs|mjs)|pnpm exec vitest run [A-Za-z0-9_][A-Za-z0-9_./-]*\.test\.tsx?)$/u.test(value)
   && !value.includes("..") && !/[\r\n]/u.test(value);
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
-const scope = ({ backend, threadId, turnId }: Caller) => JSON.stringify([backend, threadId, turnId]);
+const scope = ({ backend, threadId, turnId }: BoundedCommandCaller) => JSON.stringify([backend, threadId, turnId]);
 
-async function commandSummary(ticket: Ticket, resolveHelper: () => BoundedCommandHelper | undefined) {
+async function commandSummary(ticket: Ticket, resolveHelper: (caller: BoundedCommandCaller) => BoundedCommandHelper | undefined) {
   const sections: Array<{ heading: string; lines: string[]; removed: number; added: number }> = [];
   const isDiff = ticket.command.startsWith("git diff");
   let fileHeading = "";
@@ -88,7 +88,7 @@ async function commandSummary(ticket: Ticket, resolveHelper: () => BoundedComman
   let selected: string | undefined;
   if (ticket.helperIdentity && sections.length > 1 && repeats < lines / 2
     && Buffer.byteLength([...diagnostics].join("\n")) < 900 && (await ticket.file.stat()).size >= 8192) {
-    const helper = resolveHelper();
+    const helper = resolveHelper(ticket.caller);
     if (helper?.identity === ticket.helperIdentity && !ticket.lifetime.signal.aborted) {
       const signal = AbortSignal.any([ticket.lifetime.signal, AbortSignal.timeout(BOUNDED_HELPER_TIMEOUT_MS)]);
       const aborted = Promise.withResolvers<undefined>();
@@ -117,28 +117,34 @@ export class BoundedCommandCapture {
   private readonly idsByHandle = new Map<string, string>();
   private preparing = 0;
   private closed = false;
+  private nextSweepAt = 0;
   private sweep?: Promise<void>;
   constructor(
     private readonly issueHandle: () => string,
-    private readonly eligible: (caller: Caller) => Promise<boolean>,
-    private readonly approve: (caller: Caller, command: string, helper?: string) => Promise<boolean>,
-    private readonly resolveHelper: () => BoundedCommandHelper | undefined = () => undefined,
+    private readonly eligible: (caller: BoundedCommandCaller) => Promise<boolean>,
+    private readonly approve: (caller: BoundedCommandCaller, command: string, helper?: string) => Promise<boolean>,
+    private readonly resolveHelper: (caller: BoundedCommandCaller) => BoundedCommandHelper | undefined = () => undefined,
   ) {}
 
   get pending() { return this.tickets.size > 0; }
 
-  async prepare(caller: Caller, command: string) {
+  async prepare(caller: BoundedCommandCaller, command: string) {
     if (!caller.turnId || process.platform === "win32" || !isCommand(command)
       || !["acp:antigravity", "claude", "codex"].includes(caller.backend)
       || !await this.eligible(caller)) throw new Error("Bounded command unavailable for this turn or command.");
     if (this.closed || this.tickets.size + this.preparing >= 24) throw new Error("Capture unavailable or busy.");
     this.preparing++;
     try {
-      const helper = this.resolveHelper();
+      const helper = this.resolveHelper(caller);
       if (!await this.approve(caller, command, helper?.label) || this.closed || !await this.eligible(caller)) {
         throw new Error("Command capture was declined, cancelled, or the turn ended.");
       }
-      await (this.sweep ??= removeAbandonedCaptures().catch(() => { this.sweep = undefined; }));
+      if (!this.sweep && Date.now() >= this.nextSweepAt) {
+        this.sweep = removeAbandonedCaptures().then(() => {
+          this.nextSweepAt = Date.now() + TOKEN_MISER_OUTPUT_TTL_MS;
+        }).catch(() => {}).finally(() => { this.sweep = undefined; });
+      }
+      await this.sweep;
       const id = randomUUID();
       const handle = this.issueHandle();
       const receipt = randomUUID();
@@ -167,7 +173,7 @@ export class BoundedCommandCapture {
     return setTimeout(() => { void this.remove(id).catch(() => {}); }, TOKEN_MISER_OUTPUT_TTL_MS).unref();
   }
 
-  observe(caller: Caller, item: { id: string; processId?: string; command?: string; completed: boolean; output?: string }) {
+  observe(caller: BoundedCommandCaller, item: { id: string; processId?: string; command?: string; completed: boolean; rejected?: boolean; output?: string }) {
     if (!this.pending) return;
     const callerScope = scope(caller);
     let parsedShell: string | undefined;
@@ -179,19 +185,21 @@ export class BoundedCommandCapture {
         ticket.processId = item.processId;
         clearTimeout(ticket.timer);
       }
-      if (ticket.itemId !== item.id || !item.completed || !item.output) continue;
-      const receipt = new RegExp(`(?:^|\\n)pwragent-${ticket.receipt}:(\\d{1,3})(?:\\r?\\n|$)`, "u").exec(item.output);
-      if (receipt && Number(receipt[1]) <= 255) {
+      if (ticket.itemId !== item.id || !item.completed) continue;
+      const receipt = new RegExp(`(?:^|\\n)pwragent-${ticket.receipt}:(\\d{1,3})(?:\\r?\\n|$)`, "u").exec(item.output ?? "");
+      if (!item.rejected && receipt && Number(receipt[1]) <= 255) {
         ticket.status = Number(receipt[1]);
         ticket.timer = this.expireAfterRetention(id);
         // Readers use the owner's original descriptor. Remove the directory
         // entry as soon as the writer has finished, including on test failure.
         void this.unlinkFile(ticket).catch(() => {});
+      } else {
+        void this.remove(id).catch(() => {});
       }
     }
   }
 
-  async endTurn(caller: Caller, stop?: (matches: (terminal: { itemId: string; processId: string; command: string }) => boolean) => Promise<void>) {
+  async endTurn(caller: BoundedCommandCaller, stop?: (matches: (terminal: { itemId: string; processId: string; command: string }) => boolean) => Promise<void>) {
     const owned = [...this.tickets].filter(([, ticket]) => scope(caller) === scope(ticket.caller));
     const running = owned.map(([, ticket]) => ticket).filter((ticket) => ticket.status === undefined && ticket.itemId && ticket.processId);
     const cleanup = owned.map(([id]) => this.remove(id));
@@ -205,7 +213,7 @@ export class BoundedCommandCapture {
     await Promise.all(cleanup);
   }
 
-  private async retained(caller: Caller, id: string) {
+  private async retained(caller: BoundedCommandCaller, id: string) {
     const ticket = this.tickets.get(this.idsByHandle.get(id) ?? id);
     if (!ticket || scope(caller) !== scope(ticket.caller) || !await this.eligible(caller)) {
       throw new Error("Output expired or unavailable for this turn.");
@@ -214,7 +222,7 @@ export class BoundedCommandCapture {
     return ticket;
   }
 
-  async readBytes(caller: Caller, id: string, offset: number) {
+  async readBytes(caller: BoundedCommandCaller, id: string, offset: number) {
     const ticket = await this.retained(caller, id);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid byte offset.");
     const totalBytes = (await ticket.file.stat()).size;
@@ -222,7 +230,7 @@ export class BoundedCommandCapture {
     return { totalBytes, offset, base64: buffer.subarray(0, bytesRead).toString("base64") };
   }
 
-  async inspect(caller: Caller, id: string, range?: { start: number; end: number; query?: string }) {
+  async inspect(caller: BoundedCommandCaller, id: string, range?: { start: number; end?: number; query?: string }) {
     const ticket = await this.retained(caller, id);
     if (!range) {
       const text = await (ticket.summary ??= commandSummary(ticket, this.resolveHelper).catch((error) => {
@@ -233,8 +241,8 @@ export class BoundedCommandCapture {
       return text;
     }
     const { start, end, query } = range;
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start
-      || end - start >= 200 || (query !== undefined && (typeof query !== "string" || !query || query.length > 256))) {
+    if (!Number.isSafeInteger(start) || start < 1
+      || (end !== undefined && (!Number.isSafeInteger(end) || end < start || end - start >= 200)) || (query !== undefined && (typeof query !== "string" || !query || query.length > 256))) {
       throw new Error("Invalid line range or query.");
     }
     const selected: string[] = [];
@@ -242,7 +250,7 @@ export class BoundedCommandCapture {
     for await (const line of ticket.lines.from(start)) {
       number++;
       if (query === undefined || line.includes(query)) selected.push(query ? `${number}: ${line}` : line);
-      if (selected.length > end - start) break;
+      if (number === end || (end === undefined && selected.length >= 20)) break;
     }
     return takeUtf8Prefix(selected.join("\n"), 1450);
   }
@@ -275,13 +283,26 @@ export class BoundedCommandCapture {
   }
 }
 
-function loginShellCommand(display: string): string {
-  const argv = splitMcpCommandLine(display);
-  return argv && argv.length === 3 && ["/bin/bash", "/bin/zsh", "/bin/sh"].includes(argv[0]!)
-    && ["-c", "-lc"].includes(argv[1]!) ? argv[2]! : "";
+// Service launches can omit SHELL while Codex still resolves the account login shell.
+let accountShell: string | null | undefined;
+function isAccountShell(executable: string): boolean {
+  if (accountShell === undefined) {
+    try { accountShell = userInfo().shell; } catch { accountShell = null; }
+  }
+  return executable === accountShell;
 }
 
-// Runs on first explicit capture only. A crashed owner may have left a name
+export function loginShellCommand(display: string): string {
+  const argv = splitMcpCommandLine(display);
+  if (!argv || argv.length !== 3 || !["-c", "-lc"].includes(argv[1]!)) return "";
+  const executable = argv[0]!;
+  if (!path.isAbsolute(executable) || !["sh", "bash", "zsh"].includes(path.basename(executable))) return "";
+  const directory = path.dirname(executable);
+  return directory === "/bin" || directory === "/usr/bin" || executable === process.env.SHELL || isAccountShell(executable)
+    ? argv[2]! : "";
+}
+
+// Swept on demand, at most once per retention interval after a successful sweep. A crashed owner may have left a name
 // between allocating its descriptor and receiving the native completion event.
 async function removeAbandonedCaptures() {
   const directory = tmpdir();

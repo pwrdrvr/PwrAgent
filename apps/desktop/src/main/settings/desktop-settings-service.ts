@@ -1034,6 +1034,7 @@ export class DesktopSettingsService {
       configError: error,
       runtime: {
         tokenMiser: {
+          boundedCommandsSupported: process.platform !== "win32",
           ...(tokenMiserActivation ? { activation: tokenMiserActivation } : {}),
           ...(managedCodexRuntime
             ? {

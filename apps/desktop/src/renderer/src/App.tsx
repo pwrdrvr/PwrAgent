@@ -4356,6 +4356,8 @@ function DesktopAppShell(props: {
           settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
         pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
         reviewAutoFixDefault: settings.snapshot?.general.autoFixReviews?.value,
+        tokenMiserCaptureEnabled: settings.snapshot?.runtime.tokenMiser?.boundedCommandsSupported === true
+          && settings.snapshot.experimental.tokenMiserBoundedCommands?.value === true,
         tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
         monitorJobSuggestionsDefaultEnabled:
           settings.snapshot?.general.toolOutputAlerts?.monitorJobSuggestionsEnabled?.value ?? true,

@@ -865,7 +865,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         ports.tokenMiserCodeModeGroupingVersion,
       postToolUseExactOutputVersion: () =>
         ports.tokenMiserPostToolUseExactOutputVersion,
-      onFocusedInference: (params) => ports.recordTokenMiserFocusedInference(params),
+      onFocusedInference: (params) => ports.recordTokenMiserHelperInference(params),
       generateSummary: async (params) => {
         if (!ports.codexClient.generateStructuredObject) {
           return {
@@ -1770,9 +1770,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolvePdfAnalysisEnabledFn,
     acpSessionIdleCloseMs,
     resolveTokenMiserBoundedCommands,
-    resolveBoundedCommandHelper: () => {
+    resolveBoundedCommandHelper: (caller) => {
       try {
-        return boundedCommandHelper(settingsService ?? getDesktopSettingsService(), codexClient);
+        return boundedCommandHelper(settingsService ?? getDesktopSettingsService(), codexClient, async (usage) => {
+          if (caller.turnId) await threadUsageLedger.recordTokenMiserHelperInference({
+            threadId: caller.threadId, turnId: caller.turnId, inferenceId: randomUUID(), usage,
+          }, caller.backend);
+        });
       } catch {
         return undefined;
       }
