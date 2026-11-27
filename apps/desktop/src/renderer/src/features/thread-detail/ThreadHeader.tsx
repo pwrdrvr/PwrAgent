@@ -63,8 +63,9 @@ type ThreadHeaderProps = {
   project?: ThreadHeaderProject;
   thread: NavigationThreadSummary;
   /**
-   * The machine the thread runs on, shown wherever the launchpad showed its
-   * machine chip, so starting a thread leaves the machine where it was.
+   * The thread's machine, displayed as a fixed chip in the header.
+   * The launchpad's machine chip appears in the Machine section of the
+   * composer's Where panel.
    */
   machine?: MachineChipValue;
   backends?: BackendSummary[];
