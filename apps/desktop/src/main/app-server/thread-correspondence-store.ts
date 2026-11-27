@@ -267,7 +267,7 @@ export class ThreadCorrespondenceStore {
       && candidate.destination.backend === destination.backend
       && candidate.destination.threadId === destination.threadId
       && candidate.destination.instanceId === destination.instanceId);
-    return records.map((record) => {
+    return records.map(({ revision: _revision, ...record }) => {
       this.update(source, record.id, { state: "cancelled" });
       return { ...record, state: "cancelled" as const };
     });
