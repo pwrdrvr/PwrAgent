@@ -340,6 +340,9 @@ export class AcpSubAgentTracker {
   private readonly stepLines = new Map<string, string>();
   /** The agent whose steps a child conversation reports, for step lines only. */
   private readonly stepConversations = new Map<string, string>();
+  /** Agents a child conversation is tied to for step lines. */
+  private readonly stepTiedAgents = new Set<string>();
+  private stepLinesRevision = 0;
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -458,6 +461,7 @@ export class AcpSubAgentTracker {
       const agent = this.agents.get(id);
       if (!agent || isTerminalStatus(agent.status)) {
         this.runningIds.delete(id);
+        if (this.stepLines.delete(id)) this.stepLinesRevision += 1;
         continue;
       }
       this.settleAgent(agent, status, undefined, timestamp);
@@ -778,27 +782,34 @@ export class AcpSubAgentTracker {
     const conversationId = toolCallId.slice(0, separator);
     let agentId = this.byConversationId.get(conversationId) ?? this.stepConversations.get(conversationId);
     if (!agentId) {
-      const tied = new Set([...this.byConversationId.values(), ...this.stepConversations.values()]);
+      // Only running launches are candidates: a scan of the running set, not
+      // of every sub-agent the session has had.
       const untied = [...this.runningIds].filter((id) => {
         const agent = this.agents.get(id);
-        return agent?.toolCallId && !agent.conversationId && !tied.has(id);
+        return agent?.toolCallId && !agent.conversationId && !this.stepTiedAgents.has(id);
       });
       if (untied.length !== 1) return false;
       agentId = untied[0]!;
       this.stepConversations.set(conversationId, agentId);
+      this.stepTiedAgents.add(agentId);
     }
     const line = acpStepLine(update);
     if (!line || !this.runningIds.has(agentId) || this.stepLines.get(agentId) === line) return false;
     this.stepLines.set(agentId, line);
+    this.stepLinesRevision += 1;
     return true;
   }
 
-  /** What each running sub-agent is doing now, by card, in start order. */
+  /** Changes whenever a step line starts, changes or ends; publish only then. */
+  get activityRevision(): number {
+    return this.stepLinesRevision;
+  }
+
+  /** What each running sub-agent is doing now, by card. Only running sub-agents hold a line. */
   subAgentActivities(): SubAgentActivityLine[] {
-    return [...this.agents.values()].flatMap((agent) => {
-      const line = this.runningIds.has(agent.id) ? this.stepLines.get(agent.id) : undefined;
-      return line ? [{ monitorId: `${ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${agent.id}`, activity: line }] : [];
-    });
+    return [...this.stepLines].map(([id, activity]) => ({
+      monitorId: `${ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${id}`, activity,
+    }));
   }
 
   private settleAgent(
@@ -807,7 +818,7 @@ export class AcpSubAgentTracker {
     lastMessage: string | undefined,
     timestamp: number,
   ): void {
-    this.stepLines.delete(agent.id);
+    if (this.stepLines.delete(agent.id)) this.stepLinesRevision += 1;
     agent.status = status;
     agent.completedAt = Math.max(timestamp, agent.startedAt);
     if (lastMessage) {

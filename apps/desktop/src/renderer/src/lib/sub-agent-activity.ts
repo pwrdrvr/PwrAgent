@@ -21,13 +21,25 @@ const EMPTY: SubAgentActivities = new Map();
  * call on, and a row shows a line only while its card runs.
  */
 const activitiesByThread = new Map<string, SubAgentActivities>();
-const listeners = new Set<() => void>();
+/** Readers by thread key: a change wakes only the changed thread's readers. */
+const listenersByThread = new Map<string, Set<() => void>>();
 let subscribedApi: DesktopApi | undefined;
 let unsubscribe: (() => void) | undefined;
+let readerWakeups = 0;
+
+/** Test seam: how many reader wakeups the store has sent since its reset. */
+export function subAgentActivityReaderWakeups(): number {
+  return readerWakeups;
+}
 
 /** Applies one event; true when the store changed. Exported for tests. */
 export function applySubAgentActivityEvent(event: AgentEvent): boolean {
-  if (event.notification.method !== "thread/subAgentActivity/updated") return false;
+  return applyEvent(event) !== undefined;
+}
+
+/** Applies one event; the thread key whose lines changed, if any. */
+function applyEvent(event: AgentEvent): string | undefined {
+  if (event.notification.method !== "thread/subAgentActivity/updated") return undefined;
   const params = event.notification.params as ActivityParams;
   // A viewer window's rows are all the peer's, keyed remote, and its events
   // need not say so: key them by the window's target, as the rows are.
@@ -37,19 +49,20 @@ export function applySubAgentActivityEvent(event: AgentEvent): boolean {
   }, params.threadId);
   const previous = activitiesByThread.get(key) ?? EMPTY;
   const next = applySubAgentActivityChanges(previous, params);
-  if (next === previous) return false;
+  if (next === previous) return undefined;
   if (next.size === 0) activitiesByThread.delete(key);
   else activitiesByThread.set(key, next);
-  return true;
+  return key;
 }
 
 /** Test seam: forget every activity line and the event subscription. */
 export function resetSubAgentActivityStore(): void {
   activitiesByThread.clear();
-  listeners.clear();
+  listenersByThread.clear();
   unsubscribe?.();
   unsubscribe = undefined;
   subscribedApi = undefined;
+  readerWakeups = 0;
 }
 
 function ensureSubscribed(desktopApi: DesktopApi): void {
@@ -59,8 +72,12 @@ function ensureSubscribed(desktopApi: DesktopApi): void {
   unsubscribe?.();
   subscribedApi = desktopApi;
   unsubscribe = desktopApi.onAgentEvent((event) => {
-    if (!applySubAgentActivityEvent(event)) return;
-    for (const listener of listeners) listener();
+    const key = applyEvent(event);
+    if (key === undefined) return;
+    for (const listener of listenersByThread.get(key) ?? []) {
+      readerWakeups += 1;
+      listener();
+    }
   });
 }
 
@@ -71,11 +88,18 @@ export function useSubAgentActivities(
 ): SubAgentActivities {
   const subscribe = useCallback((listener: () => void) => {
     if (desktopApi) ensureSubscribed(desktopApi);
-    listeners.add(listener);
+    if (!threadKey) return () => undefined;
+    let readers = listenersByThread.get(threadKey);
+    if (!readers) {
+      readers = new Set();
+      listenersByThread.set(threadKey, readers);
+    }
+    readers.add(listener);
     return () => {
-      listeners.delete(listener);
+      readers.delete(listener);
+      if (readers.size === 0 && listenersByThread.get(threadKey) === readers) listenersByThread.delete(threadKey);
     };
-  }, [desktopApi]);
+  }, [desktopApi, threadKey]);
   const snapshot = useCallback(
     () => (threadKey ? activitiesByThread.get(threadKey) : undefined) ?? EMPTY,
     [threadKey],

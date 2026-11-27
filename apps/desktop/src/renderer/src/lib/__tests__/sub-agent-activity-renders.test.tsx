@@ -2,7 +2,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { DesktopApi } from "../desktop-api";
-import { resetSubAgentActivityStore, useSubAgentActivities } from "../sub-agent-activity";
+import { resetSubAgentActivityStore, subAgentActivityReaderWakeups, useSubAgentActivities } from "../sub-agent-activity";
 
 afterEach(() => {
   cleanup();
@@ -39,6 +39,8 @@ it("re-renders only the thread whose activity changed, once per real change", ()
   }
   expect(renders.get("claude:thread-0")! - mounted.get("claude:thread-0")!).toBe(50);
   for (const key of threads.slice(1)) expect(renders.get(key)).toBe(mounted.get(key));
+  // A change wakes only its thread's reader: 50, not 50 x 20 snapshot reads.
+  expect(subAgentActivityReaderWakeups()).toBe(50);
 });
 
 it("keeps one event subscription when the desktop bridge object changes", () => {

@@ -1446,6 +1446,8 @@ export class AcpBackendAdapter {
       recordedKeys: Map<string, string>;
       /** Each running sub-agent's step line as last published, by monitor id. */
       publishedActivities: ReadonlyMap<string, string>;
+      /** The tracker's activity revision those lines were published at. */
+      publishedActivityRevision: number;
       lastTurnId?: string;
       flushTimer?: ReturnType<typeof setTimeout>;
       flushChain: Promise<void>;
@@ -4360,6 +4362,7 @@ export class AcpBackendAdapter {
         tracker: new AcpSubAgentTracker(),
         recordedKeys: new Map(),
         publishedActivities: new Map(),
+        publishedActivityRevision: 0,
         flushChain: Promise.resolve(),
         consecutiveFlushFailures: 0,
       };
@@ -4487,7 +4490,12 @@ export class AcpBackendAdapter {
     sessionId: string;
     tracker: AcpSubAgentTracker;
     publishedActivities: ReadonlyMap<string, string>;
+    publishedActivityRevision: number;
   }): void {
+    // Every session update passes through here, streamed text included;
+    // only a step line that started, changed or ended costs any work.
+    if (state.tracker.activityRevision === state.publishedActivityRevision) return;
+    state.publishedActivityRevision = state.tracker.activityRevision;
     const current = state.tracker.subAgentActivities();
     const changes = subAgentActivityChanges(state.publishedActivities, current);
     if (!changes) return;

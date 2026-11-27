@@ -81,6 +81,8 @@ export type ClaudeTaskSettlement = {
  */
 export class ClaudeTaskTracker {
   private readonly tasks = new Map<string, ClaudeTask>();
+  /** Tasks holding an activity line, so reading the lines skips settled history. */
+  private readonly linedTaskIds = new Set<string>();
   private liveBackground?: Set<string>;
 
   constructor(private readonly now: () => number = Date.now) {}
@@ -125,7 +127,10 @@ export class ClaudeTaskTracker {
         // renamed every sub-agent row to whatever command it ran last; it is
         // the row's second line instead.
         const activity = claudeSubAgentActivityText(message.description);
-        if (activity) task.activity = activity;
+        if (activity) {
+          task.activity = activity;
+          this.linedTaskIds.add(task.taskId);
+        }
       }
     } else if (message.subtype === "task_notification") {
       const task = this.tasks.get(message.task_id) ?? {
@@ -198,13 +203,23 @@ export class ClaudeTaskTracker {
   }
 
   /**
-   * What each running sub-agent is doing now, by card, in start order. A card
-   * that no longer runs has no activity: its last one would read as current.
+   * What each running sub-agent is doing now, by card. A card that no longer
+   * runs has no activity: its last one would read as current. Reads only the
+   * tasks holding a line, and forgets those that stopped, so a long session's
+   * settled tasks cost nothing here.
    */
   subAgentActivities(): ClaudeSubAgentActivity[] {
-    return [...this.tasks.values()].flatMap((task) => isClaudeSubAgentTask(task) && !task.ambient
-      && task.activity && this.cardStatus(task) === "running"
-      ? [{ monitorId: claudeSubAgentMonitorId(task.taskId), activity: task.activity }] : []);
+    const lines: ClaudeSubAgentActivity[] = [];
+    for (const taskId of this.linedTaskIds) {
+      const task = this.tasks.get(taskId);
+      if (task && isClaudeSubAgentTask(task) && !task.ambient && task.activity && this.cardStatus(task) === "running") {
+        lines.push({ monitorId: claudeSubAgentMonitorId(task.taskId), activity: task.activity });
+      } else {
+        // Its next progress frame, if it ever runs again, adds it back.
+        this.linedTaskIds.delete(taskId);
+      }
+    }
+    return lines;
   }
 
   private cardStatus(task: ClaudeTask): ThreadSubAgentStatus {

@@ -357,6 +357,17 @@ describe("ACP sub-agent cards persistence & navigation projection", () => {
         sessionUpdate: "tool_call_update", toolCallId: "call_2077", status: "completed",
       });
       await vi.waitFor(() => expect(recordSubAgents).toHaveBeenCalledTimes(1));
+      // Work budget: streamed text passes through the sub-agent observer on
+      // every update, but reads no activity line while no line changed.
+      const reads = vi.spyOn(AcpSubAgentTracker.prototype, "subAgentActivities");
+      for (let chunk = 0; chunk < 50; chunk += 1) {
+        transport.emitSessionUpdate(session.sessionId, {
+          sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Inspecting." },
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(reads).not.toHaveBeenCalled();
+      reads.mockRestore();
       for (const [call, title] of [["call_7264", "ls -la"], ["call_7832", "pwd"]]) {
         transport.emitSessionUpdate(session.sessionId, {
           sessionUpdate: "tool_call", toolCallId: `32e00c43-8734-4a37-be08-6f79fda02d23:${call}`, title, kind: "execute",

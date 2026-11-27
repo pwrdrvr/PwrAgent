@@ -234,12 +234,51 @@ describe("Claude sub-agent projection", () => {
         });
 
         // Activity: the latest progress line of each card that still runs.
-        expect(tracker.subAgentActivities()).toEqual(cards.flatMap((card, index) => {
+        // The lines are a set: each event names what changed, not an order.
+        const byCard = (left: { monitorId: string }, right: { monitorId: string }) => left.monitorId.localeCompare(right.monitorId);
+        expect(tracker.subAgentActivities().sort(byCard)).toEqual(cards.flatMap((card, index) => {
           const activity = latestActivity.get(agents[index]!);
           return card.status === "running" && activity ? [{ monitorId: card.monitorId, activity }] : [];
-        }));
+        }).sort(byCard));
       }
     }));
+  });
+});
+
+/** Counts every entry any iteration of this map yields. */
+class CountingMap<K, V> extends Map<K, V> {
+  visits = 0;
+  override *[Symbol.iterator](): MapIterator<[K, V]> { for (const entry of super.entries()) { this.visits += 1; yield entry; } }
+  override *entries(): MapIterator<[K, V]> { for (const entry of super.entries()) { this.visits += 1; yield entry; } }
+  override *values(): MapIterator<V> { for (const value of super.values()) { this.visits += 1; yield value; } }
+  override *keys(): MapIterator<K> { for (const key of super.keys()) { this.visits += 1; yield key; } }
+}
+
+describe("Claude sub-agent activity work", () => {
+  it("reads only the sub-agents holding a line, not the session's settled tasks", () => {
+    const tracker = new ClaudeTaskTracker(() => 1_000);
+    const start = (id: string) => tracker.apply({ type: "system", subtype: "task_started", task_id: id, tool_use_id: `tool-${id}`,
+      description: `Task ${id}`, task_type: "local_agent", is_backgrounded: false } as unknown as SDKMessage);
+    const progress = (id: string, n: number) => tracker.apply({ type: "system", subtype: "task_progress", task_id: id,
+      tool_use_id: `tool-${id}`, description: `Running step ${n}`, usage: { total_tokens: 1, tool_uses: n, duration_ms: 1 },
+      last_tool_name: "Bash" } as unknown as SDKMessage);
+    // A long session: 200 sub-agents that worked and settled.
+    for (let task = 0; task < 200; task += 1) {
+      start(`old-${task}`);
+      progress(`old-${task}`, 1);
+      tracker.apply({ type: "system", subtype: "task_notification", task_id: `old-${task}`, tool_use_id: `tool-old-${task}`,
+        status: "completed", output_file: "", summary: "done" } as unknown as SDKMessage);
+    }
+    tracker.subAgentActivities();
+    start("live");
+    const tasks = new CountingMap((tracker as unknown as { tasks: Map<string, unknown> }).tasks);
+    Object.assign(tracker, { tasks });
+    for (let n = 0; n < 50; n += 1) {
+      progress("live", n);
+      expect(tracker.subAgentActivities()).toEqual([{ monitorId: `${CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}live`, activity: `Running step ${n}` }]);
+    }
+    // Before, each read walked all 201 tasks: 10,050 visits for 50 steps.
+    expect(tasks.visits).toBe(0);
   });
 });
 

@@ -1,9 +1,5 @@
 import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
-import {
-  subAgentActivityChanges,
-  type SubAgentActivityChanges,
-  type SubAgentActivityLine,
-} from "@pwragent/shared/sub-agent-activity-lines";
+import type { SubAgentActivityChanges } from "@pwragent/shared/sub-agent-activity-lines";
 import { codexNativeSubAgentId } from "./codex-native-subagents";
 
 /** Longest activity line kept; the row shows one ellipsized line of it. */
@@ -81,16 +77,13 @@ const TURN_ENDS = new Set(["turn/completed", "turn/failed", "turn/cancelled"]);
  * as its parent's, under the worker's thread id. Held in memory only.
  */
 export class CodexNativeSubAgentActivityTracker {
-  /** Each worker's current line, by worker thread id. */
-  private readonly lines = new Map<string, string>();
-  /** Each parent's lines as last published, by monitor id. */
-  private readonly published = new Map<string, ReadonlyMap<string, string>>();
-  /** The parent each worker's line was published under. */
-  private readonly parents = new Map<string, string>();
+  /** Each running worker's line and the parent it was published under. */
+  private readonly lines = new Map<string, { parent: string; line: string }>();
 
   /**
-   * Applies one Codex notification. Returns the event to publish for the
-   * parent whose lines changed, if any.
+   * Applies one Codex notification. Returns the change to publish for the
+   * worker's parent, if its line started, changed or ended. A step costs only
+   * that worker's line: no other worker's state is read.
    */
   observe(
     notification: AppServerNotification,
@@ -99,36 +92,23 @@ export class CodexNativeSubAgentActivityTracker {
     const params = notification.params as Record<string, unknown> | undefined;
     const worker = typeof params?.threadId === "string" ? params.threadId : undefined;
     if (!worker) return undefined;
-    const parent = parentOf(worker) ?? this.parents.get(worker);
-    if (!parent) return undefined;
+    const current = this.lines.get(worker);
     if (notification.method === "item/started") {
+      const parent = current?.parent ?? parentOf(worker);
+      if (!parent) return undefined;
       const line = codexNativeSubAgentActivityText((params?.item ?? {}) as Item);
-      if (!line) return undefined;
-      this.lines.set(worker, line);
-    } else if (TURN_ENDS.has(notification.method) || notification.method === "turn/started"
+      if (!line || line === current?.line) return undefined;
+      this.lines.set(worker, { parent, line });
+      return { parentThreadId: parent, changes: { activities: [{ monitorId: codexNativeSubAgentId(worker), activity: line }] } };
+    }
+    if (TURN_ENDS.has(notification.method) || notification.method === "turn/started"
       || (notification.method === "thread/status/changed"
         && (params?.status as { type?: unknown } | undefined)?.type !== "active")) {
       // A new turn has done nothing yet; an ended or idle one does nothing now.
-      if (!this.lines.delete(worker)) return undefined;
-    } else {
-      return undefined;
+      if (!current) return undefined;
+      this.lines.delete(worker);
+      return { parentThreadId: current.parent, changes: { activities: [], cleared: [codexNativeSubAgentId(worker)] } };
     }
-    this.parents.set(worker, parent);
-    return this.publish(parent);
-  }
-
-  private publish(parent: string): { parentThreadId: string; changes: SubAgentActivityChanges } | undefined {
-    const current: SubAgentActivityLine[] = [];
-    for (const [worker, line] of this.lines) {
-      if (this.parents.get(worker) === parent) current.push({ monitorId: codexNativeSubAgentId(worker), activity: line });
-    }
-    const changes = subAgentActivityChanges(this.published.get(parent) ?? new Map(), current);
-    if (!changes) return undefined;
-    if (current.length === 0) this.published.delete(parent);
-    else this.published.set(parent, new Map(current.map((line) => [line.monitorId, line.activity])));
-    for (const [worker, owner] of this.parents) {
-      if (owner === parent && !this.lines.has(worker)) this.parents.delete(worker);
-    }
-    return { parentThreadId: parent, changes };
+    return undefined;
   }
 }

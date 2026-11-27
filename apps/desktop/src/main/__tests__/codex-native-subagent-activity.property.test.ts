@@ -107,3 +107,31 @@ describe("Codex native worker activity lines", () => {
     expect(codexNativeSubAgentActivityText({ type: "agentMessage", text: "Done" })).toBeUndefined();
   });
 });
+
+/** Counts every entry any iteration of this map yields. */
+class CountingMap<K, V> extends Map<K, V> {
+  visits = 0;
+  override *[Symbol.iterator](): MapIterator<[K, V]> { for (const entry of super.entries()) { this.visits += 1; yield entry; } }
+  override *entries(): MapIterator<[K, V]> { for (const entry of super.entries()) { this.visits += 1; yield entry; } }
+  override *values(): MapIterator<V> { for (const value of super.values()) { this.visits += 1; yield value; } }
+  override *keys(): MapIterator<K> { for (const key of super.keys()) { this.visits += 1; yield key; } }
+}
+
+describe("Codex native worker activity work", () => {
+  it("costs one worker's line per step, however many workers run", () => {
+    // 8 parents x 10 workers x 20 steps visited 249,680 lines before: every
+    // step diffed every running worker's line, across every parent.
+    const tracker = new CodexNativeSubAgentActivityTracker();
+    const lines = new CountingMap<string, unknown>();
+    Object.assign(tracker, { lines });
+    for (let step = 0; step < 20; step += 1) {
+      for (let worker = 0; worker < 80; worker += 1) {
+        tracker.observe({ method: "item/started", params: { threadId: `worker-${worker}`, item: {
+          type: "commandExecution", command: `ls ${step}`, commandActions: [{ type: "listFiles", command: `ls ${step}` }],
+        } } } as unknown as AppServerNotification, (id) => `parent-${Number(id.replace("worker-", "")) % 8}`);
+      }
+    }
+    expect(lines.size).toBe(80);
+    expect(lines.visits).toBe(0);
+  });
+});
