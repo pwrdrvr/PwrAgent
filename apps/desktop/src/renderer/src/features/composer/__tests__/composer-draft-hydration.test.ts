@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { describe, expect, it, vi } from "vitest";
 import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
 import { type AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadLinkHoverStore, type ThreadLinkContextValue } from "../../../lib/thread-links";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { serializeDraftWithSkillTokens } from "../composer-mention-tokens";
+
+vi.mock("mdast-util-from-markdown", { spy: true });
 
 const releasePath = (project: string) =>
   `/Users/fixture-user/pwrdrvr/${project}/.agents/skills/release/SKILL.md`;
@@ -30,6 +33,31 @@ describe("hydrateComposerDraft skill chips", () => {
     subscribe: () => () => undefined,
     hoverTarget: new ThreadLinkHoverStore(),
   };
+  it("restores a paste with an incomplete link target without running CommonMark", () => {
+    vi.mocked(fromMarkdown).mockClear();
+    const text = "log) " + "[$a](x ".repeat(100);
+    expect(hydrateComposerDraft(text, [], threadLinks, undefined)).toEqual({ draft: text, skillTokens: [] });
+    expect(fromMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("restores a CommonMark thread autolink without a bracketed label", () => {
+    const url = buildThreadUrl(thread);
+    const restored = hydrateComposerDraft(`See <${url}>`, [], threadLinks, undefined);
+    expect(restored.draft).toBe("See ");
+    expect(restored.skillTokens[0]).toMatchObject({ kind: "thread", index: 4, path: url });
+  });
+
+  it("bounds catalog path reads when restoring repeated skill chips", () => {
+    let pathReads = 0;
+    const catalog = Array.from({ length: 32 }, (_, i) => ({
+      name: `s${i}`,
+      get path() { pathReads += 1; return `/p/${i}`; },
+    }));
+    const restored = hydrateComposerDraft("[$s31](/p/31) ".repeat(32), catalog, undefined, undefined);
+    expect(restored.skillTokens).toHaveLength(32);
+    expect(pathReads).toBeLessThanOrEqual(2 * catalog.length + 2 * restored.skillTokens.length);
+  });
+
   const labeledReferences = [
     {
       kind: "thread",

@@ -89,17 +89,68 @@ export function parseSkillMentionParts(text: string, work?: { chars: number }): 
   return output;
 }
 
+/** Keep the first catalog row for each key, matching Array.find on duplicate paths or names. */
+export function indexMentionSkills(skills: readonly AppServerSkillSummary[]) {
+  const byPath = new Map<string, AppServerSkillSummary>();
+  const byName = new Map<string, AppServerSkillSummary>();
+  for (const skill of skills) {
+    const path = skill.path;
+    if (path && !byPath.has(path)) byPath.set(path, skill);
+    if (!byName.has(skill.name)) byName.set(skill.name, skill);
+  }
+  return { byPath, byName };
+}
+
+type SkillNameNode = { children: Map<string, SkillNameNode>; name?: string };
+
+function* bareMentionedSkills(text: string, skills: readonly AppServerSkillSummary[]): Generator<AppServerSkillSummary> {
+  const starts = /(?:^|\s)\$/g;
+  if (!skills.length || !starts.exec(text)) return;
+
+  // Names are literal and may contain punctuation or spaces. A single occurrence
+  // of "$build.all" can match both "build" and "build.all" at valid boundaries.
+  const root: SkillNameNode = { children: new Map() };
+  for (const { name } of skills) {
+    let node = root;
+    for (let i = 0; i < name.length; i += 1) {
+      const char = name.charAt(i);
+      let child = node.children.get(char);
+      if (!child) {
+        child = { children: new Map() };
+        node.children.set(char, child);
+      }
+      node = child;
+    }
+    node.name = name;
+  }
+
+  const found = new Set<string>();
+  do {
+    let node: SkillNameNode | undefined = root;
+    for (let i = starts.lastIndex; node; i += 1) {
+      const char = text.charAt(i);
+      if (node.name !== undefined && (!char || /[\s.,!?;:]/.test(char))) found.add(node.name);
+      node = node.children.get(char);
+    }
+  } while (starts.exec(text));
+  for (const skill of skills) {
+    if (found.has(skill.name)) yield skill;
+  }
+}
+
 export function listMentionedSkills(
   text: string,
   skills: AppServerSkillSummary[]
 ): AppServerSkillSummary[] {
   const mentioned = new Map<string, AppServerSkillSummary>();
+  let index: ReturnType<typeof indexMentionSkills> | undefined;
   for (const part of parseSkillMentionParts(text)) {
     if (part.type !== "skill") {
       continue;
     }
 
-    const existing = skills.find((skill) => skill.path === part.path);
+    index ??= indexMentionSkills(skills);
+    const existing = index.byPath.get(part.path);
     const key = part.path || part.name;
     mentioned.set(
       key,
@@ -110,13 +161,7 @@ export function listMentionedSkills(
     );
   }
 
-  for (const skill of skills) {
-    const token = buildSkillLabelToken(skill);
-    const pattern = new RegExp(`(^|\\s)${escapeRegExp(token)}${SKILL_TOKEN_BOUNDARY}`);
-    if (!pattern.test(text)) {
-      continue;
-    }
-
+  for (const skill of bareMentionedSkills(text, skills)) {
     mentioned.set(skill.path ?? skill.name, skill);
   }
 
