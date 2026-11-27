@@ -34,6 +34,9 @@ import {
 } from "./subagent-kind";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
+import { useSubAgentActivities } from "../../../lib/sub-agent-activity";
+import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
+import { SubAgentActivityLine } from "../../../components/SubAgentActivityLine";
 
 type SubAgentsPanelProps = {
   lens?: SubAgentLens;
@@ -60,6 +63,7 @@ const SUB_AGENT_LENSES: Array<{
 /** Sub-Agents tab: durable task-monitor cards spawned from this thread. */
 export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
+  const activities = useSubAgentActivities(props.desktopApi, threadSummaryIdentityKey(props.thread));
   const formatProvider = useProviderLabelFormatter(props.thread.federation);
   const { onDetailsModalOpenChange } = props;
   const lensControlId = useId();
@@ -269,6 +273,8 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
                 ? subAgent.lastMessage
                 : undefined;
             const title = taskMonitorDisplayTitle(subAgent) ?? subAgent.task;
+            // What it is doing now, while it runs and its harness reports it.
+            const activity = running ? activities.get(subAgent.monitorId) : undefined;
             const stopping = stoppingIds.has(subAgent.monitorId);
             const canStop =
               (subAgent.status === "pending"
@@ -293,6 +299,11 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
                 <p className="rail-card__title" title={title}>
                   {title}
                 </p>
+                {activity ? (
+                  <p className="rail-card__activity">
+                    <SubAgentActivityLine activity={activity} />
+                  </p>
+                ) : null}
                 <p className="rail-card__runtime">
                   <span className="rail-card__provider-chip">
                     {formatProvider(backend, model)}

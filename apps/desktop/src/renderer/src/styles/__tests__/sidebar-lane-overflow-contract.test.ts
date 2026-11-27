@@ -66,6 +66,23 @@ describe("sidebar lane horizontal overflow", () => {
     expect(lastValue(".native-subagents__agent-role", "text-overflow")).toBe("ellipsis");
   });
 
+  it("keeps a working sub-agent's activity line to one line inside its row", () => {
+    // Without these the line's nowrap text sets its own width: a generated
+    // run with them stripped overflowed in 112 of 200 cases, in the tray and
+    // in the Sub-agents panel alike.
+    expect(lastValue(".native-subagents__agent-text", "min-width")).toBe("0");
+    expect(lastValue(".native-subagents__agent-line", "min-width")).toBe("0");
+    expect(lastValue(".native-subagents__agent-activity", "min-width")).toBe("0");
+    expect(lastValue(".rail-card__activity", "min-width")).toBe("0");
+    expect(lastValue(".sub-agent-activity", "min-width")).toBe("0");
+    expect(lastValue(".sub-agent-activity", "overflow")).toBe("hidden");
+    expect(lastValue(".sub-agent-activity", "white-space")).toBe("nowrap");
+    expect(lastValue(".sub-agent-activity__head", "min-width")).toBe("0");
+    expect(lastValue(".sub-agent-activity__head", "overflow")).toBe("hidden");
+    expect(lastValue(".sub-agent-activity__head", "text-overflow")).toBe("ellipsis");
+    expect(lastValue(".sub-agent-activity__tail", "flex")).toBe("0 0 auto");
+  });
+
   it("bounds a PR chip by its line and lets only the repository prefix give way", () => {
     expect(lastValue(".pr-chip", "max-width")).toBe("100%");
     expect(lastValue(".pr-chip", "min-width")).toBe("0");

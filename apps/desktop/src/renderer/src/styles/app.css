@@ -7560,6 +7560,62 @@ button.stack-display__thread,
   color: var(--text-secondary);
 }
 
+/* A sub-agent's name (and role) on the first line; while it works, what it
+   is doing now on a muted second line. The column owns the row's width, so
+   both lines ellipsize inside the tray. */
+.native-subagents__agent-text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.native-subagents__agent-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.native-subagents__agent-activity {
+  display: flex;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Two lines: the working dot stays beside the name, not between the lines. */
+.native-subagents__agent:has(.native-subagents__agent-activity) {
+  align-items: flex-start;
+}
+
+/* (15px label line − 7px dot) / 2, measured in Chromium at 12px. */
+.native-subagents__agent:has(.native-subagents__agent-activity) .native-subagents__status {
+  margin-top: 4px;
+}
+
+/* One activity line. A line naming a path keeps its tail (the file, the end
+   of the command) and loses its middle; any other line ellipsizes at its
+   end. Shared by the sidebar tray and the Sub-agents panel. */
+.sub-agent-activity {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sub-agent-activity__head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sub-agent-activity__tail {
+  flex: 0 0 auto;
+}
+
 .native-subagents__status {
   width: 7px;
   height: 7px;
@@ -44246,6 +44302,17 @@ div.composer-error-row__toggle {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* What a running sub-agent is doing now ("Reading app.css"): one muted
+   line under its task, so the task stays the card's name. */
+.rail-card__activity {
+  display: flex;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.3;
 }
 
 .rail-card__agent-name {

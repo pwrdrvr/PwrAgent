@@ -25,6 +25,7 @@ import {
   type ProjectHeldWakeup,
 } from "@pwragent/shared/project-forge-automation";
 import { type BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { type DesktopPwrAgentProfileSummary } from "@pwragent/shared/contracts/settings";
 import { type FederationCapability } from "@pwragent/shared/contracts/federation";
 import {
@@ -35,6 +36,7 @@ import {
 import { type ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
 import { findPeerCounterpartDirectory, type ProjectIdentity } from "../../../lib/federation-project-match";
+import { resetSubAgentActivityStore } from "../../../lib/sub-agent-activity";
 import type {
   CheckFederationTargetProject,
   FederationProjectDirectory,
@@ -2094,6 +2096,74 @@ describe("Sidebar", () => {
     });
     expect(screen.getByRole("button", { name: "Open transcript for Cluster: browser launch" })).toBeInTheDocument();
 
+    delete (window as Window & { pwragent?: unknown }).pwragent;
+  });
+
+  it("shows what a working Claude sub-agent is doing, muted under its name, while it works", () => {
+    resetSubAgentActivityStore();
+    let deliver: ((event: AgentEvent) => void) | undefined;
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        openSubAgentTranscriptWindow: vi.fn(async () => ({ opened: true })),
+        onAgentEvent: (callback: (event: AgentEvent) => void) => {
+          deliver = callback;
+          return () => undefined;
+        },
+      },
+    });
+    const publish = (activities: { monitorId: string; activity: string }[]) => act(() => {
+      deliver?.({ backend: "claude", notification: {
+        method: "thread/subAgentActivity/updated", params: { threadId: "thread-claude-parent", activities },
+      } });
+    });
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      source: "claude",
+      id: "thread-claude-parent",
+      title: "Audit the router",
+      codexNativeSubAgents: [
+        { threadId: "claude-native:agent-1", title: "Cluster: rules & matching", threadStatus: "active" },
+        { threadId: "claude-native:agent-2", title: "Cluster: browser launch", threadStatus: "idle" },
+      ],
+    };
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[parentThread]}
+        loading={false}
+        selectedItemKey="claude:thread-claude-parent"
+        threads={[parentThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Expand 2 Claude sub-agents for Audit the router" }));
+    expect(container.querySelector(".native-subagents__agent-activity")).toBeNull();
+
+    publish([
+      { monitorId: "claude-native:agent-1", activity: "Reading /Users/operator/repo/src/router/rules.ts" },
+      // A row that is not working shows no line, even one still published.
+      { monitorId: "claude-native:agent-2", activity: "Running npm test" },
+    ]);
+    const working = screen.getByRole("button", { name: "Open transcript for Cluster: rules & matching" });
+    expect(working).toHaveAccessibleDescription("Reading /Users/operator/repo/src/router/rules.ts");
+    // A line naming a path keeps its end whole, and its middle can give way.
+    expect(working.querySelector(".sub-agent-activity__tail")?.textContent).toBe("rc/router/rules.ts");
+    const idle = screen.getByRole("button", { name: "Open transcript for Cluster: browser launch" });
+    expect(idle).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByText("Running npm test")).not.toBeInTheDocument();
+
+    // An empty set is the sub-agents doing nothing now.
+    publish([]);
+    expect(container.querySelector(".native-subagents__agent-activity")).toBeNull();
+    expect(working).not.toHaveAttribute("aria-describedby");
+
+    resetSubAgentActivityStore();
     delete (window as Window & { pwragent?: unknown }).pwragent;
   });
 

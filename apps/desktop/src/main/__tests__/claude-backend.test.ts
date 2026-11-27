@@ -3762,7 +3762,8 @@ describe("Claude SDK backend", () => {
       yield { type: "assistant", parent_tool_use_id: "tool-agent", message: {
         id: "sub", content: [{ type: "text", text: "Reading the SDK." }],
       } } as SDKMessage;
-      yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+      // A progress frame's description is what the worker is doing now.
+      yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent", description: "Searching for query(",
         usage: { total_tokens: 10, tool_uses: 3, duration_ms: 5 }, last_tool_name: "Grep" } as SDKMessage;
       await agentDone.promise;
       yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
@@ -3789,6 +3790,14 @@ describe("Claude SDK backend", () => {
     }]));
     expect(f.backend.backgroundTaskThreadIds()).toEqual([threadId]);
     expect(f.backend.activeTaskCount(threadId)).toBe(1);
+    // That line is published live and never recorded: the card keeps its task.
+    const activityEvents = () => f.events
+      .filter((event) => event.notification.method === "thread/subAgentActivity/updated")
+      .map((event) => event.notification.params as { threadId: string; activities: unknown[] });
+    await vi.waitFor(() => expect(activityEvents().at(-1)).toEqual({
+      threadId, activities: [{ monitorId: "claude-native:agent-1", activity: "Searching for query(" }],
+    }));
+    expect(f.subAgentRecords.flatMap((record) => record.subAgents)).toHaveLength(1);
     expect(f.subAgentRecords.every((record) => record.threadId === threadId)).toBe(true);
     expect(f.events.filter((event) => event.notification.method === "thread/backgroundTasks/updated")
       .flatMap((event) => (event.notification.params as { tasks: unknown[] }).tasks)).toEqual([]);
@@ -3798,6 +3807,8 @@ describe("Claude SDK backend", () => {
     expect(f.subAgentRecords.flatMap((record) => record.subAgents).at(-1)).toMatchObject({
       monitorId: "claude-native:agent-1", status: "cancelled", lastMessage: "Stopped",
     });
+    // An ended sub-agent is doing nothing now.
+    expect(activityEvents().at(-1)).toEqual({ threadId, activities: [] });
     expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
     expect(f.backend.listWaitingTasks(threadId)).toEqual([]);
     expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);

@@ -533,6 +533,8 @@ type LiveSession = {
   publishedTaskKey: string;
   /** Each sub-agent card as last recorded, keyed by monitor id. */
   recordedSubAgentKeys: Map<string, string>;
+  /** The set last published through `thread/subAgentActivity/updated`. */
+  publishedActivityKey: string;
   /** Turns Claude scheduled in this process: /loop wake-ups and session crons. */
   sessionWakes: ClaudeSessionWakeTracker;
   /** The set last published through `thread/sessionWakes/updated`. */
@@ -1415,7 +1417,7 @@ export class ClaudeBackend {
       const current: LiveSession = live = {
         session, controller, input: new ClaudeInputStream(), inputWrites: Promise.resolve(),
         config: claudeSessionConfig(params, session), turn, lastTurnId: turn.turnId, onClosed: [],
-        tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", recordedSubAgentKeys: new Map(), toolRows: new Map(), launchedToolUseIds: new Set(),
+        tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", recordedSubAgentKeys: new Map(), publishedActivityKey: "[]", toolRows: new Map(), launchedToolUseIds: new Set(),
         sessionWakes: new ClaudeSessionWakeTracker(), publishedWakeKey: "[]",
         messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0, heldSelfStarts: 0,
         wake: claudeWakeSignal(), stderr: "",
@@ -2234,6 +2236,7 @@ export class ClaudeBackend {
     // Claude's sub-agents end with its process.
     live.tasks.endRunningSubAgents(cancelled ? "stopped" : "failed");
     await this.recordSubAgents(live);
+    await this.publishSubAgentActivity(live);
     const release = async () => {
       if (this.sessions.get(threadId) === live) this.sessions.delete(threadId);
       if (live.publishedTaskKey !== "[]") {
@@ -2449,6 +2452,7 @@ export class ClaudeBackend {
    */
   private async publishTasks(live: LiveSession): Promise<void> {
     await this.recordSubAgents(live);
+    await this.publishSubAgentActivity(live);
     const tasks = this.taskRows(live);
     const runningSubAgents = live.tasks.active().filter(isClaudeSubAgentTask).map((task) => task.taskId);
     // "[]" is the empty set, which `backgroundTaskThreadIds` reads.
@@ -2457,6 +2461,19 @@ export class ClaudeBackend {
     live.publishedTasks = tasks;
     live.publishedTaskKey = key;
     await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId: live.session.thread.id, tasks } });
+  }
+
+  /**
+   * Publishes what each running sub-agent is doing when that changes. Only an
+   * event: the line is command text that changes with every tool call, so it
+   * is never recorded on the card.
+   */
+  private async publishSubAgentActivity(live: LiveSession): Promise<void> {
+    const activities = live.tasks.subAgentActivities();
+    const key = JSON.stringify(activities);
+    if (key === live.publishedActivityKey) return;
+    live.publishedActivityKey = key;
+    await this.emit({ method: "thread/subAgentActivity/updated", params: { threadId: live.session.thread.id, activities } });
   }
 
   /**

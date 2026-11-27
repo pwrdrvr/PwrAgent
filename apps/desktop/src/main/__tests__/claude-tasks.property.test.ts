@@ -17,6 +17,8 @@ import { ClaudeTaskTracker, claudeTaskRow } from "../claude/claude-tasks";
  *   another turn when any of them ends.
  * - A card keeps the name its Agent call gave it. Progress reports what the
  *   worker is doing now, so it never renames the card.
+ * - A running card's activity is its latest progress line; a card that no
+ *   longer runs has none.
  *
  * The model is the event stream itself: each task's lifecycle as Claude
  * reports it, with notifications that race task_updated, redelivered starts
@@ -42,7 +44,7 @@ type TaskPlan = {
 
 type Step =
   | { type: "start"; task: number; redelivery: boolean }
-  | { type: "progress"; task: number }
+  | { type: "progress"; task: number; n: number }
   | { type: "updated"; task: number; status: Terminal }
   | { type: "notification"; task: number; status: Terminal }
   | { type: "set"; lagging: number[]; dropping: number[] };
@@ -65,7 +67,7 @@ const taskPlan = fc.record<TaskPlan>({
 const scenario = fc.array(taskPlan, { minLength: 1, maxLength: 5 }).chain((plans) => {
   const lanes = plans.map((plan, task) => {
     const steps: Step[] = [{ type: "start", task, redelivery: false }];
-    for (let i = 0; i < plan.progress; i += 1) steps.push({ type: "progress", task });
+    for (let i = 0; i < plan.progress; i += 1) steps.push({ type: "progress", task, n: i });
     if (plan.end === "updated-then-notification") {
       steps.push({ type: "updated", task, status: plan.status });
       steps.push({ type: "notification", task, status: plan.status });
@@ -120,6 +122,9 @@ const scenario = fc.array(taskPlan, { minLength: 1, maxLength: 5 }).chain((plans
 });
 
 const taskId = (task: number) => `task-${task}`;
+const activityLine = (task: number, n: number) => `Running cd /Users/operator/worktrees/${task} && ls  -la\n# step ${n}`;
+/** The line the tracker keeps: one line, whitespace collapsed. */
+const shownActivity = (task: number, n: number) => activityLine(task, n).replace(/\s+/g, " ");
 
 function message(step: Step, plans: TaskPlan[]): SDKMessage {
   if (step.type === "set") {
@@ -148,7 +153,7 @@ function message(step: Step, plans: TaskPlan[]): SDKMessage {
         // Claude's progress description is the worker's latest activity,
         // not its task: a bare command when the call named none (captured
         // from claude-agent-sdk 0.3.330).
-        ...base, subtype: "task_progress", description: `Running cd /Users/operator/worktrees/${step.task} && ls`,
+        ...base, subtype: "task_progress", description: activityLine(step.task, step.n),
         usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 }, last_tool_name: "Bash",
       } as unknown as SDKMessage;
     case "updated":
@@ -180,10 +185,12 @@ describe("Claude sub-agent projection", () => {
       const named = new Set<number>();
       let liveSet: Set<number> | undefined;
       const terminalCards = new Set<string>();
+      const latestActivity = new Map<number, string>();
 
       for (const step of steps) {
         tracker.apply(message(step, plans));
         if (step.type === "start" && !started.includes(step.task)) started.push(step.task);
+        if (step.type === "progress") latestActivity.set(step.task, shownActivity(step.task, step.n));
         if ((step.type === "updated" || step.type === "notification") && !settled.has(step.task)) {
           settled.set(step.task, step.status);
         }
@@ -220,6 +227,12 @@ describe("Claude sub-agent projection", () => {
           if (card.status !== "running") terminalCards.add(card.monitorId);
           else expect(terminalCards.has(card.monitorId)).toBe(false);
         });
+
+        // Activity: the latest progress line of each card that still runs.
+        expect(tracker.subAgentActivities()).toEqual(cards.flatMap((card, index) => {
+          const activity = latestActivity.get(agents[index]!);
+          return card.status === "running" && activity ? [{ monitorId: card.monitorId, activity }] : [];
+        }));
       }
     }));
   });

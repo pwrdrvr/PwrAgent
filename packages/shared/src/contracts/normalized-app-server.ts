@@ -3198,6 +3198,20 @@ export type AppServerNotification =
     }
   | {
       /**
+       * What each running sub-agent of the thread is doing now, keyed by its
+       * Sub-agents card (`monitorId`): one line such as "Reading app.css".
+       * Replaces the previous set; a sub-agent that is absent shows no line.
+       * Live only: never persisted, and it changes with every tool call a
+       * sub-agent makes, so it never invalidates navigation.
+       */
+      method: "thread/subAgentActivity/updated";
+      params: {
+        threadId: string;
+        activities: { monitorId: string; activity: string }[];
+      };
+    }
+  | {
+      /**
        * The full set of commands and sub-agents a backend reports running for
        * the thread. Replaces the previous set. Claude publishes its task set.
        * Codex has no such event, so the desktop registry publishes a Codex
