@@ -145,12 +145,18 @@ export function measureComposerRowFold(row: HTMLElement): ComposerRowFoldState {
     // A truncated name reports its shrunk box, and a pill squeezed past its
     // floor clips the rest; add back what both hide so the row unfolds as
     // soon as the whole control would fit again.
-    const labels = [...element.querySelectorAll<HTMLElement>(TRUNCATING_LABELS)];
+    // Only the pill's own labels count. An open picker inside the control
+    // (the composer's model list renders inline, below its pill) repeats
+    // the same label classes on every row; reading those cost a layout read
+    // per row on every measure and subtracted their widths from the floor.
+    const pill = element.matches(CLIPPING_PILLS)
+      ? element
+      : element.querySelector<HTMLElement>(CLIPPING_PILLS);
+    const labels = pill ? [...pill.querySelectorAll<HTMLElement>(TRUNCATING_LABELS)] : [];
     const hidden = labels.reduce(
       (sum, label) => sum + Math.max(0, label.scrollWidth - label.clientWidth),
       0,
     );
-    const pill = element.querySelector<HTMLElement>(CLIPPING_PILLS);
     const clipped = pill ? Math.max(0, pill.scrollWidth - pill.clientWidth) : 0;
     const natural = width + hidden + clipped;
     // A control the stylesheet lets shrink (the model and Where pills) gives
