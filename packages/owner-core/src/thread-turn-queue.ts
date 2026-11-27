@@ -512,6 +512,30 @@ function nextWaitingIndex(queue: readonly ThreadTurnQueueEntry[]): number {
   return queue.findIndex((entry) => !entry.paused);
 }
 
+class ThreadTurnFifo {
+  readonly entries: ThreadTurnQueueEntry[] = [];
+  private readonly idCounts = new Map<string, number>();
+
+  has(id: string): boolean {
+    return this.idCounts.has(id);
+  }
+
+  insert(entry: ThreadTurnQueueEntry, index = this.entries.length): void {
+    this.entries.splice(index, 0, entry);
+    this.idCounts.set(entry.id, (this.idCounts.get(entry.id) ?? 0) + 1);
+  }
+
+  remove(index: number, count: number): ThreadTurnQueueEntry[] {
+    const removed = this.entries.splice(index, count);
+    for (const entry of removed) {
+      const remaining = this.idCounts.get(entry.id)! - 1;
+      if (remaining === 0) this.idCounts.delete(entry.id);
+      else this.idCounts.set(entry.id, remaining);
+    }
+    return removed;
+  }
+}
+
 /**
  * Puts an entry that could not start back where it was: right after the
  * paused entry it sat behind, or at the front when none did. Its neighbors
@@ -520,21 +544,22 @@ function nextWaitingIndex(queue: readonly ThreadTurnQueueEntry[]): number {
  * front of the first entry that is not paused.
  */
 function restoreAfter(
-  queue: ThreadTurnQueueEntry[],
+  fifo: ThreadTurnFifo,
   entry: ThreadTurnQueueEntry,
   previousId: string | undefined,
 ): void {
   if (previousId === undefined) {
-    queue.unshift(entry);
+    fifo.insert(entry, 0);
     return;
   }
+  const queue = fifo.entries;
   const previous = queue.findIndex((candidate) => candidate.id === previousId);
   const index = previous >= 0 ? previous + 1 : nextWaitingIndex(queue);
-  queue.splice(index < 0 ? queue.length : index, 0, entry);
+  fifo.insert(entry, index < 0 ? queue.length : index);
 }
 
 export class ThreadTurnQueue {
-  private readonly queuedEntries = new Map<string, ThreadTurnQueueEntry[]>();
+  private readonly queuedEntries = new Map<string, ThreadTurnFifo>();
   // Controls can replace or release a row's current hold. Retain only the
   // original held admission intent until cancellation or native acceptance;
   // an ordinary row covered by a FIFO hold never acquires that intent.
@@ -621,7 +646,8 @@ export class ThreadTurnQueue {
     return await this.withDispatchSuspended(input, async () => {
       this.assertAdmission();
       const key = this.keyFor(input);
-      const queue = this.queueFor(key);
+      const fifo = this.fifoFor(key);
+      const queue = fifo.entries;
       const holdReason = this.holdReasonFor(key);
       const entry: ThreadTurnQueueEntry = {
         ...input,
@@ -658,7 +684,7 @@ export class ThreadTurnQueue {
         return { status: "started", entry, turnId: started.turnId };
       }
       // The drain that ends this suspension steers it when it is the head.
-      queue.push(entry);
+      fifo.insert(entry);
       options?.onAdmission?.();
       const position = queue.length;
       await this.emit({ type: "queued", entry, position });
@@ -704,7 +730,8 @@ export class ThreadTurnQueue {
     const key = this.keyFor(entry);
 
     if (!this.canStartImmediately({ backend: entry.backend, threadId: entry.threadId })) {
-      const queue = this.queueFor(key);
+      const fifo = this.fifoFor(key);
+      const queue = fifo.entries;
       const holdReason = this.holdReasonFor(key);
       const queuedEntry = holdReason && !entry.manualReleaseRequired
         ? {
@@ -714,7 +741,7 @@ export class ThreadTurnQueue {
           }
         : entry;
       const index = Math.min(options?.queueIndex ?? queue.length, queue.length);
-      queue.splice(index, 0, queuedEntry);
+      fifo.insert(queuedEntry, index);
       options?.onAdmission?.();
       const position = index + 1;
       await this.emit({ type: "queued", entry: queuedEntry, position });
@@ -770,7 +797,8 @@ export class ThreadTurnQueue {
 
     this.assertAdmission();
     const key = this.keyFor(entry);
-    const queue = this.queueFor(key);
+    const fifo = this.fifoFor(key);
+    const queue = fifo.entries;
     // On a held FIFO a held entry joins the back, so held entries go in the
     // order they arrived. Otherwise it goes ahead of the turns waiting, and
     // its hold then covers them, though never ahead of a restart continuation.
@@ -780,7 +808,7 @@ export class ThreadTurnQueue {
       : leadingContinuations < 0 ? queue.length : leadingContinuations);
     this.heldAdmissionReasons.set(entry.id, reason);
     this.addHoldReason(key, reason);
-    queue.splice(index, 0, entry);
+    fifo.insert(entry, index);
     options?.onAdmission?.();
     // Entries already held keep their own reason, so each still releases
     // the way it was held. Cover the pre-existing FIFO before any publication
@@ -827,10 +855,10 @@ export class ThreadTurnQueue {
       return { status: "queued", entry: existing.entry, position: existing.position };
     }
     this.assertAdmission();
-    const queue = this.queueFor(this.keyFor(entry));
-    queue.push(entry);
+    const fifo = this.fifoFor(this.keyFor(entry));
+    fifo.insert(entry);
     options?.onAdmission?.();
-    const position = queue.length;
+    const position = fifo.entries.length;
     await this.emit({ type: "queued", entry, position });
     return { status: "queued", entry, position };
   }
@@ -851,7 +879,7 @@ export class ThreadTurnQueue {
     for (const input of [...entries].sort((left, right) => left.createdAt - right.createdAt)) {
       if (this.findQueuedEntry(input.id)) continue;
       const entry: ThreadTurnQueueEntry = { ...input, paused: true, pauseRevision: 1 };
-      this.queueFor(this.keyFor(entry)).push(entry);
+      this.fifoFor(this.keyFor(entry)).insert(entry);
       restored.push(entry);
     }
     return restored;
@@ -911,7 +939,7 @@ export class ThreadTurnQueue {
       suspensions <= (params.ignoreDispatchSuspensionCount ?? 0) &&
       !this.runningEntries.has(key) &&
       !this.heldQueues.has(key) &&
-      (params.bypassWaitingQueue === true || !hasWaitingEntry(this.queueFor(key))) &&
+      (params.bypassWaitingQueue === true || !hasWaitingEntry(this.queuedEntries.get(key)?.entries ?? [])) &&
       !(this.options.isThreadActive?.(params) ?? false) &&
       !this.isDispatchHeld({ backend: params.backend, threadId: params.threadId })
     );
@@ -943,7 +971,7 @@ export class ThreadTurnQueue {
     for (const input of [...entries].sort((left, right) => right.createdAt - left.createdAt)) {
       if (this.findQueuedEntry(input.id)) continue;
       const entry: ThreadTurnQueueEntry = { ...input, restartContinuation: true };
-      this.queueFor(this.keyFor(entry)).unshift(entry);
+      this.fifoFor(this.keyFor(entry)).insert(entry, 0);
       restored.unshift(entry);
     }
     return restored;
@@ -965,7 +993,7 @@ export class ThreadTurnQueue {
       const entry: ThreadTurnQueueEntry = input.paused
         ? { ...input, paused: true, pauseRevision: 1 }
         : input;
-      this.queueFor(this.keyFor(entry)).push(entry);
+      this.fifoFor(this.keyFor(entry)).insert(entry);
       restored.push(entry);
     }
     return restored;
@@ -980,11 +1008,15 @@ export class ThreadTurnQueue {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
   }): ThreadTurnQueueEntry[] {
-    return [...this.queueFor(this.keyFor(params))];
+    return this.queuedEntries.get(this.keyFor(params))?.entries.slice() ?? [];
+  }
+
+  hasQueuedEntry(params: { backend: AppServerBackendKind; threadId: ThreadIdentifier; queueEntryId: string }): boolean {
+    return this.queuedEntries.get(this.keyFor(params))?.has(params.queueEntryId) ?? false;
   }
 
   hasWaitingEntries(params: { backend: AppServerBackendKind; threadId: ThreadIdentifier }): boolean {
-    return hasWaitingEntry(this.queuedEntries.get(this.keyFor(params)) ?? []);
+    return hasWaitingEntry(this.queuedEntries.get(this.keyFor(params))?.entries ?? []);
   }
 
   /** Synchronous projection reads borrow entries without cloning the complete FIFO. */
@@ -992,11 +1024,11 @@ export class ThreadTurnQueue {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
   }): IterableIterator<ThreadTurnQueueEntry> {
-    yield* this.queueFor(this.keyFor(params));
+    yield* this.queuedEntries.get(this.keyFor(params))?.entries ?? [];
   }
 
   getAllQueuedEntries(): ThreadTurnQueueEntry[] {
-    return [...this.queuedEntries.values()].flatMap((queue) => [...queue]);
+    return [...this.queuedEntries.values()].flatMap((fifo) => fifo.entries);
   }
 
   hasDispatchInProgress(): boolean {
@@ -1004,10 +1036,11 @@ export class ThreadTurnQueue {
   }
 
   cancelEntry(entryId: string, reason?: string, options?: { retainQueueHold?: boolean }): ThreadTurnQueueEntry | undefined {
-    for (const [key, queue] of this.queuedEntries.entries()) {
+    for (const [key, fifo] of this.queuedEntries) {
+      const queue = fifo.entries;
       const index = queue.findIndex((entry) => entry.id === entryId);
       if (index === -1) continue;
-      const [entry] = queue.splice(index, 1);
+      const [entry] = fifo.remove(index, 1);
       this.heldAdmissionReasons.delete(entryId);
       if (queue.length === 0) this.queuedEntries.delete(key);
       if (!options?.retainQueueHold) this.dropSpentHold(key);
@@ -1037,7 +1070,7 @@ export class ThreadTurnQueue {
     return await this.withDispatchSuspended(found.entry, () => {
       // Not queueFor: the FIFO can have drained while the move waited, and
       // a lookup must not leave an empty one behind.
-      const queue = this.queuedEntries.get(found.key) ?? [];
+      const queue = this.queuedEntries.get(found.key)?.entries ?? [];
       const result = (
         disposition: ThreadTurnQueueMoveResult["disposition"],
       ): ThreadTurnQueueMoveResult => ({
@@ -1091,7 +1124,7 @@ export class ThreadTurnQueue {
     return await this.withDispatchSuspended(found.entry, () => {
       // The suspension waited for earlier edits; any of them can have
       // started or cancelled this entry.
-      const queue = this.queuedEntries.get(found.key) ?? [];
+      const queue = this.queuedEntries.get(found.key)?.entries ?? [];
       const index = queue.findIndex((entry) => entry.id === entryId);
       const entry = queue[index];
       if (!entry) return { disposition: "not_found", entryId };
@@ -1150,7 +1183,7 @@ export class ThreadTurnQueue {
     input: AppServerTurnInputItem[],
     sourceTurn?: Pick<NonNullable<AppServerThreadMessageOrigin["sourceThread"]>, "turnId" | "rootTurnId">,
   ): ThreadTurnQueueEntry | undefined {
-    for (const queue of this.queuedEntries.values()) {
+    for (const { entries: queue } of this.queuedEntries.values()) {
       const index = queue.findIndex((entry) => entry.id === entryId);
       if (index === -1) continue;
       const current = queue[index];
@@ -1221,7 +1254,7 @@ export class ThreadTurnQueue {
     entryId: string,
     title: string,
   ): ThreadTurnQueueEntry | undefined {
-    for (const queue of this.queuedEntries.values()) {
+    for (const { entries: queue } of this.queuedEntries.values()) {
       const index = queue.findIndex((entry) => entry.id === entryId);
       if (index === -1) continue;
       const current = queue[index];
@@ -1253,7 +1286,7 @@ export class ThreadTurnQueue {
     // Do not serialize lifecycle callbacks: they may release another cause.
     this.dispatchSuspensions.set(key, (this.dispatchSuspensions.get(key) ?? 0) + 1);
     try {
-      const queue = this.queuedEntries.get(key) ?? [];
+      const queue = this.queuedEntries.get(key)?.entries ?? [];
       const kept = new Set<string>();
       const updatedEntries: ThreadTurnQueueEntry[] = [];
       let ahead: string | undefined;
@@ -1278,7 +1311,7 @@ export class ThreadTurnQueue {
       if (reasons.length > 0) this.heldQueues.set(key, { ...hold, reasons });
       else this.heldQueues.delete(key);
       for (const released of updatedEntries) {
-        const live = this.queuedEntries.get(key);
+        const live = this.queuedEntries.get(key)?.entries;
         const index = live?.findIndex(entry => entry.id === released.id) ?? -1;
         const entry = live?.[index];
         // A title or input refresh keeps this release's transition. A newer
@@ -1317,7 +1350,7 @@ export class ThreadTurnQueue {
     }
     // Retry answers the entry dispatch would start, which can sit behind
     // paused ones.
-    const queue = this.queueFor(found.key);
+    const queue = this.fifoFor(found.key).entries;
     if (queue[nextWaitingIndex(queue)]?.id !== entryId) {
       return { disposition: "not_head", entryId };
     }
@@ -1459,7 +1492,9 @@ export class ThreadTurnQueue {
     budgetReviewed?: boolean;
   }): Promise<StartNextResult> {
     if (this.closed || this.admissions.has(key) || this.dispatchSuspensions.has(key) || this.steerPreflights.has(key)) return "none";
-    const queue = this.queueFor(key);
+    const fifo = this.queuedEntries.get(key);
+    if (!fifo) return "none";
+    const queue = fifo.entries;
     const index = nextWaitingIndex(queue);
     const head = queue[index];
     // A held head waits for its release. Entries ahead of every hold, which
@@ -1516,7 +1551,7 @@ export class ThreadTurnQueue {
       ? queue.slice(index, index + plannedSize).findIndex(this.options.needsFreshDispatchSlot)
       : -1;
     const size = freshSlotIndex < 0 ? plannedSize : Math.max(1, freshSlotIndex);
-    const members = queue.splice(index, size).flatMap((entry) => {
+    const members = fifo.remove(index, size).flatMap((entry) => {
       const prepared = this.prepareDispatch(entry);
       return typeof prepared === "string" ? [] : [prepared];
     });
@@ -1574,7 +1609,7 @@ export class ThreadTurnQueue {
       for (const member of members) this.recentlyAdmittedEntries.delete(member.id);
       if (error instanceof ThreadTurnQueueDispatchCancelled) {
         await this.emitForMembers(members, (entry) => ({ type: "cancelled", entry, reason: error.message }));
-        if (this.queueFor(key).length > 0) this.scheduleDrain(key);
+        if (this.queuedEntries.get(key)?.entries.length) this.scheduleDrain(key);
         return "none";
       }
       // A rejected start says nothing about whether this thread can safely
@@ -1631,10 +1666,10 @@ export class ThreadTurnQueue {
     members: readonly ThreadTurnQueueEntry[],
     previousId: string | undefined,
   ): void {
-    const queue = this.queueFor(key);
+    const fifo = this.fifoFor(key);
     let after = previousId;
     for (const member of members) {
-      restoreAfter(queue, member, after);
+      restoreAfter(fifo, member, after);
       after = member.id;
     }
   }
@@ -1759,12 +1794,12 @@ export class ThreadTurnQueue {
     return next;
   }
 
-  private queueFor(key: string): ThreadTurnQueueEntry[] {
-    const queue = this.queuedEntries.get(key);
-    if (queue) return queue;
-    const nextQueue: ThreadTurnQueueEntry[] = [];
-    this.queuedEntries.set(key, nextQueue);
-    return nextQueue;
+  private fifoFor(key: string): ThreadTurnFifo {
+    const existing = this.queuedEntries.get(key);
+    if (existing) return existing;
+    const fifo = new ThreadTurnFifo();
+    this.queuedEntries.set(key, fifo);
+    return fifo;
   }
 
   private findQueuedEntry(entryId: string, sender?: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>): {
@@ -1772,7 +1807,10 @@ export class ThreadTurnQueue {
     key: string;
     position: number;
   } | undefined {
-    for (const [key, queue] of this.queuedEntries) {
+    for (const [key, fifo] of this.queuedEntries) {
+      // A sender can also name a replacement handle inside a queued message.
+      if (!sender && !fifo.has(entryId)) continue;
+      const queue = fifo.entries;
       const index = queue.findIndex((entry) => entry.id === entryId || (sender && entry.agentMessages?.some(message => {
         const source = message.origin?.sourceThread;
         return message.replacementHandle === entryId && source?.backend === sender.backend
@@ -1794,7 +1832,7 @@ export class ThreadTurnQueue {
       ?? "The previous turn failed. Review the error before retrying queued messages.";
     // An immediate start's release may already have applied this hold.
     if (this.holdReasonFor(key) === reason
-      && this.queueFor(key).every((entry) =>
+      && this.fifoFor(key).entries.every((entry) =>
         entry.manualReleaseRequired && entry.holdReason === reason)) return;
     await this.holdQueue(key, reason);
   }
@@ -1810,7 +1848,7 @@ export class ThreadTurnQueue {
     reason: string,
     options: { keepHeld?: boolean } = {},
   ): Promise<void> {
-    const queue = this.queuedEntries.get(key);
+    const queue = this.queuedEntries.get(key)?.entries;
     if (!queue?.length) return;
     this.addHoldReason(key, reason);
     const heldEntries: ThreadTurnQueueEntry[] = [];
@@ -1829,7 +1867,7 @@ export class ThreadTurnQueue {
     // Hold the entire FIFO before publication can cancel or release a row.
     // Later controls own any entries they replace while these events await.
     for (const held of heldEntries) {
-      const index = this.queuedEntries.get(key)?.indexOf(held) ?? -1;
+      const index = this.queuedEntries.get(key)?.entries.indexOf(held) ?? -1;
       if (index < 0) continue;
       await this.emit({
         type: "held",
@@ -1842,7 +1880,7 @@ export class ThreadTurnQueue {
 
   private async clearQueueHold(key: string): Promise<void> {
     this.heldQueues.delete(key);
-    const queue = this.queuedEntries.get(key) ?? [];
+    const queue = this.queuedEntries.get(key)?.entries ?? [];
     // Finish this release before publication yields to another hold. That
     // hold must cover the whole waiting FIFO without retaining old causes.
     const released = queue.map((current) => ({
@@ -1884,7 +1922,7 @@ export class ThreadTurnQueue {
    */
   private dropSpentHold(key: string): void {
     if (!this.heldQueues.has(key)) return;
-    const queue = this.queuedEntries.get(key) ?? [];
+    const queue = this.queuedEntries.get(key)?.entries ?? [];
     if (!queue.some((entry) => entry.manualReleaseRequired)) this.heldQueues.delete(key);
   }
 
