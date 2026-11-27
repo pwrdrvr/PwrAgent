@@ -250,6 +250,14 @@ function chooseDropdownOption(label: string, optionName: string): void {
   fireEvent.click(screen.getByRole("option", { name: optionName }));
 }
 
+/** Opens the launchpad's Where panel, which holds project, checkout and machine. */
+function openWherePanel(): HTMLElement {
+  const existing = screen.queryByRole("dialog", { name: "Where this thread runs" });
+  if (existing) return existing;
+  fireEvent.click(screen.getByRole("button", { name: /^Where:/ }));
+  return screen.getByRole("dialog", { name: "Where this thread runs" });
+}
+
 async function clickButton(name: string | RegExp): Promise<void> {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name }));
@@ -3108,7 +3116,7 @@ describe("Composer", () => {
     expect(elsewhere).toHaveFocus();
   });
 
-  describe("integrated terminal tools", () => {
+  describe("composer tools", () => {
     const thread: NavigationThreadSummary = {
       id: "terminal-thread", title: "Terminal tools", titleSource: "explicit", source: "codex",
       executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
@@ -3125,9 +3133,8 @@ describe("Composer", () => {
       git: { path: { value: "", source: "default" }, discovery: { candidates: [] } },
     };
 
-    it("places the toggle after Environment and Run, immediately before the application launchers", () => {
+    it("puts the application launchers and environment pickers before the ▶ that runs the chosen command", () => {
       render(<Composer skills={[]} applications={applications}
-        integratedTerminal={{ open: false, onToggle: vi.fn() }}
         thread={{ ...thread,
           linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }],
           codexEnvironmentRuntime: { environmentId: "demo", environmentName: "Demo", executionTarget: "local" },
@@ -3137,93 +3144,23 @@ describe("Composer", () => {
       const tools = screen.getByLabelText("Composer tools");
       const buttons = within(tools).getAllByRole("button");
       expect(buttons.map((button) => button.getAttribute("aria-label")?.split(":")[0])).toEqual([
-        "Environment", "Run", "Environment command", "Open integrated terminal", "VS Code", "Terminal",
+        "VS Code", "Terminal", "Environment", "Environment command", "Run",
       ]);
-      const toggle = within(tools).getByRole("button", { name: "Open integrated terminal" });
-      expect(toggle).toHaveClass("composer__toggle", "composer__terminal-toggle");
-      expect(toggle).toHaveTextContent("");
-      expect(toggle.querySelector("svg")).toHaveAttribute("width", "14");
-    });
-
-    it.each([
-      { open: false, running: false, label: "Open integrated terminal" },
-      { open: true, running: false, label: "Hide integrated terminal" },
-      { open: false, running: true, label: "Show running integrated terminal" },
-      { open: true, running: true, label: "Hide integrated terminal" },
-    ])("shows $label without a workspace or application launchers", ({ open, running, label }) => {
-      const onToggle = vi.fn();
-      render(<Composer skills={[]} thread={thread} integratedTerminal={{ open, running, onToggle }} />);
-      const tools = screen.getByLabelText("Composer tools");
-      const toggle = within(tools).getByRole("button", { name: label });
-      expect(within(tools).getAllByRole("button")).toEqual([toggle]);
-      expect(toggle).toHaveAttribute("aria-pressed", String(open));
-      expect(toggle).not.toHaveAttribute("aria-disabled");
-      expect(toggle.classList.contains("is-active")).toBe(open);
-      expect(toggle.classList.contains("is-running")).toBe(running && !open);
-      fireEvent.mouseEnter(toggle);
-      expect(screen.getByRole("tooltip")).toHaveTextContent(label);
-      expect(document.body.querySelector(":scope > .viewport-tooltip")).toBe(screen.getByRole("tooltip"));
-      fireEvent.click(toggle);
-      expect(onToggle).toHaveBeenCalledOnce();
-      expect(screen.queryByRole("tooltip")).toBeNull();
-    });
-
-    it("keeps unavailable remote terminals focusable and explains why on hover and focus", () => {
-      const onToggle = vi.fn();
-      const disabledReason = "Remote terminal not granted by Demo peer.";
-      render(<Composer skills={[]} thread={{ ...thread, federation: {
-        ref: { backend: "codex", threadId: thread.id, target: { scope: "remote", instanceId: "demo-peer" } },
-        instanceLabel: "Demo peer", peerStatus: "connected",
-      } }} integratedTerminal={{ open: false, disabledReason, onToggle }} />);
-      const toggle = screen.getByRole("button", { name: disabledReason });
-      expect(toggle).toHaveClass("is-disabled");
-      expect(toggle).toHaveAttribute("aria-disabled", "true");
-      expect(toggle).toHaveAttribute("aria-pressed", "false");
-      expect(toggle).toBeEnabled();
-      expect(toggle).not.toHaveAttribute("disabled");
-      fireEvent.mouseEnter(toggle);
-      expect(screen.getByRole("tooltip")).toHaveTextContent(disabledReason);
-      fireEvent.mouseLeave(toggle);
-      expect(screen.queryByRole("tooltip")).toBeNull();
-      act(() => toggle.focus());
-      expect(toggle).toHaveFocus();
-      expect(screen.getByRole("tooltip")).toHaveTextContent(disabledReason);
-      fireEvent.click(toggle);
-      expect(onToggle).not.toHaveBeenCalled();
-    });
-
-    it("hides the toggle in a launchpad even if terminal controls were supplied", () => {
-      render(<Composer skills={[]} integratedTerminal={{ open: false, onToggle: vi.fn() }}
-        launchpad={{ directoryKey: "demo", directoryKind: "directory", directoryLabel: "Demo",
-          directoryPath: "/repo/demo", backend: "codex", executionMode: "default", prompt: "",
-          workMode: "local", branchName: "main", createdAt: 1, updatedAt: 1 }} />);
+      // The terminal toggle lives in the thread header now.
       expect(screen.queryByRole("button", { name: /integrated terminal/ })).toBeNull();
-      expect(screen.queryByLabelText("Composer tools")).toBeNull();
     });
 
-    it("opens and hides the terminal while a send is being prepared", async () => {
+    it("disables the application launchers while a send is being prepared", async () => {
       const check = createDeferred<boolean>();
       const startTurn = vi.fn();
-      function PreparingComposer() {
-        const [open, setOpen] = useState(false);
-        return <Composer skills={[]} applications={applications} desktopApi={{ startTurn }}
-          onBeforeStartTurn={() => check.promise}
-          thread={{ ...thread, linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }] }}
-          integratedTerminal={{ open, onToggle: () => setOpen((value) => !value) }} />;
-      }
-      render(<PreparingComposer />);
+      render(<Composer skills={[]} applications={applications} desktopApi={{ startTurn }}
+        onBeforeStartTurn={() => check.promise}
+        thread={{ ...thread, linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }] }} />);
       fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "Check the demo" } });
       await clickButton("Send");
       expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "VS Code" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Terminal" })).toBeDisabled();
-      const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
-      expect(toggle).toBeEnabled();
-      expect(toggle.closest("fieldset")).toBeNull();
-      await clickButton("Open integrated terminal");
-      expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute("aria-pressed", "true");
-      await clickButton("Hide integrated terminal");
-      expect(screen.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute("aria-pressed", "false");
       await clickButton("Cancel");
       await act(async () => { check.resolve(false); });
       expect(startTurn).not.toHaveBeenCalled();
@@ -3693,6 +3630,7 @@ describe("Composer", () => {
       />,
     );
 
+    openWherePanel();
     fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
 
     expect(screen.getByRole("option", { name: /remote repo/i })).toBeInTheDocument();
@@ -7929,6 +7867,7 @@ describe("Composer", () => {
     expect(modelSettingsPill()).toHaveAttribute("data-effort", "low");
     expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("priority");
     expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
+    openWherePanel();
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "feature/provider-memory",
@@ -7950,6 +7889,7 @@ describe("Composer", () => {
     expect(modelSettingsPill()).toHaveAttribute("data-effort", "ultra");
     expect(modelSettingsPill()).toHaveAttribute("data-speed", "fast");
     expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
+    openWherePanel();
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "feature/provider-memory",
@@ -21862,6 +21802,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeEnabled();
     expect(workspaceMode).toHaveValue("local");
@@ -21912,6 +21853,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toHaveValue("worktree");
     expect(workspaceMode).toHaveTextContent("New worktree");
@@ -21954,6 +21896,7 @@ describe("Composer", () => {
     const input = screen.getByLabelText("New thread");
     fireEvent.change(input, { target: { value: "/review" } });
     await clickButton("Start sub-thread");
+    openWherePanel();
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -22007,6 +21950,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
@@ -22044,6 +21988,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
@@ -22093,6 +22038,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
@@ -22145,6 +22091,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(screen.getByRole("listbox").closest(".composer-dropdown")).toHaveClass(
@@ -22210,6 +22157,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(screen.getByRole("listbox").parentElement).toHaveStyle({
@@ -22273,6 +22221,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(screen.getByRole("listbox").parentElement).toHaveStyle({
@@ -22361,6 +22310,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("local");
     expect(
       screen.queryByRole("option", { name: "New worktree" }),
@@ -22420,6 +22370,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     const inUseOption = screen.getByRole("option", {
@@ -22514,6 +22465,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(
@@ -22576,6 +22528,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     const optionNames = screen
@@ -22631,6 +22584,7 @@ describe("Composer", () => {
       />
     );
 
+    openWherePanel();
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
     fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     expect(screen.queryByRole("option", { name: "HEAD" })).not.toBeInTheDocument();
@@ -23265,6 +23219,7 @@ describe("Composer", () => {
       await screen.findByAltText("wrong-repo-composer.png"),
     ).toBeInTheDocument();
 
+    openWherePanel();
     fireEvent.click(screen.getByRole("button", { name: "Project: PwrSnap" }));
     fireEvent.click(screen.getByRole("option", { name: /PwrGit/ }));
 
@@ -23300,6 +23255,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("New thread"), {
       target: { value: "Submit this newer draft in PwrGit" },
     });
+    openWherePanel();
     fireEvent.click(screen.getByRole("button", { name: "Project: PwrSnap" }));
     fireEvent.click(screen.getByRole("option", { name: /PwrGit/ }));
 
@@ -29888,7 +29844,7 @@ describe("Composer", () => {
     expect(onPendingStatusChange).not.toHaveBeenCalledWith(undefined);
   });
 
-  it("sends Codex turns with plan collaboration mode when plan mode is enabled", async () => {
+  it("sends a /plan message as one Codex turn in plan collaboration mode", async () => {
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -29947,10 +29903,10 @@ describe("Composer", () => {
       />
     );
 
+    expect(screen.queryByLabelText("Plan mode")).toBeNull();
     fireEvent.change(screen.getByLabelText("Reply"), {
-      target: { value: "Plan this change" },
+      target: { value: "/plan Plan this change" },
     });
-    fireEvent.click(screen.getByLabelText("Plan mode"));
     await clickButton("Send");
 
     await waitFor(() => {
@@ -29969,15 +29925,13 @@ describe("Composer", () => {
       },
     });
     expect(onPendingStatusChange).toHaveBeenCalledWith("Planning");
+    // One turn: the draft is gone, so the next message is an ordinary one.
     await waitFor(() => {
-      expect(screen.getByLabelText("Plan mode")).toHaveAttribute(
-        "aria-pressed",
-        "false",
-      );
+      expect(screen.getByLabelText("Reply")).toHaveValue("");
     });
   });
 
-  it("offers Plan on Claude threads, sends it for one turn, and leaves other providers without it", async () => {
+  it("offers /plan on Claude threads, sends it for one turn, and leaves other providers without it", async () => {
     const startTurn = vi.fn().mockResolvedValue({ backend: "claude", threadId: "thread-1", turnId: "turn-1" });
     const claudeThread = {
       id: "thread-1", title: "Plan", titleSource: "explicit" as const,
@@ -29993,14 +29947,17 @@ describe("Composer", () => {
         thread={claudeThread}
       />,
     );
-    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Plan this change" } });
-    fireEvent.click(screen.getByLabelText("Plan mode"));
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/pla" } });
+    expect(await screen.findByRole("option", { name: /\/plan/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/plan Plan this change" } });
     await clickButton("Send");
     await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
     expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
-      backend: "claude", threadId: "thread-1", collaborationMode: expect.objectContaining({ mode: "plan" }),
+      backend: "claude",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Plan this change" }],
+      collaborationMode: expect.objectContaining({ mode: "plan" }),
     }));
-    await waitFor(() => expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false"));
     rerender(
       <Composer
         backends={[backendSummary("acp:grok")]}
@@ -30010,7 +29967,9 @@ describe("Composer", () => {
         thread={{ ...claudeThread, source: "acp:grok" }}
       />,
     );
-    expect(screen.queryByLabelText("Plan mode")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/pla" } });
+    await flushReactUpdates();
+    expect(screen.queryByRole("option", { name: /\/plan/ })).toBeNull();
   });
 
   describe("permission-mode queue indicator", () => {

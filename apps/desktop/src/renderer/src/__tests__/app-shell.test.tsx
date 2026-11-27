@@ -133,6 +133,19 @@ async function renderApp(): Promise<ReturnType<typeof render>> {
   return view;
 }
 
+/** The new-thread machine picker, which lives in the composer's Where panel. */
+function machinePicker(): HTMLElement {
+  if (!screen.queryByRole("dialog", { name: "Where this thread runs" })) {
+    fireEvent.click(screen.getByRole("button", { name: /^Where:/ }));
+  }
+  return screen.getByRole("button", { name: /^Machine(?::|$)/ });
+}
+
+async function findMachinePicker(): Promise<HTMLElement> {
+  await screen.findByRole("button", { name: /^Where:/ });
+  return machinePicker();
+}
+
 async function clickButton(name: string | RegExp, getContainer?: () => HTMLElement): Promise<void> {
   const getButton = () => {
     const scope = getContainer ? within(getContainer()) : screen;
@@ -950,7 +963,7 @@ describe("App", () => {
     expect(await screen.findByRole("textbox", { name: "New thread" }))
       .toBeInTheDocument();
     // The composer says where the thread will start, before anything is sent.
-    expect(screen.getByRole("button", { name: /^Machine(?::|$)/ }))
+    expect(machinePicker())
       .toHaveTextContent("Studio Mac / work");
 
     fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
@@ -1181,7 +1194,7 @@ describe("App", () => {
         fireEvent.click(await screen.findByRole("menuitem", { name: "Composer owner" }));
       } else {
         await clickButton("New thread");
-        fireEvent.click(await screen.findByRole("button", { name: /^Machine(?::|$)/ }));
+        fireEvent.click(await findMachinePicker());
         fireEvent.click(await screen.findByRole("option", { name: "Composer owner" }));
       }
       await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
@@ -1316,7 +1329,7 @@ describe("App", () => {
     await renderApp();
     await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
     await clickButton("New thread");
-    const chip = await screen.findByRole("button", { name: /^Machine(?::|$)/ });
+    const chip = await findMachinePicker();
     expect(chip).toHaveTextContent("Harold-MBP-M5-Max");
     expect(chip).not.toHaveTextContent("Harold-Mac-Mini-M4");
     expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--remote");
@@ -1344,9 +1357,9 @@ describe("App", () => {
     await waitFor(() => expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
       .toHaveAttribute("data-value", "Create this on the M5"));
     if (otherPeers) {
-      fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
+      fireEvent.click(machinePicker());
       await act(async () => { fireEvent.click(screen.getByRole("option", { name: "Laptop" })); });
-      await waitFor(() => expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Laptop"));
+      await waitFor(() => expect(machinePicker()).toHaveTextContent("Laptop"));
       // A machine label can commit before its editor scope. Finish restoring
       // the moved draft before the next peer event or machine selection.
       await waitFor(() => expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
@@ -1366,14 +1379,14 @@ describe("App", () => {
             params: { instanceId: target.instanceId, status: ownerStatus } },
         });
       });
-      fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
+      fireEvent.click(machinePicker());
       const disconnectedOwner = await screen.findByRole("option", { name: /Harold-MBP-M5-Max/, description: "Offline" });
       expect(disconnectedOwner).toHaveAttribute("aria-disabled", "true");
       const launchpadReadCount = ensureDirectoryLaunchpad.mock.calls.length;
       fireEvent.click(disconnectedOwner);
       await flushReactUpdates();
       expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(launchpadReadCount);
-      expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Laptop");
+      expect(machinePicker()).toHaveTextContent("Laptop");
       expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
         .toHaveAttribute("data-value", "Create this on the M5");
 
@@ -1387,7 +1400,7 @@ describe("App", () => {
       });
       const reconnectedOwner = await screen.findByRole("option", { name: /Harold-MBP-M5-Max/, description: "This window" });
       await act(async () => { fireEvent.click(reconnectedOwner); });
-      await waitFor(() => expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Harold-MBP-M5-Max"));
+      await waitFor(() => expect(machinePicker()).toHaveTextContent("Harold-MBP-M5-Max"));
       // The machine chip updates before the scoped editor restores its draft.
       await waitFor(() => expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
         .toHaveAttribute("data-value", "Create this on the M5"));

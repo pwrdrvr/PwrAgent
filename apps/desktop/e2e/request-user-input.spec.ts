@@ -27,8 +27,7 @@ async function openRequestUserInputReplay() {
 
   await app.window
     .getByRole("textbox", { name: "Reply", exact: true })
-    .fill("Ask the plan questionnaire.");
-  await app.window.getByLabel("Plan mode").click();
+    .fill("/plan Ask the plan questionnaire.");
   await app.window.getByRole("button", { name: "Send" }).click();
 
   await app.advance({ stepId: "status-active-1" });

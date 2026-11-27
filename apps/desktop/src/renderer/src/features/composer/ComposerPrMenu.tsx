@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
@@ -41,6 +41,13 @@ export function ComposerPrMenu(props: {
   testId?: string;
   /** The menu is portaled; a hover-revealed rail stays open while it is. */
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Where the menu opens from when `openRequest` asks: the row's ⋮ while this
+   * button is folded into it.
+   */
+  anchorRef?: RefObject<HTMLElement | null>;
+  /** Bumped to open the menu from `anchorRef`. */
+  openRequest?: number;
   autoFix: {
     checked: boolean;
     available: boolean;
@@ -60,6 +67,9 @@ export function ComposerPrMenu(props: {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const [anchored, setAnchored] = useState(false);
+  const placementRef: RefObject<HTMLElement | null> =
+    anchored && props.anchorRef ? props.anchorRef : triggerRef;
   const menuRef = useRef<HTMLDivElement>(null);
   const openRef = useRef(false);
   const sessionRef = useRef(0);
@@ -76,15 +86,20 @@ export function ComposerPrMenu(props: {
     setError(undefined);
     setOpen(true);
   }, []);
-  useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
+  useEffect(() => {
+    if (!props.openRequest) return;
+    setAnchored(true);
+    openMenu();
+  }, [openMenu, props.openRequest]);
+  useMenuNavigation({ open, menuRef, triggerRef: placementRef, onClose: close });
   const onOpenChange = props.onOpenChange;
   useEffect(() => {
     if (!open) return undefined;
     onOpenChange?.(true);
     return () => onOpenChange?.(false);
   }, [onOpenChange, open]);
-  useCloseOnOutsidePointer({ open, triggerRef, menuRef, onClose: close });
-  const position = useTodoFactMenuPlacement({ open, triggerRef, menuRef, width: 340 });
+  useCloseOnOutsidePointer({ open, triggerRef: placementRef, menuRef, onClose: close });
+  const position = useTodoFactMenuPlacement({ open, triggerRef: placementRef, menuRef, width: 340 });
   const owner: FederationTarget | undefined = props.thread.federation?.ref.target;
   const target = { backend: props.thread.source, threadId: props.thread.id };
   // Read only while the menu is open: the list refreshes on every
@@ -141,6 +156,7 @@ export function ComposerPrMenu(props: {
         data-tooltip={open ? undefined : props.tooltip}
         data-testid={props.testId ?? "composer-pr-menu"}
         onClick={() => {
+          setAnchored(false);
           if (open) close();
           else openMenu();
         }}

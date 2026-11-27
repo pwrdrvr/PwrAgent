@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { openLaunchpadWherePanel } from "./fixtures/launchpad-where";
 
 const POSIX_SETUP_COMMAND = "printf setup-output && sleep 2";
 const WINDOWS_SETUP_COMMAND = "Write-Output setup-output; Start-Sleep -Seconds 2";
@@ -722,6 +723,7 @@ test("directory launchpad keeps selected environment controls after restart", as
     await expect(
       secondApp.window.getByRole("textbox", { name: "New thread" }),
     ).toBeVisible();
+    await openLaunchpadWherePanel(secondApp.window);
     await expect(settings.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute(
       "data-value",
       "worktree",
