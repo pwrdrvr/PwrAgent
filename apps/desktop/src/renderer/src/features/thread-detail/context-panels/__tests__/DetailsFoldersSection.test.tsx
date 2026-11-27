@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../../../composer/native-picker-boundary";
-import { LinkedProjectsPanel } from "../LinkedProjectsPanel";
+import { DetailsFoldersSection } from "../DetailsFoldersSection";
 
 afterEach(cleanup);
 
@@ -21,7 +21,20 @@ const childThread: NavigationThreadSummary = {
   inbox: { inInbox: false },
 };
 
-describe("LinkedProjectsPanel", () => {
+/** Opens the ⋯ menu of an attached folder and chooses one of its items. */
+function chooseAttached(label: string, item: string): void {
+  const attached = screen.getByRole("list", { name: "Attached folders" });
+  fireEvent.click(within(attached).getByRole("button", { name: `Folder actions for ${label}` }));
+  fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: item }));
+}
+
+function folderMenu(label: string): HTMLElement {
+  fireEvent.click(within(screen.getByRole("list", { name: "Primary folder" }))
+    .getByRole("button", { name: `Folder actions for ${label}` }));
+  return screen.getByRole("menu");
+}
+
+describe("DetailsFoldersSection", () => {
   it("detaches the first row when the current checkout is listed second", async () => {
     const detachDirectoryFromThread = vi.fn(async () => ({
       ok: true as const, backend: "codex" as const, threadId: childThread.id, directories: [sharedCheckout],
@@ -29,13 +42,14 @@ describe("LinkedProjectsPanel", () => {
     const onRefreshNavigation = vi.fn(async () => {
       panel.rerender(view({ ...childThread, linkedDirectories: [sharedCheckout] }));
     });
-    const view = (thread: NavigationThreadSummary) => <LinkedProjectsPanel
+    const view = (thread: NavigationThreadSummary) => <DetailsFoldersSection
       desktopApi={{ detachDirectoryFromThread }} onRefreshNavigation={onRefreshNavigation}
       thread={thread} hideTooltip={() => undefined} showTooltip={() => undefined}
     />;
     const panel = render(view(childThread));
 
-    fireEvent.click(within(screen.getAllByRole("listitem")[0]!).getByRole("button", { name: "Detach" }));
+    // The cwd's checkout is listed second; the first is the attached one.
+    chooseAttached("Project", "Detach");
     await waitFor(() => expect(screen.queryByText(attachedCheckout.worktreePath)).not.toBeInTheDocument());
     expect(screen.getByText(sharedCheckout.worktreePath)).toBeVisible();
     expect(detachDirectoryFromThread).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
@@ -51,15 +65,19 @@ describe("LinkedProjectsPanel", () => {
         reason: "not-found" as const, message };
     });
     const onRefreshNavigation = vi.fn(async () => undefined);
-    render(<LinkedProjectsPanel
+    render(<DetailsFoldersSection
       desktopApi={{ detachDirectoryFromThread }} onRefreshNavigation={onRefreshNavigation}
       thread={{ ...childThread, linkedDirectories: [sharedCheckout, attachedCheckout] }}
       hideTooltip={() => undefined} showTooltip={() => undefined}
     />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Detach" }));
+    chooseAttached("Project", "Detach");
     expect(await screen.findByRole("alert")).toHaveTextContent(message);
-    expect(screen.getByRole("button", { name: "Detach" })).toBeEnabled();
+    const attached = screen.getByRole("list", { name: "Attached folders" });
+    fireEvent.click(within(attached).getByRole("button", { name: "Folder actions for Project" }));
+    expect(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Detach" }))
+      .not.toHaveAttribute("aria-disabled");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(screen.getByText(attachedCheckout.worktreePath)).toBeVisible();
     expect(onRefreshNavigation).not.toHaveBeenCalled();
   });
@@ -73,7 +91,7 @@ describe("LinkedProjectsPanel", () => {
     }));
     const onRefreshNavigation = vi.fn(async () => undefined);
     render(
-      <LinkedProjectsPanel
+      <DetailsFoldersSection
         desktopApi={{ detachDirectoryFromThread }}
         onRefreshNavigation={onRefreshNavigation}
         hideTooltip={() => undefined}
@@ -91,7 +109,7 @@ describe("LinkedProjectsPanel", () => {
         }}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Detach" }));
+    chooseAttached("PwrGit", "Detach");
     await waitFor(() => expect(onRefreshNavigation).toHaveBeenCalledOnce());
     expect(detachDirectoryFromThread).toHaveBeenCalledWith({
       backend: "codex", federationTarget: target, threadId: "source-thread", directory,
@@ -102,7 +120,7 @@ describe("LinkedProjectsPanel", () => {
     const pickDirectoryFromDisk = vi.fn();
     const attachDirectoryToThread = vi.fn();
     render(
-      <LinkedProjectsPanel
+      <DetailsFoldersSection
         desktopApi={{
           attachDirectoryToThread,
           detachDirectoryFromThread: vi.fn(),
@@ -138,7 +156,7 @@ describe("LinkedProjectsPanel", () => {
       />,
     );
 
-    const addDirectory = screen.getByRole("button", { name: "Add directory" });
+    const addDirectory = screen.getByRole("button", { name: "Attach folder" });
     expect(addDirectory).toBeDisabled();
     expect(addDirectory).toHaveAttribute(
       "data-tooltip",
@@ -156,49 +174,64 @@ describe("LinkedProjectsPanel", () => {
       })),
       runWorktreeReflink: vi.fn(async () => ({ status: "failed" as const, reason: "not run in this test" })),
     });
-    const view = (desktopApi: ReturnType<typeof storageApi>, shown = thread) => <LinkedProjectsPanel
+    const view = (desktopApi: ReturnType<typeof storageApi>, shown = thread) => <DetailsFoldersSection
       desktopApi={desktopApi} thread={shown} hideTooltip={() => undefined} showTooltip={() => undefined}
     />;
+
+    /** Whether the worktree's menu offers Share storage; leaves the menu closed. */
+    const shareStorageOffered = (): boolean => {
+      const menu = folderMenu("Project");
+      const offered = within(menu).queryByRole("menuitem", { name: "Share storage" }) !== null;
+      fireEvent.keyDown(menu, { key: "Escape" });
+      return offered;
+    };
+    const chooseShareStorage = (): void => {
+      fireEvent.click(within(folderMenu("Project")).getByRole("menuitem", { name: "Share storage" }));
+    };
 
     it("is offered for a worktree only after the selected Git's help lists the command", async () => {
       const api = storageApi({ reflink: true, verifyFilters: false });
       render(view(api));
       // Nothing is offered while the probe is out.
-      expect(screen.queryByRole("button", { name: /Share storage/ })).not.toBeInTheDocument();
-      const action = await screen.findByRole("button", { name: "Share storage for Project" });
-      // The main checkout has no source to share with.
-      expect(screen.getAllByRole("button", { name: /Share storage/ })).toEqual([action]);
+      expect(shareStorageOffered()).toBe(false);
+      await waitFor(() => expect(shareStorageOffered()).toBe(true));
       expect(api.readWorktreeReflinkCapabilities).toHaveBeenCalledWith({
         backend: "codex", threadId: thread.id, worktreePath: worktree.worktreePath,
       });
+      // The main checkout has no source to share with.
+      const attached = screen.getByRole("list", { name: "Attached folders" });
+      fireEvent.click(within(attached).getByRole("button", { name: "Folder actions for Project main" }));
+      expect(within(screen.getByRole("menu")).queryByRole("menuitem", { name: "Share storage" })).toBeNull();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
-      fireEvent.click(action);
+      chooseShareStorage();
       expect(await screen.findByRole("dialog", { name: "Share worktree storage" })).toBeVisible();
     });
 
     it("does not reopen for a thread when the panel comes back from another one", async () => {
       const api = storageApi({ reflink: true, verifyFilters: false });
       const panel = render(view(api));
-      fireEvent.click(await screen.findByRole("button", { name: "Share storage for Project" }));
+      await waitFor(() => expect(shareStorageOffered()).toBe(true));
+      chooseShareStorage();
       expect(await screen.findByRole("dialog", { name: "Share worktree storage" })).toBeVisible();
 
       const other: NavigationThreadSummary = { ...thread, id: "other" };
       panel.rerender(view(api, other));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       // The other thread links the same directory, and did not ask for the dialog.
-      expect(await screen.findByRole("button", { name: "Share storage for Project" })).toBeVisible();
+      await waitFor(() => expect(shareStorageOffered()).toBe(true));
       panel.rerender(view(api));
-      await screen.findByRole("button", { name: "Share storage for Project" });
+      await waitFor(() => expect(shareStorageOffered()).toBe(true));
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
     it("does not restart its probe when the api object is rebuilt on a render", async () => {
       const api = storageApi({ reflink: true, verifyFilters: false });
       const panel = render(view(api));
-      await screen.findByRole("button", { name: "Share storage for Project" });
+      await waitFor(() => expect(shareStorageOffered()).toBe(true));
       panel.rerender(view({ ...api }));
       panel.rerender(view({ ...api }));
-      expect(screen.getByRole("button", { name: "Share storage for Project" })).toBeVisible();
+      expect(shareStorageOffered()).toBe(true);
       expect(api.readWorktreeReflinkCapabilities).toHaveBeenCalledTimes(1);
     });
 
@@ -207,7 +240,7 @@ describe("LinkedProjectsPanel", () => {
       render(view(api));
       await waitFor(() => expect(api.readWorktreeReflinkCapabilities).toHaveBeenCalled());
       await Promise.resolve();
-      expect(screen.queryByRole("button", { name: /Share storage/ })).not.toBeInTheDocument();
+      expect(shareStorageOffered()).toBe(false);
     });
 
     it("is not offered, or probed, for a thread another machine owns", async () => {
@@ -218,7 +251,7 @@ describe("LinkedProjectsPanel", () => {
       }));
       await Promise.resolve();
       expect(api.readWorktreeReflinkCapabilities).not.toHaveBeenCalled();
-      expect(screen.queryByRole("button", { name: /Share storage/ })).not.toBeInTheDocument();
+      expect(shareStorageOffered()).toBe(false);
     });
   });
 });

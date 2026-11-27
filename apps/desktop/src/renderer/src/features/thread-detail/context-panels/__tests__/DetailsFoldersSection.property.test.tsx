@@ -2,14 +2,14 @@ import "@testing-library/jest-dom/vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cleanup, fireEvent, render, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import fc from "fast-check";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { copyText } from "../../../../lib/copy-text";
 import { cssWithOnlyProperties } from "../../../../styles/__tests__/css-property-cascade";
-import { LinkedProjectsPanel } from "../LinkedProjectsPanel";
+import { DetailsFoldersSection } from "../DetailsFoldersSection";
 
 vi.mock("../../../../lib/copy-text", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../../../lib/copy-text")>(),
@@ -41,6 +41,16 @@ function threadFor(directory: LinkedDirectorySummary, id = directory.id): Naviga
   };
 }
 
+/** Opens a folder's ⋯ menu and returns it. */
+function openFolderMenu(trigger: HTMLElement): HTMLElement {
+  fireEvent.click(trigger);
+  return screen.getByRole("menu");
+}
+
+function copyPathFrom(trigger: HTMLElement): void {
+  fireEvent.click(within(openFolderMenu(trigger)).getByRole("menuitem", { name: /^Copy path/ }));
+}
+
 describe("linked project checkout identity", () => {
   it("uses the checkout path for the project heading's tooltip and copy action", () => {
     const checkout = "/Users/fixture/.codex/worktrees/checkout-one/Project";
@@ -49,12 +59,12 @@ describe("linked project checkout identity", () => {
       path: "/Users/fixture/projects/Project", worktreePath: checkout,
     };
     const showTooltip = vi.fn();
-    const panel = render(<LinkedProjectsPanel thread={threadFor(directory)}
+    const panel = render(<DetailsFoldersSection thread={threadFor(directory)}
       showTooltip={showTooltip} hideTooltip={() => undefined} />);
 
     fireEvent.mouseEnter(panel.getByLabelText("Path for Project"));
     expect(showTooltip.mock.lastCall?.[1]).toBe(checkout);
-    fireEvent.click(panel.getByRole("button", { name: "Copy path for Project" }));
+    copyPathFrom(panel.getByRole("button", { name: "Folder actions for Project" }));
     expect(copyText).toHaveBeenLastCalledWith(checkout);
   });
 
@@ -66,7 +76,7 @@ describe("linked project checkout identity", () => {
         id: "checkout-one", kind: "worktree", label: "Project",
         path: "/Users/fixture/projects/Project", worktreePath: checkout,
       };
-      const panel = render(<LinkedProjectsPanel thread={threadFor(directory)}
+      const panel = render(<DetailsFoldersSection thread={threadFor(directory)}
         showTooltip={() => undefined} hideTooltip={() => undefined} />);
 
       // The path must be readable without opening a tooltip or a menu.
@@ -99,7 +109,7 @@ describe("linked project checkout identity", () => {
           gitBranch: "shared-branch",
         }));
         const showTooltip = vi.fn();
-        const view = (sibling: number) => <LinkedProjectsPanel
+        const view = (sibling: number) => <DetailsFoldersSection
           thread={threadFor(directories[sibling]!, `thread-${sibling}`)}
           showTooltip={showTooltip} hideTooltip={() => undefined} />;
         const panel = render(view(0));
@@ -117,9 +127,7 @@ describe("linked project checkout identity", () => {
             expect(panel.queryByText(checkouts[1 - sibling]!)).not.toBeInTheDocument();
             fireEvent.mouseEnter(panel.getByLabelText(`Path for ${project}`));
             expect(showTooltip.mock.lastCall?.[1]).toBe(expected);
-            fireEvent.click(panel.getByRole("button", { name: `Copy path for ${project}` }));
-            expect(copyText).toHaveBeenLastCalledWith(expected);
-            fireEvent.click(panel.getByRole("button", { name: `Copy path for ${directories[sibling]!.kind} ${project}` }));
+            copyPathFrom(panel.getByRole("button", { name: `Folder actions for ${project}` }));
             expect(copyText).toHaveBeenLastCalledWith(expected);
           }
         } finally {
@@ -143,7 +151,7 @@ describe("linked project checkout identity", () => {
         const secondary: LinkedDirectorySummary = {
           ...primary, id: "secondary", worktreePath: `${root}${name}-sibling`,
         };
-        const panel = render(<LinkedProjectsPanel
+        const panel = render(<DetailsFoldersSection
           desktopApi={{ detachDirectoryFromThread: vi.fn() }}
           thread={{
             ...threadFor(primary),
@@ -154,9 +162,16 @@ describe("linked project checkout identity", () => {
           hideTooltip={() => undefined}
         />);
         try {
-          const rows = panel.getAllByRole("listitem");
-          expect(within(rows[reverse ? 0 : 1]!).getByRole("button", { name: "Detach" })).toBeVisible();
-          expect(within(rows[reverse ? 1 : 0]!).queryByRole("button", { name: "Detach" })).toBeNull();
+          const attached = panel.getByRole("list", { name: "Attached folders" });
+          const primaryList = panel.getByRole("list", { name: "Primary folder" });
+          // The attached row is the sibling, whichever order the thread lists them in.
+          expect(within(attached).getByText(secondary.worktreePath!)).toBeVisible();
+          const attachedMenu = openFolderMenu(within(attached).getByRole("button", { name: "Folder actions for Project" }));
+          expect(within(attachedMenu).getByRole("menuitem", { name: "Detach" })).toBeVisible();
+          fireEvent.keyDown(attachedMenu, { key: "Escape" });
+          const primaryMenu = openFolderMenu(within(primaryList).getByRole("button", { name: "Folder actions for Project" }));
+          expect(within(primaryMenu).queryByRole("menuitem", { name: "Detach" })).toBeNull();
+          fireEvent.keyDown(primaryMenu, { key: "Escape" });
         } finally {
           panel.unmount();
         }

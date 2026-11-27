@@ -44,10 +44,10 @@ import {
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
 // When the rail is open, the active tab's panel content renders. The
-// default tab is "info"; its execution-context heading is a
+// default tab is "info", Details' Thread view; its Agent heading is a
 // stable "the panel is revealed" signal. There is no separate panel title
 // anymore — each panel's own section <h3> is the title.
-const REVEALED_SIGNAL = "Execution context";
+const REVEALED_SIGNAL = "Agent";
 
 afterEach(() => {
   cleanup();
@@ -237,6 +237,11 @@ function renderPanel(overrides: PanelOverrides = {}) {
   return { ...result, onActiveTabChange };
 }
 
+/** The rail's spine tabs, without the Details tab's own segments. */
+function spineTabs(): HTMLElement[] {
+  return within(screen.getByRole("tablist", { name: "Context panels" })).getAllByRole("tab");
+}
+
 const advanceHoverRevealDelay = async (): Promise<void> => {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(HOVER_RAIL_REVEAL_DELAY_MS + 1);
@@ -326,7 +331,7 @@ describe("ThreadContextPanel", () => {
     vi.useFakeTimers();
     const { onActiveTabChange } = renderPanel();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Thread info" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Details" }));
 
     expect(screen.getByText(REVEALED_SIGNAL)).toBeInTheDocument();
     expect(onActiveTabChange).toHaveBeenCalledWith("info");
@@ -386,7 +391,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("tab", { name: "Waiting for" }).querySelector(".context-rail__activity")).toBeNull();
   });
 
-  it("counts the watches that wake this thread on the Pull requests tab", () => {
+  it("counts the watches that wake this thread on the PRs segment", () => {
     const watch: ThreadPullRequestWatchSummary = {
       watchId: "watch-ci",
       backend: "codex",
@@ -404,20 +409,21 @@ describe("ThreadContextPanel", () => {
     render(
       <ThreadPrWatchIndicatorsContext.Provider value={{ byThreadKey: summarizeThreadPrWatches([watch, terminal]) }}>
         <ThreadContextPanel
-          activeTab="info"
+          activeTab="prs"
           backends={[baseBackend]}
-          pinned={false}
+          pinned
           thread={baseThread}
           onActiveTabChange={() => undefined}
         />
       </ThreadPrWatchIndicatorsContext.Provider>,
     );
-    const tab = screen.getByRole("tab", { name: "Pull requests · 2 watches waking this thread" });
-    expect(tab.querySelector(".context-rail__activity--watches")).toHaveTextContent("2");
+    expect(screen.getByRole("tab", { name: "PRs · 2 watches waking this thread" })).toBeInTheDocument();
     cleanup();
 
     // A peer's thread counts the owner's projection, not this instance's list.
     renderPanel({
+      activeTab: "prs",
+      pinned: true,
       thread: {
         ...baseThread,
         activePrWatches: [watch],
@@ -429,16 +435,15 @@ describe("ThreadContextPanel", () => {
         },
       } as NavigationThreadSummary,
     });
-    expect(screen.getByRole("tab", { name: "Pull requests · 1 watch waking this thread" }))
+    expect(screen.getByRole("tab", { name: "PRs · 1 watch waking this thread" }))
       .toBeInTheDocument();
     cleanup();
 
-    renderPanel();
-    expect(screen.getByRole("tab", { name: "Pull requests" })
-      .querySelector(".context-rail__activity--watches")).toBeNull();
+    renderPanel({ activeTab: "prs", pinned: true });
+    expect(screen.getByRole("tab", { name: "PRs" })).toBeInTheDocument();
   });
 
-  it("counts a merge build watch, which the Pull requests card lists, on its tab", () => {
+  it("counts a merge build watch, which the Pull requests card lists, on the PRs segment", () => {
     const condition = { backend: "codex" as const, threadId: "thread-1", when: "merge_build" as const, prUrl: "https://github.com/example/widgets/pull/41" };
     const wait: ThreadDependency = {
       id: "wait-1", backend: "codex", threadId: "thread-1", mode: "all", onFailure: "notify", status: "waiting",
@@ -450,31 +455,35 @@ describe("ThreadContextPanel", () => {
       <ThreadDependencyIndicatorsContext.Provider value={{ byThreadKey: summarizeThreadDependencies([wait]) }}>
         <ThreadPrWatchIndicatorsContext.Provider value={{ byThreadKey: new Map() }}>
           <ThreadContextPanel
-            activeTab="info"
+            activeTab="prs"
             backends={[baseBackend]}
-            pinned={false}
+            pinned
             thread={baseThread}
             onActiveTabChange={() => undefined}
           />
         </ThreadPrWatchIndicatorsContext.Provider>
       </ThreadDependencyIndicatorsContext.Provider>,
     );
-    expect(screen.getByRole("tab", { name: "Pull requests · 1 watch waking this thread" })
-      .querySelector(".context-rail__activity--watches")).toHaveTextContent("1");
+    expect(screen.getByRole("tab", { name: "PRs · 1 watch waking this thread" })).toBeInTheDocument();
   });
 
   it("wires the tabs to a labelled tabpanel when the rail is open", () => {
     renderPanel({ pinned: true });
 
-    const activeTab = screen.getByRole("tab", { name: "Thread info" });
+    const activeTab = screen.getByRole("tab", { name: "Details" });
     expect(activeTab).toHaveAttribute("aria-controls", "context-rail-panel");
 
-    const panel = screen.getByRole("tabpanel");
-    expect(panel).toHaveAttribute("id", "context-rail-panel");
+    const panel = document.getElementById("context-rail-panel");
+    expect(panel).toHaveAttribute("role", "tabpanel");
     expect(panel).toHaveAttribute("aria-labelledby", activeTab.id);
+    // Details' own strip is a tablist inside that panel, with its own panel.
+    const segment = within(panel!).getByRole("tab", { name: "Thread" });
+    expect(segment).toHaveAttribute("aria-selected", "true");
+    expect(document.getElementById("details-segment-panel"))
+      .toHaveAttribute("aria-labelledby", segment.id);
   });
 
-  it("shows the thread creation and update timestamps in Thread info", () => {
+  it("shows the thread creation and update timestamps in the Agent section's execution context", () => {
     const createdAt = new Date(2026, 6, 8, 9, 15).getTime();
     const updatedAt = new Date(2026, 6, 9, 10, 41).getTime();
     renderPanel({
@@ -486,11 +495,8 @@ describe("ThreadContextPanel", () => {
       },
     });
 
-    const executionContext = screen
-      .getByRole("heading", { level: 3, name: "Execution context" })
-      .closest("section");
-    expect(executionContext).not.toBeNull();
-    const context = within(executionContext!);
+    fireEvent.click(screen.getByRole("button", { name: "Execution context" }));
+    const context = within(screen.getByRole("menu", { name: "Execution context" }));
     expect(context.getByText("Created").nextElementSibling).toHaveTextContent(
       new Intl.DateTimeFormat(undefined, {
         month: "short",
@@ -509,17 +515,14 @@ describe("ThreadContextPanel", () => {
     );
   });
 
-  it("shows the initial backend load duration in Thread info", () => {
+  it("shows the initial backend load duration in the Agent section's execution context", () => {
     renderPanel({
       initialLoadDurationMs: 1_234.4,
       pinned: true,
     });
 
-    const executionContext = screen
-      .getByRole("heading", { level: 3, name: "Execution context" })
-      .closest("section");
-    expect(executionContext).not.toBeNull();
-    const context = within(executionContext!);
+    fireEvent.click(screen.getByRole("button", { name: "Execution context" }));
+    const context = within(screen.getByRole("menu", { name: "Execution context" }));
     expect(context.getByText("Initial load").nextElementSibling).toHaveTextContent(
       `${(1_234).toLocaleString()} ms`,
     );
@@ -926,7 +929,7 @@ describe("ThreadContextPanel", () => {
   it("moves focus between tabs with Arrow keys (roving tablist)", () => {
     renderPanel({ pinned: true });
     // The rendered order is the accessibility oracle, including optional tabs.
-    const tabs = screen.getAllByRole("tab");
+    const tabs = spineTabs();
     for (const [index, tab] of tabs.entries()) {
       // Focus shows the tab's tooltip, a state update.
       act(() => tab.focus());
@@ -943,8 +946,8 @@ describe("ThreadContextPanel", () => {
 
   it("explains every rail tab in the rail's tooltip", () => {
     renderPanel({ pinned: true });
-    const tabs = screen.getAllByRole("tab");
-    expect(tabs.length).toBeGreaterThan(5);
+    const tabs = spineTabs();
+    expect(tabs.length).toBeGreaterThan(3);
     for (const tab of tabs) {
       const name = tab.getAttribute("aria-label")!;
       // A native `title` would draw a second, unclamped tooltip.
@@ -973,8 +976,8 @@ describe("ThreadContextPanel", () => {
     });
     // The pointer stays on a tab after clicking it, so its tooltip is still
     // up when focus moves into the panel.
-    fireEvent.focus(screen.getByRole("tab", { name: "Linked projects" }));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Linked projects — ");
+    fireEvent.focus(screen.getByRole("tab", { name: "Details" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Details — ");
     fireEvent.focus(screen.getByLabelText("Path for PwrAgent"));
     expect(screen.getAllByRole("tooltip")).toHaveLength(1);
     expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/fixture-user/github/PwrAgent");
@@ -983,7 +986,7 @@ describe("ThreadContextPanel", () => {
   it("draws every rail tab with its own glyph, none shared with the lens switch or machines", () => {
     renderPanel({ pinned: true });
     const glyph = (svg: Element | null): string => svg?.innerHTML ?? "";
-    const tabGlyphs = screen.getAllByRole("tab").map((tab) => glyph(tab.querySelector("svg")));
+    const tabGlyphs = spineTabs().map((tab) => glyph(tab.querySelector("svg")));
     expect(new Set(tabGlyphs).size).toBe(tabGlyphs.length);
     // Glyphs that already mean something else: the Updated, Created, Drafts,
     // and Directories lenses, and a machine.
@@ -1024,10 +1027,10 @@ describe("ThreadContextPanel", () => {
     expect(
       screen.queryByRole("heading", { level: 3, name: "Pricing" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Details" })).toBeInTheDocument();
   });
 
-  it("falls back to Thread info for a saved Tool calls tab", () => {
+  it("falls back to Details for a saved Tool calls tab", () => {
     const savedTab: unknown = "tool-calls";
     expect(isContextTabId(savedTab)).toBe(false);
     renderPanel({
@@ -1035,11 +1038,11 @@ describe("ThreadContextPanel", () => {
       pinned: true,
     });
 
-    expect(screen.getByRole("tab", { name: "Thread info" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("tab", { name: "Tool calls" })).not.toBeInTheDocument();
   });
 
-  it.each([false, true])("opens the incident explorer from Thread info with pricing enabled=%s", (pricingEnabled) => {
+  it.each([false, true])("opens the incident explorer from Details with pricing enabled=%s", (pricingEnabled) => {
     const onOpenToolOutputIncidentExplorer = vi.fn();
     renderPanel({
       activeTab: "info",
@@ -1048,7 +1051,8 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: pricingEnabled,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Tool Output Incidents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Execution context" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Tool Output Incidents" }));
     expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledExactlyOnceWith();
   });
 
@@ -4062,7 +4066,8 @@ describe("ThreadContextPanel", () => {
 
     const rail = screen.getByLabelText("Thread context");
     mockRailRect(rail);
-    fireEvent.click(screen.getByRole("tab", { name: "Sub-agents" }));
+    // Sub-agents now live in Details › Jobs.
+    fireEvent.click(screen.getByRole("tab", { name: "Details" }));
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
 
     const dialog = screen.getByRole("dialog");
@@ -4298,14 +4303,7 @@ describe("ThreadContextPanel", () => {
     );
 
     fireEvent.mouseLeave(screen.getByLabelText("Path for PwrAgent"));
-    fireEvent.mouseEnter(screen.getByLabelText("Path for worktree PwrAgent"));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/fixture-user/github");
-    expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "launchpad-pwragent-main-molpnvyk",
-    );
-
-    fireEvent.mouseLeave(screen.getByLabelText("Path for worktree PwrAgent"));
-    fireEvent.mouseEnter(screen.getByLabelText("Path for local LocalOnly"));
+    fireEvent.mouseEnter(screen.getByLabelText("Path for LocalOnly"));
     expect(screen.getByRole("tooltip")).toHaveTextContent(
       "/Users/fixture-user/github/PwrAgent",
     );
@@ -4377,11 +4375,15 @@ describe("ThreadContextPanel", () => {
       },
     });
 
+    // The git rows follow the chosen folder: the primary's thread branch first.
     expect(screen.getByText("main")).toBeInTheDocument();
+    expect(screen.queryByText("fix/channelsv2-live-pods")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show git for kube-manifests" }));
     expect(screen.getByText("fix/channelsv2-live-pods")).toBeInTheDocument();
+    expect(screen.queryByText("main")).not.toBeInTheDocument();
   });
 
-  it("detaches a secondary linked project from the Linked Projects tab", async () => {
+  it("detaches a secondary linked project from Details › Folders & git", async () => {
     const detachDirectoryFromThread = vi.fn(async () => ({
       ok: true as const,
       backend: "codex" as const,
@@ -4418,9 +4420,11 @@ describe("ThreadContextPanel", () => {
       },
     });
 
-    const detachButtons = screen.getAllByRole("button", { name: "Detach" });
-    expect(detachButtons).toHaveLength(1);
-    fireEvent.click(detachButtons[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Folder actions for PwrAgent" }));
+    expect(screen.queryByRole("menuitem", { name: "Detach" })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Folder actions for agent-kit" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Detach" }));
 
     await waitFor(() => {
       expect(detachDirectoryFromThread).toHaveBeenCalledWith({
@@ -4465,7 +4469,9 @@ describe("ThreadContextPanel", () => {
       },
     });
 
-    expect(screen.queryByRole("button", { name: "Detach" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Folder actions for agent-kit" }));
+    expect(screen.getByRole("menuitem", { name: /^Copy path/ })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Detach" })).not.toBeInTheDocument();
   });
 
   it("shows regular and Spark rate limits together on the AI provider info tab", () => {

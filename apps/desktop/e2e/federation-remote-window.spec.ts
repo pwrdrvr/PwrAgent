@@ -471,7 +471,10 @@ test.describe("federation remote window", () => {
       const page = viewer.window;
       const selectPeer = async () => {
         await page.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Peer sub-agent parent", exact: true }).click();
-        await page.getByRole("tab", { name: "Sub-agents", exact: true }).click();
+        // Sub-agents are in Details › Jobs.
+        await page.getByRole("tab", { name: /^Details/ }).click();
+        await page.getByRole("tablist", { name: "Details", exact: true })
+          .getByRole("tab", { name: /^Jobs/ }).click();
       };
       await selectPeer();
       await expect(page.getByText("Historical worker 0", { exact: true })).toBeVisible();

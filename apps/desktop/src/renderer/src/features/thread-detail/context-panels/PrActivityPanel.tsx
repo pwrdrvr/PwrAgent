@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { parseThreadIdentityKey, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { type PrActivityEvent, type PrActivitySnapshot } from "@pwragent/shared/contracts/pr-activity";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -22,9 +22,13 @@ const MAX_ROWS = 200;
  * callout), how much budget is left, then the timeline. The history is the
  * main process's in-memory journal, so nothing here writes SQLite.
  */
-export function PrActivityPanel({ desktopApi, thread }: {
+export function PrActivityPanel({ desktopApi, thread, prKey, prFilter }: {
   desktopApi?: Pick<DesktopApi, "getPrActivity" | "resumePrAutoDispatchBudget">;
   thread?: NavigationThreadSummary;
+  /** Narrows This thread to one PR's events (`buildPullRequestStatusKey`). */
+  prKey?: string;
+  /** The control that picks `prKey`, drawn under the heading. */
+  prFilter?: ReactNode;
 }) {
   const [snapshot, setSnapshot] = useState<PrActivitySnapshot>();
   const [view, setView] = useState<ActivityView>("thread");
@@ -97,7 +101,8 @@ export function PrActivityPanel({ desktopApi, thread }: {
     // Every PR check spends a request; those admissions are ledger entries
     // and only drown the decisions out of the timeline.
     if (isRoutineAdmission(event)) return false;
-    return view === "all" || (threadKey !== undefined && event.threadKeys.includes(threadKey));
+    return view === "all" || (threadKey !== undefined && event.threadKeys.includes(threadKey)
+      && (prKey === undefined || event.prKeys.includes(prKey)));
   }) ?? [];
   const monitoring = snapshot?.monitoring;
   const latestRepairBalance = snapshot?.events.find((event) =>
@@ -115,6 +120,7 @@ export function PrActivityPanel({ desktopApi, thread }: {
   return (
     <section className="context-panel__section pr-activity">
       <h3>PR activity</h3>
+      {prFilter}
       {monitoring ? (
         <p className="rail-card__status-line">
           <RailStatusChip tone={monitoring.backgroundPollingEnabled ? "ok" : "neutral"}>
