@@ -513,6 +513,26 @@ describe("thread sub-agent table", () => {
       expect((await store.readThreadTokenMiserGateTotals({ backend: "codex", threadId: "thread-1" })).gateCount).toBe(4);
     });
 
+    it("initializes legacy gate totals before another WAL writer advances the Pricing snapshot", async () => {
+      const { dbPath, stateDb, store } = openStore();
+      const thread = { backend: "codex", threadId: "thread-1" } as const;
+      await store.upsertThreadSubAgents({ ...thread, subAgents: mixedGates() });
+      const expected = await store.readThreadTokenMiserGateTotals(thread);
+      stateDb.raw.exec("UPDATE thread_sub_agent_revisions SET gate_totals_ready = 0, gate_count = 0");
+      const peer = StateDb.open(dbPath);
+      cleanups.push(() => peer.close());
+      const reads = store as unknown as { readStoredPricingSummaries(params: typeof thread): unknown };
+      const summaries = reads.readStoredPricingSummaries.bind(reads);
+      vi.spyOn(reads, "readStoredPricingSummaries").mockImplementationOnce((params) => {
+        const result = summaries(params);
+        peer.raw.prepare("INSERT INTO meta(key, value) VALUES ('wal-peer', 'committed')").run();
+        return result;
+      });
+      const page = await store.readThreadPricingPage({ ...thread, offset: 0, limit: 1 });
+      expect(page?.tokenMiserGateTotals).toEqual(expected);
+      expect(stateDb.raw.prepare("SELECT gate_totals_ready FROM thread_sub_agent_revisions").get()).toEqual({ gate_totals_ready: 1 });
+    });
+
     it("adds the columns to an existing profile once, and sums its gates on first read", async () => {
       const { dbPath, stateDb, store } = openStore();
       await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1", subAgents: mixedGates() });

@@ -1,8 +1,11 @@
+import * as pricingDisplay from "@pwragent/shared/thread-pricing-display";
+import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
 import { LivePricingLines } from "../app-server/live-pricing-lines";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import type {
+  ThreadDisplayRead,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared/contracts/normalized-app-server";
@@ -55,6 +58,29 @@ type Internals = {
   ): Promise<void>;
 };
 
+/** Materialized ledger, card and metadata rows, including statements reused after warm-up. */
+function countPricingRows(db: StateDb) {
+  let count = 0;
+  const prepare = db.raw.prepare.bind(db.raw);
+  vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
+    const stmt = prepare(sql);
+    if (/SELECT/i.test(sql) && /thread_usage_lines|thread_sub_agents|token_miser_objects/.test(sql)) {
+      for (const method of ["all", "get"] as const) {
+        const read = stmt[method].bind(stmt);
+        Object.assign(stmt, { [method]: (...args: unknown[]) => {
+          const value = read(...args);
+          for (const row of Array.isArray(value) ? value : [value]) {
+            if (row && typeof row === "object" && ("usage_line_id" in row || "card" in row || "payload" in row)) count++;
+          }
+          return value;
+        } });
+      }
+    }
+    return stmt;
+  });
+  return { count: () => count, reset: () => { count = 0; } };
+}
+
 describe("Token Miser savings scaling", () => {
   let directory: string;
   let stateDb: StateDb;
@@ -92,6 +118,210 @@ describe("Token Miser savings scaling", () => {
       stateDb.close();
       rmSync(directory, { force: true, recursive: true });
     }
+  });
+
+  it("refreshes a grouped Codex Pricing page from changed rows and keeps the owner's full-ledger ordering and spend", async () => {
+    const thread = { backend: "codex", threadId: THREAD_ID } as const;
+    const request = { ...thread, includeTurns: false, viewOnly: true, display: { resource: "pricing", limit: 2, deferPricingGates: true } } as const;
+    const rowsRead = countPricingRows(stateDb);
+    const metadataRead = countPricingRows(tokenMiserStore.stateDb);
+    const entries = buildWorkload(1).entries.slice(0, 4).map((entry, i) => ({
+      ...entry, turnId: i < 2 ? "turn-0" : "orphan", parentModel: PARENT_MODELS[0],
+      baselineParentTokens: i % 2 ? 3_000 : 5_000_000, replayTrackingVersion: 2 as const,
+    }));
+    const write = tokenMiserStore.stateDb.raw.prepare(`INSERT INTO token_miser_objects(object_id, thread_id, created_at, payload)
+      VALUES (?, ?, ?, ?) ON CONFLICT(object_id) DO UPDATE SET payload = excluded.payload`);
+    const persist = (entry: TokenMiserObjectMetadata) => write.run(entry.objectId, THREAD_ID, entry.createdAt, JSON.stringify(entry));
+    for (const entry of entries) persist(entry);
+    for (let i = 0; i < 8; i++) {
+      const line = parentLine({ id: String(i), turnId: "turn-" + i, model: PARENT_MODELS[0] });
+      // A helper thread can itself dispatch helpers. Two billing identities
+      // then tie on provider and currency; the newest raw line breaks the tie.
+      await store.upsertThreadUsageLine({ line: { ...line, parentThreadId: "outer-thread",
+        priceStatus: "priced", createdAt: line.createdAt + i * 100 } });
+    }
+    await internals.persistTokenMiserLedgerEntries(entries);
+    await internals.publishLiveTokenMiserReplayEntries(entries);
+
+    const folds = vi.spyOn(pricingDisplay.PricingRunningTotals.prototype, "add");
+    const grouped = vi.spyOn(pricingDisplay, "isTokenMiserGateLine");
+    const read = async (peer: boolean, display: ThreadDisplayRead = request.display) =>
+      (await (peer ? readThreadForPeer(registry, { ...request, display }) : registry.readThread({ ...request, display }))).display!;
+    const oracle = async (display: ThreadDisplayRead) => {
+      const full = vi.spyOn(store, "readThreadPricingPage").mockResolvedValue(undefined);
+      const fresh = new SqliteOverlayStore(stateDb);
+      const ledger = vi.spyOn(store, "readThreadPricing").mockImplementation((params) => fresh.readThreadPricing(params));
+      try { return (await read(false, display)).pricingPage; } finally { ledger.mockRestore(); full.mockRestore(); }
+    };
+    const check = async (peer: boolean, rows: number, groupVisits: number, folded: number, objects = 0) => {
+      rowsRead.reset();
+      metadataRead.reset();
+      folds.mockClear();
+      grouped.mockClear();
+      const result = await read(peer);
+      expect([rowsRead.count(), grouped.mock.calls.length, folds.mock.calls.length, metadataRead.count()])
+        .toEqual([rows, groupVisits, folded, objects]);
+      expect(result.pricingPage).toEqual(await oracle(request.display));
+      return result;
+    };
+    await read(false);
+    const turnId = "later";
+    vi.spyOn(Date, "now").mockReturnValue(entries[0]!.createdAt + 10000);
+    await registry.publishLocalEvent({ ...thread, notification: { method: "turn/started",
+      params: { threadId: THREAD_ID, turnId, turn: { id: turnId, status: "inProgress" } } } });
+    const tokens = { inputTokens: 1000, cachedInputTokens: 100, outputTokens: 20, totalTokens: 1020 };
+    await registry.publishLocalEvent({ ...thread, notification: { method: "thread/tokenUsage/updated",
+      params: { threadId: THREAD_ID, turnId, model: PARENT_MODELS[0], tokenUsage: { last: tokens, total: tokens } } } });
+    await registry.publishLocalEvent({ ...thread, notification: { method: "turn/completed",
+      params: { threadId: THREAD_ID, turnId, turn: { id: turnId, status: "completed", output: [] } } } });
+    const first = await check(false, 1, 1, 1);
+    await check(true, 0, 0, 0);
+    await internals.publishLiveTokenMiserReplayEntries(entries);
+    expect((await check(true, 0, 0, 0)).nextCursor).toBe(first.nextCursor);
+    await read(true, { ...request.display, cursor: first.nextCursor });
+
+    const all = { ...request.display, limit: 50, deferPricingGates: false };
+    const expanded = (await read(true, all)).pricingPage!;
+    expect(expanded).toEqual(await oracle(all));
+    const parent = expanded.rows.find((row) => row.line.turnId === "turn-0")!;
+    expect(parent.gates).toHaveLength(2);
+    expect(expanded.rows.some((row) => row.orphan)).toBe(true);
+    for (const filter of ["primary", "small"] as const) {
+      const selection = { ...request.display, pricingGateGroup: { usageLineId: parent.line.usageLineId, filter } };
+      const selected = (await read(true, selection)).pricingPage!;
+      expect(selected).toEqual(await oracle(selection));
+      expect(selected.totalRows).toBe(1);
+    }
+
+    const reassigned = { ...entries[0]!, turnId };
+    persist(reassigned);
+    await internals.publishLiveTokenMiserReplayEntries([reassigned]);
+    await check(false, 1, 2, 0, 1);
+    await expect(read(true, { ...request.display, cursor: first.nextCursor })).rejects.toThrow("Thread display history changed");
+
+    // The stored helper price still owns the savings equation while the live
+    // replacement owns the displayed spend and every newer row's running total.
+    const live = internals.liveTokenMiserUsageLines.get(THREAD_ID)!;
+    const original = [...live.values()][0]!;
+    live.set(original.usageLineId, { ...original, totalCostMicros: original.totalCostMicros + 10001, outputTokens: original.outputTokens + 100 });
+    await check(true, 1, 2, 0);
+    expect((await read(false, all)).pricingPage).toEqual(await oracle(all));
+  });
+
+  it.each([false, true])("refolds only the gate and its completing parent (parent already displayed: %s)", async (pending) => {
+    const thread = { backend: "codex", threadId: THREAD_ID } as const;
+    const request = { ...thread, includeTurns: false, viewOnly: true, display: { resource: "pricing", limit: 4 } } as const;
+    const parent = (i: number) => ({
+      ...parentLine({ id: String(i), turnId: "turn-" + i, model: PARENT_MODELS[0] }),
+      priceStatus: "priced" as const, createdAt: 1_800_000_000_000 + i * 100,
+    });
+    const active = parent(24);
+    await store.upsertThreadUsageLines({ lines: Array.from({ length: pending ? 25 : 24 }, (_, i) => parent(i)) });
+    await registry.readThread(request);
+    const entry = { ...buildWorkload(1).entries[0]!, turnId: active.turnId!, createdAt: active.createdAt + 10 };
+    await internals.publishLiveTokenMiserReplayEntries([entry]);
+    await readThreadForPeer(registry, request);
+    // The gate can be repriced in place before the parent settles.
+    const live = internals.liveTokenMiserUsageLines.get(THREAD_ID)!;
+    const gate = [...live.values()][0]!;
+    live.set(gate.usageLineId, { ...gate, totalCostMicros: gate.totalCostMicros + 100, outputTokens: gate.outputTokens + 100 });
+    const correction = vi.spyOn(pricingDisplay.PricingRunningTotals.prototype, "add");
+    await registry.readThread(request);
+    expect(correction).not.toHaveBeenCalled();
+    correction.mockRestore();
+    await store.upsertThreadUsageLine({ line: { ...active, completedAt: active.createdAt + 100, outputTokens: 250 } });
+    const folds = vi.spyOn(pricingDisplay.PricingRunningTotals.prototype, "add");
+    const warm = (await readThreadForPeer(registry, request)).display!.pricingPage;
+    expect(folds).toHaveBeenCalledTimes(2);
+    vi.spyOn(store, "readThreadPricingPage").mockResolvedValue(undefined);
+    expect(warm).toEqual((await registry.readThread(request)).display!.pricingPage);
+  });
+
+  it("keeps a cursor issued after retiring a stored policy card across eviction", async () => {
+    const thread = { backend: "codex", threadId: THREAD_ID } as const;
+    const request = { ...thread, includeTurns: false, viewOnly: true, display: { resource: "pricing", limit: 1 } } as const;
+    const entry = buildWorkload(1).entries[2]!;
+    for (const id of ["first", "second"]) {
+      await store.upsertThreadUsageLine({ line: parentLine({ id, turnId: id, model: PARENT_MODELS[0] }) });
+    }
+    await internals.publishLiveTokenMiserReplayEntries([entry]);
+    await registry.readThread(request);
+    await internals.persistTokenMiserLedgerEntries([entry]);
+    internals.liveTokenMiserSubAgents.delete(THREAD_ID);
+    const cursor = (await registry.readThread(request)).display!.nextCursor;
+    expect(cursor).toBeTruthy();
+    const next = { ...request, display: { ...request.display, cursor } };
+    const expected = (await registry.readThread(next)).display;
+    for (let i = 0; i < 8; i++) await store.readThreadPricingPage({ ...thread, threadId: "other-" + i, offset: 0, limit: 1 });
+    expect((await readThreadForPeer(registry, next)).display).toEqual(expected);
+  });
+
+  it("reconciles observation membership with point reads after the initial baseline", () => {
+    const db = tokenMiserStore.stateDb.raw;
+    let scans = 0;
+    const prepare = db.prepare.bind(db);
+    vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      const stmt = prepare(sql);
+      if (/^SELECT.*FROM token_miser_observations/i.test(sql.trim()) && !/observation_id\s*=/.test(sql)) {
+        for (const method of ["get", "all"] as const) {
+          const read = stmt[method].bind(stmt);
+          Object.assign(stmt, { [method]: (...args: unknown[]) => { scans++; return read(...args); } });
+        }
+      }
+      return stmt;
+    });
+    const insert = db.prepare("INSERT INTO token_miser_observations(observation_id, thread_id, created_at, payload) VALUES (?, ?, 10, '{}')");
+    const watch = tokenMiserStore.watchPricingMetadata(THREAD_ID, () => {})!;
+    try {
+      watch.dataVersion();
+      insert.run("a", THREAD_ID);
+      expect(watch.observationCount()).toBe(1);
+      scans = 0;
+      insert.run("b", THREAD_ID);
+      expect(watch.observationCount()).toBe(2);
+      db.prepare("UPDATE token_miser_observations SET created_at = 20 WHERE observation_id = 'b'").run();
+      expect(watch.observationCount()).toBe(2);
+      db.exec("BEGIN");
+      insert.run("rolled-back", THREAD_ID);
+      db.exec("ROLLBACK");
+      db.prepare("UPDATE token_miser_observations SET thread_id = 'elsewhere' WHERE observation_id = 'a'").run();
+      expect(watch.observationCount()).toBe(1);
+      db.prepare("DELETE FROM token_miser_observations WHERE observation_id = 'b'").run();
+      expect(watch.observationCount()).toBe(0);
+      // REPLACE reports an implicit delete even with SQLite recursive triggers off.
+      const replace = db.prepare("INSERT OR REPLACE INTO token_miser_observations(observation_id, thread_id, created_at, payload) VALUES ('a', ?, 30, '{}')");
+      replace.run(THREAD_ID);
+      expect(watch.observationCount()).toBe(1);
+      replace.run("elsewhere");
+      expect(watch.observationCount()).toBe(0);
+      expect(scans).toBe(0);
+    } finally { watch.close(); }
+  });
+
+  it("updates legacy replay decisions and focused helper charges on the open page", async () => {
+    const thread = { backend: "codex", threadId: THREAD_ID } as const;
+    const work = buildWorkload(1);
+    const entry = { ...work.entries[1]!, replayTrackingVersion: undefined, parentModel: PARENT_MODELS[0] };
+    tokenMiserStore.stateDb.raw.prepare("INSERT INTO token_miser_objects(object_id, thread_id, created_at, payload) VALUES (?, ?, ?, ?)")
+      .run(entry.objectId, THREAD_ID, entry.createdAt, JSON.stringify(entry));
+    await internals.persistTokenMiserLedgerEntries([entry]);
+    const line = gateLine({ monitorId: "system:token-miser-focused:request", index: 10, inputTokens: 500 });
+    await store.upsertThreadUsageLine({ line });
+    const request = { ...thread, includeTurns: false, viewOnly: true, display: { resource: "pricing" } } as const;
+    const check = async () => {
+      const page = (await readThreadForPeer(registry, request)).display!.pricingPage!;
+      const full = vi.spyOn(store, "readThreadPricingPage").mockResolvedValue(undefined);
+      try { expect(page).toEqual((await registry.readThread(request)).display!.pricingPage); } finally { full.mockRestore(); }
+      return page.tokenMiserSummary!;
+    };
+    const initial = await check();
+    for (const call of work.invocations.filter((row) => row.turnId === entry.turnId)) {
+      await store.upsertThreadToolInvocation({ invocation: call });
+    }
+    const replayed = await check();
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET total_cost_micros = total_cost_micros + 1234 WHERE usage_line_id = ?").run(line.usageLineId);
+    expect((await check()).terms!.gateCostMicros).toBe(replayed.terms!.gateCostMicros + 1234);
+    expect(initial.decisionCount).toBe(1);
   });
 
   async function readSavings(
@@ -251,6 +481,32 @@ describe("Token Miser savings scaling", () => {
     `);
   });
 
+  it("keeps the first priced parent by either turn id as live rows move or acquire a model", () => {
+    const first = parentLine({ id: "first", turnId: "active" });
+    const second = parentLine({ id: "second", turnId: "alias", usageTurnId: "active", model: PARENT_MODELS[1] });
+    const live = new LivePricingLines([[first.usageLineId, first], [second.usageLineId, second]]);
+    const check = () => {
+      for (const thread of [THREAD_ID, "other"]) {
+        for (const turn of ["active", "alias"]) {
+          const expected = [...live.values()].find((line) => line.threadId === thread && line.scope !== "monitor" && line.model
+            && (line.turnId === turn || line.usageTurnId === turn));
+          expect(live.forParent(thread, turn)).toBe(expected);
+        }
+      }
+    };
+    check();
+    live.set(first.usageLineId, { ...first, model: PARENT_MODELS[0] });
+    check();
+    live.set(second.usageLineId, { ...second, threadId: "other" });
+    check();
+    live.delete(first.usageLineId);
+    check();
+    live.set(first.usageLineId, { ...first, threadId: "other", model: PARENT_MODELS[0] });
+    check();
+    live.clear();
+    check();
+  });
+
   it("keeps persisted and live gate artifacts identical", async () => {
     const work = buildWorkload(1);
     vi.spyOn(store, "readThreadPricing").mockResolvedValue({
@@ -265,7 +521,7 @@ describe("Token Miser savings scaling", () => {
 
     internals.liveTokenMiserUsageLines.set(
       THREAD_ID,
-      new Map([...work.persistedLines, ...work.liveLines].map((line) => [line.usageLineId, line])),
+      new LivePricingLines([...work.persistedLines, ...work.liveLines].map((line) => [line.usageLineId, line])),
     );
     await internals.publishLiveTokenMiserReplayEntries(work.entries);
     expect(
@@ -360,7 +616,7 @@ describe("Token Miser savings scaling", () => {
       const persistReads = { ...counter.reads };
       internals.liveTokenMiserUsageLines.set(
         THREAD_ID,
-        new Map(counter.wrap("pricing", [...work.persistedLines, ...work.liveLines])
+        new LivePricingLines(counter.wrap("pricing", [...work.persistedLines, ...work.liveLines])
           .map((line) => [line.usageLineId, line])),
       );
       counter.reads.pricing = 0;

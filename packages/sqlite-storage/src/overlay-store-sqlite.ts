@@ -44,7 +44,11 @@ import { prepareSqliteRead } from "./sqlite-prepared-read";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteChangedThreadKeys, sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { forgetThreadSpend, projectedThreadSpend, type SpendGateLines } from "./thread-spend-projection";
+import { PricingPageCards, PricingPageLiveRows, PricingPagePrices, type PricingPageAccounting, type PricingPageOverlay } from "./pricing-page-overlay";
+import type { PricingGateSelection } from "@pwragent/shared/thread-pricing-display";
+import { addTokenMiserGateAccountingTotals } from "@pwragent/shared/token-miser-savings-summary";
 import { PricingPageMarkers, ThreadPricingPageIndex } from "./thread-pricing-page";
+import { watchPricingRows } from "./sqlite-pricing-row-changes";
 import { sqliteUsageLedgerVersions, watchPricingPage } from "./sqlite-usage-ledger-change-version";
 import {
   PROJECT_CHECKOUT_GROUPS_META_KEY,
@@ -218,9 +222,19 @@ import type {
 const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
 // The focused thread, its context panel, and a few threads open in other
 // windows. A long thread's ledger holds a few MB.
+export type { PricingAccountingReader } from "./pricing-page-overlay";
+
 type OpenPricingPage = {
+  prices?: PricingPagePrices;
+  accounting?: PricingPageAccounting;
+  accountingOwner?: object;
   index?: ThreadPricingPageIndex;
-  monitorId?: string;
+  cards: PricingPageCards;
+  dirtyCards: Set<string>;
+  liveLines: PricingPageLiveRows<ThreadUsageLineRecord>;
+  liveCards: PricingPageLiveRows<ThreadSubAgentSummary>;
+  localIds: Set<string>;
+  decorationKey?: string;
   version: number;
   markers?: PricingPageMarkers;
   dirtyMarkers: Set<string>;
@@ -3631,10 +3645,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return pricing;
   }
 
-  /** Page a chronological turn ledger. Gate grouping and live provider overlays
-   * use the full display projection. Caller-owned transactions never seed this cache. */
+  /** An open ledger projects committed rows and owner-local substitutions under one SQLite snapshot. */
   async readThreadPricingPage(params: {
     backend: AppServerBackendKind; threadId: string; offset: number; limit: number;
+    gateSelection?: PricingGateSelection; deferGates?: boolean; overlay?: PricingPageOverlay;
   }) {
     const db = this.stateDb.raw;
     if (db.inTransaction) return undefined;
@@ -3645,9 +3659,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       await this.repriceThreadUsageHistory(params);
       entry = this.openPricingPages.get(key);
     }
+    const storageKey = this.subAgentStorageKey(params);
+    // Legacy totals may need a write, which cannot upgrade a stale WAL read snapshot.
+    this.subAgentTable.initializeGateTotals(storageKey);
     if (!entry) {
-      const page: OpenPricingPage = { version: -1, dirtyMarkers: new Set(), dirty: new Set(), stop: () => {} };
-      page.stop = watchPricingPage(db, backend, threadId, (table, id) => {
+      const page: OpenPricingPage = {
+        version: -1, cards: new PricingPageCards(), dirtyCards: new Set(), localIds: new Set(),
+        liveLines: new PricingPageLiveRows(), liveCards: new PricingPageLiveRows(),
+        dirtyMarkers: new Set(), dirty: new Set(), stop: () => {},
+      };
+      const stopCards = watchPricingRows(db, "thread_sub_agents", storageKey, (id) => {
+        if (!page.cards.needs(id)) page.dirtyCards.add(id);
+      });
+      const stopLedger = watchPricingPage(db, backend, threadId, (table, id) => {
         // A TEMP trigger also fires for rolled-back writes. Read the final values
         // under a committed snapshot before applying any of these hints.
         if (table === "thread_compactions") {
@@ -3658,7 +3682,6 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           }
           return;
         }
-        if (table === "thread_usage_lines" && id === page.monitorId) page.monitorId = undefined;
         if (!page.index || !id) return;
         if (table === "thread_usage_lines") page.dirty.add(id);
         if (table === "thread_usage_turns") {
@@ -3669,6 +3692,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           page.dirty.clear();
         }
       });
+      page.stop = () => { stopCards(); stopLedger(); page.liveLines.close(); page.liveCards.close(); page.accounting?.close(); };
       entry = page;
     }
     const page = entry;
@@ -3680,38 +3704,113 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       this.openPricingPages.delete(id);
     }
     try {
+      if (page.accountingOwner !== params.overlay?.accountingOwner) {
+        page.accounting?.close();
+        page.accountingOwner = params.overlay?.accountingOwner;
+        try {
+          page.accounting = params.overlay?.openAccounting?.();
+        } catch (error) {
+          params.overlay?.accountingFailed?.(error);
+          page.accounting = undefined;
+          page.accountingOwner = undefined;
+        }
+        page.index = undefined;
+      }
       return db.transaction(() => {
         const version = db.pragma("data_version", { simple: true }) as number;
-        if (version !== page.version) {
+        const overlay = params.overlay;
+        page.liveLines.sync(overlay?.lines, page.dirty);
+        page.liveCards.sync(overlay?.cards, page.dirtyCards);
+        if (version !== page.version || page.decorationKey !== overlay?.decorationKey) {
           page.index = undefined;
-          page.monitorId = undefined;
           page.markers = undefined;
           page.dirtyMarkers.clear();
           page.version = version;
+          page.decorationKey = overlay?.decorationKey;
         }
-        if (page.monitorId) return undefined;
-        if (page.index && !page.index.rewindChanged(page.dirty)) page.index = undefined;
-        if (page.index && page.dirty.size) {
-          const changed: ThreadUsageLineRecord[] = [];
+        const decorate = (line: ThreadUsageLineRecord) => {
+          if (overlay?.isLocal(line)) page.localIds.add(line.usageLineId);
+          return overlay?.decorate(line) ?? line;
+        };
+        const readCards = (ids: string[]) => this.subAgentTable.getMany(storageKey, ids);
+        const needCards = (lines: Iterable<ThreadUsageLineRecord>) => {
+          for (const line of lines) {
+            if (line.scope === "monitor" && line.sourceItemId && page.cards.needs(line.sourceItemId)) page.dirtyCards.add(line.sourceItemId);
+          }
+        };
+        if (page.index) {
+          const readChanged = (ids: Iterable<string>) => {
+            const rows: ThreadUsageLineRecord[] = [];
+            const live = new Map<string, ThreadUsageLineRecord>();
+            const missing = new Set<string>();
+            for (const id of ids) {
+              page.localIds.delete(id);
+              const replacement = overlay?.lines?.get(id);
+              if (replacement) live.set(id, replacement);
+              const line = this.readThreadUsageLineSync(id);
+              if (line && line.status !== "superseded" && line.backend === backend
+                && (line.threadId === threadId || line.parentThreadId === threadId)) rows.push(line);
+              else missing.add(id);
+            }
+            this.attachUsageTurnMetadataSync(backend, threadId, rows);
+            if (page.accounting && page.prices) {
+              for (const line of rows) page.prices.replace(line.usageLineId, line, page.accounting);
+              for (const id of missing) page.prices.replace(id, undefined, page.accounting);
+            }
+            return [...rows.filter((line) => !live.has(line.usageLineId)), ...live.values()].map(decorate);
+          };
+          const retiredMonitors = new Set<string>();
+          const changed = new Map(readChanged(page.dirty).map((line) => [line.usageLineId, line]));
           for (const id of page.dirty) {
-            const line = this.readThreadUsageLineSync(id);
-            if (line && line.status !== "superseded" && line.backend === backend
-              && (line.threadId === threadId || line.parentThreadId === threadId)) changed.push(line);
+            if (page.index.sameLine(id, changed.get(id))) {
+              page.dirty.delete(id);
+              changed.delete(id);
+            } else {
+              const old = page.index.get(id);
+              const next = changed.get(id);
+              if (old?.scope === "monitor" && old.sourceItemId && (next?.scope !== "monitor" || old.sourceItemId !== next.sourceItemId)) retiredMonitors.add(old.sourceItemId);
+              // Stored prices win in the savings equation. Only a live-only
+              // gate can change that equation independently of the stored index.
+              for (const line of [old, next]) {
+                if (line?.scope === "monitor" && line.sourceItemId && !page.prices?.gate(line.sourceItemId)) page.accounting?.changed(line);
+              }
+              if (page.index.replaceMonitor(id, next)) {
+                page.dirty.delete(id);
+                changed.delete(id);
+              }
+            }
           }
-          this.attachUsageTurnMetadataSync(backend, threadId, changed);
-          if (!page.index.append(changed)) page.index = undefined;
+          if (!page.index.rewindChanged(page.dirty, changed)) page.index = undefined;
+          if (page.index) {
+            needCards(changed.values());
+            if (!page.cards.update(page.dirtyCards, readCards, overlay?.cards, page.index)
+              || !page.index.append([...changed.values()])) page.index = undefined;
+            if (page.index) {
+              for (const id of retiredMonitors) page.dirtyCards.add(id);
+              page.cards.forgetUnused(page.dirtyCards, page.index, overlay?.cards);
+            }
+          }
         }
-        page.dirty.clear();
         if (!page.index) {
+          page.cards = new PricingPageCards();
+          page.dirtyCards.clear();
+          page.localIds.clear();
           const baseline = this.readStoredThreadPricing(params, true);
-          const monitor = baseline.lines.find((line) => line.scope === "monitor");
-          if (monitor) {
-            page.monitorId = monitor.usageLineId;
-            return undefined;
+          if (page.accounting) {
+            page.accounting.reset();
+            page.prices = new PricingPagePrices(threadId);
+            for (const line of baseline.lines) page.prices.replace(line.usageLineId, line, page.accounting);
           }
-          page.index = ThreadPricingPageIndex.fromHistory(baseline.lines);
+          const lines = new Map(baseline.lines.map((line) => [line.usageLineId, line]));
+          for (const [id, line] of overlay?.lines ?? []) lines.set(id, line);
+          needCards(lines.values());
+          for (const id of overlay?.cards?.keys() ?? []) page.dirtyCards.add(id);
+          page.cards.update(page.dirtyCards, readCards, overlay?.cards);
+          page.index = ThreadPricingPageIndex.fromHistory(Array.from(lines.values(), decorate), page.cards.effective);
           if (!page.index) return undefined;
         }
+        page.dirty.clear();
+        page.dirtyCards.clear();
         type MarkerRow = ThreadCompactionRow & { rowid: number };
         if (!page.markers) {
           page.markers = new PricingPageMarkers();
@@ -3726,10 +3825,30 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           }
         }
         page.dirtyMarkers.clear();
-        return page.index.page({
-          ...params, markerRevision: page.markers.revision(), summaries: this.readStoredPricingSummaries(params),
+        const history = page.index.page({
+          ...params, merged: Boolean(overlay?.lines?.size || page.localIds.size),
+          markerRevision: page.markers.revision() + page.cards.revision(), summaries: this.readStoredPricingSummaries(params),
           markers: (lineIds, turns) => page.markers!.read(lineIds, turns),
         });
+        const tokenMiserGateTotals = addTokenMiserGateAccountingTotals(this.subAgentTable.gateTotals(storageKey), page.cards.adjustment);
+        if (page.accounting && page.prices) {
+          const prices = page.prices;
+          try {
+            page.accounting.project(history, tokenMiserGateTotals, {
+              gate: (id) => prices.gate(id) ?? overlay?.liveGate?.(id), parent: prices.parent, focusedCost: prices.focusedCost,
+              invocations: () => (prepareSqliteRead(db, `SELECT * FROM thread_tool_invocations WHERE backend = ? AND thread_id = ?
+                ORDER BY observed_at DESC, invocation_id DESC LIMIT 200`).all(backend, threadId) as ThreadToolInvocationRow[]).map(threadToolInvocationFromRow),
+            }, params.deferGates);
+          } catch (error) {
+            // Retry optional accounting through the ordinary reader, which can
+            // still serve ledger prices if the metadata store is unavailable.
+            overlay?.accountingFailed?.(error);
+            page.stop();
+            this.openPricingPages.delete(key);
+            return undefined;
+          }
+        }
+        return { ...history, tokenMiserGateTotals };
       })();
     } catch (error) {
       page.stop();
@@ -5138,7 +5257,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: ThreadOverlayState["backend"];
     threadId: string;
   }): Promise<TokenMiserGateAccountingTotals> {
-    return this.subAgentTable.gateTotals(this.subAgentStorageKey(params));
+    const key = this.subAgentStorageKey(params);
+    this.subAgentTable.initializeGateTotals(key);
+    return this.subAgentTable.gateTotals(key);
   }
 
   /** Cards whose `monitorId` starts with `monitorIdPrefix`, keyed by thread id. */

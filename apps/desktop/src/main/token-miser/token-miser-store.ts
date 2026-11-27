@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { mapTokenMiserFiles, withTokenMiserFileOperation } from "./token-miser-file-io";
 import { TokenMiserOutputCache } from "./token-miser-output-cache";
-import type { TokenMiserObjectRecord, TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
+import type { OrderedTokenMiserMetadata, TokenMiserObjectRecord, TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
 import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   estimateTokenCount,
@@ -851,6 +851,33 @@ export class TokenMiserStore {
     this.outputs.remove(deliveryId);
   }
 
+  private readonly pricingListeners = new Map<string, Set<(id: string) => void>>();
+
+  watchPricingMetadata(threadId: string, changed: (id: string) => void) {
+    const watcher = this.storage.watchPricingMetadata?.(threadId, changed);
+    if (!watcher) return undefined;
+    const listeners = this.pricingListeners.get(threadId) ?? new Set();
+    this.pricingListeners.set(threadId, listeners);
+    listeners.add(changed);
+    const current = (row: OrderedTokenMiserMetadata<TokenMiserObjectMetadata>) => ({
+      ...row, entry: mergeReplayUpdate(row.entry, this.replayUpdates.get(row.entry.objectId)),
+    });
+    return {
+      dataVersion: () => watcher.dataVersion(),
+      observationCount: () => watcher.observationCount(),
+      all: () => watcher.all().map(current),
+      get: (id: string) => {
+        const row = watcher.get(id);
+        return row && current(row);
+      },
+      close: () => {
+        watcher.close();
+        listeners.delete(changed);
+        if (!listeners.size) this.pricingListeners.delete(threadId);
+      },
+    };
+  }
+
   async listMetadata(threadId?: string): Promise<TokenMiserObjectMetadata[]> {
     return this.storage.listMetadata(threadId).map((entry) =>
       mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
@@ -1440,6 +1467,7 @@ export class TokenMiserStore {
       else this.storage.runExclusive(apply);
       if (updated) {
         if (reason !== "replay") this.replayUpdates.delete(objectId);
+        for (const notify of this.pricingListeners.get(updated.threadId) ?? []) notify(objectId);
         await this.options.onMetadataUpdated?.(updated, reason);
       }
     });
