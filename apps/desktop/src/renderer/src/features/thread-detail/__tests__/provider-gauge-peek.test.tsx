@@ -173,11 +173,11 @@ describe("AI provider gauge peek", () => {
   it("hands the hover reveal back when the pointer moves on up the spine", async () => {
     renderPanel();
     await openPeek();
-    const other = screen.getByRole("tab", { name: /Thread info/ });
+    const other = screen.getByRole("tab", { name: /^Details/ });
     move(gauge(), other, { clientX: 1176, clientY: 40 });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(HOVER_RAIL_REVEAL_DELAY_MS + 1);
     });
-    expect(screen.getByRole("tabpanel")).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel", { name: /^Details/ })).toBeInTheDocument();
   });
 });
