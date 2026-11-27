@@ -378,7 +378,7 @@ describe("WaitingForPanel", () => {
     const showTab = vi.fn();
     render(<WaitingForPanel thread={thread} controller={controller(ready())} now={NOW} onShowTab={showTab} />);
     fireEvent.click(screen.getByRole("button", { name: "pnpm test:desktop-e2e --shard 2/4" }));
-    fireEvent.click(screen.getByRole("button", { name: "Show in Actions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show in Jobs" }));
     expect(showTab).toHaveBeenCalledWith("actions");
   });
 

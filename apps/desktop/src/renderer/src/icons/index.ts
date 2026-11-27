@@ -51,6 +51,7 @@ export { MattermostIcon } from "./MattermostIcon";
 export { MicIcon } from "./MicIcon";
 export { MicOffIcon } from "./MicOffIcon";
 export { MinimizeIcon } from "./MinimizeIcon";
+export { MoreHorizontalIcon } from "./MoreHorizontalIcon";
 export { MoreVerticalIcon } from "./MoreVerticalIcon";
 export { LineIcon } from "./LineIcon";
 export { NewThreadIcon } from "./NewThreadIcon";

@@ -31,24 +31,20 @@ import { isThreadPendingWakeLive } from "@pwragent/shared/contracts/thread-pendi
 import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
-  ActivityIcon,
-  AutomationsIcon,
   DecisionsIcon,
-  EditsIcon,
   GaugeIcon,
   InfoIcon,
   HourglassIcon,
   PauseIcon,
   PlugIcon,
   PricingIcon,
-  ProjectsIcon,
-  PullRequestIcon,
-  SubAgentsIcon,
   ResearchIcon,
-  TerminalIcon,
   TodoIcon,
   type IconProps,
 } from "../../icons";
+import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared/token-usage-pricing";
+import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import {
@@ -69,7 +65,6 @@ import type {
   ThreadTodosView,
 } from "../thread-todos/thread-todos-view";
 import { PrActivityPanel } from "./context-panels/PrActivityPanel";
-import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
 import { SubAgentsPanel } from "./context-panels/SubAgentsPanel";
 import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
@@ -77,7 +72,6 @@ import { useThreadPrWatches } from "../pr-watches/useThreadPrWatchIndicators";
 import { readFollowUpsSuspended, useThreadPendingWakes } from "../thread-pending-wakes/useThreadPendingWakes";
 import { useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
 import { WaitingForPanel } from "./context-panels/WaitingForPanel";
-import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
 import { DecisionsPanel, type DecisionSetupSettings } from "./context-panels/DecisionsPanel";
@@ -85,11 +79,22 @@ import { useDecisionsRail } from "./context-panels/useDecisionsRail";
 import { ActionRunsPanel } from "./context-panels/ActionRunsPanel";
 import { ConnectionsPanel } from "./context-panels/ConnectionsPanel";
 import { buildRailTooltipText } from "./context-panels/context-rail-shared";
-import type {
-  ContextTabId,
-  ActionRunsDock,
-  EditedFilesDock,
+import {
+  contextTabIdForDetailsSegment,
+  resolveContextTabTarget,
+  type ContextTabId,
+  type ContextRailTabId,
+  type ActionRunsDock,
+  type DetailsSegmentId,
+  type EditedFilesDock,
 } from "./context-panels/context-tab";
+import { DetailsPanel } from "./context-panels/DetailsPanel";
+import { DetailsThreadView, type DetailsThreadControls } from "./context-panels/DetailsThreadView";
+import {
+  countChangedFiles,
+  summarizeDetailsJobs,
+  type DetailsJobsSectionId,
+} from "./context-panels/details-model";
 import type { EditedFileGroup } from "./edited-file-groups";
 
 const HOVER_RAIL_POINTER_POLL_MS = 500;
@@ -98,8 +103,11 @@ const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
 const noop = (): void => {};
 
+/** The PRs segment's activity filter value for every PR of the thread. */
+const ALL_PULL_REQUESTS = "all";
+
 type ContextTab = {
-  id: ContextTabId;
+  id: ContextRailTabId;
   label: string;
   /** What the panel holds, after the name in the tab's tooltip. The rail is
    *  icon-only, so this line is the only place the tab explains itself. */
@@ -111,19 +119,12 @@ type ContextTab = {
 
 const CONTEXT_TABS: ContextTab[] = [
   { id: "connections", label: "Connections", hint: "PwrGit, PwrSnap, and Sandboxer", Icon: PlugIcon },
-  { id: "info", label: "Thread info", hint: "status, IDs, and where it runs", Icon: InfoIcon },
+  { id: "details", label: "Details", hint: "where it runs, its changes, PRs, and jobs", Icon: InfoIcon },
   { id: "todos", label: "To-dos", hint: "cards raised for this thread", Icon: TodoIcon },
   { id: "research", label: "Research", hint: "this thread's research runs", Icon: ResearchIcon },
   { id: "waiting", label: "Waiting for", hint: "wakes, watches, and follow-ups", Icon: HourglassIcon },
-  { id: "edits", label: "Edits", hint: "files this thread changed", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", hint: "token usage and cost", Icon: PricingIcon },
   { id: "decisions", label: "Decisions", hint: "typed questions agents run in bulk", Icon: DecisionsIcon },
-  { id: "actions", label: "Actions", hint: "agent commands running in the background", Icon: TerminalIcon },
-  { id: "subagents", label: "Sub-agents", hint: "agents this thread spawned", Icon: SubAgentsIcon },
-  { id: "automations", label: "Automations", hint: "scheduled runs for this thread", Icon: AutomationsIcon },
-  { id: "pr-activity", label: "PR activity", hint: "what Auto-fix did on this thread's PRs", Icon: ActivityIcon },
-  { id: "prs", label: "Pull requests", hint: "attached PRs and their watches", Icon: PullRequestIcon },
-  { id: "projects", label: "Linked projects", hint: "directories this thread works in", Icon: ProjectsIcon },
   {
     id: "providers",
     label: "AI provider info",
@@ -221,8 +222,14 @@ type ThreadContextPanelProps = {
     snapshotRef: string,
     worktreePath: string
   ) => Promise<void>;
+  /**
+   * The stored tab, in the old tab vocabulary: the eight tabs Details took
+   * in name its segments (`resolveContextTabTarget`).
+   */
   activeTab: ContextTabId;
   onActiveTabChange: (tab: ContextTabId) => void;
+  /** What the Details › Thread view needs from the thread's window. */
+  detailsControls?: DetailsThreadControls;
   /** Accumulated edited-file groups for the Edits tab (newest first). */
   editedFileGroups?: EditedFileGroup[];
   editedFileCommitStates?: Record<string, EditGroupCommitState>;
@@ -272,6 +279,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     [props.editedFileGroups],
   );
   const actionRuns = useMemo(() => props.actionRuns ?? [], [props.actionRuns]);
+  // The rail renders on every streamed delta; the edit groups keep their
+  // identity until an edit lands, so the Changes count is walked only then.
+  const changedFiles = useMemo(() => countChangedFiles(editedFileGroups), [editedFileGroups]);
   // The Pull requests tab counts what wakes this thread: this instance's own
   // list for a local thread, the owner's projection for a peer's, plus the
   // merge build watches its card lists from Continue After.
@@ -361,6 +371,43 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       : props.activeTab === "decisions" && !decisionsVisible
         ? "info"
       : props.activeTab;
+  // The eight tabs Details took in name a segment, and some a section in it.
+  const activeTarget = resolveContextTabTarget(activeTab);
+  const activeRailTab = activeTarget.tab;
+  // The segment Details shows when its spine icon is chosen again.
+  const [rememberedSegment, setRememberedSegment] = useState<DetailsSegmentId>(
+    activeTarget.segment ?? "thread",
+  );
+  if (activeTarget.segment && activeTarget.segment !== rememberedSegment) {
+    setRememberedSegment(activeTarget.segment);
+  }
+  const detailsSegment = activeTarget.segment ?? rememberedSegment;
+  // The tab the operator last picked from the spine or the segments. It
+  // opens at the top: Jobs is stored as "actions", which names Commands,
+  // and scrolling there hid the running sub-agents drawn above it. Only a
+  // reveal from elsewhere scrolls to the section its id names.
+  const [pickedTab, setPickedTab] = useState<ContextTabId | undefined>(props.activeTab);
+  const detailsSection = pickedTab === activeTab ? undefined : activeTarget.section;
+  // The PR whose activity the PRs segment shows, chosen per thread.
+  const [activityPr, setActivityPr] = useState<{ thread: string; key: string }>();
+  const pricingSummaries = props.pricing?.summaries ?? [];
+  const threadCost = threadPricingSummaryEnabled
+    && props.pricingDisplayOptions?.usd !== false
+    && pricingSummaries.some((summary) => summary.currency === "USD")
+    ? formatTokenUsageMicrosAsUsd(pricingSummaries
+      .filter((summary) => summary.currency === "USD")
+      .reduce((total, summary) => total + summary.totalCostMicros, 0))
+    : undefined;
+  const detailsOpen = open && activeRailTab === "details";
+  const terminalCount = props.backgroundTerminals?.terminals?.length ?? 0;
+  const subAgents = props.thread?.subAgents;
+  const activeSubAgents = props.thread?.activeSubAgents;
+  const jobsSummary = useMemo(() => summarizeDetailsJobs({
+    terminalCount,
+    runs: actionRuns,
+    subAgents: subAgents ?? [],
+    activeSubAgents,
+  }), [actionRuns, activeSubAgents, subAgents, terminalCount]);
   const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi, { includeEnded: open && activeTab === "waiting" });
   const pendingWakeCount = pendingWakes.state.status === "ready"
     ? pendingWakes.state.wakes.filter(isThreadPendingWakeLive).length
@@ -374,9 +421,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     subAgentLens,
     desktopApi: props.desktopApi,
     thread: props.thread,
-    resource: open && (activeTab === "pricing" || activeTab === "subagents")
-      ? activeTab
-      : undefined,
+    resource: !open
+      ? undefined
+      : activeTab === "pricing"
+        ? "pricing"
+        : detailsOpen && detailsSegment === "jobs"
+          ? "subagents"
+          : undefined,
   });
   const subAgentsPanelThread = useMemo(() => {
     if (!props.thread) {
@@ -644,7 +695,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     revealed,
   ]);
 
-  const selectTab = (tab: ContextTabId): void => {
+  /** Shows a tab by any of its ids, old ones included, and reveals the rail. */
+  const showContextTab = (tab: ContextTabId): void => {
     if (!props.thread) {
       setLaunchpadTab(tab === "connections" ? "connections" : "providers");
     } else {
@@ -653,6 +705,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     if (!pinned) {
       revealRail();
     }
+  };
+  const selectTab = (tab: ContextRailTabId): void => {
+    const id = tab === "details" ? contextTabIdForDetailsSegment(detailsSegment) : tab;
+    setPickedTab(id);
+    showContextTab(id);
+  };
+  const selectDetailsSegment = (segment: DetailsSegmentId): void => {
+    const id = contextTabIdForDetailsSegment(segment);
+    setPickedTab(id);
+    showContextTab(id);
   };
 
   const resizeRail = (nextWidth: number): void => {
@@ -761,10 +823,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               className="context-panel__scroll"
               id="context-rail-panel"
               role="tabpanel"
-              aria-labelledby={`context-rail-tab-${activeTab}`}
+              aria-labelledby={`context-rail-tab-${activeRailTab}`}
             >
               {displayResource.error ? <p className="context-empty" role="alert">{displayResource.error} <button className="button button--ghost" onClick={displayResource.refresh} type="button">Retry</button></p> : null}
-              {displayResource.loading && !displayResource.data ? <p className="context-empty">Loading…</p> : renderActivePanel()}
+              {activeTab === "pricing" && displayResource.loading && !displayResource.data
+                ? <p className="context-empty">Loading…</p>
+                : renderActivePanel()}
             </div>
           </div>
         </div>
@@ -791,20 +855,18 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   );
 
   function renderTab(tab: ContextTab) {
-    const isActive = tab.id === activeTab;
+    const isActive = tab.id === activeRailTab;
     const TabIcon = tab.Icon;
-    const commandCount = tab.id === "actions" ? props.backgroundTerminals?.terminals?.length ?? 0 : 0;
+    const jobsRunning = tab.id === "details" ? jobsSummary.running : 0;
     const todoBadge = tab.id === "todos" && props.todos
       ? readTodoTabBadge(props.todos.view, props.todos.threadKey)
       : undefined;
-    const watchCount = tab.id === "prs" ? prWatchCount : tab.id === "waiting" ? pendingWakeCount : 0;
+    const watchCount = tab.id === "waiting" ? pendingWakeCount : 0;
     const suspended = tab.id === "waiting" && (followUpsSuspended || monitorWakesSuspended);
-    const baseLabel = commandCount
-      ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
-      : watchCount && tab.id === "waiting"
-        ? `${tab.label} · ${watchCount} pending wake${watchCount === 1 ? "" : "s"}`
+    const baseLabel = jobsRunning
+      ? `${tab.label} · ${jobsRunning} job${jobsRunning === 1 ? "" : "s"} running`
       : watchCount
-        ? `${tab.label} · ${watchCount} watch${watchCount === 1 ? "" : "es"} waking this thread`
+        ? `${tab.label} · ${watchCount} pending wake${watchCount === 1 ? "" : "s"}`
         : todoBadge?.unread
         ? `${tab.label} · ${todoBadge.count} unread`
         : todoBadge
@@ -843,7 +905,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         {/* The tooltip is sighted-only; this carries its explanation to
             assistive tech without changing the tab's accessible name. */}
         <span id={`context-rail-tab-${tab.id}-hint`} hidden>{tab.hint}</span>
-        {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
+        {jobsRunning > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
         {todoBadge ? (
           <span
             className={`context-rail__activity context-rail__activity--todos${
@@ -908,7 +970,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   }
 
   function renderActivePanel() {
-    switch (activeTab) {
+    switch (activeRailTab) {
+      case "details":
+        return renderDetails();
       case "connections":
         if (!props.launchpadConnections) return null;
         return (
@@ -916,8 +980,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             {props.launchpadConnections.content}
           </ConnectionsPanel>
         );
-      case "pr-activity":
-        return <PrActivityPanel desktopApi={props.desktopApi} thread={props.thread} />;
       case "research": {
         const ownerTarget = props.thread
           ? resolveThreadOwnerFederationTarget(props.thread, readRendererFederationTarget()?.instanceId)
@@ -933,23 +995,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       }
-      case "info":
-        if (!props.thread) return null;
-        return (
-          <ThreadInfoPanel
-            thread={props.thread}
-            backends={props.backends}
-            platform={props.platform}
-            desktopApi={props.desktopApi}
-            onOpenToolOutputIncidentExplorer={
-              onOpenToolOutputIncidentExplorer ? openIncidentExplorer : undefined
-            }
-            onRefreshNavigation={props.onRefreshNavigation}
-            showTooltip={showRailTooltip}
-            hideTooltip={hideRailTooltip}
-            initialLoadDurationMs={props.initialLoadDurationMs}
-          />
-        );
       case "todos":
         if (!props.thread || !props.todos) return null;
         return (
@@ -965,27 +1010,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onAnswerQuestion={props.todos.onAnswerQuestion}
             sentQuestionAnswers={props.todos.sentQuestionAnswers}
             revealRequest={props.todos.revealRequest}
-          />
-        );
-      case "edits":
-        if (!props.thread) return null;
-        return (
-          <EditsPanel
-            backend={props.thread.source}
-            groups={editedFileGroups}
-            commitStatesByKey={props.editedFileCommitStates}
-            worktreeRoot={editsWorktreeRoot}
-            desktopApi={props.desktopApi}
-            threadId={props.thread.id}
-            workingStateRefreshKey={JSON.stringify({
-              fetchedAt: props.thread.gitWorkingStateFetchedAt,
-              state: props.thread.gitWorkingState ?? null,
-            })}
-            onOpenFile={props.onOpenEditedFile}
-            preferredEditor={props.preferredEditor}
-            onScrollToTurn={props.onScrollToTurn}
-            dock={props.editedFilesDock ?? "above"}
-            onDockChange={props.onEditedFilesDockChange ?? noop}
           />
         );
       case "pricing":
@@ -1027,55 +1051,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             settings={props.decisionSettings}
             onOpenSettings={props.onOpenDecisionSettings}
             onDetailsModalOpenChange={handlePortaledInteractionChange}
-          />
-        );
-      case "actions":
-        if (!props.thread) return null;
-        return (
-          <ActionRunsPanel
-            {...props.backgroundTerminals}
-            dock={props.actionRunsDock ?? "above"}
-            environmentName={props.actionRunsEnvironmentName}
-            onDockChange={changeActionRunsDock}
-            onDismissRun={props.onDismissEnvActionRun}
-            onStopRun={props.onStopEnvActionRun}
-            runs={actionRuns}
-          />
-        );
-      case "subagents":
-        if (!subAgentsPanelThread) return null;
-        return (
-          <SubAgentsPanel
-            lens={displayResource.data?.subAgentLens}
-            lensCounts={displayResource.data?.subAgentCounts}
-            onSelectLens={setSubAgentLens}
-            onLoadMore={displayResource.data?.nextCursor ? displayResource.loadMore : undefined}
-            loading={displayResource.loading}
-            desktopApi={props.desktopApi}
-            onRefreshNavigation={props.onRefreshNavigation}
-            pricingDisplayOptions={props.pricingDisplayOptions}
-            thread={subAgentsPanelThread}
-            onDetailsModalOpenChange={handlePortaledInteractionChange}
-          />
-        );
-      case "automations":
-        if (!props.thread) return null;
-        return (
-          <ThreadAutomationsPanel
-            desktopApi={props.desktopApi}
-            thread={props.thread}
-            onOpenAutomations={props.onOpenAutomations}
-            onRefreshNavigation={props.onRefreshNavigation}
-          />
-        );
-      case "prs":
-        if (!props.thread) return null;
-        return (
-          <PullRequestsPanel
-            desktopApi={props.desktopApi}
-            onRefreshNavigation={props.onRefreshNavigation}
-            onSetThreadPrAutoDispatch={props.onSetThreadPrAutoDispatch}
-            thread={props.thread}
           />
         );
       case "waiting": {
@@ -1122,26 +1097,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               }
             } : undefined}
             onUnlockThread={props.onUnlockThread}
-            onShowTab={selectTab}
+            onShowTab={showContextTab}
             onOpenContinueAfter={openContinueAfter ? () => openContinueAfter(thread) : undefined}
             readResourceCheckouts={readResourceCheckouts}
             onOpenResource={openResources ? (resourceId) => { void openResources({ resourceId }); } : undefined}
           />
         );
       }
-      case "projects":
-        if (!props.thread) return null;
-        return (
-          <LinkedProjectsPanel
-            desktopApi={props.desktopApi}
-            onRefreshNavigation={props.onRefreshNavigation}
-            onRestoreWorktree={props.onRestoreWorktree}
-            thread={props.thread}
-            worktreeArchiveError={props.worktreeArchiveError}
-            showTooltip={showRailTooltip}
-            hideTooltip={hideRailTooltip}
-          />
-        );
       case "providers":
         return (
           <ProviderStatusPanel
@@ -1153,6 +1115,184 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     }
   }
 
+
+  function renderDetails() {
+    const thread = props.thread;
+    if (!thread) return null;
+    const prCount = thread.prs?.length ?? 0;
+    const prDescription = [
+      prCount ? `${prCount} pull request${prCount === 1 ? "" : "s"}` : undefined,
+      prWatchCount ? `${prWatchCount} watch${prWatchCount === 1 ? "" : "es"} waking this thread` : undefined,
+    ].filter(Boolean).join(" · ");
+    return (
+      <DetailsPanel
+        segment={detailsSegment}
+        section={detailsSection}
+        revealKey={activeTab}
+        badges={{
+          changes: {
+            count: changedFiles,
+            description: changedFiles ? `${changedFiles} file${changedFiles === 1 ? "" : "s"} changed` : undefined,
+          },
+          prs: { count: prCount, description: prDescription || undefined },
+          jobs: {
+            count: jobsSummary.running,
+            description: jobsSummary.running ? `${jobsSummary.running} running` : undefined,
+          },
+        }}
+        onSelectSegment={selectDetailsSegment}
+        onShowTooltip={showTooltip}
+        onHideTooltip={hideRailTooltip}
+      >
+        {renderDetailsSegment(thread)}
+      </DetailsPanel>
+    );
+  }
+
+  function renderDetailsSegment(thread: NavigationPresentedThread) {
+    switch (detailsSegment) {
+      case "thread":
+        return (
+          <DetailsThreadView
+            thread={thread}
+            backends={props.backends}
+            desktopApi={props.desktopApi}
+            platform={props.platform}
+            initialLoadDurationMs={props.initialLoadDurationMs}
+            cost={threadCost}
+            activeTurnId={props.activeTurnId}
+            controls={props.detailsControls}
+            actionRuns={actionRuns}
+            onStopEnvActionRun={props.onStopEnvActionRun}
+            onRefreshNavigation={props.onRefreshNavigation}
+            onRestoreWorktree={props.onRestoreWorktree}
+            worktreeArchiveError={props.worktreeArchiveError}
+            onOpenToolOutputIncidentExplorer={
+              onOpenToolOutputIncidentExplorer ? openIncidentExplorer : undefined
+            }
+            onShowChanges={() => selectDetailsSegment("changes")}
+            onShowPullRequests={() => selectDetailsSegment("prs")}
+            showTooltip={showRailTooltip}
+            hideTooltip={hideRailTooltip}
+            onPortaledInteractionChange={handlePortaledInteractionChange}
+          />
+        );
+      case "changes":
+        return (
+          <EditsPanel
+            backend={thread.source}
+            groups={editedFileGroups}
+            commitStatesByKey={props.editedFileCommitStates}
+            worktreeRoot={editsWorktreeRoot}
+            desktopApi={props.desktopApi}
+            threadId={thread.id}
+            workingStateRefreshKey={JSON.stringify({
+              fetchedAt: thread.gitWorkingStateFetchedAt,
+              state: thread.gitWorkingState ?? null,
+            })}
+            onOpenFile={props.onOpenEditedFile}
+            preferredEditor={props.preferredEditor}
+            onScrollToTurn={props.onScrollToTurn}
+            dock={props.editedFilesDock ?? "above"}
+            onDockChange={props.onEditedFilesDockChange ?? noop}
+          />
+        );
+      case "prs": {
+        const prs = thread.prs ?? [];
+        const prKeys = prs.map((pr) => buildPullRequestStatusKey(pr));
+        const threadKey = `${thread.source}\0${thread.id}`;
+        const chosen = activityPr?.thread === threadKey ? activityPr.key : undefined;
+        const selectedPrKey = chosen === ALL_PULL_REQUESTS
+          ? undefined
+          : chosen && prKeys.includes(chosen) ? chosen : prKeys[0];
+        return (
+          <>
+            <PullRequestsPanel
+              desktopApi={props.desktopApi}
+              onRefreshNavigation={props.onRefreshNavigation}
+              onSetThreadPrAutoDispatch={props.onSetThreadPrAutoDispatch}
+              thread={thread}
+            />
+            <div data-details-section="activity">
+              <PrActivityPanel
+                desktopApi={props.desktopApi}
+                thread={thread}
+                prKey={selectedPrKey}
+                prFilter={prs.length > 1 ? (
+                  <Select
+                    aria-label="Activity for"
+                    className="settings-select details-select"
+                    value={selectedPrKey ?? ALL_PULL_REQUESTS}
+                    options={[
+                      ...prs.map((pr, index) => ({
+                        value: prKeys[index]!,
+                        label: `#${pr.number}${pr.title?.trim() ? ` ${pr.title.trim()}` : ""}`,
+                      })),
+                      { value: ALL_PULL_REQUESTS, label: "All of this thread's PRs" },
+                    ]}
+                    onChange={(key) => setActivityPr({ thread: threadKey, key })}
+                  />
+                ) : undefined}
+              />
+            </div>
+          </>
+        );
+      }
+      case "jobs":
+        return <>{jobsSummary.order.map((section) => renderJobsSection(section, thread))}</>;
+    }
+  }
+
+  function renderJobsSection(section: DetailsJobsSectionId, thread: NavigationPresentedThread) {
+    switch (section) {
+      case "commands":
+        return (
+          <div key={section} data-details-section="commands">
+            <ActionRunsPanel
+              {...props.backgroundTerminals}
+              dock={props.actionRunsDock ?? "above"}
+              environmentName={props.actionRunsEnvironmentName}
+              onDockChange={changeActionRunsDock}
+              onDismissRun={props.onDismissEnvActionRun}
+              onStopRun={props.onStopEnvActionRun}
+              runs={actionRuns}
+            />
+          </div>
+        );
+      case "subagents":
+        return (
+          <div key={section} data-details-section="subagents">
+            {displayResource.loading && !displayResource.data ? (
+              <p className="context-empty">Loading…</p>
+            ) : subAgentsPanelThread ? (
+              <SubAgentsPanel
+                lens={displayResource.data?.subAgentLens}
+                lensCounts={displayResource.data?.subAgentCounts}
+                onSelectLens={setSubAgentLens}
+                onLoadMore={displayResource.data?.nextCursor ? displayResource.loadMore : undefined}
+                loading={displayResource.loading}
+                desktopApi={props.desktopApi}
+                onRefreshNavigation={props.onRefreshNavigation}
+                pricingDisplayOptions={props.pricingDisplayOptions}
+                thread={subAgentsPanelThread}
+                onDetailsModalOpenChange={handlePortaledInteractionChange}
+              />
+            ) : null}
+          </div>
+        );
+      case "scheduled":
+        return (
+          <div key={section} data-details-section="scheduled">
+            <ThreadAutomationsPanel
+              desktopApi={props.desktopApi}
+              thread={thread}
+              onOpenAutomations={props.onOpenAutomations}
+              onRefreshNavigation={props.onRefreshNavigation}
+            />
+          </div>
+        );
+    }
+  }
 
 }
 

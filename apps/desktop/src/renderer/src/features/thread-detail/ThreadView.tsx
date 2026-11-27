@@ -61,6 +61,7 @@ import type {
   ThreadExecutionMode,
   ThreadCompactionRecord,
   ThreadTokenMiserAccounting,
+  ThreadWorkspaceHandoffDirection,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   SetThreadCheckoutHibernationResponse,
@@ -123,7 +124,7 @@ import {
   threadComposerScope,
   type ComposerSlotLineage,
 } from "./composer-slot";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import { readRendererFederationLabel, readRendererFederationTarget } from "../../lib/federation-window";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { isThreadRemoteWorkHere } from "../navigation/ThreadRowStatus";
 import type {
@@ -148,6 +149,10 @@ import {
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { ThreadContextPanel } from "./ThreadContextPanel";
+import type {
+  WorkspaceHandoffAvailability,
+  WorkspaceHandoffRequest,
+} from "../composer/thread-workspace";
 import type { DecisionSetupSettings } from "./context-panels/DecisionsPanel";
 import { ArrowRightToLineIcon } from "../../icons/ArrowRightToLineIcon";
 import {
@@ -1052,6 +1057,8 @@ export type ThreadViewProps = {
   ) => Promise<void>;
   /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
   onSetThreadPrAutoDispatch?: (enabled: boolean, prKey?: string) => Promise<void>;
+  /** This instance's name, for the Details tab's Location row. */
+  localMachineLabel?: string;
   /** Locks (or re-notes) the selected thread when `locked`, else unlocks it. */
   onSetThreadLock?: (locked: boolean, note?: string) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
@@ -1820,6 +1827,13 @@ export function ThreadView(props: ThreadViewProps) {
   }, [launchpadConnectionsDock]);
   const [threadMcpAccessOpen, setThreadMcpAccessOpen] = useState(false);
   const [waitingHeadingThreadId, setWaitingHeadingThreadId] = useState<string>();
+  // The Details tab's folder menu opens the composer's handoff dialog.
+  const [workspaceHandoffRequest, setWorkspaceHandoffRequest] = useState<WorkspaceHandoffRequest>();
+  const requestWorkspaceHandoff = useEventCallback((direction: ThreadWorkspaceHandoffDirection) => {
+    setWorkspaceHandoffRequest((current) => ({ id: (current?.id ?? 0) + 1, direction }));
+  });
+  // What the composer would open now, so the menu offers no handoff it refuses.
+  const [workspaceHandoffAvailability, setWorkspaceHandoffAvailability] = useState<WorkspaceHandoffAvailability>();
   const showRunningMonitors = useEventCallback(() => {
     setWaitingHeadingThreadId(selectedThread?.id);
     onActiveContextTabChange("waiting");
@@ -3211,6 +3225,8 @@ export function ThreadView(props: ThreadViewProps) {
           onUserRepliedToThread: props.onUserRepliedToThread,
           onRefreshNavigation: props.onRefreshNavigation,
           onHandoffThreadWorkspace: props.onHandoffThreadWorkspace,
+          workspaceHandoffRequest,
+          onWorkspaceHandoffAvailabilityChange: setWorkspaceHandoffAvailability,
           onMoveThreadToMainCheckout: props.onMoveThreadToMainCheckout,
           onBeforeStartTurn:
             selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
@@ -3736,6 +3752,37 @@ export function ThreadView(props: ThreadViewProps) {
           worktreeArchiveError: props.worktreeArchiveError,
           onRestoreWorktree: props.onRestoreWorktree,
           initialLoadDurationMs: props.initialLoadDurationMs,
+          detailsControls: selectedThread ? {
+            machineLabel: selectedThread.federation?.instanceLabel
+              ?? (readRendererFederationTarget()
+                ? readRendererFederationLabel() ?? "Owner"
+                : props.localMachineLabel ?? "This machine"),
+            ...(selectedThread.federation
+              ? { peer: { status: selectedThread.federation.peerStatus } }
+              : readRendererFederationTarget() ? { peer: {} } : {}),
+            applications: props.applications,
+            integratedTerminal,
+            // The dialog lives in the composer; with it replaced, nothing could answer.
+            onRequestWorkspaceHandoff: props.onHandoffThreadWorkspace && !composerReplacedByRecovery
+              ? requestWorkspaceHandoff
+              : undefined,
+            workspaceHandoffAvailability,
+            workspaceHandoffBlocked: Boolean(
+              props.pendingRequest || props.pendingUserInput || props.pendingMcpInteraction,
+            ),
+            workspaceActionsBlocked: props.workspaceActionsBlocked,
+            onEditEnvironments: props.onEditEnvironments,
+            environmentSetupRunning: selectedThreadEnvironmentSetup?.phase === "setup"
+              && selectedThreadEnvironmentSetup.status === "running",
+            directories: props.directories,
+            autoFix: {
+              backgroundPrPollingEnabled: props.backgroundPrPollingEnabled,
+              prAutoDispatchAllowed: props.prAutoDispatchAllowed,
+              watchMergeBuildsDefault: props.watchMergeBuildsDefault,
+              directories: props.directories,
+              onSetThreadPrAutoDispatch: props.onSetThreadPrAutoDispatch,
+            },
+          } : undefined,
           todos: threadTodos ? {
             view: threadTodos.view,
             threadKey: threadTodos.threadKey,

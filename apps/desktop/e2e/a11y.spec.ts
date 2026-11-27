@@ -779,10 +779,13 @@ registerSharedAudit({
       app.window.getByRole("heading", { level: 2, name: "Replay smoke thread" }),
     ).toBeVisible();
     const contextRail = app.window.getByRole("complementary", { name: "Thread context" });
-    await contextRail.getByRole("tab", { name: "Linked projects" }).click();
+    // Share storage is in the folder's ⋯ menu in Details › Folders & git.
+    await contextRail.getByRole("tab", { name: /^Details/ }).click();
     await contextRail
-      .getByRole("button", { name: `Share storage for ${WORKTREE_STORAGE_AUDIT_LABEL}`, exact: true })
+      .getByRole("button", { name: `Folder actions for ${WORKTREE_STORAGE_AUDIT_LABEL}`, exact: true })
+      .first()
       .click();
+    await app.window.getByRole("menuitem", { name: "Share storage", exact: true }).click();
     const dialog = app.window.getByRole("dialog", { name: "Share worktree storage", exact: true });
     const verify = dialog.getByRole("checkbox", { name: /^Verify filtered files/ });
     const share = dialog.getByRole("button", { name: "Share storage", exact: true });
@@ -923,7 +926,15 @@ registerSharedAudit({
     });
 
     await test.step("rail Pull requests panel with watches", async () => {
-      await app.window.getByRole("tab", { name: /^Pull requests/ }).click();
+      // Pull requests is Details › PRs.
+      await app.window
+        .getByRole("tablist", { name: "Context panels" })
+        .getByRole("tab", { name: /^Details/ })
+        .click();
+      await app.window
+        .getByRole("tablist", { name: "Details" })
+        .getByRole("tab", { name: /^PRs/ })
+        .click();
       // One assertion per row kind, so a seed drifting to fewer watches
       // fails here instead of auditing a shorter list.
       await expect(watchedCard.getByText("Waiting for CI · attempt 2")).toBeVisible();

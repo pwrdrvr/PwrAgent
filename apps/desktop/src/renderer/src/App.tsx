@@ -4556,6 +4556,7 @@ function DesktopAppShell(props: {
         onCancelExecutionModeQueue: navigation.selectedThread ? handleCancelExecutionModeQueue : undefined,
         onSetThreadModelSettings: navigation.selectedThread ? handleSetThreadModelSettings : undefined,
         onSetThreadPrAutoDispatch: navigation.selectedThread ? handleSetThreadPrAutoDispatch : undefined,
+        localMachineLabel: localMachine.label,
         onSetThreadLock: navigation.selectedThread ? handleSetThreadLock : undefined,
         onCancelThreadPrAutoDispatch: navigation.selectedThread ? handleCancelThreadPrAutoDispatch : undefined,
         onSendThreadPrAutoDispatchNow: navigation.selectedThread ? handleSendThreadPrAutoDispatchNow : undefined,

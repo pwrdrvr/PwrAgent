@@ -1,8 +1,10 @@
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
-import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
+import { useTodoFactMenuPlacement } from "../thread-todos/TodoFactMenu";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 
 /**
@@ -47,9 +49,21 @@ export type ProjectPickerProps = {
    * omitted, the "Chat without a directory" row is not rendered.
    */
   onSelectNoDirectory?: () => void;
+  /**
+   * Replaces the composer's project pill with the caller's own control, such
+   * as the context rail's "Attach folder" row. The popover is unchanged.
+   */
+  trigger?: { className: string; ariaLabel: string; content: ReactNode };
+  /**
+   * Draws the popover on `document.body`, placed against the trigger, for a
+   * host that clips or is narrower than the 440px panel (the context rail).
+   */
+  portal?: boolean;
+  onOpenChange?: (open: boolean) => void;
 };
 
 const RECENTS_LIMIT = 10;
+const POPOVER_WIDTH = 440;
 
 function formatLabel(directory: NavigationDirectorySummary): string {
   return directory.label || (directory.path ? tildifyPath(directory.path) : directory.key);
@@ -71,8 +85,11 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
   const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLSpanElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
   const errorId = useId();
+  const portal = props.portal === true;
+  const getPortaledSurface = useCallback(() => popRef.current, []);
   // A layer, not a document listener: inside a dialog, the dialog would
   // otherwise take the Escape meant for this popover and close with it.
   useDismissableLayer({
@@ -80,14 +97,30 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
     onDismiss: () => setOpen(false),
     surfaceRef: containerRef,
     triggerRef,
+    ...(portal ? { getPortaledSurface } : {}),
   });
+  const placement = useTodoFactMenuPlacement({
+    open: open && portal,
+    triggerRef,
+    menuRef: popRef,
+    width: POPOVER_WIDTH,
+  });
+  const onOpenChange = props.onOpenChange;
+  // Balanced, like the rail's other portaled menus: true while open, false
+  // on close or unmount, and nothing for a picker that never opened.
+  useEffect(() => {
+    if (!open) return undefined;
+    onOpenChange?.(true);
+    return () => onOpenChange?.(false);
+  }, [onOpenChange, open]);
 
   useEffect(() => {
     if (!open) {
       return;
     }
     const onPointerDown = (event: PointerEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!containerRef.current?.contains(target) && !popRef.current?.contains(target)) {
         setOpen(false);
       }
     };
@@ -136,20 +169,31 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
         // read fluently as a description.
         aria-describedby={props.pickError ? errorId : undefined}
         aria-label={
-          props.value ? `Project: ${buttonLabel}` : "Choose a project"
+          props.trigger?.ariaLabel
+            ?? (props.value ? `Project: ${buttonLabel}` : "Choose a project")
         }
-        className={`project-picker__trigger${
+        className={props.trigger?.className ?? `project-picker__trigger${
           isEmpty ? " is-empty" : " is-active"
         }`}
         disabled={props.disabled}
         onClick={() => setOpen((current) => !current)}
       >
-        <FolderIcon size={13} />
-        <span className="project-picker__label">{buttonLabel}</span>
+        {props.trigger ? props.trigger.content : (
+          <>
+            <FolderIcon size={13} />
+            <span className="project-picker__label">{buttonLabel}</span>
+          </>
+        )}
       </button>
 
-      {open ? (
-        <div className="project-picker__pop" role="dialog" aria-label="Project picker">
+      {open ? renderPopover(
+        <div
+          ref={popRef}
+          className={`project-picker__pop${portal ? " project-picker__pop--portal" : ""}`}
+          role="dialog"
+          aria-label="Project picker"
+          style={portal ? { left: placement.left, top: placement.top, maxHeight: placement.maxHeight } : undefined}
+        >
           <div className="project-picker__search">
             <span aria-hidden="true" className="project-picker__search-icon">
               <SearchIcon size={13} />
@@ -283,8 +327,12 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
               {props.pickError}
             </p>
           ) : null}
-        </div>
+        </div>,
       ) : null}
     </span>
   );
+
+  function renderPopover(popover: ReactElement): ReactNode {
+    return portal ? createPortal(popover, document.body) : popover;
+  }
 }

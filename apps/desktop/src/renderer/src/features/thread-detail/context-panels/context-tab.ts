@@ -49,6 +49,98 @@ export function isContextTabId(value: unknown): value is ContextTabId {
 }
 
 /**
+ * The tabs the rail's icon spine draws. Details took in eight of the old
+ * tabs; the rest kept their own icons.
+ */
+export type ContextRailTabId =
+  | "details"
+  | "todos"
+  | "research"
+  | "waiting"
+  | "pricing"
+  | "decisions"
+  | "providers"
+  | "connections";
+
+/** The four views of the Details tab's segmented control. */
+export type DetailsSegmentId = "thread" | "changes" | "prs" | "jobs";
+
+export const DETAILS_SEGMENT_IDS: readonly DetailsSegmentId[] = [
+  "thread",
+  "changes",
+  "prs",
+  "jobs",
+];
+
+/** The section a segment scrolls to when a request named one. */
+export type DetailsSectionId =
+  | "folders"
+  | "activity"
+  | "commands"
+  | "subagents"
+  | "scheduled";
+
+export type ContextRailTarget = {
+  tab: ContextRailTabId;
+  /** Set exactly when `tab` is `details`. */
+  segment?: DetailsSegmentId;
+  section?: DetailsSectionId;
+};
+
+/**
+ * Where a context tab id lands on the rail. Every id stays valid: the
+ * persisted `[ui] active_context_tab`, deep links, and reveal requests
+ * (to-do, PR and sub-agent chips, Actions toasts) still name the old tabs,
+ * and the eight that Details took in open it at their segment.
+ */
+export function resolveContextTabTarget(id: ContextTabId): ContextRailTarget {
+  switch (id) {
+    case "info":
+      return { tab: "details", segment: "thread" };
+    case "projects":
+      return { tab: "details", segment: "thread", section: "folders" };
+    case "edits":
+      return { tab: "details", segment: "changes" };
+    case "prs":
+      return { tab: "details", segment: "prs" };
+    case "pr-activity":
+      return { tab: "details", segment: "prs", section: "activity" };
+    case "actions":
+      return { tab: "details", segment: "jobs", section: "commands" };
+    case "subagents":
+      return { tab: "details", segment: "jobs", section: "subagents" };
+    case "automations":
+      return { tab: "details", segment: "jobs", section: "scheduled" };
+    case "todos":
+    case "research":
+    case "waiting":
+    case "pricing":
+    case "decisions":
+    case "providers":
+    case "connections":
+      return { tab: id };
+  }
+}
+
+/**
+ * The id a segment is stored and announced as. It is one of the old tab
+ * ids, so the persisted value keeps its shape and an older build reading it
+ * opens the same view.
+ */
+export function contextTabIdForDetailsSegment(segment: DetailsSegmentId): ContextTabId {
+  switch (segment) {
+    case "thread":
+      return "info";
+    case "changes":
+      return "edits";
+    case "prs":
+      return "prs";
+    case "jobs":
+      return "actions";
+  }
+}
+
+/**
  * Where the accumulated edited-files list renders: above the composer
  * (default LiveWorkRail placement) or only in the context-rail Edits
  * panel. Persisted to `config.toml` `[ui] edited_files_dock`; lives
