@@ -737,7 +737,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const leaveGauge = (event: MouseEvent<HTMLElement>): void => {
     railTooltip.hide();
     providerPeek.leave();
-    if (!open && railRef.current?.contains(event.relatedTarget as Node | null)) {
+    // React reports a leave to outside the window, or to anything it does
+    // not render, with `window` as the related target: not a Node.
+    const next = event.relatedTarget;
+    if (!open && next instanceof Node && railRef.current?.contains(next)) {
       revealRailAfterHoverIntent({ x: event.clientX, y: event.clientY });
     }
   };

@@ -244,6 +244,69 @@ describe("AI provider gauge peek", () => {
     expect(bottom).toBeLessThanOrEqual(window.innerHeight);
   });
 
+  // Found by the scaling audit: reading the pace only while the peek was up
+  // dropped a read still running when it closed, so every glance read again.
+  it("reads the pace once across glances that end before it answers", async () => {
+    const now = Date.UTC(2026, 10, 25, 9);
+    vi.setSystemTime(now);
+    const weekly = { name: "Weekly limit", windowKey: "secondary" as const, windowMinutes: 10_080, resetAt: now + 82 * 3_600_000 };
+    const readUsageActivity = vi.fn(() => new Promise<ReadUsageActivityResponse>((resolve) => {
+      setTimeout(() => resolve({
+        rows: [],
+        readAt: now,
+        rateLimits: [],
+        truncated: false,
+        limitObservation: { observedAt: now, accountKey: "glances", planType: "pro", limits: [{ ...weekly, usedPercent: 53 }] },
+      } as unknown as ReadUsageActivityResponse), 5_000);
+    }));
+    mockLayout();
+    render(
+      <ThreadContextPanel
+        activeTab="info"
+        backends={[backend("codex", "OpenAI", [{ ...weekly, usedPercent: 53 }])]}
+        desktopApi={{ readUsageActivity } as unknown as ComponentProps<typeof ThreadContextPanel>["desktopApi"]}
+        pinned={false}
+        thread={thread}
+        onActiveTabChange={vi.fn()}
+      />,
+    );
+    for (let glance = 0; glance < 3; glance += 1) {
+      await openPeek();
+      move(gauge(), document.body, { clientX: 600, clientY: 600 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(HOVER_TRANSITION_GRACE_MS + 1);
+      });
+      expect(peek()).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+    }
+    expect(readUsageActivity).toHaveBeenCalledTimes(1);
+  });
+
+  // React reports a leave to outside the window with `window` as the related
+  // target, which `Node.contains` rejects.
+  it("closes without an error when the pointer leaves the window from the gauge", async () => {
+    const errors: unknown[] = [];
+    const record = (event: ErrorEvent) => {
+      errors.push(event.error);
+      event.preventDefault();
+    };
+    window.addEventListener("error", record);
+    try {
+      renderPanel();
+      await openPeek();
+      fireEvent.mouseOut(gauge(), { relatedTarget: null, clientX: 1199, clientY: 756 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(HOVER_TRANSITION_GRACE_MS + 1);
+      });
+      expect(peek()).toBeNull();
+      expect(errors).toEqual([]);
+    } finally {
+      window.removeEventListener("error", record);
+    }
+  });
+
   it("hands the hover reveal back when the pointer moves on up the spine", async () => {
     renderPanel();
     await openPeek();
