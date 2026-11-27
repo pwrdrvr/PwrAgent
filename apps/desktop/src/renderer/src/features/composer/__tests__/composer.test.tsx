@@ -1330,6 +1330,33 @@ describe("Composer", () => {
     expect(onMaterializeLaunchpad).not.toHaveBeenCalled();
   });
 
+  it("releases a /plan queued during launchpad creation in its own mode", async () => {
+    const draftStore = createComposerDraftStore();
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "First message");
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend, threadId: request.threadId, turnId: "planned",
+    }));
+    const props = {
+      backends: [backendSummary("codex")], desktopApi: { startTurn }, draftStore, skills: [],
+    };
+    const view = render(<Composer {...props} launchpad={launchpad} launchpadMaterializing
+      directory={retargetingPwrSnap} onMaterializeLaunchpad={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "/plan next step" } });
+    await clickButton("Queue");
+    const thread: NavigationThreadSummary = {
+      id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    act(() => handoffLaunchpadComposer(draftStore, `launchpad:${launchpad.directoryKey}`, {
+      ...thread, optimisticActiveTurn: { id: "first" },
+    }));
+    view.rerender(<Composer {...props} thread={thread} />);
+    await waitFor(() => expect(startTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      input: [{ type: "text", text: "next step" }],
+      collaborationMode: { mode: "plan", settings: { developerInstructions: null } },
+    })));
+  });
+
   it.each([
     ["slash", false],
     ["slash", true],
@@ -8898,7 +8925,7 @@ describe("Composer", () => {
     );
   });
 
-  it("preserves a scheduled send time while editing a scheduled queued draft", async () => {
+  it("preserves /plan and the send time when editing a scheduled queued draft", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
@@ -8907,10 +8934,11 @@ describe("Composer", () => {
       turnId: "turn-scheduled",
     }));
 
+    const scheduled = createScheduledActionApi();
     render(
       <Composer
         desktopApi={{
-          ...createScheduledActionApi(),
+          ...scheduled,
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -8929,7 +8957,7 @@ describe("Composer", () => {
     );
 
     const textarea = screen.getByLabelText("Reply");
-    fireEvent.change(textarea, { target: { value: "Original scheduled text" } });
+    fireEvent.change(textarea, { target: { value: "/plan Original scheduled text" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
     await act(async () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
@@ -8938,7 +8966,7 @@ describe("Composer", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     });
-    expect(textarea).toHaveValue("Original scheduled text");
+    expect(textarea).toHaveValue("/plan Original scheduled text");
     // The Send button is plain "Send"; the schedule surfaces as an armed
     // toggle beside it rather than a countdown label on Send itself.
     const scheduleToggle = screen.getByRole("switch");
@@ -8946,12 +8974,18 @@ describe("Composer", () => {
     expect(scheduleToggle).toHaveTextContent("in 1h");
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
-    fireEvent.change(textarea, { target: { value: "Edited scheduled text" } });
+    fireEvent.change(textarea, { target: { value: "/plan Edited scheduled text" } });
     // Toggle stays armed → Send keeps the schedule (re-queues at the same time).
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
     });
 
+    expect(scheduled.createScheduledThreadAction.mock.calls.map(([request]) => request.turn)).toEqual(
+      ["Original scheduled text", "Edited scheduled text"].map((text) => expect.objectContaining({
+        input: [{ type: "text", text }],
+        collaborationMode: { mode: "plan", settings: { developerInstructions: null } },
+      })),
+    );
     expect(startTurn).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("");
     expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
@@ -14076,6 +14110,20 @@ describe("Composer", () => {
         textarea,
       };
     }
+
+    it.each(["queue", "steer"] as const)("admits a busy /plan as a new Plan turn on %s", async (gesture) => {
+      const { startTurn, steerTurn, textarea } = renderSteerable("win32");
+      fireEvent.change(textarea, { target: { value: "/plan next step" } });
+      await act(async () => {
+        fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: gesture === "steer" });
+      });
+
+      expect(steerTurn).not.toHaveBeenCalled();
+      expect(startTurn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        input: [{ type: "text", text: "next step" }],
+        collaborationMode: { mode: "plan", settings: { developerInstructions: null } },
+      }));
+    });
 
     it("steers on Ctrl+Enter on Windows", async () => {
       const { startTurn, steerTurn, textarea } = renderSteerable("win32");

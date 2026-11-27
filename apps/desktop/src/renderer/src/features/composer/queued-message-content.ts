@@ -10,6 +10,7 @@ export function restoreQueuedMessage(
   return {
     ...queued,
     input: content.input,
+    collaborationMode: content.collaborationMode ?? queued.collaborationMode,
     text: content.input
       .flatMap((item) => item.type === "text" ? [item.text] : [])
       .join("\n"),

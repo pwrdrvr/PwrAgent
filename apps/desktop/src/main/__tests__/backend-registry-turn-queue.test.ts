@@ -53,7 +53,7 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-w
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { ScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { ScheduledThreadActionStore } from "../storage/scheduled-thread-action-store";
-import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { type PwrAgentFederatedThreadMessageRequest } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 
 describe("DesktopBackendRegistry", () => {
@@ -93,6 +93,38 @@ describe("DesktopBackendRegistry", () => {
     } finally {
       await emitCompletedTurn(registry, "codex", threadId, turnId);
       await registry.close();
+    }
+  });
+
+  it("delivers a scheduled Plan turn to the provider after the active turn ends", async () => {
+    const client = new MockBackendClient({ threads: [] });
+    const start = vi.spyOn(client, "startTurn");
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    const db = openInMemoryStateDb();
+    const thread = { backend: "codex" as const, threadId: "scheduled-plan" };
+    let now = 1000;
+    const scheduler = new ScheduledThreadActionService({
+      registry, store: new ScheduledThreadActionStore(db), now: () => now,
+      setTimer: vi.fn(), clearTimer: vi.fn(),
+    });
+    const turn = {
+      collaborationMode: { mode: "plan" as const, settings: { developerInstructions: null } },
+      input: [{ type: "text" as const, text: "next step" }],
+    };
+    try {
+      await emitStartedTurn(registry, "codex", thread.threadId, "active");
+      await scheduler.create({ ...thread, kind: "turn", scheduledFor: now + 50, displayText: "next step", turn });
+      now += 50;
+      await scheduler.evaluateDueActions();
+      const [entry] = registry.getQueuedTurnsForThread(thread);
+      expect(await registry.readQueuedTurn({ ...thread, queueEntryId: entry.queueEntryId })).toMatchObject(turn);
+      expect(start).not.toHaveBeenCalled();
+      await emitCompletedTurn(registry, "codex", thread.threadId, "active");
+      await vi.waitFor(() => expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(turn)));
+    } finally {
+      scheduler.dispose();
+      await registry.close();
+      db.close();
     }
   });
 

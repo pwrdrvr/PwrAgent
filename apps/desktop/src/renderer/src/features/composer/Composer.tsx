@@ -1015,6 +1015,7 @@ type QueuedTurnDraft = {
   title?: string;
   reviewFix?: boolean;
   input?: AppServerTurnInputItem[];
+  collaborationMode?: AppServerCollaborationModeRequest;
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
   scheduledSendAt?: number;
@@ -4516,7 +4517,9 @@ function useComposerController(props: ComposerProps) {
   // `/plan <message>` sends this one turn in Plan mode.
   const supportsPlan = supportsPlanCommand(props.launchpad?.backend ?? props.thread?.source);
   const planCommand = supportsPlan ? parsePlanCommand(canonicalDraft) : undefined;
-  const planModeEnabled = planCommand !== undefined;
+  const draftCollaborationMode: AppServerCollaborationModeRequest | undefined = planCommand
+    ? { mode: "plan", settings: { developerInstructions: null } }
+    : undefined;
   /** What a turn sends: the draft, without a leading `/plan`. */
   const turnDraft = planCommand ? planCommand.prompt : canonicalDraft;
   const codexGoalCommands = (props.launchpad?.backend ?? props.thread?.source) === "codex";
@@ -5878,7 +5881,7 @@ function useComposerController(props: ComposerProps) {
       });
     }
     const payload = await buildQueuedTurnPayload(queued);
-    return { queueEntryId: queued.id, contentHash: "", input: payload.input };
+    return { queueEntryId: queued.id, contentHash: "", input: payload.input, collaborationMode: queued.collaborationMode };
   };
 
   // A failed row is a local copy of a failed scheduled action. Removing it
@@ -8924,15 +8927,7 @@ function useComposerController(props: ComposerProps) {
       return false;
     }
 
-    const collaborationMode =
-      !queued && planModeEnabled
-        ? ({
-            mode: "plan",
-            settings: {
-              developerInstructions: null,
-            },
-          } satisfies AppServerCollaborationModeRequest)
-        : undefined;
+    const collaborationMode = queued ? queued.collaborationMode : draftCollaborationMode;
 
     let optimisticMessageId: string | undefined;
     if (!backendQueueSubmission) {
@@ -9314,6 +9309,7 @@ function useComposerController(props: ComposerProps) {
             imageAttachments,
             fileAttachments,
             turn: {
+              collaborationMode: draftCollaborationMode,
               input: payload.input,
               executionMode: props.thread.executionMode,
               model: selectedModelOption?.id,
@@ -9337,8 +9333,9 @@ function useComposerController(props: ComposerProps) {
             upsertScheduledProjectionInScope(composerScopeKey, {
               id: `scheduled-projection:${response.action.id}`,
               scheduledActionId: response.action.id,
+              collaborationMode: draftCollaborationMode,
               input: payload.input,
-              text: canonicalDraft,
+              text: turnDraft,
               imageAttachments,
               fileAttachments,
               ...(response.action.status === "scheduled"
@@ -9356,8 +9353,9 @@ function useComposerController(props: ComposerProps) {
         } else {
           enqueueQueuedTurn({
             id: createQueuedTurnId(),
+            collaborationMode: draftCollaborationMode,
             input: payload.input,
-            text: canonicalDraft,
+            text: turnDraft,
             imageAttachments,
             fileAttachments,
           });
@@ -9382,7 +9380,7 @@ function useComposerController(props: ComposerProps) {
       }
     };
     const payload = buildTurnPayload(
-      canonicalDraft,
+      turnDraft,
       imageAttachments,
       fileAttachments,
       skillTokens,
@@ -9593,15 +9591,6 @@ function useComposerController(props: ComposerProps) {
       return;
     }
 
-    const collaborationMode =
-      !reviewTarget && planModeEnabled
-        ? ({
-            mode: "plan",
-            settings: {
-              developerInstructions: null,
-            },
-          } satisfies AppServerCollaborationModeRequest)
-        : undefined;
     const submittedScopeKey = composerScopeKey;
     const submittedSnapshot = beginLaunchpadSubmission(submittedScopeKey);
     setSendError(undefined);
@@ -9632,7 +9621,7 @@ function useComposerController(props: ComposerProps) {
       await props.onMaterializeLaunchpad(
         props.launchpad.directoryKey,
         input,
-        collaborationMode,
+        reviewTarget ? undefined : draftCollaborationMode,
         reviewTarget,
         listDraftReferencedDirectories(
           appendFileReferenceMarkdown(canonicalDraft, fileAttachments),
@@ -10235,6 +10224,10 @@ function useComposerController(props: ComposerProps) {
         return;
       }
     }
+    if (queued.collaborationMode?.mode === "plan") {
+      setSendError("Plan mode starts a new turn. This message is still queued.");
+      return;
+    }
     const cancellation = await cancelServerManagedQueuedTurn(
       queued,
       expectedScopeKey,
@@ -10428,10 +10421,11 @@ function useComposerController(props: ComposerProps) {
       const scopeKey = composerScopeKey;
       const destination = getLaunchpadComposerDestination(draftStore, scopeKey);
       const snapshot = latestDraftSnapshotRef.current.snapshot;
-      const text = canonicalDraft;
+      if (planCommand && !hasComposerContent && !imageAttachments.length && !fileAttachments.length) return;
       const queued: QueuedTurnDraft = {
         id: createQueuedTurnId(),
-        text,
+        text: turnDraft,
+        collaborationMode: draftCollaborationMode,
         backendQueuePending: true,
         imageAttachments: snapshot.imageAttachments,
         fileAttachments: snapshot.fileAttachments ?? [],
@@ -10441,7 +10435,7 @@ function useComposerController(props: ComposerProps) {
       enqueueQueuedTurnInScope(scopeKey, queued);
       resetComposerDraftAndState(scopeKey);
       try {
-        const payload = await buildTurnPayload(text, imageAttachments, fileAttachments, skillTokens);
+        const payload = await buildTurnPayload(turnDraft, imageAttachments, fileAttachments, skillTokens);
         updateQueuedTurnInScope(destination.scopeKey, queued, (current) => ({
           ...current,
           backendQueuePending: false,
@@ -10473,6 +10467,7 @@ function useComposerController(props: ComposerProps) {
     if (shouldQueueThreadSubmit()) {
       if (
         activeTurnIdRef.current
+        && !planCommand // Plan mode takes effect only at the start of a new turn.
         && (mode === "steer" || mode === "interrupt")
       ) {
         const steering = steerCurrentDraft(
@@ -10567,6 +10562,7 @@ function useComposerController(props: ComposerProps) {
             backendQueuePending: true,
             queueEntryId,
             text: turnDraft,
+            collaborationMode: draftCollaborationMode,
             imageAttachments,
             fileAttachments,
             input: payload.input,
@@ -10667,15 +10663,6 @@ function useComposerController(props: ComposerProps) {
     } else {
       payload = payloadOrPromise;
     }
-    const collaborationMode = planModeEnabled
-      ? ({
-          mode: "plan",
-          settings: {
-            developerInstructions: null,
-          },
-        } satisfies AppServerCollaborationModeRequest)
-      : undefined;
-
     if (payload.input.length === 0 || props.disabled) {
       if (submittedLaunchpad) {
         restoreSubmittedComposerDraftInScope(submittedLaunchpad.scopeKey, submittedLaunchpad.snapshot);
@@ -10694,7 +10681,7 @@ function useComposerController(props: ComposerProps) {
         props.launchpad.codexEnvironmentId &&
           selectedCodexEnvironment?.setupScript
           ? "Running environment setup"
-          : collaborationMode
+          : draftCollaborationMode
             ? "Planning"
             : "Thinking",
       );
@@ -10702,7 +10689,7 @@ function useComposerController(props: ComposerProps) {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
           payload.input,
-          collaborationMode,
+          draftCollaborationMode,
           undefined,
           // Scan the outgoing display text so the appended file
           // references also link their containing tracked repos.
@@ -14082,6 +14069,7 @@ function useComposerController(props: ComposerProps) {
 
       {queuedTurns.map((queued, index) => {
         const queuedScopeKey = composerScopeKey;
+        const canSteerQueued = supportsSteering && !queued.reviewCommand && queued.collaborationMode?.mode !== "plan";
         // The send waits for a hibernated checkout's restore, then starts.
         const waitingForCheckout = props.thread?.workspaceHibernated?.restoring === true;
         const backendOwned = Boolean(
@@ -14198,7 +14186,7 @@ function useComposerController(props: ComposerProps) {
                   Resume
                 </button>
               ) : isLaunchpad ? (
-                supportsSteering && !queued.reviewCommand ? (
+                canSteerQueued ? (
                   <button
                     className="composer__secondary-action"
                     disabled={queued.backendQueuePending}
@@ -14245,7 +14233,7 @@ function useComposerController(props: ComposerProps) {
                   Send now
                 </button>
               ) : activeTurnId ? (
-                supportsSteering && !queued.reviewCommand ? (
+                canSteerQueued ? (
                   <button
                     className="composer__secondary-action"
                     disabled={
@@ -14287,6 +14275,9 @@ function useComposerController(props: ComposerProps) {
                 disabled={queued.backendQueuePending}
                 onClick={() => {
                   const editQueuedTurn = (editable = queued): void => {
+                    const draftText = editable.collaborationMode?.mode === "plan"
+                      ? `/plan ${editable.text}`
+                      : editable.text;
                     acknowledgeQueuedFailure(queued);
                     removeQueuedTurnInScope(queuedScopeKey, queued);
                     if (activeComposerScopeKeyRef.current !== queuedScopeKey) {
@@ -14298,7 +14289,7 @@ function useComposerController(props: ComposerProps) {
                         draftStore.pushDraft(queuedScopeKey, currentDraft);
                       }
                       saveComposerDraftSnapshot(queuedScopeKey, {
-                        draft: editable.text,
+                        draft: draftText,
                         editorDocument: undefined,
                         imageAttachments: editable.imageAttachments,
                         fileAttachments: editable.fileAttachments,
@@ -14310,7 +14301,7 @@ function useComposerController(props: ComposerProps) {
                     if (hasComposerDraftSnapshotContent(currentDraft)) {
                       draftStore.pushDraft(queuedScopeKey, currentDraft);
                     }
-                    setComposerDraftFromCanonical(editable.text);
+                    setComposerDraftFromCanonical(draftText);
                     setImageAttachments(editable.imageAttachments);
                     setFileAttachments(editable.fileAttachments);
                     setScheduledDraftSendAt(scheduledSendAt);

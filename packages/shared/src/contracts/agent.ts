@@ -357,6 +357,7 @@ export type ReadQueuedTurnRequest = {
 };
 
 export type ReadQueuedTurnResponse = {
+  collaborationMode?: AppServerCollaborationModeRequest;
   imageParts?: AppServerThreadImagePart[];
   contentHash: string;
   queueEntryId: string;

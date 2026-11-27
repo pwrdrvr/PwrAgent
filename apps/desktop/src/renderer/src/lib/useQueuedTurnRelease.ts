@@ -403,6 +403,7 @@ export function useQueuedTurnRelease(params: {
             readRendererFederationTarget(),
           threadId: releaseThread.id,
           input,
+          collaborationMode: claimedQueuedTurn.collaborationMode,
           executionMode: releaseThread.executionMode,
           model: selectedModelOption?.id,
           reasoningEffort: supportsReasoning

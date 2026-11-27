@@ -11449,6 +11449,7 @@ export class DesktopBackendRegistry {
     if (!entry) throw new Error("The queued message is no longer waiting.");
     return {
       queueEntryId: entry.id,
+      collaborationMode: entry.collaborationMode,
       contentHash: createHash("sha256").update(JSON.stringify(entry.input)).digest("hex"),
       input: portable
         ? await portableTurnInputAttachments(structuredClone(entry.input), {

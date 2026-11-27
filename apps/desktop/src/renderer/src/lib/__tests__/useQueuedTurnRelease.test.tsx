@@ -312,6 +312,7 @@ describe("useQueuedTurnRelease", () => {
         text: "First background reply",
         imageAttachments: [],
         fileAttachments: [],
+        collaborationMode: { mode: "plan" },
         input: [{ type: "text", text: "First background reply" }],
       },
       {
@@ -366,6 +367,7 @@ describe("useQueuedTurnRelease", () => {
         expect.objectContaining({
           backend: "codex",
           threadId: "thread-a",
+          collaborationMode: { mode: "plan" },
           input: [{ type: "text", text: "First background reply" }],
         })
       );

@@ -18,7 +18,7 @@ import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
 } from "@pwragent/shared/contracts/navigation";
-import type { ModelSettingsRecent, ReviewAfterAction, ReviewRunMode } from "@pwragent/shared/contracts/agent";
+import type { AppServerCollaborationModeRequest, ModelSettingsRecent, ReviewAfterAction, ReviewRunMode } from "@pwragent/shared/contracts/agent";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
 
 export type ComposerDraftSnapshot = {
@@ -78,6 +78,7 @@ export type ComposerQueuedTurnSnapshot = {
   /** Owner-generated display title for a long message; see `ThreadQueuedTurnSummary`. */
   title?: string;
   input?: AppServerTurnInputItem[];
+  collaborationMode?: AppServerCollaborationModeRequest;
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
   fileAttachments: NavigationLaunchpadFileAttachment[];

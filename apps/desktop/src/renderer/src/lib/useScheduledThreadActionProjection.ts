@@ -425,6 +425,7 @@ function projectionFromAction(action: ScheduledThreadAction, target: FederationT
         }
       : {}),
     input: action.turn?.input,
+    collaborationMode: action.turn?.collaborationMode,
     text: action.review?.draftText ?? action.displayText,
     imageAttachments: action.imageAttachments ?? [],
     fileAttachments: action.fileAttachments ?? [],
