@@ -29,65 +29,75 @@ type ParserContext =
   | "action"
   | `${"setup" | "cleanup"}.${EnvironmentPlatform}`;
 
-// Leave capacity in libuv's default pool for turn admission and other I/O.
-const MAX_RUNNING_ENVIRONMENT_READS = 2;
 const ENVIRONMENT_READ_TIMEOUT_MS = 3_000;
-const queuedEnvironmentReads = new Set<() => void>();
-let runningEnvironmentReads = 0;
 
-export async function listCodexEnvironmentOptions(
-  directoryPath?: string,
-  platform: NodeJS.Platform = process.platform,
-): Promise<CodexEnvironmentOption[]> {
-  if (!directoryPath?.trim()) {
-    return [];
-  }
+// Bulk listings can leave two native reads blocked. Reserve a separate slot
+// for explicit reads and leave a worker in libuv's default pool for other I/O.
+export const listCodexEnvironmentOptions = createEnvironmentReadLane(1);
+export const listBackgroundCodexEnvironmentOptions = createEnvironmentReadLane(2);
 
-  const environmentsDir = path.join(
-    directoryPath.trim(),
-    ".codex",
-    "environments",
-  );
-  const deadline = performance.now() + ENVIRONMENT_READ_TIMEOUT_MS;
-  const timeoutError = () => Object.assign(
-    new Error(`Timed out reading Codex environments in ${environmentsDir}. Check the drive or network mount and retry.`),
-    { code: "ETIMEDOUT", path: environmentsDir },
-  );
-  const checkDeadline = () => {
-    if (performance.now() >= deadline) throw timeoutError();
-  };
+export function isCodexEnvironmentDiscoveryTimeout(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ETIMEDOUT";
+}
 
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      queuedEnvironmentReads.delete(start);
-      reject(timeoutError());
-    }, ENVIRONMENT_READ_TIMEOUT_MS);
-    const start = () => {
-      runningEnvironmentReads++;
-      void readEnvironmentOptions(environmentsDir, platform, checkDeadline)
-        .then((options) => {
-          checkDeadline();
-          return options;
-        })
-        .finally(() => {
-          clearTimeout(timer);
-          // A deadline releases the caller, but only native completion releases
-          // the slot. A timed-out read also stops before its next filesystem call.
-          runningEnvironmentReads--;
-          const next = queuedEnvironmentReads.values().next().value;
-          if (next) {
-            queuedEnvironmentReads.delete(next);
-            next();
-          }
-        })
-        .then(resolve, reject);
-    };
-    if (runningEnvironmentReads < MAX_RUNNING_ENVIRONMENT_READS) {
-      start();
-    } else {
-      queuedEnvironmentReads.add(start);
+function createEnvironmentReadLane(capacity: number) {
+  const queuedEnvironmentReads = new Set<() => void>();
+  let runningEnvironmentReads = 0;
+
+  return async function listEnvironmentOptions(
+    directoryPath?: string,
+    platform: NodeJS.Platform = process.platform,
+  ): Promise<CodexEnvironmentOption[]> {
+    if (!directoryPath?.trim()) {
+      return [];
     }
-  });
+
+    const environmentsDir = path.join(
+      directoryPath.trim(),
+      ".codex",
+      "environments",
+    );
+    const deadline = performance.now() + ENVIRONMENT_READ_TIMEOUT_MS;
+    const timeoutError = () => Object.assign(
+      new Error(`Timed out reading Codex environments in ${environmentsDir}. Check the drive or network mount and retry.`),
+      { code: "ETIMEDOUT", path: environmentsDir },
+    );
+    const checkDeadline = () => {
+      if (performance.now() >= deadline) throw timeoutError();
+    };
+
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        queuedEnvironmentReads.delete(start);
+        reject(timeoutError());
+      }, ENVIRONMENT_READ_TIMEOUT_MS);
+      const start = () => {
+        runningEnvironmentReads++;
+        void readEnvironmentOptions(environmentsDir, platform, checkDeadline)
+          .then((options) => {
+            checkDeadline();
+            return options;
+          })
+          .finally(() => {
+            clearTimeout(timer);
+            // A deadline releases the caller, but only native completion releases
+            // the slot. A timed-out read also stops before its next filesystem call.
+            runningEnvironmentReads--;
+            const next = queuedEnvironmentReads.values().next().value;
+            if (next) {
+              queuedEnvironmentReads.delete(next);
+              next();
+            }
+          })
+          .then(resolve, reject);
+      };
+      if (runningEnvironmentReads < capacity) {
+        start();
+      } else {
+        queuedEnvironmentReads.add(start);
+      }
+    });
+  };
 }
 
 async function readEnvironmentOptions(

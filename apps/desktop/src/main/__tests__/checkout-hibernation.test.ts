@@ -36,6 +36,7 @@ import {
 import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import { ArchiveWorktreeTransport } from "./fixtures/archive-worktree-transport";
 import type { CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
+import * as codexEnvironmentConfig from "../app-server/codex-environment-config";
 import { inspectRegisterableWorktree } from "../app-server/worktree-maintenance-registration";
 
 /**
@@ -956,6 +957,37 @@ describe("Restore now and Keep it awake", () => {
     releaseSetup();
     await restore;
     expect(registry.readCheckoutHibernation(identity)).toEqual({ restoring: false });
+  }));
+
+  it("records an environment read timeout as a setup failure after checkout restore", ownFixtureTest(async () => {
+    const fixture = await createFixture({ environment: true });
+    const runner = vi.fn<CodexEnvironmentCommandRunner>(async () => ({ exitCode: 0, output: "installed", durationMs: 1 }));
+    const { registry, store } = fixture.open(ON, { commandRunner: runner });
+    await store.setThreadCodexEnvironmentRuntime({ ...identity, codexEnvironmentRuntime: {
+      environmentId: "env", environmentName: "Env", executionTarget: "local", setupStatus: "completed",
+      shellEnvironment: { PATH: "/old/setup" },
+    } });
+    await sweep(registry);
+    const original = codexEnvironmentConfig.listCodexEnvironmentOptions;
+    const read = vi.spyOn(codexEnvironmentConfig, "listCodexEnvironmentOptions")
+      .mockImplementation((cwd) => cwd === fixture.worktree
+        ? Promise.reject(Object.assign(new Error("Environment read timed out"), { code: "ETIMEDOUT" }))
+        : original(cwd));
+    try {
+      const { writes } = await measureSqliteWrites(() =>
+        registry.setThreadCheckoutHibernation({ ...identity, restore: true }));
+      expect(await snapshotOf(store)).toMatchObject({ state: "restored" });
+      const runtime = (await store.getThreadOverlayState(identity))?.codexEnvironmentRuntime;
+      expect(runtime).toMatchObject({
+        cwd: fixture.worktree, setupStatus: "failed", setupOutput: "Environment read timed out",
+      });
+      expect(runtime?.shellEnvironment).toBeUndefined();
+      expect(runner).not.toHaveBeenCalled();
+      expectSqliteWriteBudget({ scenario: "checkout-hibernation-restore-environment-timeout",
+        note: "restore one hibernated checkout and record environment discovery failure", writes });
+    } finally {
+      read.mockRestore();
+    }
   }));
 });
 

@@ -2,7 +2,7 @@ import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
-import type { ThreadWorktreeRegistration } from "@pwragent/shared/contracts/navigation";
+import type { CodexEnvironmentOption, ThreadWorktreeRegistration } from "@pwragent/shared/contracts/navigation";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import { removeManagedWorktree } from "./managed-worktree";
@@ -228,6 +228,7 @@ export interface ThreadArchiveCoordinatorHost extends Pick<RegistryHostPorts,
     owner?: { backend: AppServerBackendKind; threadId: string };
     /** Run setup in a workspace that is not a new worktree. */
     forceSetup?: boolean;
+    restoredEnvironment?: CodexEnvironmentOption;
     onSetupProgress?: (
       event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
     ) => void;
@@ -1547,13 +1548,29 @@ export class ThreadArchiveCoordinator {
     onSetupStart?: () => Promise<void>,
   ): Promise<void> {
     if (!sourceRuntime?.environmentId || sourceRuntime.executionTarget !== "local") return;
-    const environment = (await listCodexEnvironmentOptions(cwd).catch(() => []))
-      .find((candidate) => candidate.id === sourceRuntime.environmentId);
-    if (!environment?.setupScript) return;
-    await onSetupStart?.();
     let runtime: CodexThreadEnvironmentRuntime | undefined;
     try {
-      runtime = await this.host().buildForkedCodexEnvironmentRuntime({ cwd, forceSetup: true, owner: identity, sourceRuntime, workMode: "worktree" });
+      const options = await listCodexEnvironmentOptions(cwd).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new CodexEnvironmentStartupError(message, "setup", {
+          ...sourceRuntime,
+          cwd,
+          setupStatus: "failed",
+          setupOutput: message,
+          setupFinishedAt: Date.now(),
+          setupStartedAt: undefined,
+          setupExitCode: undefined,
+          setupDurationMs: undefined,
+          setupFailureAcknowledgedAt: undefined,
+          shellEnvironment: undefined,
+        });
+      });
+      const environment = options.find((candidate) => candidate.id === sourceRuntime.environmentId);
+      if (!environment?.setupScript) return;
+      await onSetupStart?.();
+      runtime = await this.host().buildForkedCodexEnvironmentRuntime({
+        cwd, restoredEnvironment: environment, owner: identity, sourceRuntime, workMode: "worktree",
+      });
     } catch (error) {
       if (!(error instanceof CodexEnvironmentStartupError)) throw error;
       runtime = error.runtime;
