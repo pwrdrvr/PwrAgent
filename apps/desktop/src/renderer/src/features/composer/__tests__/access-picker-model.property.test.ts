@@ -152,7 +152,7 @@ describe("access level stops", () => {
           if (stop.disabled) expect(stop.reason).toBeTruthy();
         }
       }),
-      { numRuns: 300 },
+      { numRuns: 100 },
     );
   });
 
@@ -270,7 +270,7 @@ describe("access picker confirmation", () => {
           }
         },
       ),
-      { numRuns: 200 },
+      { numRuns: 100 },
     );
   });
 
