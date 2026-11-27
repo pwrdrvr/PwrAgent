@@ -173,8 +173,9 @@ describe("DetailsFoldersSection", () => {
       { key: "child", kind: "directory" as const, label: "Child", path: attachedCheckout.worktreePath },
     ];
     const attachApi = () => ({
-      attachDirectoryToThread: vi.fn(async () => ({
-        ok: true as const, backend: "codex" as const, threadId: childThread.id, directories: [],
+      attachDirectoryToThread: vi.fn(async (request: { path: string }) => ({
+        ok: true as const, backend: "codex" as const, threadId: childThread.id,
+        directory: { id: request.path, kind: "local" as const, label: request.path, path: request.path },
       })),
       detachDirectoryFromThread: vi.fn(),
       pickDirectoryFromDisk: vi.fn(async () => ({ canceled: false as const, path: "/fixture/Picked" })),

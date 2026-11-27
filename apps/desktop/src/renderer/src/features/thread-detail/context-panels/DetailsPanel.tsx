@@ -1,4 +1,6 @@
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
+import { EditsIcon, PullRequestIcon, TerminalIcon, ThreadIcon } from "../../../icons";
+import type { IconProps } from "../../../icons/icon-types";
 import {
   DETAILS_SEGMENT_IDS,
   type DetailsSectionId,
@@ -19,6 +21,15 @@ const SEGMENT_LABELS: Record<DetailsSegmentId, string> = {
   jobs: "Jobs",
 };
 
+// Drawn only when the rail is too narrow for the labels; Changes and Jobs
+// keep the icons their old spine tabs (Edits, Actions) had.
+const SEGMENT_ICONS: Record<DetailsSegmentId, ComponentType<IconProps>> = {
+  thread: ThreadIcon,
+  changes: EditsIcon,
+  prs: PullRequestIcon,
+  jobs: TerminalIcon,
+};
+
 /**
  * The Details tab: a four-way segmented control over Thread, Changes, PRs
  * and Jobs. It is the rail's only tab strip, and it sits inside the one
@@ -32,6 +43,9 @@ export function DetailsPanel(props: {
   revealKey?: string;
   badges: Partial<Record<DetailsSegmentId, DetailsSegmentBadge>>;
   onSelectSegment: (segment: DetailsSegmentId) => void;
+  /** Names a segment on hover and focus, which an icon-only one needs. */
+  onShowTooltip?: (target: HTMLElement, text: string) => void;
+  onHideTooltip?: () => void;
   children: ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -53,6 +67,8 @@ export function DetailsPanel(props: {
           const badge = props.badges[id];
           const count = badge?.count ?? 0;
           const selected = id === segment;
+          const Icon = SEGMENT_ICONS[id];
+          const tooltip = badge?.description ? `${SEGMENT_LABELS[id]} · ${badge.description}` : SEGMENT_LABELS[id];
           return (
             <button
               key={id}
@@ -65,8 +81,15 @@ export function DetailsPanel(props: {
               tabIndex={selected ? 0 : -1}
               className={`details-segments__button${selected ? " is-active" : ""}`}
               onClick={() => props.onSelectSegment(id)}
+              onMouseEnter={(event) => props.onShowTooltip?.(event.currentTarget, tooltip)}
+              onMouseLeave={() => props.onHideTooltip?.()}
+              onFocus={(event) => props.onShowTooltip?.(event.currentTarget, tooltip)}
+              onBlur={() => props.onHideTooltip?.()}
             >
-              {SEGMENT_LABELS[id]}
+              <Icon size={14} aria-hidden="true" className="details-segments__icon" />
+              {/* Hidden, not removed, when only the icon fits: it stays the
+                  tab's name. */}
+              <span className="details-segments__label">{SEGMENT_LABELS[id]}</span>
               {count > 0 ? (
                 <span className="details-segments__count">
                   {count > 99 ? "99+" : count}

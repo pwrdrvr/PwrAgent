@@ -1125,6 +1125,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           },
         }}
         onSelectSegment={selectDetailsSegment}
+        onShowTooltip={showTooltip}
+        onHideTooltip={hideRailTooltip}
       >
         {renderDetailsSegment(thread)}
       </DetailsPanel>

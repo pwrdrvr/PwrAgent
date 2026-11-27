@@ -46372,16 +46372,20 @@ button.pricing-token-miser__folded:focus-visible {
 /* Details tab: a segmented control over Thread, Changes, PRs and Jobs, and
    the Thread view's short sections of actionable rows. */
 .details-panel {
+  container: details-panel / inline-size;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
+/* Each segment is as wide as its label and count, and the four share what
+   is left over. Equal columns clipped "Changes 99+" under "PRs" well before
+   the rail's narrowest width. */
 .details-segments {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, auto);
   gap: 2px;
-  margin: 10px 12px 0;
+  margin: 12px 12px 0;
   padding: 3px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -46389,13 +46393,13 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .details-segments__button {
+  position: relative;
   display: inline-flex;
-  min-width: 0;
   height: 26px;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 0 6px;
+  gap: 6px;
+  padding: 0 8px;
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
@@ -46433,6 +46437,29 @@ button.pricing-token-miser__folded:focus-visible {
   font-weight: 600;
   line-height: 14px;
   text-align: center;
+}
+
+.details-segments__icon {
+  display: none;
+  flex: 0 0 auto;
+}
+
+/* Too narrow for every label beside its count: each segment shows its icon
+   and count, and its label stays as the tab's name (and its tooltip). The
+   width is where the labels with three-character counts stop fitting. */
+@container details-panel (max-width: 359px) {
+  .details-segments__icon {
+    display: block;
+  }
+
+  .details-segments__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 .details-segments__button.is-active .details-segments__count {
