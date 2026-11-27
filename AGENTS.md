@@ -13,6 +13,7 @@ Read the task-specific references below before doing the work they cover. They c
 - Default `rg` searches exclude those records through [`.rgignore`](.rgignore). Use `rg --no-ignore` or `rg -u` only when you need them.
 - Exclude `apps/desktop/.local/protocol-captures/` from broad searches; search it only for captured E2E protocol work.
 - Put a `CLAUDE.md` symlink next to every `AGENTS.md`, pointing to its sibling `AGENTS.md`, so Codex and Claude receive the same guidance.
+- Add repository skills under `.agents/skills/`. `.claude/skills` is a symlink to it because Claude Code discovers project skills only there; never replace it with a directory.
 - Keep this file under 24 KiB, `apps/desktop/AGENTS.md` under 16 KiB, and every AGENTS.md chain from the root down under 32 KiB (`pnpm lint:agent-instructions`, also checked by CI's classifier). Codex silently drops AGENTS.md text past 32 KiB along a path. Put details in a linked document and leave a line here saying when to read it.
 
 ## Deferred Work and Reviews
