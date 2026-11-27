@@ -6339,7 +6339,7 @@ describe("app server ipc", () => {
       expect(pin.coverage.state).toBe("checking");
       expect(archiveSettled).toBe(false);
       expect(listThreads).not.toHaveBeenCalled();
-      expect(canonicalizeNavigationPullRequests).toHaveBeenCalledWith([pr], expect.anything());
+      await vi.waitFor(() => expect(canonicalizeNavigationPullRequests).toHaveBeenCalledWith([pr], expect.anything()));
       expect(stackRead).not.toHaveBeenCalled();
 
       provider.resolve();
@@ -6347,6 +6347,7 @@ describe("app server ipc", () => {
       getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
       emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: { failedProviders: 0 } } });
       expect((await archive).coverage.state).toBe("complete");
+      await vi.waitFor(async () => expect((await read(lens)).coverage.state).toBe("complete"));
       const live = await read(lens);
       await vi.waitFor(() => expect(stackRead).toHaveBeenCalledOnce());
       expect(live.entries[0]?.row.stackMemberships).toBeUndefined();

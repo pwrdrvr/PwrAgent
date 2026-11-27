@@ -463,7 +463,7 @@ import {
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, archivedRemoteThreadPinMounts, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
-import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, loadSidebarNavigationQueryIndex, navigationPullRequestProjection, navigationQueryShowsStacks } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, isSidebarDisplayQuery, loadLocalNavigationQueryIndex, loadSidebarNavigationQueryIndex, navigationPullRequestProjection, navigationQueryShowsStacks } from "../app-server/navigation-query-source";
 import { reconcileWindowsDirectoryAliases } from "../app-server/navigation-windows-directory-aliases";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
@@ -2111,30 +2111,31 @@ class DesktopAppServerService {
       return Object.keys(directoryThreadsCollapsed).length
         ? { ...page, remoteOwner: { ...page.remoteOwner!, directoryThreadsCollapsed } } : page;
     }
-    const sidebar = request.consumer === "main-sidebar" && request.query.kind !== "group-members"
-      && request.query.kind !== "star-map";
+    const sidebar = isSidebarDisplayQuery(request);
     return await getDesktopNavigationQueryStore().readPage({
-      pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal: rpcOptions?.signal, backgroundValidation: sidebar }),
+      pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal: rpcOptions?.signal, backgroundValidation: sidebar, backend: request.backend }),
       loadIndex: async () => {
         rpcOptions?.signal.throwIfAborted();
         await awaitStartupProviderCoverage({ query: request.query, readReason: request.readReason,
           deadlineAt: rpcOptions?.deadlineAt ?? request.deadlineAt, signal: rpcOptions?.signal });
         const summaries = request.inventory === "viewer"
           ? getDesktopFederationRuntime().remoteThreadSummaries() : undefined;
-        const loadIndex = sidebar ? loadSidebarNavigationQueryIndex : loadLocalNavigationQueryIndex;
-        const index = await loadIndex({
+        const prepare = async () => {
+          const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries!);
+          const localInstanceId = pins.length ? (await getDesktopFederationRuntime().health()).instanceId : undefined;
+          return (local: NavigationQueryIndex) => pins.length ? appendViewerNavigationPins({ ...local, localInstanceId }, pins) : local;
+        };
+        const params = {
           backend: request.backend,
           callerReason: "renderer-navigation-query",
           useSavedStartupInventory: request.query.kind === "group-members",
           includeStacks: navigationQueryShowsStacks(request.query, request.consumer),
           signal: rpcOptions?.signal,
-          ...(summaries ? { viewer: { source: summaries, project: async (local: NavigationQueryIndex) => {
-            const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
-            if (!pins.length) return local;
-            const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
-            return appendViewerNavigationPins({ ...local, localInstanceId }, pins);
-          } } } : {}),
-        });
+        };
+        const index = sidebar
+          ? await loadSidebarNavigationQueryIndex({ ...params, viewerPins: summaries && { source: summaries, prepare, appendsPins: true } })
+          : await loadLocalNavigationQueryIndex({ ...params, viewer: summaries && { source: summaries,
+            project: async (local) => (await prepare())(local) } });
         rpcOptions?.signal.throwIfAborted();
         if (summaries) {
           // Drafts name threads on any instance. Peer rows come from the cache

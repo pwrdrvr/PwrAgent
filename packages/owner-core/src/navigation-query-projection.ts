@@ -122,8 +122,9 @@ type CertifiedSnapshot = {
   shell: SnapshotShell;
   sharedThreads: readonly NavigationThreadSummary[];
   rowOwners?: readonly string[];
-  projection?: ProjectionIndex;
+  acceleration: { projection?: ProjectionIndex };
   bytes: number;
+  counts?: NavigationCounts;
   onWork?: NavigationProjectionWork;
 };
 
@@ -242,7 +243,8 @@ export function createNavigationQuerySnapshot(index: NavigationQueryIndex, onWor
   const prepared = sameInventory ? prior : undefined;
   // JSON size is the pool's existing inventory charge. Charge auxiliary maps
   // conservatively as well: references/buckets plus UTF-16 identity/path keys.
-  const projection = prepared?.projection ?? buildProjectionIndex(copy, onWork);
+  const acceleration = prepared?.acceleration.projection ? prepared.acceleration : { projection: buildProjectionIndex(copy, onWork) };
+  const projection = acceleration.projection!;
   let bytes = prepared?.bytes ?? 0;
   if (!bytes) {
     bytes = 1_024 + 512 * copy.threads.length + 256 * copy.directories.length;
@@ -256,8 +258,90 @@ export function createNavigationQuerySnapshot(index: NavigationQueryIndex, onWor
   const prefix = owned?.sharedThreads;
   const shared = prefix && prefix.length <= copy.threads.length
     && prefix.every((row, position) => row === copy.threads[position]) ? prefix : copy.threads;
-  snapshots.set(copy, { shell, sharedThreads: shared, rowOwners, token: prepared?.token ?? Symbol("navigation-index"), projection, bytes, onWork });
+  snapshots.set(copy, { shell, sharedThreads: shared, rowOwners, token: prepared?.token ?? Symbol("navigation-index"), acceleration, bytes, onWork });
   return copy;
+}
+
+function patchSnapshotCollection<T extends object>(source: T[], replacements: ReadonlyMap<number, T>): T[] {
+  if (!replacements.size) return source;
+  const result = source.slice();
+  const values = [...replacements.values()];
+  const rows = values.every((row) => certifiedRows.has(row)) ? values : structuredClone(values);
+  const certified = certifiedCollections.has(source) && freezeSnapshot(rows);
+  let i = 0;
+  for (const position of replacements.keys()) {
+    const row = rows[i++]!;
+    result[position] = row;
+    if (certified) certifiedRows.add(row);
+  }
+  if (certified) {
+    Object.freeze(result);
+    certifiedCollections.add(result);
+  }
+  return result;
+}
+
+/** Publish one immutable owner observation for a batch with stable membership and
+ * directory geometry. Cursor readers can still use every map in the older observation. */
+export function replaceNavigationQueryRows(index: NavigationQueryIndex, replacements: ReadonlyMap<number, NavigationThreadSummary>,
+  inputRequestThreadKeys: ReadonlySet<string>, observedAt: number,
+  directoryCounts: ReadonlyMap<number, NavigationDirectorySummary>): NavigationQueryIndex {
+  const previous = snapshots.get(index);
+  const prepared = previous?.acceleration.projection;
+  const sameKeys = isDeepStrictEqual(inputRequestThreadKeys, new Set(index.inputRequestThreadKeys));
+  if (!replacements.size && sameKeys) return index;
+  const detached = patchSnapshotCollection(index.threads, replacements);
+  const detachedDirectories = patchSnapshotCollection(index.directories, directoryCounts);
+  if (!prepared || !previous || !certifiedCollections.has(detached) || !certifiedCollections.has(detachedDirectories)) {
+    return createNavigationQuerySnapshot({ ...index, threads: detached, directories: detachedDirectories, observedAt, inputRequestThreadKeys });
+  }
+  // All aliases of the old immutable observation share this handle. Relinquish
+  // its optional acceleration before updating the maps synchronously. A reader
+  // still holding an older observation can always derive its own maps from it.
+  previous.acceleration.projection = undefined;
+  const projection = prepared;
+  let ownersChanged = false;
+  const counts = { ...(previous.counts ?? countsForThreads(index.threads)) };
+  for (const position of replacements.keys()) {
+    const old = index.threads[position]!;
+    const row = detached[position]!;
+    ownersChanged ||= row.parentThreadInstanceId !== old.parentThreadInstanceId;
+    const candidateKey = JSON.stringify([null, row.id]);
+    const candidates = projection.parentCandidates.get(candidateKey)!;
+    const nextCandidates = candidates.map((candidate) => candidate === old ? row : candidate);
+    projection.parentCandidates.set(candidateKey, nextCandidates);
+    if (index.localInstanceId) projection.parentCandidates.set(JSON.stringify([index.localInstanceId, row.id]), nextCandidates);
+    projection.threadsByIdentity.set(threadKey(row), row);
+    projection.threadsByLegacyKey.set(buildThreadIdentityKey(row.source, row.id), row);
+    for (const [member, sign] of [[old, -1], [row, 1]] as const) {
+      if (!isOrdinaryThread(member)) continue;
+      const parent = parentIdentity(member, projection.parentCandidates);
+      if (parent) {
+        const id = identityKey(parent);
+        const count = (projection.childCountByParent.get(id) ?? 0) + sign;
+        if (count) projection.childCountByParent.set(id, count);
+        else projection.childCountByParent.delete(id);
+        if (parent.ownerInstanceId) {
+          const viewerCount = (projection.viewerChildCountByParent.get(id) ?? 0) + sign;
+          if (viewerCount) projection.viewerChildCountByParent.set(id, viewerCount);
+          else projection.viewerChildCountByParent.delete(id);
+        }
+      }
+      counts.total += sign;
+      if (isActive(member)) counts.active += sign;
+      if (member.inbox.inInbox) {
+        counts.unread += sign;
+        if (!isActive(member)) counts.review += sign;
+      }
+      if (member.pinnedRank) counts.pinned = (counts.pinned ?? 0) + sign;
+    }
+  }
+  if (!counts.pinned) delete counts.pinned;
+  const next = Object.freeze({ ...index, threads: detached, directories: detachedDirectories, observedAt,
+    inputRequestThreadKeys: sameKeys ? index.inputRequestThreadKeys : detachSnapshotKeys(inputRequestThreadKeys) });
+  snapshots.set(next, { ...previous, token: Symbol("navigation-index"), sharedThreads: detached,
+    acceleration: { projection }, counts, rowOwners: ownersChanged ? snapshotRowOwners(next) : previous.rowOwners });
+  return next;
 }
 
 function snapshotRowOwners(index: NavigationQueryIndex): readonly string[] | undefined {
@@ -294,7 +378,7 @@ export function navigationQuerySnapshotAuxiliaryBytes(index: NavigationQueryInde
 export function releaseNavigationQuerySnapshotProjection(index: NavigationQueryIndex): void {
   const snapshot = snapshots.get(index);
   if (!snapshot) return;
-  snapshot.projection = undefined;
+  snapshot.acceleration.projection = undefined;
   snapshot.bytes = 0;
 }
 
@@ -1651,13 +1735,13 @@ export function projectNavigationQuery(params: {
   }
   const snapshot = snapshots.get(params.index);
   const onWork = params.onIndexWork ?? snapshot?.onWork;
-  const prepared = snapshot?.projection ?? buildProjectionIndex(params.index, onWork, false);
+  const prepared = snapshot?.acceleration.projection ?? buildProjectionIndex(params.index, onWork, false);
   const { threadsByIdentity, threadsByLegacyKey, parentCandidates, repositories, checkoutProjects, workspaceProjects } = prepared;
   const scopedDirectory = queryDirectory({ query, index: params.index, threadsByLegacyKey });
   const scopedMembers = scopedDirectory ? new Set(directoryMemberThreads(scopedDirectory, threadsByLegacyKey)) : undefined;
   const { childCountByParent, viewerChildCountByParent } = scopedMembers
     ? buildChildCounts(scopedMembers, prepared, onWork)
-    : snapshot?.projection ?? buildChildCounts(params.index.threads, prepared, onWork);
+    : snapshot?.acceleration.projection ?? buildChildCounts(params.index.threads, prepared, onWork);
   const lensRootOf = query.kind === "lens" && query.roots
     ? lensRootResolver({ threadsByIdentity, parentCandidates }) : undefined;
   const selectedThreads = selectQueryThreads({
@@ -1820,7 +1904,8 @@ export function projectNavigationQuery(params: {
     ...(directoryGitProof ? { directoryGitProof } : {}),
     // Both pages count every owner thread, so both can say which providers
     // the owner uses. Provider chips hide while that is a single provider.
-    counts: countsForThreads(countsThreads, {
+    counts: countsThreads === params.index.threads && query.kind === "lens" && snapshot
+      ? { ...(snapshot.counts ??= countsForThreads(countsThreads)) } : countsForThreads(countsThreads, {
       backends: query.kind === "directory-index"
         || (query.kind === "star-map" && query.projectKey === undefined),
     }),

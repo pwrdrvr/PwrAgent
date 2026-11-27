@@ -66,3 +66,7 @@ export function sqliteOwnerNavigationChangeVersion(db: Database.Database): strin
   if (!version) return "transaction";
   return `${sqliteThreadChangeVersion(db)}:${sqliteBackendChangeVersion(db)}:${version.owner}`;
 }
+
+export function sqliteViewerNavigationChangeVersion(db: Database.Database): number | undefined {
+  return ensureNavigationVersion(db)?.viewer;
+}

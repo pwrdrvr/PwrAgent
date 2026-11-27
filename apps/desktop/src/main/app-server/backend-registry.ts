@@ -254,6 +254,7 @@ import {
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
+  type AppServerBackendScope,
   type AppServerBackendKind,
   type AppServerBackendWake,
   type CodexThreadEnvironmentRuntime,
@@ -5329,10 +5330,32 @@ export class DesktopBackendRegistry {
     return this.inheritThreadListReadState(limited, rows);
   }
 
+  /** Display observation without consuming the provider listing's status fence. */
+  navigationThreadStatus(row: AppServerThreadSummary): AppServerThreadStatus | undefined {
+    if (this.threadHasActiveTurn(row.id, row.source)) return "active";
+    return row.source === "codex" ? this.context.turnState.statusObservation(row.id)?.status ?? row.threadStatus : row.threadStatus;
+  }
+
+  /** Refresh only SQLite-owned sessions and overlays after an external profile commit.
+   * The saved Codex discovery snapshot may predate an observed start or deletion. */
+  async reconcileSqliteNavigationThreads(threads: AppServerThreadSummary[], backend: AppServerBackendScope): Promise<AppServerThreadSummary[]> {
+    if (this.closed || this.isBootstrapModeFn()) return [];
+    const [codex, claude, acp] = await Promise.all([
+      this.applySavedCodexOverlays(threads.filter((row) => row.source === "codex")),
+      backend === "all" || backend === "claude" ? this.claudeBackend.listThreads() : [],
+      backend === "all" || isAcpBackendId(backend) ? this.readAcpThreadsForCache(true) : [],
+    ]);
+    return [...codex, ...claude, ...acp.filter((row) => backend === "all" || row.source === backend)];
+  }
+
   /** Complete available local membership while the owner checks its providers. */
   readStartupNavigationThreads(backend?: AppServerBackendKind): Promise<AppServerThreadSummary[]> | undefined {
-    if (!this.providerThreadSnapshotStore || this.closed || this.isBootstrapModeFn()
-      || this.isCodexBootstrapDeferredFn() || this.startupProviderRefreshStatus?.state !== "checking") return undefined;
+    if (this.startupProviderRefreshStatus?.state !== "checking") return undefined;
+    return this.readSavedNavigationThreads(backend);
+  }
+
+  readSavedNavigationThreads(backend?: AppServerBackendKind): Promise<AppServerThreadSummary[]> | undefined {
+    if (!this.providerThreadSnapshotStore || this.closed || this.isBootstrapModeFn() || this.isCodexBootstrapDeferredFn()) return undefined;
     return this.hydrateSavedStartupThreads().then((saved) => {
       const reviewParents = new Set<string>();
       for (const review of this.context.turnState.liveReviewRecords().values()) {
@@ -5554,7 +5577,7 @@ export class DesktopBackendRegistry {
       backend: "codex",
       notification: {
         method: "navigation/providerThreads/refreshed",
-        params: { failedProviders },
+        params: { failedProviders, backend: "codex" },
       },
     });
   }

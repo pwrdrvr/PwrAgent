@@ -29,6 +29,10 @@ const mocks = vi.hoisted(() => {
     profileStore: undefined as SqliteOverlayStore | undefined,
     store: {
       readNavigationPullRequests: vi.fn((): PrSummary[][] => []),
+      readNavigationQueryThreads: vi.fn(({ threads }: { threads: NavigationThreadSummary[] }) => ({
+        threads: threads.map((thread) => ({ ...thread, inbox: thread.inbox ?? { inInbox: false } })),
+      })),
+      readNavigationQueryDirectories: (threads: NavigationThreadSummary[]) => ({ directories: buildDirectorySummaries({ threads }) }),
       readNavigationSourceVersion: vi.fn(() => "unchanged"),
       getThreadPrAutoDispatchPending: vi.fn(async () => undefined),
       readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
@@ -53,6 +57,7 @@ import { loadLocalNavigationQueryIndex, loadSidebarNavigationQueryIndex, navigat
 import { StackReader, readStackClones } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
+import * as checkoutStore from "../git-info/directory-store";
 import { runGitCommand } from "../app-server/git-executable";
 import { configureBundledGit } from "../bundled-git";
 import { gitSubprocessDiagnostics, prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
@@ -99,31 +104,53 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
   };
 }
 
-it("serves a warm Attention filter from the existing sidebar index until the owner changes", async () => {
+it.each([8, 16, 32])("keeps a filter switch and %i row changes off inventory discovery", async (size) => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const source = createSource();
   const store = new NavigationQueryStore();
-  const project = vi.fn(() => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query" }));
-  const read = (query: NavigationQueryRequest["query"]) => store.readPage({
-    scopeKey: "warm-sidebar", request: { protocol: 2, consumer: "main-sidebar", query }, loadIndex: project,
+  const threads: NavigationThreadSummary[] = Array.from({ length: size }, (_, i) => ({
+    id: String(i), source: "codex", title: String(i), titleSource: "explicit", projectKey: "/fixture/" + i,
+    linkedDirectories: [], inbox: { inInbox: false }, threadStatus: "idle",
+  }));
+  source.listThreads.mockResolvedValue(threads);
+  const checkout = vi.spyOn(checkoutStore, "readNavigationCheckouts").mockResolvedValue([]);
+  const joined = mocks.store.readNavigationQueryIndex;
+  const original = joined.getMockImplementation()!;
+  joined.mockImplementation(({ threads }) => ({ ...mocks.store.readNavigationQueryThreads({ threads }), directories: [] }));
+  const read = (active = false) => store.readPage({
+    scopeKey: "warm-sidebar", request: { protocol: 2, consumer: "main-sidebar",
+      query: { kind: "lens", lens: "attention", ...(active ? { attention: "active" as const } : {}) } },
+    loadIndex: () => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query", includeStacks: true }),
   });
+  const work = () => [source.listThreads.mock.calls.length,
+    checkout.mock.calls.reduce((total, [paths]) => total + paths.length, 0), joined.mock.calls.length];
   try {
-    source.finish();
-    await read({ kind: "lens", lens: "attention" });
-    const projected = await project.mock.results[0]!.value;
-    await vi.advanceTimersByTimeAsync(10_000);
-    await read({ kind: "lens", lens: "attention", attention: "active" });
-    expect(await project.mock.results[1]!.value).toBe(projected);
-    expect(source.listThreads).toHaveBeenCalledTimes(1);
-
-    source.emit("thread/status/changed");
-    await read({ kind: "lens", lens: "attention", attention: "active" });
-    expect(source.listThreads).toHaveBeenCalledTimes(2);
-
+    const discovered = Promise.withResolvers<void>();
+    source.registry.publishLocalEvent = async (event) => {
+      if (event.notification.method === "navigation/invalidated") discovered.resolve();
+    };
+    await read();
+    await discovered.promise;
+    source.listThreads.mockClear();
+    checkout.mockClear();
+    joined.mockClear();
     await vi.advanceTimersByTimeAsync(15_001);
-    await read({ kind: "lens", lens: "attention" });
-    expect(source.listThreads).toHaveBeenCalledTimes(3);
-  } finally { vi.useRealTimers(); }
+    await read(true);
+    const switched = work();
+    for (const thread of threads) {
+      thread.threadStatus = "active";
+      for (const listener of source.listeners) listener({ backend: "codex", notification: {
+        method: "thread/status/changed", params: { threadId: thread.id, status: { type: "active" } },
+      } });
+    }
+    const page = await read(true);
+    expect(page.counts.active).toBe(size);
+    expect({ switched, afterBurst: work() }).toEqual({ switched: [0, 0, 0], afterBurst: [0, 0, 0] });
+  } finally {
+    joined.mockImplementation(original);
+    checkout.mockRestore();
+    vi.useRealTimers();
+  }
 });
 
 it("drops a revoked named messaging binding from the next warm sidebar read", async () => {
@@ -143,8 +170,8 @@ it("drops a revoked named messaging binding from the next warm sidebar read", as
     expect((await read()).threads[0]?.messagingBindings).toHaveLength(1);
     bindings = [];
     namedBindings.noteMessagingBindingsChange();
-    expect((await read()).threads[0]?.messagingBindings ?? []).toEqual([]);
-    expect(source.listThreads).toHaveBeenCalledTimes(2);
+    await vi.waitFor(async () => expect((await read()).threads[0]?.messagingBindings ?? []).toEqual([]));
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
   } finally {
     namedBindings.setNamedMessagingBindingReader(undefined);
     mocks.store.readNavigationQueryIndex.mockImplementation(previous);
@@ -1170,7 +1197,7 @@ it("keeps confirmed stack badges for unchanged rows while Git revalidates", asyn
   source.registry.publishLocalEvent = vi.fn(async () => {});
   const projection = mocks.store.readNavigationQueryIndex;
   const original = projection.getMockImplementation()!;
-  projection.mockImplementation(({ threads }) => ({ threads, directories: [] }));
+  projection.mockImplementation(({ threads }) => ({ ...mocks.store.readNavigationQueryThreads({ threads }), directories: [] }));
   const nextScan = Promise.withResolvers<void>();
   const git = vi.spyOn(StackReader.prototype, "read").mockResolvedValueOnce({ stacks: [initial], catalogs: [] })
     .mockImplementation(async () => { await nextScan.promise; return { stacks: [], catalogs: [] }; });
