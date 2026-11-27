@@ -16936,6 +16936,7 @@ function useComposerController(props: ComposerProps) {
       <div
         className={hasSetup ? "composer__setup" : "composer__footer"}
         data-folded-tiers={hasSetup ? composerRowFold.foldedTierCount : undefined}
+        data-overflowing={hasSetup && composerRowFold.overflows ? "" : undefined}
         ref={hasSetup ? composerRowFold.rowRef : undefined}
         aria-label={
           props.launchpad

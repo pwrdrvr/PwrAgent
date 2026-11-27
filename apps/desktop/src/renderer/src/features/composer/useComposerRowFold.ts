@@ -18,8 +18,9 @@ import {
 export function useComposerRowFold(): {
   rowRef: (element: HTMLElement | null) => void;
   foldedTierCount: number;
+  overflows: boolean;
 } {
-  const [foldedTierCount, setFoldedTierCount] = useState(0);
+  const [fold, setFold] = useState<ComposerRowFoldState>(NO_FOLD);
   const [row, setRow] = useState<HTMLElement | null>(null);
   const frameRef = useRef<number | undefined>(undefined);
 
@@ -27,7 +28,11 @@ export function useComposerRowFold(): {
     if (!row || typeof ResizeObserver === "undefined") return;
     const measure = () => {
       frameRef.current = undefined;
-      setFoldedTierCount(measureComposerRowFold(row));
+      const next = measureComposerRowFold(row);
+      setFold((current) =>
+        current.foldedTierCount === next.foldedTierCount && current.overflows === next.overflows
+          ? current
+          : next);
     };
     const schedule = () => {
       if (frameRef.current !== undefined) return;
@@ -57,13 +62,24 @@ export function useComposerRowFold(): {
   }, [row]);
 
   const rowRef = useCallback((element: HTMLElement | null) => setRow(element), []);
-  return { rowRef, foldedTierCount: row ? foldedTierCount : 0 };
+  const current = row ? fold : NO_FOLD;
+  return { rowRef, foldedTierCount: current.foldedTierCount, overflows: current.overflows };
 }
+
+type ComposerRowFoldState = { foldedTierCount: number; overflows: boolean };
+
+const NO_FOLD: ComposerRowFoldState = { foldedTierCount: 0, overflows: false };
 
 const FOLD_TIERS: ReadonlySet<string> = new Set(COMPOSER_FOLD_TIERS);
 
-/** The labels that ellipsize once every tier has folded: the model name and the Where pill. */
-const TRUNCATING_LABELS = ".model-settings__pill-model, .composer-where__label";
+/**
+ * The labels that ellipsize once every tier has folded: the model name, the
+ * new-thread provider, and the Where label.
+ */
+const TRUNCATING_LABELS = ".model-settings__pill-model, .model-settings__pill-provider, .composer-where__label";
+
+/** The pills around those labels, which clip whatever does not fit. */
+const CLIPPING_PILLS = ".model-settings__pill, .composer-where__pill";
 
 /**
  * The boxes that sit in the row's flex line, in order. `display: contents`
@@ -102,7 +118,7 @@ function composerRowFlexItems(row: HTMLElement): HTMLElement[] {
   return items;
 }
 
-export function measureComposerRowFold(row: HTMLElement): number {
+export function measureComposerRowFold(row: HTMLElement): ComposerRowFoldState {
   const style = getComputedStyle(row);
   const available = row.clientWidth
     - (Number.parseFloat(style.paddingLeft) || 0)
@@ -112,12 +128,40 @@ export function measureComposerRowFold(row: HTMLElement): number {
     const fold = element.dataset.composerFold;
     const tier = fold !== undefined && FOLD_TIERS.has(fold) ? (fold as ComposerFoldTier) : undefined;
     const width = element.dataset.composerRowGroup !== undefined ? 0 : element.getBoundingClientRect().width;
-    // A truncated name reports its shrunk box; add back what it hides so the
-    // row unfolds as soon as the full name would fit again.
-    const truncatable = element.querySelector<HTMLElement>(TRUNCATING_LABELS);
-    const hidden = truncatable ? Math.max(0, truncatable.scrollWidth - truncatable.clientWidth) : 0;
-    return { ...(tier ? { tier } : {}), width: width + hidden };
+    // A truncated name reports its shrunk box, and a pill squeezed past its
+    // floor clips the rest; add back what both hide so the row unfolds as
+    // soon as the whole control would fit again.
+    const labels = [...element.querySelectorAll<HTMLElement>(TRUNCATING_LABELS)];
+    const hidden = labels.reduce(
+      (sum, label) => sum + Math.max(0, label.scrollWidth - label.clientWidth),
+      0,
+    );
+    const pill = element.querySelector<HTMLElement>(CLIPPING_PILLS);
+    const clipped = pill ? Math.max(0, pill.scrollWidth - pill.clientWidth) : 0;
+    const natural = width + hidden + clipped;
+    // A control the stylesheet lets shrink (the model and Where pills) gives
+    // up its truncating labels once every tier has folded, and no more: the
+    // rest of the pill (effort, icons, chevron) is its floor.
+    const shrinks = (Number.parseFloat(getComputedStyle(element).flexShrink) || 0) > 0;
+    const minWidth = shrinks && labels.length > 0
+      ? Math.max(0, natural - labels.reduce((sum, label) => sum + label.scrollWidth, 0))
+      : undefined;
+    // The stylesheet cannot know that floor, so it reads it from here
+    // (`--composer-row-floor`). Setting a style attribute is not a change the
+    // observer above watches, so this does not schedule another measure.
+    if (minWidth !== undefined) {
+      const floor = `${Math.ceil(minWidth)}px`;
+      if (element.style.getPropertyValue("--composer-row-floor") !== floor) {
+        element.style.setProperty("--composer-row-floor", floor);
+      }
+    }
+    return {
+      ...(tier ? { tier } : {}),
+      width: natural,
+      ...(minWidth !== undefined ? { minWidth } : {}),
+    };
   });
-  if (available <= 0) return 0;
-  return planComposerRowFold({ available, gap, items }).foldedTierCount;
+  if (available <= 0) return NO_FOLD;
+  const plan = planComposerRowFold({ available, gap, items });
+  return { foldedTierCount: plan.foldedTierCount, overflows: plan.overflows };
 }

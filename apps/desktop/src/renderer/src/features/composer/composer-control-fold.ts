@@ -12,6 +12,9 @@
  * The access control, the model pill, ⋮, the context moon and the Send split
  * never fold. Once every tier has folded, the model name truncates. Nothing
  * else gives up width.
+ *
+ * A pane can be narrower than even those pinned controls. Then the row
+ * `overflows`, and only then it wraps, so Send never leaves the box.
  */
 export const COMPOSER_FOLD_TIERS = ["details", "run", "dictation", "attach"] as const;
 
@@ -34,6 +37,11 @@ export type ComposerRowPlan = {
   foldedTierCount: number;
   /** Width taken from shrinkable controls after every tier has folded. */
   shrink: number;
+  /**
+   * The pinned controls do not fit even at their floors, so the row has to
+   * wrap to keep Send in the box.
+   */
+  overflows: boolean;
 };
 
 /** Sub-pixel measurements must not fold a control that fits. */
@@ -86,7 +94,7 @@ export function planComposerRowFold(input: {
   for (let folded = 0; folded <= COMPOSER_FOLD_TIERS.length; folded += 1) {
     width = composerRowWidth(visibleComposerRowItems(items, folded), gap);
     if (width <= available + FIT_TOLERANCE_PX) {
-      return { foldedTierCount: folded, shrink: 0 };
+      return { foldedTierCount: folded, shrink: 0, overflows: false };
     }
   }
   const shrinkable = items.reduce(
@@ -97,5 +105,6 @@ export function planComposerRowFold(input: {
   return {
     foldedTierCount: COMPOSER_FOLD_TIERS.length,
     shrink: Math.min(shrinkable, width - available),
+    overflows: width - shrinkable > available + FIT_TOLERANCE_PX,
   };
 }

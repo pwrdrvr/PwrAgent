@@ -18,6 +18,8 @@ import {
  * moving to the Details rail, then the environment ▶, then dictation, then
  * attach. The access control, model pill, ⋮, moon and Send never fold, and
  * the model name truncates only after everything that can fold has folded.
+ * A pane narrower than those pinned controls is the one case that wraps, so
+ * Send never leaves the box.
  */
 
 function declarations(selector: string): Map<string, string> {
@@ -151,6 +153,40 @@ describe("composer control row fold", () => {
     expect(folded.get("visibility")).toBe("hidden");
     // The tools group adds nothing but its children, so it must use the row's gap.
     expect(parseColumnGap(declarations(".composer__application-actions"))).toBe(rowGap);
+    // The last resort, when even the pinned controls do not fit.
+    expect(declarations(".composer__setup[data-overflowing]").get("flex-wrap")).toBe("wrap");
+  });
+
+  it("overflows, and so wraps, exactly when the pinned controls cannot fit", () => {
+    fc.assert(
+      fc.property(
+        composerRow.chain((controls) =>
+          fc.tuple(fc.constant(controls), fc.integer({ min: 1, max: Math.ceil(pinnedFloor(controls)) + 40 }))),
+        ([controls, available]) => {
+          const { plan } = layOut(controls, available);
+          expect(plan.overflows).toBe(pinnedFloor(controls) > available + 0.5);
+          if (plan.overflows) expect(plan.foldedTierCount).toBe(COMPOSER_FOLD_TIERS.length);
+        },
+      ),
+    );
+  });
+
+  // From CI: a 900 px window with both rails open leaves the thread pane's
+  // row about 212 px. Access, the effort-only model pill, ⋮, the moon and
+  // Send need more than that, and the unwrapped row pushed Send out of the
+  // box, where it could not be clicked.
+  it("wraps a row too narrow for its pinned controls rather than clip Send", () => {
+    const controls: Control[] = [
+      { id: "access", width: 110 },
+      { id: "model", width: 150, minWidth: 84 },
+      { id: "dictation", tier: "dictation", width: 26 },
+      { id: "options", width: 26 },
+      { id: "moon", width: 66 },
+      { id: "send", width: 54 },
+    ];
+    const { plan } = layOut(controls, 212);
+    expect(plan.foldedTierCount).toBe(COMPOSER_FOLD_TIERS.length);
+    expect(plan.overflows).toBe(true);
   });
 
   it("is one line at every width that fits the pinned controls", () => {

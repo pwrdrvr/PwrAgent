@@ -49883,8 +49883,10 @@ button.composer__subthread-source-parent:hover {
   outline-offset: 1px;
 }
 
+/* The border stays, unpainted: the input's min-height counts it, and the
+   empty line must sit evenly between its top and bottom padding. */
 .composer__box .composer-tiptap-input {
-  border: 0;
+  border-color: transparent;
   border-radius: 8px 8px 0 0;
   background: transparent;
 }
@@ -49923,10 +49925,43 @@ button.composer__subthread-source-parent:hover {
   flex-shrink: 0;
 }
 
-/* The model name gives way, never its effort meter. */
-.composer__setup .composer__pending-controls > .model-settings {
+/* A pane narrower than the controls that never fold: the row wraps, and so
+   does the Send group, so Send stays in the box (`overflows` in
+   composer-control-fold.ts). */
+.composer__setup[data-overflowing] {
+  flex-wrap: wrap;
+}
+
+.composer__setup[data-overflowing] > .composer__actions {
+  flex-wrap: wrap;
+  flex-shrink: 1;
+  min-width: 0;
+  margin-left: auto;
+}
+
+/* The model name and the Where label give way, never the effort meter or
+   the checkout. The fold hook measures what is left of each pill and sets it
+   as the floor, so one pill cannot shrink past it while the other has
+   room. */
+.composer__setup .composer__pending-controls > .model-settings,
+.composer__setup .composer__pending-controls > .composer-where {
   flex: 0 1 auto;
-  min-width: 72px;
+  min-width: var(--composer-row-floor, 0px);
+}
+
+.composer__setup .model-settings__pill,
+.composer__setup .composer-where__pill {
+  overflow: hidden;
+}
+
+/* On a new thread the pill also names the provider. It gives way after the
+   model name: it shrinks a tenth as fast. */
+.composer__setup .model-settings__pill-provider {
+  flex: 0 0.1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A control the row can fold. Folded, it stays mounted at its natural size
@@ -49997,11 +50032,6 @@ button.composer__subthread-source-parent:hover {
 /* The new-thread Where pill: project, checkout and machine behind one
    chip. Its accent rim marks the one choice a new thread needs before it
    starts. The label truncates, as the model name does. */
-.composer__setup .composer__pending-controls > .composer-where {
-  flex: 0 1 auto;
-  min-width: 96px;
-}
-
 .composer-where {
   position: relative;
   display: inline-flex;

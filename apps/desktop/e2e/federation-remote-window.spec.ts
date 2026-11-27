@@ -17,6 +17,7 @@ import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { StateDb } from "../src/main/state/state-db";
 import { launchElectronApp, rightClickThreadRow } from "./fixtures/electron-app";
 import { accessTrigger, allowFullAccess } from "./fixtures/access-picker";
+import { chooseComposerOption, expectComposerOption } from "./fixtures/composer-row";
 import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 import {
   buildFakeAgentConfigToml,
@@ -1455,15 +1456,8 @@ test.describe("federation remote window", () => {
       await remote.keyboard.press("Escape");
       await expect(childProvider).toContainText("OpenAI");
 
-      const childTools = remote.getByLabel("Composer tools");
-      const childEnvironment = childTools.getByRole("button", {
-        name: /^Environment(?::|$)/,
-        exact: true,
-      });
-      await expect(childEnvironment).toBeVisible();
-      await childEnvironment.click();
-      await remote.getByRole("option", { name: "PwrAgent", exact: true }).click();
-      await expect(childEnvironment).toContainText("PwrAgent");
+      await chooseComposerOption(remote, /^Environment(?::|$)/, "PwrAgent");
+      await expectComposerOption(remote, /^Environment(?::|$)/, "PwrAgent");
 
       await childPrompt.fill("/review");
       await remote.getByRole("button", { name: "Start sub-thread" }).click();
@@ -2666,13 +2660,8 @@ test.describe("federation remote window", () => {
       }
       await expect(childAccessMode).toHaveAttribute("data-value", "full-access");
 
-      const childEnvironment = remote
-        .getByLabel("Composer tools")
-        .getByRole("button", { name: /^Environment(?::|$)/, exact: true });
-      await expect(childEnvironment).toBeVisible();
-      await childEnvironment.click();
-      await remote.getByRole("option", { name: "PwrAgent", exact: true }).click();
-      await expect(childEnvironment).toContainText("PwrAgent");
+      await chooseComposerOption(remote, /^Environment(?::|$)/, "PwrAgent");
+      await expectComposerOption(remote, /^Environment(?::|$)/, "PwrAgent");
 
       await remote.getByRole("textbox", { name: "New thread" }).fill("/review");
       await remote.getByRole("button", { name: "Start sub-thread" }).click();
