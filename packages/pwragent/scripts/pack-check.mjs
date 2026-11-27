@@ -64,7 +64,8 @@ try {
   assert.ok(!/require\(["'](?:\/|[A-Za-z]:)/.test(unpacked("dist/index.js")), "Portable bundle must not require build-host absolute paths");
   assert.deepEqual(packed.bundled, []);
   assert.ok(![...files].some(file => file.startsWith("resources/git/") || file === "resources/mcp-ipc-relay/mcp-ipc-relay"
-    || file.startsWith("resources/mcp-stdio-relay/")), "Do not pack build-host binaries");
+    || file.startsWith("resources/mcp-stdio-relay/") || file.startsWith("native/mcp-stdio-relay/target/")),
+    "Do not pack build-host binaries");
   assert.equal(unpacked("scripts/stage-runtime.mjs"), readFileSync(new URL("../../../apps/desktop/scripts/stage-runtime.mjs", import.meta.url), "utf8"));
   assert.equal(unpacked("dist/THIRD_PARTY_LICENSES"), readFileSync(path.join(root, "dist/THIRD_PARTY_LICENSES"), "utf8"));
   assert.equal(unpacked("licenses/xterm-LICENSE"), readFileSync(path.join(root, "licenses/xterm-LICENSE"), "utf8"));

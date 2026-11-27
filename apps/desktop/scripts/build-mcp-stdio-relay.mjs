@@ -27,7 +27,7 @@ export function buildMcpStdioRelay({ arch = process.arch, outputRoot = root, pac
   }
   const source = join(root, "native/mcp-stdio-relay");
   const buildRoot = join(outputRoot, "build/mcp-stdio-relay");
-  const targetDir = join(buildRoot, "cargo");
+  const targetDir = join(outputRoot, ".local/mcp-stdio-relay/cargo");
   const filename = mcpStdioRelayName();
   const output = destination ?? join(buildRoot, packaged ? "packaged" : `${process.platform}-${arch}`, filename);
   const temporary = `${output}.${randomUUID()}.tmp`;
