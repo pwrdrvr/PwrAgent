@@ -1,22 +1,50 @@
-import { projectRetainedOwnerThread, retainsOwnerThread, type RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
+import { projectRetainedOwnerThread, retainedOwnerArchivedAt, retainsOwnerThread, type RetainedOwnerThreadStorage } from "@pwragent/owner-core/retained-owner-thread-storage";
 import type { OwnerJobRecord } from "@pwragent/owner-core/owner-job-storage";
+import type { OwnerThreadRecord } from "@pwragent/owner-core/thread-storage";
 import { SqliteOverlayStore } from "./overlay-store-sqlite";
 import { SqliteOwnerJobStore } from "./owner-job-store";
-import { readCommittedOutpostImport } from "./legacy-outpost-owner-data";
+import { CommittedOutpostImportReader } from "./legacy-outpost-owner-data";
 import type { StateDb } from "./state-db";
 
 /** A read projection over existing metadata/jobs and the committed import proof. */
 export class RetainedOwnerThreadStore implements RetainedOwnerThreadStorage {
   private readonly threads: SqliteOverlayStore;
   private readonly jobs: SqliteOwnerJobStore;
+  private readonly imported: CommittedOutpostImportReader;
 
-  constructor(private readonly db: StateDb, private readonly headlessDirectory: string) {
+  constructor(private readonly db: StateDb, headlessDirectory: string) {
+    this.imported = new CommittedOutpostImportReader(db, headlessDirectory);
     this.threads = new SqliteOverlayStore(db);
     this.jobs = new SqliteOwnerJobStore(db);
   }
 
+  private pendingImport(threadId: string, record: OwnerThreadRecord | undefined) {
+    if (!retainsOwnerThread(record, true)) return undefined;
+    const imported = this.imported.read([threadId]);
+    return imported.threadIds.has(threadId) ? imported : undefined;
+  }
+
+  has(threadId: string): boolean {
+    if (this.jobs.latestForThread(threadId)?.threadId) return true;
+    const record = this.threads.readStoredOwnerThreadMetadata({ backend: "codex", threadId });
+    return Boolean(this.pendingImport(threadId, record));
+  }
+
+  get(threadId: string, archived?: boolean) {
+    const record = this.threads.readStoredOwnerThreadMetadata({ backend: "codex", threadId });
+    if (archived !== undefined && (retainedOwnerArchivedAt(record) !== undefined) !== archived) return undefined;
+    const job = this.jobs.latestForThread(threadId);
+    if (job?.threadId) {
+      // The receipt proves identity even if the same thread was imported.
+      const workspace = record?.cwd || job.cwd ? undefined : this.imported.readWorkspace();
+      return projectRetainedOwnerThread(threadId, record, job, workspace);
+    }
+    const imported = this.pendingImport(threadId, record);
+    return imported && projectRetainedOwnerThread(threadId, record, undefined, imported.workspace);
+  }
+
   list() {
-    const imported = readCommittedOutpostImport(this.db, this.headlessDirectory);
+    const imported = this.imported.read();
     const jobs = new Map<string, OwnerJobRecord>();
     for (const job of this.jobs.list()) {
       if (!job.threadId) continue;
@@ -32,7 +60,7 @@ export class RetainedOwnerThreadStore implements RetainedOwnerThreadStorage {
   }
 
   confirmNativeThreads(threadIds: readonly string[]): void {
-    const imported = readCommittedOutpostImport(this.db, this.headlessDirectory).threadIds;
+    const imported = this.imported.read(threadIds).threadIds;
     const candidates = [...new Set(threadIds)].filter(id => imported.has(id));
     if (!candidates.length) return;
     // The current fact is read inside the transaction. A late positive walk

@@ -1722,6 +1722,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return this.readOwnerThreadMetadataList();
   }
 
+  /** Match the list projection without running first-touch overlay migrations. */
+  readStoredOwnerThreadMetadata(identity: OwnerThreadIdentity): OwnerThreadRecord | undefined {
+    const key = encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(identity.backend, identity.threadId));
+    const row = this.stateDb.raw.prepare("SELECT payload FROM threads WHERE thread_id = ?").get(key) as { payload: string } | undefined;
+    return row && ownerThreadRecord(JSON.parse(row.payload));
+  }
+
   readOwnerThreadMetadataList(): OwnerThreadRecord[] {
     const rows = this.stateDb.raw.prepare("SELECT payload FROM threads ORDER BY thread_id").all() as { payload: string }[];
     return rows.map((row) => ownerThreadRecord(JSON.parse(row.payload)));

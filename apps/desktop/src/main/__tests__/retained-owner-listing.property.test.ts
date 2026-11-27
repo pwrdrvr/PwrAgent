@@ -117,3 +117,36 @@ it("changes a retained Codex thread's monitor preference only while it belongs t
     expect((await f.overlay.getThreadOverlayState(identity))?.jobMonitorCreationEnabled).toBe(false);
   } finally { await registry.close(); await provider.close(); f.close(); }
 });
+
+it("resolves an archived job and an unknown ID without projecting unrelated retained owners", async () => {
+  const f = retainedOwnerFixture(false, ["imported", "unrelated"]);
+  const configPath = path.join(f.root, "config.toml");
+  writeFileSync(configPath, "");
+  const config = new DesktopConfigStore({ configPath });
+  config.recordProviderDiscovery("codex", { candidates: [], selectedCommand: "/fixture/codex", selectedVersion: "0.159.2" });
+  const client = new CodexAppServerClient({ directoryResolver: async () => [] });
+  const archived = { id: "accepted", source: "codex" as const, title: "Native archive", titleSource: "explicit" as const,
+    createdAt: 1, updatedAt: 2, linkedDirectories: [] };
+  const list = vi.spyOn(client, "listThreads").mockImplementation(async params => params?.archived ? [archived] : []);
+  vi.spyOn(client, "listNativeSubAgentThreads").mockResolvedValue([]);
+  f.jobs.save({ version: 1, id: "receipt", threadId: archived.id, status: "completed", fingerprint: "accepted" });
+  const projectAll = vi.spyOn(f.retained, "list");
+  const prepared = vi.spyOn(f.db.raw, "prepare");
+  const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: f.overlay, configStore: config,
+    retainedOwnerThreadStorage: f.retained, providerThreadSnapshotStore: null, messagingStore: null,
+    threadTitleGenerationService: null, pdfToolMcpServer: null, discoverLocalAcpAgents: async () => [] });
+  try {
+    const resolve = (threadId: string) => registry.resolveThread({ backend: "codex", threadId });
+    expect(await resolve("missing")).toBeUndefined();
+    expect(list.mock.calls.some(([params]) => params?.archived)).toBe(false);
+    expect(await resolve("accepted")).toMatchObject({ id: archived.id, title: archived.title });
+    expect(await registry.resolveThread({ threadId: "imported" })).toMatchObject({ id: "imported" });
+    expect(projectAll).not.toHaveBeenCalled();
+    const jobReads = new Set(prepared.mock.calls.map(([sql]) => sql).filter(sql => sql.includes("FROM owner_jobs")));
+    expect(jobReads.size).toBeGreaterThan(0);
+    for (const sql of jobReads) {
+      const plan = f.db.raw.prepare("EXPLAIN QUERY PLAN " + sql).all(archived.id);
+      expect(plan).toEqual([expect.objectContaining({ detail: expect.stringMatching(/SEARCH owner_jobs USING (?:COVERING )?INDEX/) })]);
+    }
+  } finally { await registry.close(); await client.close(); config.dispose(); f.close(); }
+});
