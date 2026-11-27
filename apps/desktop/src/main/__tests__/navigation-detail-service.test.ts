@@ -620,6 +620,16 @@ describe("NavigationDetailService", () => {
     expect(readSelectedWorkspaceGitStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("hydrates environment choices for selected detail built from a CWD-only summary", async () => {
+    const options = [{ id: "env", name: "Owner environment", actions: [] }];
+    mocks.listCodexEnvironmentOptions.mockResolvedValue(options);
+    const { detail } = await selectedWithSubAgents({ linkedDirectories: [
+      { id: "workspace", label: "Repo", kind: "local", path: "/owner/repo" },
+    ] });
+    expect(detail.thread?.codexEnvironmentOptions).toEqual(options);
+    expect(mocks.listCodexEnvironmentOptions).toHaveBeenCalledExactlyOnceWith("/owner/repo");
+  });
+
   it("rejects oversized configuration without truncating action metadata", async () => {
     const service = new NavigationDetailService({} as DesktopBackendRegistry);
     mocks.getDirectoryLaunchpad.mockResolvedValue({ directoryKey: "chosen", agent: { name: "owner", instructions: "x".repeat(252 * 1024) } });

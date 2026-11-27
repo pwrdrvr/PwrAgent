@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   codexThread,
   createThreadReadRegistry,
@@ -139,6 +140,38 @@ describe("thread read budgets", () => {
       reads: client.counts,
       scenario: "concurrent-identical-listings",
     });
+  });
+
+  it("visits each cold listing row once across concurrent turn CWD lookups", async () => {
+    const firstCwd = "/worktrees/thread-alpha";
+    const secondCwd = "/worktrees/thread-beta";
+    const { client, registry } = build([
+      { ...NAMED_THREAD, projectKey: firstCwd },
+      { ...SECOND_THREAD, projectKey: secondCwd },
+    ]);
+    const listThreads = registry.listThreads.bind(registry);
+    const trackedLists = new WeakMap<AppServerThreadSummary[], AppServerThreadSummary[]>();
+    let rowVisits = 0;
+    vi.spyOn(registry, "listThreads").mockImplementation(async (params) => {
+      const rows = await listThreads(params);
+      const tracked = trackedLists.get(rows);
+      if (tracked) return tracked;
+      const counted = new Proxy(rows, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^\d+$/.test(property)) rowVisits++;
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      trackedLists.set(rows, counted);
+      return counted;
+    });
+
+    await expect(Promise.all([
+      registry.resolveThreadWorkspaceCwd("codex", NAMED_THREAD.id),
+      registry.resolveThreadWorkspaceCwd("codex", SECOND_THREAD.id),
+    ])).resolves.toEqual([firstCwd, secondCwd]);
+    expect(client.counts.providerListCalls).toBe(1);
+    expect(rowVisits).toBeLessThanOrEqual(2);
   });
 });
 

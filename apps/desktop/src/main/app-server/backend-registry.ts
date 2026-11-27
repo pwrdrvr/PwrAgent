@@ -697,7 +697,8 @@ import {
   type BackendModelCatalogCallerReason,
 } from "./backend-model-catalog";
 import {
-  listCodexEnvironmentOptions,
+  isCodexEnvironmentDiscoveryTimeout,
+  listBackgroundCodexEnvironmentOptions,
 } from "./codex-environment-config";
 import { assertThreadModelSettingsAvailable } from "./thread-model-admission";
 import { setupVariablesForAgent } from "./agent-setup-variables";
@@ -1039,7 +1040,14 @@ function logBackendLifecycleNotification(
   }
 }
 
+const ENVIRONMENT_TIMEOUT_THREAD_LIST_REUSE_WINDOW_MS = 5_000;
 let threadListCacheSequence = 0;
+
+function requiresSuccessfulCodexThreadList(callerReason?: string): boolean {
+  return callerReason === "archive-cleanup"
+    || callerReason === "startup-provider-refresh"
+    || callerReason === "authentication-recovery";
+}
 
 class CompactionRecoveryRevoked extends Error {
   constructor(readonly status: "busy" | "discarded" = "discarded") { super("Compaction recovery admission was revoked"); }
@@ -1171,6 +1179,7 @@ export class DesktopBackendRegistry {
   private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
+  private readonly workspaceThreadRowsById = new WeakMap<AppServerThreadSummary[], Map<string, AppServerThreadSummary>>();
   private threadListCacheRevision = 0;
   private createdThreadDirectoryVisibility = new Map<
     string,
@@ -1370,6 +1379,7 @@ export class DesktopBackendRegistry {
    * stores, and their read errors reject the listing instead.
    */
   private readonly incompleteThreadLists = new WeakSet<readonly AppServerThreadSummary[]>();
+  private readonly threadListsWithEnvironmentTimeouts = new WeakSet<readonly AppServerThreadSummary[]>();
   /**
    * In-flight terminal-notification label reconciliations, keyed by thread. A
    * burst of turn completions on threads this process never observed must cost
@@ -4479,16 +4489,15 @@ export class DesktopBackendRegistry {
       caller: normalizedParams.callerReason,
       provider: normalizedParams.backend === "codex" ? "codex" : normalizedParams.backend ? "acp" : "all",
       archived: normalizedParams.archived === true,
-    }, () => this.readThreadList(normalizedParams, displayMetadataObservationSequence));
+    }, () => this.readThreadList(normalizedParams, displayMetadataObservationSequence, { cacheKey, pendingState }));
     const promise = execution
       .then((threads) => {
         if (this.threadListCache.get(cacheKey) === pendingState) {
           listingDiagnostics.remember(threads, execution);
+          const reuseWindowMs = this.threadListReuseWindowMs(threads);
           this.threadListCache.set(cacheKey, {
             archived: normalizedParams.archived === true,
-            expiresAt: Date.now() + (this.incompleteThreadLists.has(threads)
-              ? INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS
-              : THREAD_LIST_REUSE_WINDOW_MS),
+            expiresAt: Date.now() + reuseWindowMs,
             threads,
           });
           logDebug("threadListCache:store", {
@@ -4497,7 +4506,7 @@ export class DesktopBackendRegistry {
             callerReason: normalizedParams.callerReason ?? "thread-list",
             durationMs: Date.now() - startedAt,
             enrichDirectories: normalizedParams.enrichDirectories,
-            expiresInMs: THREAD_LIST_REUSE_WINDOW_MS,
+            expiresInMs: reuseWindowMs,
             filterPresent: Boolean(normalizedParams.filter?.trim()),
             forceRefresh: normalizedParams.forceRefresh === true,
             limit: normalizedParams.limit,
@@ -5044,6 +5053,7 @@ export class DesktopBackendRegistry {
       skipArchivedMetadataRefresh?: boolean;
     },
     displayMetadataObservationSequence: number,
+    cache: { cacheKey: string; pendingState: ThreadListCacheState },
   ): Promise<AppServerThreadSummary[]> {
     const durableThreads = await this.readDurableStartupThreads(
       params,
@@ -5059,24 +5069,38 @@ export class DesktopBackendRegistry {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
     };
+    // Turn admission needs workspace metadata before its own filesystem I/O.
+    const enrichEnvironmentOptions = params.callerReason !== "turn-cwd";
     if (
       params.backend === "claude"
       || params.backend === "codex"
       || (params.backend && isAcpBackendId(params.backend))
     ) {
-      const listed = await this.readProviderThreadList(
-        params.backend,
-        params,
-        diagnostics,
-        displayMetadataObservationSequence,
-      );
-      const threads = this.inheritIncompleteThreadList(
-        await this.withThreadEnvironmentOptions(listed.threads),
-        listed.threads,
-      );
+      // A turn can use the provider rows even while navigation is still reading
+      // environment files. Keep the shared read on the pending cache entries
+      // so an invalidation fences it along with the projected results.
+      const canShareProviderRead = params.backend === "codex"
+        && !params.forceRefresh
+        && !requiresSuccessfulCodexThreadList(params.callerReason)
+        && this.threadListCache.get(cache.cacheKey) === cache.pendingState;
+      const sibling = canShareProviderRead
+        ? this.threadListCache.get(this.buildThreadListCacheKey({ ...params, enrichEnvironmentOptions: !enrichEnvironmentOptions }))
+        : undefined;
+      const providerRead = sibling?.providerRead ?? {
+        observationSequence: displayMetadataObservationSequence,
+        result: this.readProviderThreadList(params.backend, params, diagnostics, displayMetadataObservationSequence),
+      };
+      if (canShareProviderRead) cache.pendingState.providerRead = providerRead;
+      const listed = await providerRead.result;
+      const threads = enrichEnvironmentOptions
+        ? this.inheritThreadListReadState(
+          await this.withThreadEnvironmentOptions(listed.threads),
+          listed.threads,
+        )
+        : listed.threads;
       this.rememberThreadListContexts(
         threads,
-        displayMetadataObservationSequence,
+        providerRead.observationSequence,
         listed.enriched,
         params.archived,
       );
@@ -5098,7 +5122,9 @@ export class DesktopBackendRegistry {
         skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
       }),
       this.listAllInstalledAcpThreads(params.filter, params.archived)
-        .then((threads) => this.withThreadEnvironmentOptions(threads)),
+        .then((threads) => enrichEnvironmentOptions
+          ? this.withThreadEnvironmentOptions(threads)
+          : threads),
       this.listThreads({ ...params, backend: "claude" }),
     ]);
 
@@ -5114,12 +5140,16 @@ export class DesktopBackendRegistry {
       ACP_LISTINGS_ARE_ENRICHED,
       params.archived,
     );
-    return this.inheritIncompleteThreadList(
+    const threads = this.inheritThreadListReadState(
       [...codexThreads, ...acpThreads, ...claudeThreads].sort(
         (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
       ),
       codexThreads,
     );
+    if ([acpThreads, claudeThreads].some((rows) => this.threadListsWithEnvironmentTimeouts.has(rows))) {
+      this.threadListsWithEnvironmentTimeouts.add(threads);
+    }
+    return threads;
   }
 
   /**
@@ -5177,7 +5207,7 @@ export class DesktopBackendRegistry {
         maxPages: params.maxPages,
         skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
       }, diagnostics);
-      const threads = this.inheritIncompleteThreadList(
+      const threads = this.inheritThreadListReadState(
         await this.filterArchivedThreadsPresentInActiveList({
           archived: params.archived,
           backend: "codex",
@@ -5217,12 +5247,18 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private inheritIncompleteThreadList(
+  private inheritThreadListReadState(
     threads: AppServerThreadSummary[],
     source: readonly AppServerThreadSummary[],
   ): AppServerThreadSummary[] {
     if (this.incompleteThreadLists.has(source)) this.incompleteThreadLists.add(threads);
+    if (this.threadListsWithEnvironmentTimeouts.has(source)) this.threadListsWithEnvironmentTimeouts.add(threads);
     return threads;
+  }
+
+  private threadListReuseWindowMs(threads: readonly AppServerThreadSummary[]): number {
+    if (this.threadListsWithEnvironmentTimeouts.has(threads)) return ENVIRONMENT_TIMEOUT_THREAD_LIST_REUSE_WINDOW_MS;
+    return this.incompleteThreadLists.has(threads) ? INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS : THREAD_LIST_REUSE_WINDOW_MS;
   }
 
   private async readDurableStartupThreads(
@@ -5258,7 +5294,7 @@ export class DesktopBackendRegistry {
     let codexRows = 0;
     const limited = limit === undefined ? rows : rows.filter((thread) => thread.source !== "codex" || codexRows++ < limit);
     this.incompleteThreadLists.add(limited);
-    return limited;
+    return this.inheritThreadListReadState(limited, rows);
   }
 
   /** Complete available local membership while the owner checks its providers. */
@@ -5313,6 +5349,10 @@ export class DesktopBackendRegistry {
     const retained = this.mergeRetainedOwnerThreads(this.withPendingStartedThreads("codex", nativeThreads), {}, archivedNativeIds);
     const threads = await this.applySavedCodexOverlays(retained);
     if (this.closed) return [];
+    if (this.threadListsWithEnvironmentTimeouts.has(acpThreads)
+      || (liveCodex && this.threadListsWithEnvironmentTimeouts.has(liveCodex))) {
+      this.threadListsWithEnvironmentTimeouts.add(threads);
+    }
     if (!this.savedStartupThreadMetadataHydrated) {
       this.savedStartupThreadMetadataHydrated = true;
       this.rememberThreadListContexts(threads, displayMetadataObservationSequence, false, false);
@@ -5595,13 +5635,17 @@ export class DesktopBackendRegistry {
     this.invalidateThreadListCache();
     const incomplete = codexIncomplete || refreshes.some(({ threads }) => this.isIncompleteThreadList(threads));
     if (incomplete) this.incompleteThreadLists.add(currentThreads);
+    if (this.threadListsWithEnvironmentTimeouts.has(acpThreads)
+      || refreshes.some(({ threads }) => this.threadListsWithEnvironmentTimeouts.has(threads))) {
+      this.threadListsWithEnvironmentTimeouts.add(currentThreads);
+    }
     const cacheKey = this.buildThreadListCacheKey({
       callerReason: "navigation-snapshot",
       enrichDirectories: false,
     });
     this.threadListCache.set(cacheKey, {
       archived: false,
-      expiresAt: Date.now() + (incomplete ? INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS : THREAD_LIST_REUSE_WINDOW_MS),
+      expiresAt: Date.now() + this.threadListReuseWindowMs(currentThreads),
       threads: currentThreads,
     });
   }
@@ -6239,7 +6283,7 @@ export class DesktopBackendRegistry {
       const session = isAcpBackendId(thread.source) ? this.acpBackend.getSession(thread.source, thread.id) : undefined;
       return session ? [session] : [];
     });
-    return sessions.filter(session => !session.hidden && session.archivedAt === undefined).map(session => {
+    const threads = sessions.filter(session => !session.hidden && session.archivedAt === undefined).map(session => {
       const native = this.acpBackend.sessionToThreadSummary(session);
       const previous = byIdentity.get(buildThreadIdentityKey(session.backendId, session.sessionId));
       return previous && previous.projectKey === native.projectKey
@@ -6255,13 +6299,12 @@ export class DesktopBackendRegistry {
           ? { ...native, codexNativeSubAgents: previous.codexNativeSubAgents }
           : native;
     });
+    return this.inheritThreadListReadState(threads, enriched);
   }
 
   /**
-   * Attaches the environments defined in each thread's workspace. Every
-   * provider listing passes through here, whatever its backend: when each
-   * backend's list did this itself, the Claude list never did, and its
-   * threads showed an environment's Run chip with no Environment picker.
+   * Attaches the environments defined in each thread's workspace so navigation
+   * can show the Environment picker alongside Run across all backends.
    */
   private async withThreadEnvironmentOptions(
     threads: AppServerThreadSummary[],
@@ -6282,8 +6325,9 @@ export class DesktopBackendRegistry {
       ] as const),
     ));
     // Threads in one checkout share its environment files; read them once.
-    const optionsByCwd = new Map<string, Promise<CodexEnvironmentOption[]>>();
-    return await Promise.all(
+    const optionsByCwd = new Map<string, Promise<CodexEnvironmentOption[] | undefined>>();
+    let timedOut = false;
+    const enriched = await Promise.all(
       threads.map(async (thread) => {
         const cwd = resolveThreadWorkspaceCwd(
           thread,
@@ -6292,12 +6336,19 @@ export class DesktopBackendRegistry {
         if (!cwd) return { ...thread, codexEnvironmentOptions: [] };
         let options = optionsByCwd.get(cwd);
         if (!options) {
-          options = listCodexEnvironmentOptions(cwd).catch(() => []);
+          options = listBackgroundCodexEnvironmentOptions(cwd).catch((error) => {
+            if (!isCodexEnvironmentDiscoveryTimeout(error)) return [];
+            timedOut = true;
+            return undefined;
+          });
           optionsByCwd.set(cwd, options);
         }
-        return { ...thread, codexEnvironmentOptions: await options };
+        const choices = await options;
+        return choices === undefined ? thread : { ...thread, codexEnvironmentOptions: choices };
       }),
     );
+    if (timedOut) this.threadListsWithEnvironmentTimeouts.add(enriched);
+    return enriched;
   }
 
   private async listInstalledAcpThreads(
@@ -18615,6 +18666,7 @@ export class DesktopBackendRegistry {
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
+    enrichEnvironmentOptions?: boolean;
     filter?: string;
     forceRefresh?: boolean;
     limit?: number;
@@ -18634,6 +18686,8 @@ export class DesktopBackendRegistry {
       backend: params.backend ?? "all",
       codexDirectoryBackfill,
       enrichDirectories: params.enrichDirectories === true,
+      // A CWD lookup must never join a pending environment-enriched list.
+      enrichEnvironmentOptions: params.enrichEnvironmentOptions ?? (params.callerReason !== "turn-cwd"),
       revalidateDirectories: includesCodex && params.enrichDirectories === true && params.forceRefresh === true,
       filter: params.filter?.trim() ?? "",
       limit: params.limit,
@@ -18809,11 +18863,7 @@ export class DesktopBackendRegistry {
           // cannot authorize absence. Retry an unexpectedly short walk sooner.
           .listThreads(params, diagnostics, params.maxPages === undefined ? () => { incomplete = true; } : undefined)
           .catch(async (error) => {
-            if (
-              diagnostics?.callerReason === "archive-cleanup"
-              || diagnostics?.callerReason === "startup-provider-refresh"
-              || diagnostics?.callerReason === "authentication-recovery"
-            ) {
+            if (requiresSuccessfulCodexThreadList(diagnostics?.callerReason)) {
               throw error;
             }
 
@@ -19039,7 +19089,7 @@ export class DesktopBackendRegistry {
   ): AppServerThreadSummary[] {
     const retained = this.retainedOwnerThreadsMissingFrom(threads, params).filter(thread => !oppositeNativeIds.has(thread.id));
     if (!retained.length) return threads;
-    return this.inheritIncompleteThreadList([...threads, ...retained]
+    return this.inheritThreadListReadState([...threads, ...retained]
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)), threads);
   }
 
@@ -19948,7 +19998,19 @@ export class DesktopBackendRegistry {
       archived: false,
       callerReason,
     })
-      .then((threads) => threads.find((thread) => thread.id === params.threadId))
+      .then((threads) => {
+        // Concurrent cold lookups share one listing. Index that result once
+        // and let a refreshed listing build an index of its own rows.
+        let byId = this.workspaceThreadRowsById.get(threads);
+        if (!byId) {
+          byId = new Map();
+          for (const thread of threads) {
+            if (!byId.has(thread.id)) byId.set(thread.id, thread);
+          }
+          this.workspaceThreadRowsById.set(threads, byId);
+        }
+        return byId.get(params.threadId);
+      })
       .catch(() => undefined);
   }
 

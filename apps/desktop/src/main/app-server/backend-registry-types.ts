@@ -1084,6 +1084,10 @@ export type ThreadListCacheState = {
   archived: boolean;
   expiresAt?: number;
   promise?: Promise<AppServerThreadSummary[]>;
+  providerRead?: {
+    observationSequence: number;
+    result: Promise<{ threads: AppServerThreadSummary[]; enriched: boolean }>;
+  };
   threads?: AppServerThreadSummary[];
 };
 
