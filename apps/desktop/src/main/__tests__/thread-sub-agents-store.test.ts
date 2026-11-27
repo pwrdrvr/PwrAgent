@@ -392,22 +392,23 @@ describe("thread sub-agent table", () => {
       const { stateDb, store } = openStore();
       const ids = ["system:token-miser:gate-1", "system:token-miserX", "codex-native:worker", "codex-native",
         "review:turn-1", "system:title-helper:x", "task-monitor:abc", "codex-native:",
-        "claude-native:task-1", "claude-native", "claude-native:"];
+        "claude-native:task-1", "claude-native", "claude-native:",
+        "acp-native:call-1", "acp-native", "acp-native:"];
       await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1",
         subAgents: ids.map((monitorId, index) => card(index, { monitorId })) });
       const rows = stateDb.raw.prepare(`SELECT monitor_id, ${THREAD_SUB_AGENT_LENS_SQL} AS lens FROM thread_sub_agents`).all() as Array<{ monitor_id: string; lens: SubAgentLens }>;
       expect(rows).toHaveLength(ids.length);
       for (const row of rows) expect([row.monitor_id, row.lens]).toEqual([row.monitor_id, subAgentLens(card(0, { monitorId: row.monitor_id }))]);
-      // Claude Code's own sub-agents are harness workers, like Codex's.
+      // Claude Code and ACP native sub-agents are harness workers, like Codex's.
       expect(rows.filter((row) => row.lens === "harness").map((row) => row.monitor_id).sort())
-        .toEqual(["claude-native:", "claude-native:task-1", "codex-native:", "codex-native:worker"]);
+        .toEqual(["acp-native:", "acp-native:call-1", "claude-native:", "claude-native:task-1", "codex-native:", "codex-native:worker"]);
     });
 
     it("agrees with the shared lens for any monitor id (differential)", async () => {
       const { stateDb, store } = openStore();
       // Ids near every prefix boundary: a whole prefix, a cut one, one with a
       // suffix, and arbitrary text.
-      const prefixes = ["system:token-miser:", "codex-native:", "claude-native:", "review:", "task-monitor:"];
+      const prefixes = ["system:token-miser:", "codex-native:", "claude-native:", "acp-native:", "review:", "task-monitor:"];
       const monitorId = fc.oneof(
         fc.tuple(fc.constantFrom(...prefixes), fc.string({ maxLength: 6 })).map(([prefix, rest]) => prefix + rest),
         fc.tuple(fc.constantFrom(...prefixes), fc.nat({ max: 20 })).map(([prefix, cut]) => prefix.slice(0, cut)),
@@ -521,7 +522,7 @@ describe("thread sub-agent table", () => {
         DROP TRIGGER thread_sub_agent_gate_totals_update_new;
         DROP TRIGGER thread_sub_agent_gate_totals_delete;
         DROP VIEW thread_sub_agent_gate_shares;
-        DROP INDEX thread_sub_agents_by_lens_v2;`);
+        DROP INDEX thread_sub_agents_by_lens_v3;`);
       for (const column of (stateDb.raw.prepare("SELECT name FROM pragma_table_info('thread_sub_agent_revisions')").all() as Array<{ name: string }>)
         .map((row) => row.name).filter((name) => name.startsWith("gate_"))) {
         stateDb.raw.exec(`ALTER TABLE thread_sub_agent_revisions DROP COLUMN ${column}`);
@@ -580,7 +581,7 @@ describe("thread sub-agent table", () => {
       // The two lenses that never age out are counted from the index alone.
       const counts = reads.find((sql) => sql.startsWith("SELECT count(*)") && !sql.includes("completedAt"))!;
       expect((stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${counts}`).all(null, null, null) as Array<{ detail: string }>)
-        .map((row) => row.detail).join("\n")).toMatch(/USING COVERING INDEX thread_sub_agents_by_lens_v2/);
+        .map((row) => row.detail).join("\n")).toMatch(/USING COVERING INDEX thread_sub_agents_by_lens_v3/);
     });
 
     it("parses the same card bytes for pricing and a panel page on a thread with 25 or 2,025 gates", async () => {
@@ -760,5 +761,92 @@ describe("thread sub-agent table", () => {
       .toEqual([{ n: 1, thread_id: "codex:thread-2" }]);
     expect(await store.readThreadSubAgentRevision({ backend: "codex", threadId: "thread-1" }))
       .toEqual({ count: 0, revision: 0 });
+  });
+
+  it("batches listThreadSubAgentsByMonitorIdPrefix into one query and skips expired cards in SQL when visibleSince is set", async () => {
+    const { stateDb, store } = openStore();
+    const now = 1_800_000_000_000;
+    const visibleSince = now - 60 * 60 * 1000;
+    const expiredAt = visibleSince - 60_000;
+    const threadIds: string[] = [];
+
+    for (let t = 0; t < 25; t += 1) {
+      const threadId = `acp-thread-${t}`;
+      threadIds.push(threadId);
+      const cards: ThreadSubAgentSummary[] = Array.from({ length: 20 }, (_, h) => ({
+        monitorId: `acp-native:hist-${t}-${h}`,
+        task: `Expired worker ${h}`,
+        status: "success",
+        outcome: "success",
+        createdAt: expiredAt - 5_000,
+        updatedAt: expiredAt,
+        completedAt: expiredAt,
+        backend: "acp:antigravity",
+      }));
+      if (t === 0) {
+        cards.push(
+          {
+            monitorId: "acp-native:live-1",
+            task: "Running worker",
+            status: "running",
+            createdAt: expiredAt - 10_000,
+            updatedAt: expiredAt - 5_000,
+            backend: "acp:antigravity",
+          },
+          {
+            monitorId: "acp-native:recent-1",
+            task: "Recently completed worker",
+            status: "success",
+            outcome: "success",
+            createdAt: now - 120_000,
+            updatedAt: now - 60_000,
+            completedAt: now - 60_000,
+            backend: "acp:antigravity",
+          },
+        );
+      }
+      await store.upsertThreadSubAgents({
+        backend: "acp:antigravity",
+        threadId,
+        subAgents: cards,
+      });
+    }
+
+    let jsonParseCalls = 0;
+    const origParse = JSON.parse;
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((...args: Parameters<typeof JSON.parse>) => {
+      jsonParseCalls += 1;
+      return origParse(...args);
+    });
+    let sqlAllCalls = 0;
+    const origPrepare = stateDb.raw.prepare.bind(stateDb.raw);
+    const prepareSpy = vi.spyOn(stateDb.raw, "prepare").mockImplementation((...args: Parameters<typeof stateDb.raw.prepare>) => {
+      const stmt = origPrepare(...args);
+      const origAll = stmt.all.bind(stmt);
+      stmt.all = (...allArgs: unknown[]) => {
+        sqlAllCalls += 1;
+        return origAll(...allArgs);
+      };
+      return stmt;
+    });
+
+    try {
+      const visible = await store.listThreadSubAgentsByMonitorIdPrefix({
+        backend: "acp:antigravity",
+        threadIds,
+        monitorIdPrefix: "acp-native:",
+        visibleSince,
+      });
+      expect(sqlAllCalls).toBe(1);
+      expect(jsonParseCalls).toBe(2);
+      expect(Object.keys(visible)).toEqual(["acp-thread-0"]);
+      expect(visible["acp-thread-0"]?.map((entry) => entry.monitorId).sort()).toEqual([
+        "acp-native:live-1",
+        "acp-native:recent-1",
+      ]);
+    } finally {
+      parseSpy.mockRestore();
+      prepareSpy.mockRestore();
+    }
   });
 });

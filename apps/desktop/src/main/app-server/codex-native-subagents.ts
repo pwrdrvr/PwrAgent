@@ -516,11 +516,12 @@ export function codexNativeSubAgentOutcome(
 export function nativeSubAgentRowFromCard(card: ThreadSubAgentSummary, threadId: string): CodexNativeSubAgentSummary {
   return {
     threadId,
-    title: card.task,
+    title: card.displayTitle ?? card.task,
     createdAt: card.createdAt,
     updatedAt: card.updatedAt,
     threadStatus: codexNativeSubAgentIsTerminal(card.status) ? "idle" : "active",
     ...(card.agentName ? { agentNickname: card.agentName } : {}),
+    ...(card.agentRole ? { agentRole: card.agentRole } : {}),
   };
 }
 

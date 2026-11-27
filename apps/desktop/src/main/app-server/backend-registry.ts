@@ -2335,6 +2335,7 @@ export class DesktopBackendRegistry {
       readThreadLock: (...args: Parameters<typeof this.readThreadLock>) => this.readThreadLock(...args),
       readThreadUsageActivities: (...args: Parameters<ThreadUsageLedger["readThreadUsageActivities"]>) => this.threadUsageLedger.readThreadUsageActivities(...args),
       get recentlyCompletedThreadUsageTurns() { return current().threadUsageLedger.recentlyCompletedThreadUsageTurnRecords; },
+      recordAcpSubAgents: (...args: Parameters<SubAgentMonitorService["recordAcpSubAgents"]>) => this.subAgentMonitorService.recordAcpSubAgents(...args),
       recordClaudeSubAgents: (...args: Parameters<SubAgentMonitorService["recordClaudeSubAgents"]>) => this.subAgentMonitorService.recordClaudeSubAgents(...args),
       recordCodexWorktreeOwnerThread: (...args: Parameters<typeof this.recordCodexWorktreeOwnerThread>) => this.recordCodexWorktreeOwnerThread(...args),
       recordMissingCodexThread: (...args: Parameters<typeof this.recordMissingCodexThread>) => this.recordMissingCodexThread(...args),
@@ -6162,7 +6163,7 @@ export class DesktopBackendRegistry {
     const inventory = this.acpBackend.listInventorySessions({ archived });
     if (inventory) {
       const threadLists = await Promise.all(inventory.map(({ backendId, sessions }) =>
-        this.enrichAcpThreadList(backendId, sessions, filter),
+        this.enrichAcpThreadList(backendId, sessions, filter, archived),
       ));
       return threadLists.flat();
     }
@@ -6192,8 +6193,18 @@ export class DesktopBackendRegistry {
     return sessions.filter(session => !session.hidden && session.archivedAt === undefined).map(session => {
       const native = this.acpBackend.sessionToThreadSummary(session);
       const previous = byIdentity.get(buildThreadIdentityKey(session.backendId, session.sessionId));
-      return previous && previous.projectKey === native.projectKey ? { ...native,
-        linkedDirectories: previous.linkedDirectories, codexEnvironmentOptions: previous.codexEnvironmentOptions } : native;
+      return previous && previous.projectKey === native.projectKey
+        ? {
+            ...native,
+            linkedDirectories: previous.linkedDirectories,
+            codexEnvironmentOptions: previous.codexEnvironmentOptions,
+            ...(previous.codexNativeSubAgents
+              ? { codexNativeSubAgents: previous.codexNativeSubAgents }
+              : {}),
+          }
+        : previous?.codexNativeSubAgents
+          ? { ...native, codexNativeSubAgents: previous.codexNativeSubAgents }
+          : native;
     });
   }
 
@@ -6248,22 +6259,36 @@ export class DesktopBackendRegistry {
     if (!isAcpBackendId(backendId)) {
       return [];
     }
-    return this.enrichAcpThreadList(backendId, this.acpBackend.listSessions(backendId, { archived }), filter);
+    return await this.enrichAcpThreadList(
+      backendId,
+      this.acpBackend.listSessions(backendId, { archived }),
+      filter,
+      archived,
+    );
   }
 
   private async enrichAcpThreadList(
     backendId: AcpBackendId,
     sessions: AcpSessionMetadata[],
     filter?: string,
+    archived?: boolean,
   ): Promise<AppServerThreadSummary[]> {
     const normalizedFilter = filter?.trim().toLowerCase();
     const threads = sessions.map((session) => this.acpBackend.sessionToThreadSummary(session));
+    const overlaysByThreadId = threads.length > 0 && typeof this.overlayStore.getThreadOverlayStates === "function"
+      ? await this.overlayStore.getThreadOverlayStates({
+          backend: backendId,
+          threadIds: threads.map((thread) => thread.id),
+        })
+      : undefined;
     const enrichedThreads = await Promise.all(
       threads.map(async (thread) => {
-        const overlay = await this.overlayStore.getThreadOverlayState({
-          backend: backendId,
-          threadId: thread.id,
-        });
+        const overlay = overlaysByThreadId
+          ? overlaysByThreadId[thread.id]
+          : await this.overlayStore.getThreadOverlayState({
+              backend: backendId,
+              threadId: thread.id,
+            });
         const executionMode = backendId === "acp:antigravity"
           ? thread.executionMode
           : this.latestAppliedExecutionModeFromOverlay(overlay) ?? thread.executionMode;
@@ -6284,12 +6309,15 @@ export class DesktopBackendRegistry {
         };
       }),
     );
-    return enrichedThreads.filter(
+    const filtered = enrichedThreads.filter(
       (thread) =>
         !normalizedFilter ||
         thread.title.toLowerCase().includes(normalizedFilter) ||
         thread.id.toLowerCase().includes(normalizedFilter),
     );
+    return archived
+      ? filtered
+      : await this.subAgentMonitorService.withAcpNativeSubAgents(backendId, filtered);
   }
 
   /**
