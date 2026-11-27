@@ -924,7 +924,7 @@ describe("Composer", () => {
     ]);
   });
 
-  it("schedules a new thread from /plan with the message alone, in Plan mode", async () => {
+  it("schedules a new thread in Plan mode and turns Plan off once it is scheduled", async () => {
     const onMaterializeLaunchpad = vi.fn<NonNullable<ComponentProps<typeof Composer>["onMaterializeLaunchpad"]>>(async () => undefined);
     render(
       <Composer
@@ -936,7 +936,8 @@ describe("Composer", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "/plan Investigate the build" } });
+    fireEvent.change(screen.getByLabelText("New thread"), { target: { value: "Investigate the build" } });
+    fireEvent.click(screen.getByRole("button", { name: "Plan mode" }));
     fireEvent.click(screen.getByRole("button", { name: "Schedule thread" }));
     await act(async () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Start in 15m" }));
@@ -951,6 +952,7 @@ describe("Composer", () => {
       [],
       expect.any(Number),
     ]);
+    expect(screen.getByRole("button", { name: "Plan mode" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("reloads a failed configuration read after returning to a project draft", async () => {
@@ -29904,7 +29906,7 @@ describe("Composer", () => {
     expect(onPendingStatusChange).not.toHaveBeenCalledWith(undefined);
   });
 
-  it("sends a /plan message as one Codex turn in plan collaboration mode", async () => {
+  it("sends one Codex turn in plan collaboration mode, then turns Plan off", async () => {
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -29963,10 +29965,10 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.queryByLabelText("Plan mode")).toBeNull();
     fireEvent.change(screen.getByLabelText("Reply"), {
-      target: { value: "/plan Plan this change" },
+      target: { value: "Plan this change" },
     });
+    fireEvent.click(screen.getByLabelText("Plan mode"));
     await clickButton("Send");
 
     await waitFor(() => {
@@ -29985,43 +29987,15 @@ describe("Composer", () => {
       },
     });
     expect(onPendingStatusChange).toHaveBeenCalledWith("Planning");
-    // One turn: the draft is gone, so the next message is an ordinary one.
     await waitFor(() => {
-      expect(screen.getByLabelText("Reply")).toHaveValue("");
+      expect(screen.getByLabelText("Plan mode")).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
     });
   });
 
-  it("keeps Send disabled for a bare /plan, which has no message to send", async () => {
-    const startTurn = vi.fn().mockResolvedValue({ backend: "claude", threadId: "thread-1", turnId: "turn-1" });
-    render(
-      <Composer
-        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
-        disabled={false}
-        skills={[]}
-        thread={{
-          id: "thread-1",
-          title: "Plan mode",
-          titleSource: "explicit",
-          source: "claude",
-          linkedDirectories: [],
-          inbox: { inInbox: false },
-        }}
-      />,
-    );
-
-    const reply = screen.getByLabelText("Reply");
-    for (const draft of ["/plan", "/plan   ", "/PLAN\n"]) {
-      fireEvent.change(reply, { target: { value: draft } });
-      expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-    }
-    fireEvent.keyDown(reply, { key: "Enter" });
-    expect(startTurn).not.toHaveBeenCalled();
-
-    fireEvent.change(reply, { target: { value: "/plan Plan this change" } });
-    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
-  });
-
-  it("offers /plan on Claude threads, sends it for one turn, and leaves other providers without it", async () => {
+  it("offers Plan on Claude threads, sends it for one turn, and leaves other providers without it", async () => {
     const startTurn = vi.fn().mockResolvedValue({ backend: "claude", threadId: "thread-1", turnId: "turn-1" });
     const claudeThread = {
       id: "thread-1", title: "Plan", titleSource: "explicit" as const,
@@ -30037,9 +30011,8 @@ describe("Composer", () => {
         thread={claudeThread}
       />,
     );
-    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/pla" } });
-    expect(await screen.findByRole("option", { name: /\/plan/ })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/plan Plan this change" } });
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Plan this change" } });
+    fireEvent.click(screen.getByLabelText("Plan mode"));
     await clickButton("Send");
     await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
     expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
@@ -30048,6 +30021,7 @@ describe("Composer", () => {
       input: [{ type: "text", text: "Plan this change" }],
       collaborationMode: expect.objectContaining({ mode: "plan" }),
     }));
+    await waitFor(() => expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false"));
     rerender(
       <Composer
         backends={[backendSummary("acp:grok")]}
@@ -30057,9 +30031,7 @@ describe("Composer", () => {
         thread={{ ...claudeThread, source: "acp:grok" }}
       />,
     );
-    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/pla" } });
-    await flushReactUpdates();
-    expect(screen.queryByRole("option", { name: /\/plan/ })).toBeNull();
+    expect(screen.queryByLabelText("Plan mode")).toBeNull();
   });
 
   describe("permission-mode queue indicator", () => {

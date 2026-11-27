@@ -225,6 +225,7 @@ import {
   MoreVerticalIcon,
   PauseIcon,
   PencilIcon,
+  PlanIcon,
   PlayIcon,
   MicIcon,
   PlusIcon,
@@ -322,7 +323,6 @@ import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { isComposerTierFolded, type ComposerFoldTier } from "./composer-control-fold";
 import { useComposerRowFold } from "./useComposerRowFold";
-import { parsePlanCommand, supportsPlanCommand } from "./composer-plan-command";
 import {
   CodexSkillProfileControl,
   codexSkillProfileOptions,
@@ -1137,15 +1137,8 @@ type ReviewWorkspaceOption = {
 };
 
 
-const PLAN_SLASH_COMMAND: SlashCommandSuggestion = {
-  id: "plan",
-  label: "/plan",
-  insertText: "/plan",
-  argumentHint: "message",
-  description: "Send one message in Plan mode: the agent plans and changes nothing yet",
-  source: "pwragent",
-  sourceLabel: "PwrAgent",
-};
+/** Backends whose turns take Plan: Codex's collaboration mode, Claude's plan permission mode. */
+const PLAN_MODE_BACKENDS: ReadonlySet<string> = new Set(["codex", "claude"]);
 
 const SCHEDULED_SEND_OPTIONS = [
   { label: "Send in 15m", delayMs: 15 * 60_000 },
@@ -3682,6 +3675,8 @@ function useComposerController(props: ComposerProps) {
     getImageSignature,
     expandedStripItemKey,
     setExpandedStripItemKey,
+    planModeEnabled,
+    setPlanModeEnabled,
     skillTokens,
     setSkillTokens,
     referenceInspectionCacheRef,
@@ -4116,6 +4111,7 @@ function useComposerController(props: ComposerProps) {
     // paging walks the same thumbnails the operator sees.
     // Escape-to-close is owned by `ImageLightbox` itself.
     const [expandedStripItemKey, setExpandedStripItemKey] = useState<string>();
+    const [planModeEnabled, setPlanModeEnabled] = useState(false);
     const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
       latestDraftSnapshotRef.current.snapshot.skillTokens
     );
@@ -4418,6 +4414,8 @@ function useComposerController(props: ComposerProps) {
       getImageSignature,
       expandedStripItemKey,
       setExpandedStripItemKey,
+      planModeEnabled,
+      setPlanModeEnabled,
       skillTokens,
       setSkillTokens,
       referenceInspectionCacheRef,
@@ -4514,12 +4512,8 @@ function useComposerController(props: ComposerProps) {
     () => serializeDraftWithSkillTokens(draft, skillTokens),
     [draft, skillTokens]
   );
-  // `/plan <message>` sends this one turn in Plan mode.
-  const supportsPlan = supportsPlanCommand(props.launchpad?.backend ?? props.thread?.source);
-  const planCommand = supportsPlan ? parsePlanCommand(canonicalDraft) : undefined;
-  const planModeEnabled = planCommand !== undefined;
-  /** What a turn sends: the draft, without a leading `/plan`. */
-  const turnDraft = planCommand ? planCommand.prompt : canonicalDraft;
+  // Claude maps Plan to its own read-only plan permission mode.
+  const supportsPlanMode = PLAN_MODE_BACKENDS.has(props.launchpad?.backend ?? props.thread?.source ?? "");
   const codexGoalCommands = (props.launchpad?.backend ?? props.thread?.source) === "codex";
   const localGoalThreadId = codexGoalCommands && filesystemFederationTarget?.scope !== "remote"
     ? props.thread?.id
@@ -4902,10 +4896,8 @@ function useComposerController(props: ComposerProps) {
       window.removeEventListener("focus", revalidate);
     };
   }, [pdfPreviewPathsKey, props.pdfAnalysisEnabled, requestComposerPdfPreview]);
-  // A bare /plan has nothing to send: only its prompt counts as content.
   const hasComposerContent =
-    (planCommand ? planCommand.prompt.length > 0 : draft.trim().length > 0)
-    || skillTokens.length > 0;
+    draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
   const nextReleasableQueuedTurn = getNextReleasableQueuedTurn(queuedTurns);
   const ownerCanMoveQueuedTurns = queuedTurnOwnerCanMove(props.desktopApi, props.thread);
@@ -6351,11 +6343,7 @@ function useComposerController(props: ComposerProps) {
     if (supportsLockCommand) {
       localCommands.push(LOCK_SLASH_COMMAND);
     }
-    if (supportsPlan) {
-      localCommands.push(PLAN_SLASH_COMMAND);
-    }
-    return [...localCommands, ...commands.filter((command) =>
-      !supportsPlan || command.label.toLowerCase() !== PLAN_SLASH_COMMAND.label)];
+    return [...localCommands, ...commands];
   }, [
     goalControls.state?.supported,
     localGoalThreadId,
@@ -6363,7 +6351,6 @@ function useComposerController(props: ComposerProps) {
     props.providerCommands,
     supportsLockCommand,
     supportsMcpInventory,
-    supportsPlan,
     supportsReview,
     supportsForkCommand,
     supportsSubthreadCommand,
@@ -8899,7 +8886,7 @@ function useComposerController(props: ComposerProps) {
       ?? (queued
         ? buildQueuedTurnPayload(queued)
         : buildTurnPayload(
-            turnDraft,
+            canonicalDraft,
             imageAttachments,
             fileAttachments,
             skillTokens,
@@ -8926,7 +8913,7 @@ function useComposerController(props: ComposerProps) {
     }
 
     const collaborationMode =
-      !queued && planModeEnabled
+      !queued && planModeEnabled && supportsPlanMode
         ? ({
             mode: "plan",
             settings: {
@@ -8949,6 +8936,9 @@ function useComposerController(props: ComposerProps) {
     }
     if (!queued && !backendQueueSubmission) {
       resetComposerDraftAndState(composerScopeKey);
+      if (collaborationMode) {
+        setPlanModeEnabled(false);
+      }
     }
 
     try {
@@ -9091,15 +9081,18 @@ function useComposerController(props: ComposerProps) {
         props.removeOptimisticMessage?.(optimisticMessageId);
       }
       if (!queued) {
-        // A recovered `/plan` draft still starts with the command, so it
-        // sends in Plan mode again.
-        if (backendQueueSubmission) {
-          restoreSubmittedComposerDraftInScope(
-            submittedScopeKey,
-            submittedSnapshot,
-          );
-        } else {
-          recoverSubmittedComposerDraft(submittedSnapshot);
+        const recoveredSubmittedDraft = backendQueueSubmission
+          ? restoreSubmittedComposerDraftInScope(
+              submittedScopeKey,
+              submittedSnapshot,
+            )
+          : recoverSubmittedComposerDraft(submittedSnapshot);
+        if (
+          collaborationMode
+          && recoveredSubmittedDraft
+          && (!backendQueueSubmission || submittedScopeIsVisible())
+        ) {
+          setPlanModeEnabled(true);
         }
       }
       if (!backendQueueSubmission || submittedScopeIsVisible()) {
@@ -9595,7 +9588,7 @@ function useComposerController(props: ComposerProps) {
     }
 
     const collaborationMode =
-      !reviewTarget && planModeEnabled
+      !reviewTarget && planModeEnabled && supportsPlanMode
         ? ({
             mode: "plan",
             settings: {
@@ -9616,7 +9609,7 @@ function useComposerController(props: ComposerProps) {
       let input: AppServerTurnInputItem[] | undefined;
       if (!reviewTarget) {
         const payloadOrPromise = buildTurnPayload(
-          turnDraft,
+          canonicalDraft,
           imageAttachments,
           fileAttachments,
           skillTokens,
@@ -9646,6 +9639,9 @@ function useComposerController(props: ComposerProps) {
       setReviewConfig(undefined);
       setScheduledDraftSendAt(undefined);
       setScheduleArmed(true);
+      if (collaborationMode) {
+        setPlanModeEnabled(false);
+      }
     } catch (error) {
       if (!draftStore.get(submittedScopeKey)) {
         restoreSubmittedComposerDraftInScope(submittedScopeKey, submittedSnapshot);
@@ -10530,7 +10526,7 @@ function useComposerController(props: ComposerProps) {
         setScheduleArmed(true);
         resetComposerDraftAndState(submittedScopeKey);
         const payloadOrPromise = buildTurnPayload(
-          turnDraft,
+          canonicalDraft,
           imageAttachments,
           fileAttachments,
           skillTokens,
@@ -10567,7 +10563,7 @@ function useComposerController(props: ComposerProps) {
             id: queueEntryId,
             backendQueuePending: true,
             queueEntryId,
-            text: turnDraft,
+            text: canonicalDraft,
             imageAttachments,
             fileAttachments,
             input: payload.input,
@@ -10640,7 +10636,7 @@ function useComposerController(props: ComposerProps) {
       ? { scopeKey: composerScopeKey, snapshot: beginLaunchpadSubmission(composerScopeKey) }
       : undefined;
     const payloadOrPromise = buildTurnPayload(
-      turnDraft,
+      canonicalDraft,
       imageAttachments,
       fileAttachments,
       skillTokens,
@@ -10668,7 +10664,7 @@ function useComposerController(props: ComposerProps) {
     } else {
       payload = payloadOrPromise;
     }
-    const collaborationMode = planModeEnabled
+    const collaborationMode = planModeEnabled && supportsPlanMode
       ? ({
           mode: "plan",
           settings: {
@@ -10711,6 +10707,10 @@ function useComposerController(props: ComposerProps) {
             .map((directory) => directory.path)
             .filter((path): path is string => Boolean(path))
         );
+
+        if (collaborationMode) {
+          setPlanModeEnabled(false);
+        }
       } catch (error) {
         // Never overwrite a follow-up typed while creation was in flight.
         // The composer may be showing the starting thread's own scope when
@@ -16260,6 +16260,9 @@ function useComposerController(props: ComposerProps) {
           () => setAgentPresetScope(presetLaunchpad.directoryKey), launchpadSubmitting));
       }
     }
+    if (supportsPlanMode && !planModeEnabled && composerTierFolded("details")) {
+      actions.push(action("plan", "Plan mode", () => setPlanModeEnabled(true), sending));
+    }
     if (composerTierFolded("run") && controlRuntime && !commandGroup) {
       actions.push(configurationAction(
         "run",
@@ -16673,6 +16676,24 @@ function useComposerController(props: ComposerProps) {
           {controlSkillProfile || props.launchpad?.backend === "codex"
             ? renderFoldSlot("details", <CodexSkillProfileControl {...skillProfile} />)
             : null}
+
+          {/* Plan folds with the Details controls while it is off. Once on,
+              it stays in the row, so the next send's mode is never hidden. */}
+          {supportsPlanMode ? renderFoldSlot(planModeEnabled ? undefined : "details", (
+            <button
+              type="button"
+              className={`composer__toggle tooltip-target${
+                planModeEnabled ? " is-active" : ""
+              }`}
+              aria-label="Plan mode"
+              aria-pressed={planModeEnabled}
+              data-tooltip="Plan mode — plan the work before making changes"
+              disabled={sending}
+              onClick={() => setPlanModeEnabled((current) => !current)}
+            >
+              <PlanIcon size={15} aria-hidden="true" />
+            </button>
+          )) : null}
 
           {props.thread && showPrAutoDispatchToggle ? renderFoldSlot("details", (
             <ComposerPrMenu

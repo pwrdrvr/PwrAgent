@@ -60,12 +60,19 @@ export function useComposerRowFold(): {
       for (const item of composerRowFlexItems(row)) resizeObserver.observe(item);
     };
     // Controls come and go with the thread (an environment, a PR, a running
-    // dictation), so the set of items to watch is re-read on each change.
+    // dictation), so the set of items to watch is re-read on each change. A
+    // control can also change tier in place (Plan stays in the row once on),
+    // which changes only its slot's `data-composer-fold`.
     const mutationObserver = new MutationObserver(() => {
       observeItems();
       measure("mutation");
     });
-    mutationObserver.observe(row, { childList: true, subtree: true, characterData: true });
+    mutationObserver.observe(row, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributeFilter: ["data-composer-fold"],
+    });
     observeItems();
     measure("render");
     return () => {

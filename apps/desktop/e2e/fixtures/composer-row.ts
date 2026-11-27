@@ -150,3 +150,21 @@ export async function startComposerDictation(page: Page): Promise<void> {
   }
   await composerRow(page).getByRole("button", { name, exact: true }).click();
 }
+
+/**
+ * Turns Plan mode on for the next send: the row's toggle, or ⋮'s item when
+ * it has folded. Once on, the toggle stays in the row.
+ */
+export async function enableComposerPlanMode(page: Page): Promise<void> {
+  const name = "Plan mode";
+  const toggle = composerRowButton(page, name);
+  if (await isComposerTierFolded(page, "details", toggle)) {
+    const menu = await openComposerThreadOptions(page);
+    await menu.getByRole("menuitem", { name, exact: true }).click();
+    await expect(menu).toBeHidden();
+  } else {
+    await composerRow(page).getByRole("button", { name, exact: true }).click();
+  }
+  await expect(composerRow(page).getByRole("button", { name, exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
+}

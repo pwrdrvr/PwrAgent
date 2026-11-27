@@ -97,6 +97,24 @@ describe("useComposerRowFold", () => {
     expect(commits.at(-1)).toBe(1);
   });
 
+  it("refolds before paint when a control stops folding with its tier", async () => {
+    // Plan folds with the Details controls while it is off and stays in the
+    // row once on. Only its slot's tier changes, so nothing else in the row
+    // mutates to prompt a measure.
+    rowWidth = 210;
+    const plan: Control = { key: "plan", width: 30, tier: "details" };
+    const commits: number[] = [];
+    const view = render(<Row commits={commits} controls={[PINNED, plan, RUN]} />);
+    expect(commits.at(-1)).toBe(1);
+
+    view.rerender(<Row commits={commits} controls={[PINNED, { ...plan, tier: undefined }, RUN]} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Pinned 100 + Plan 30 + Run 100 overflows 210, so Run folds too.
+    expect(commits.at(-1)).toBe(2);
+  });
+
   describe("with the model picker open inside the row", () => {
     // The composer's model picker renders its list inline, under its pill,
     // and each row repeats the pill's label classes.
