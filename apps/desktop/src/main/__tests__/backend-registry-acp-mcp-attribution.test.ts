@@ -15,6 +15,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
 import { StateDb } from "../state/state-db";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -25,7 +27,7 @@ import { createDesktopBackendRegistry } from "../app-server/backend-registry-wir
 
 const threadId = "shared-provider-session-id";
 
-function createAcpMcpFixture(tokenMiser = false, store?: SqliteOverlayStore) {
+function createAcpMcpFixture(tokenMiser = false, store?: SqliteOverlayStore, tokenMiserStore?: TokenMiserStore) {
   const agentCapabilities = { loadSession: true, mcp: { http: true } };
   const providers = (["antigravity", "grok"] as const).map((name) => {
     const backend = `acp:${name}` as const;
@@ -53,7 +55,7 @@ function createAcpMcpFixture(tokenMiser = false, store?: SqliteOverlayStore) {
   const overlayStore = store ?? createOverlayStoreMock();
   const registry = createDesktopBackendRegistry({
     codexClient: new MockBackendClient({ threads: [] }),
-    overlayStore,
+    overlayStore, tokenMiserStore,
     resolveTokenMiserEnabled: () => false,
     resolveTokenMiserBoundedCommands: () => tokenMiser,
     acpAgentStore: createAcpAgentStoreMock(providers.map(({ agent }) => agent)),
@@ -102,7 +104,8 @@ it.skipIf(process.platform === "win32")("requires a fresh owner decision before 
   const dir = await mkdtemp(path.join(tmpdir(), "capture-approval-"));
   const db = StateDb.open(path.join(dir, "state.db"));
   const store = new SqliteOverlayStore(db);
-  const fixture = createAcpMcpFixture(true, store);
+  const outputs = new TokenMiserStore(dir, { storage: new SqliteTokenMiserStorage(db) });
+  const fixture = createAcpMcpFixture(true, store, outputs);
   const { registry, providers: [provider] } = fixture;
   const target = { backend: provider.backend, threadId };
   try {
@@ -129,7 +132,10 @@ it.skipIf(process.platform === "win32")("requires a fresh owner decision before 
     await decide("decline");
     const { result: prepared, writes } = await measureSqliteWrites(() => decide("accept"));
     expectSqliteWriteBudget({ scenario: "bounded-command-retention-approval", writes,
-      note: "One owner-approved ACP command capture, from MCP preparation through receipt of the native command." });
+      note: "First approved capture reserves a block of 256 profile-wide output handles." });
+    const warm = await measureSqliteWrites(() => decide("accept"));
+    expectSqliteWriteBudget({ scenario: "bounded-command-warm-approval", writes: warm.writes,
+      note: "Preparing another approved capture within the reserved block adds zero commits." });
     await decide("cancel");
     if (!prepared || typeof prepared !== "object" || !("command" in prepared) || typeof prepared.command !== "string"
       || !("objectId" in prepared) || typeof prepared.objectId !== "string") throw new Error("Missing command or capture ID.");
@@ -149,6 +155,32 @@ it.skipIf(process.platform === "win32")("requires a fresh owner decision before 
       } });
       expect(JSON.stringify(summary.content)).toContain("+thead { position: static }");
     });
+  } finally {
+    await fixture.close();
+    db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it("scopes managed retrieval tools to Codex when another backend has the same thread ID", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "managed-source-ownership-"));
+  const db = StateDb.open(path.join(dir, "state.db"));
+  const outputs = new TokenMiserStore(dir, { storage: new SqliteTokenMiserStorage(db) });
+  const fixture = createAcpMcpFixture(true, new SqliteOverlayStore(db), outputs);
+  const provider = fixture.providers[0];
+  try {
+    await fixture.connect(provider);
+    await fixture.registry.startTurn({ backend: provider.backend, threadId, input: [{ type: "text", text: "Inspect output." }] }, "desktop");
+    // Native thread IDs are backend-local. A Codex source with this textual ID
+    // still belongs exclusively to Codex when the ACP thread has an active turn.
+    const handle = outputs.issueOutputHandle();
+    await outputs.store({ handle, threadId, turnId: "codex-turn", toolUseId: "fixture", toolName: "Bash",
+      output: "Codex-only source", replacementCharacters: 10, summary: { summary: "Fixture", usefulDetails: [] } });
+    const foreign = await provider.mcp.callTool({ name: "call_pwragent_tool", arguments: {
+      toolName: "read_token_miser_output", arguments: { objectId: handle },
+    } });
+    expect(foreign.isError).toBe(true);
+    expect(JSON.stringify(foreign.content)).not.toContain("Codex-only source");
   } finally {
     await fixture.close();
     db.close();

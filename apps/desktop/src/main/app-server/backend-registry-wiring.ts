@@ -194,7 +194,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   let codexEnvironmentCommandRunner: ThreadDirectoryServiceDependencies["codexEnvironmentCommandRunner"];
   let codexEnvironmentHydrationStore: ThreadDirectoryServiceDependencies["codexEnvironmentHydrationStore"];
   let tokenMiserDiagnostics: RegistryDependencies["tokenMiserDiagnostics"];
-  let tokenMiserStore: RegistryDependencies["tokenMiserStore"];
+  let tokenMiserStore = options?.tokenMiserStore;
   let tokenMiserServiceValue: RegistryDependencies["tokenMiserService"];
   let tokenMiserHookBridge: RegistryDependencies["tokenMiserHookBridge"];
   let tokenMiserCodeModeReducerDescriptorPath: RegistryDependencies["tokenMiserCodeModeReducerDescriptorPath"];
@@ -1016,7 +1016,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               forgePrToolHandler: ports.gatedForgePrToolHandler,
               forgeToolPolicy: ports.resolveForgeToolPolicy(),
               threadOrchestrationHandler: ports.threadOrchestrationHandler,
-              tokenMiserStore: ports.tokenMiserStore,
+              tokenMiserStore: context.backend === "codex" ? ports.tokenMiserStore : undefined,
               tokenMiserFocused: ports.tokenMiserService?.focused,
               boundedCommandCapture: ["acp:antigravity", "claude", "codex"].includes(context.backend) && ports.resolveTokenMiserBoundedCommands()
                 ? ports.boundedCommandCapture : undefined,

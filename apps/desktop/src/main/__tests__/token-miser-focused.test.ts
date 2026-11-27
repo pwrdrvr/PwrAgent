@@ -69,6 +69,7 @@ describe("focused Token Miser summaries", () => {
     const { service, requests, generateSummary, onFocusedInference, store, entry } = await fixture();
     const results = await service.focused.summarize("owner", "turn", Array.from({ length: 15 }, (_, index) => ({ ...requests[0]!, question: `Question ${index}` })));
     expect(new Set(results.map((result) => result.segmentId)).size).toBe(15);
+    expect(results.every((result) => /^o[0-9]+$/u.test(result.segmentId))).toBe(true);
     expect(generateSummary).toHaveBeenCalledTimes(1);
     expect(generateSummary.mock.calls[0]![0]).not.toHaveProperty("model");
     expect(onFocusedInference).toHaveBeenCalledTimes(1);
@@ -254,11 +255,11 @@ describe("focused Token Miser summaries", () => {
     expect(large.generateSummary).not.toHaveBeenCalled();
   });
 
-  it("measures zero SQLite writes for selection and reference creation, one for each emitted delivery", async () => {
+  it("measures one handle block allocation for 15 selections and one write for an emitted delivery", async () => {
     const { tools, requests, context, store } = await fixture();
     if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: store.stateDb.raw, dbPath: store.stateDb.raw.name });
     const { result, writes } = await measureSqliteWrites(() => tools.find((tool) => tool.name === "summarize_token_miser_output")!.dispatch({ requests: Array(15).fill(requests[0]) }, context));
-    expectSqliteWriteBudget({ scenario: "token-miser-focused-selection", note: "One 15-answer batch with mocked inference accounting: selection, references and unused delivery remain in RAM.", writes });
+    expectSqliteWriteBudget({ scenario: "token-miser-focused-selection", note: "One 15-answer batch reserves its first handle block. Source selections and delivery payloads stay in memory.", writes });
     const { writes: delivered } = await measureSqliteWrites(() => store.confirmModelVisibleRetrievals({ threadId: "owner", output: visible(result) }));
     expectSqliteWriteBudget({ scenario: "token-miser-focused-delivery", note: "One authenticated focused batch emission updates its anchor source once.", writes: delivered });
   });

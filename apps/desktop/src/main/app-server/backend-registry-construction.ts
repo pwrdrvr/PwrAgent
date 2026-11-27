@@ -180,6 +180,7 @@ export type DesktopBackendRegistryOptions = {
   /** Test seam: the timer of the retry after a failed provider read. */
   codexProviderCatalogRetryTimer?: CodexProviderCatalogRetryTimer;
   resolvePdfAnalysisEnabled?: () => boolean;
+  tokenMiserStore?: TokenMiserStore;
   resolveTokenMiserBoundedCommands?: () => boolean;
   resolveTokenMiserEnabled?: () => boolean;
   resolveTokenMiserPollingReviewsEnabled?: () => boolean;

@@ -15,6 +15,21 @@ export class SqliteTokenMiserStorage<
 
   private get db() { return this.stateDb.raw; }
 
+  reserveOutputHandles(count: number): number {
+    const key = "token_miser_last_output_handle";
+    return this.db.transaction(() => {
+      const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined;
+      const last = row ? Number(row.value) : 0;
+      if ((row && (String(last) !== row.value || last < 1)) || !Number.isSafeInteger(last)
+        || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(last + count)) {
+        throw new Error("Invalid Token Miser output handle counter.");
+      }
+      this.db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .run(key, String(last + count));
+      return last + 1;
+    }).immediate();
+  }
+
   readMetadata(objectId: string, threadId?: string): Metadata | undefined {
     const row = (threadId === undefined
       ? this.db.prepare("SELECT payload FROM token_miser_objects WHERE object_id = ?").get(objectId)

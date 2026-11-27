@@ -333,3 +333,61 @@ it("observes restoration by another instance after successful archive persistenc
   await new TokenMiserStore(root).restoreThread("owner");
   await expect(store.store(params)).resolves.toBeDefined();
 });
+
+it("allocates disjoint handle blocks across owners, including after restart and rollover", async () => {
+  const { store, root } = await fixture();
+  const peer = new TokenMiserStore(root);
+  const issued = new Set<string>();
+  for (let i = 0; i < 260; i++) {
+    for (const owner of [store, peer]) {
+      const handle = owner.issueOutputHandle();
+      expect(handle).toMatch(/^o[0-9]+$/u);
+      expect(issued.has(handle)).toBe(false);
+      issued.add(handle);
+    }
+  }
+  expect(issued.has(new TokenMiserStore(root).issueOutputHandle())).toBe(false);
+});
+
+it("resolves only live aliases of the requesting thread and keeps UUID callers working", async () => {
+  const { store, root } = await fixture();
+  const handle = store.issueOutputHandle();
+  const other = store.issueOutputHandle();
+  const [entry] = await Promise.all([
+    store.store({ ...params, handle }),
+    store.store({ ...params, handle: other, threadId: "peer" }),
+  ]);
+  for (const objectId of [handle, entry.objectId]) {
+    expect((await store.readAll({ objectId, threadId: "owner" }))?.text).toBe(params.output);
+    expect(await store.readAll({ objectId, threadId: "peer" })).toBeUndefined();
+    expect(await new TokenMiserStore(root).readAll({ objectId, threadId: "owner" })).toBeUndefined();
+  }
+  store.startTurn("owner", "next-turn");
+  const fresh = store.issueOutputHandle();
+  await store.store({ ...params, handle: fresh, turnId: "next-turn" });
+  for (const objectId of [handle, entry.objectId]) {
+    expect(await store.readAll({ objectId, threadId: "owner" })).toBeUndefined();
+  }
+  expect((await store.readAll({ objectId: other, threadId: "peer" }))?.text).toBe(params.output);
+  await store.archiveThread("owner");
+  expect(await store.readAll({ objectId: fresh, threadId: "owner" })).toBeUndefined();
+});
+
+it("never reinterprets an expired handle as a later native cell name", async () => {
+  const { store } = await fixture();
+  const stale = store.issueOutputHandle();
+  await store.store({ ...params, handle: stale });
+  store.startTurn("owner", "next");
+  const group = store.issueOutputHandle();
+  const memberId = "11111111-1111-4111-8111-111111111111";
+  const memberHandle = store.issueOutputHandle();
+  const member = { objectId: memberId, toolCallId: "nested", toolName: "Bash" };
+  await store.store({ ...params, handle: group, turnId: "next", groupId: stale,
+    groupMembers: [{ ...member, summary: "Fixture" }],
+    output: JSON.stringify({ version: 1, groupId: stale, members: [{ ...member, handle: memberHandle, output: "fresh" }] }),
+  });
+  const read = (groupId: string) => store.readGroupBatch({ threadId: "owner", groupId,
+    operations: [{ objectId: memberHandle, mode: "full" }] });
+  expect(await read(stale)).toBeUndefined();
+  expect((await read(group))?.results[0]?.text).toBe("fresh");
+});

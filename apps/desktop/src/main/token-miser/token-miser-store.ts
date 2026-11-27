@@ -78,6 +78,7 @@ export type TokenMiserReadResult = {
 
 export type TokenMiserGroupStoredMember = {
   objectId: string;
+  handle?: string;
   toolCallId: string;
   toolName: string;
   output: string;
@@ -228,6 +229,7 @@ export type TokenMiserStoreOptions = {
 };
 
 export type TokenMiserStoreParams = {
+  handle?: string;
   objectId?: string;
   threadId: string;
   turnId: string;
@@ -265,9 +267,13 @@ export type TokenMiserStagedObject = {
   discard(): Promise<void>;
 };
 
+const HANDLE_BLOCK_SIZE = 256;
+
 export class TokenMiserStore {
   private readonly archivedThreads = new Set<string>();
   private readonly outputs = new TokenMiserOutputCache();
+  private nextHandle = 0;
+  private handlesRemaining = 0;
   private readonly updateLocks = new Map<string, Promise<void>>();
   private readonly pendingRetrievalDeliveries =
     new Map<string, { createdAt: number; threadId: string; turnId: string }>();
@@ -318,6 +324,27 @@ export class TokenMiserStore {
   }
 
   private get storage() { return this.options.storage; }
+
+  issueOutputHandle(): string {
+    if (!this.handlesRemaining) {
+      this.nextHandle = this.storage.reserveOutputHandles(HANDLE_BLOCK_SIZE);
+      this.handlesRemaining = HANDLE_BLOCK_SIZE;
+    }
+    this.handlesRemaining--;
+    return `o${this.nextHandle++}`;
+  }
+
+  private async groupObjectId(threadId: string, groupId: string): Promise<string | undefined> {
+    const id = this.outputs.resolveId(groupId);
+    if (id !== groupId) return id;
+    // Historical groups used the native cell ID. Keep that lookup for old clients.
+    const legacy = (await this.listMetadata(threadId)).find((entry) => entry.groupId === groupId);
+    if (!legacy) return undefined;
+    // A native cell name may resemble an expired handle. Only older, unaliased
+    // groups could have issued that native name as their public reference.
+    if (/^o[1-9][0-9]*$/u.test(groupId) && this.outputs.publicReference(legacy.objectId) !== legacy.objectId) return undefined;
+    return legacy.objectId;
+  }
 
   async store(params: TokenMiserStoreParams): Promise<TokenMiserObjectMetadata> {
     const staged = await this.stage(params);
@@ -386,7 +413,7 @@ export class TokenMiserStore {
         params.summary.summary,
         ...params.summary.usefulDetails,
         ...(params.summary.suggestedNextStep ? [params.summary.suggestedNextStep] : []),
-      ].join("\n"));
+      ].join("\n"), params.handle);
     if (!retained) throw new Error("Token Miser temporary output capacity exceeded.");
     this.owners.set(objectId, this.threadKey(params.threadId));
     this.outputGenerations.set(objectId, generation);
@@ -470,7 +497,7 @@ export class TokenMiserStore {
     threadId: string;
   }): Promise<{ text: string; turnId: string; objectId: string; memberId?: string } | undefined> {
     const objectId = params.groupId
-      ? (await this.listMetadata(params.threadId)).find((entry) => entry.groupId === params.groupId)?.objectId
+      ? await this.groupObjectId(params.threadId, params.groupId)
       : params.objectId;
     if (!objectId) return undefined;
     const stored = await this.readAuthorizedObject(objectId, params.threadId);
@@ -479,11 +506,23 @@ export class TokenMiserStore {
     if (memberId) {
       if (!stored.metadata.groupId) return undefined;
       const group = parseGroupStoredOutput(stored.output, stored.metadata.groupId);
-      const member = group?.members.find((entry) => entry.objectId === memberId);
-      return member ? { text: member.output, turnId: stored.metadata.turnId, objectId, memberId } : undefined;
+      const member = group?.members.find((entry) => entry.objectId === memberId || entry.handle === memberId);
+      return member ? {
+        text: member.output,
+        turnId: stored.metadata.turnId,
+        objectId: this.outputs.publicReference(stored.metadata.objectId),
+        memberId: member.handle ?? member.objectId,
+      } : undefined;
     }
     if (stored.metadata.groupId) return undefined;
-    return { text: stored.output, turnId: stored.metadata.turnId, objectId };
+    return { text: stored.output, turnId: stored.metadata.turnId, objectId: this.outputs.publicReference(stored.metadata.objectId) };
+  }
+
+  async readBytes(params: { objectId: string; threadId: string; byteOffset: number }) {
+    if (!Number.isSafeInteger(params.byteOffset) || params.byteOffset < 0) throw new Error("Invalid byte offset.");
+    const stored = await this.readAuthorizedObject(params.objectId, params.threadId);
+    if (!stored || stored.metadata.groupId) return undefined;
+    return this.outputs.bytePage(stored.metadata.objectId, params.byteOffset);
   }
 
   async readLines(params: {
@@ -525,7 +564,7 @@ export class TokenMiserStore {
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid output offset.");
     const stored = await this.readAuthorizedObject(params.objectId, params.threadId);
     if (!stored) return { available: false };
-    const text = params.source === "original" ? stored.output : this.outputs.getDetail(params.objectId);
+    const text = params.source === "original" ? stored.output : this.outputs.getDetail(stored.metadata.objectId);
     if (text === undefined) return { available: false };
     // Character pages bound IPC and rendering even for a single enormous line.
     const start = Math.min(offset, text.length);
@@ -599,25 +638,20 @@ export class TokenMiserStore {
     operations: TokenMiserGroupBatchOperation[];
     maxOutputChars?: number;
   }): Promise<TokenMiserGroupBatchResult | undefined> {
-    const metadata = (await this.listMetadata(params.threadId)).find((entry) =>
-      entry.groupId === params.groupId
-    );
-    if (!metadata || !metadata.groupMembers?.length) {
+    const id = await this.groupObjectId(params.threadId, params.groupId);
+    const stored = id && await this.readAuthorizedObject(id, params.threadId);
+    if (!stored || !stored.metadata.groupId || !stored.metadata.groupMembers?.length) {
       return undefined;
     }
-    const stored = await this.readAuthorizedObject(
-      metadata.objectId,
-      params.threadId,
-    );
-    if (!stored) {
-      return undefined;
-    }
-    const group = parseGroupStoredOutput(stored.output, params.groupId);
+    const group = parseGroupStoredOutput(stored.output, stored.metadata.groupId);
     if (!group) {
       return undefined;
     }
     const operations = params.operations.slice(0, MAX_GROUP_BATCH_OPERATIONS);
     const members = new Map(group.members.map((member) => [member.objectId, member]));
+    for (const member of group.members) {
+      if (member.handle) members.set(member.handle, member);
+    }
     const results = operations.map((operation) =>
       readGroupMember(members.get(operation.objectId), operation)
     );
@@ -627,7 +661,7 @@ export class TokenMiserStore {
       MAX_GROUP_BATCH_OUTPUT_CHARACTERS,
     );
     const result = boundGroupBatchResult({
-      sourceObjectId: metadata.objectId,
+      sourceObjectId: this.outputs.publicReference(stored.metadata.objectId),
       groupId: params.groupId,
       results,
       truncated: params.operations.length > operations.length,
@@ -641,19 +675,20 @@ export class TokenMiserStore {
     visibleText: string;
     kind?: "summary" | "source";
   }): Promise<TokenMiserRetrievalDelivery | undefined> {
-    const generation = this.outputGenerations.get(params.objectId);
+    const objectId = this.outputs.resolveId(params.objectId);
+    const generation = this.outputGenerations.get(objectId);
     if (generation === undefined || !await this.isCurrentRetention(params.threadId, generation)) return undefined;
-    const metadata = await this.readMetadata(params.objectId, params.threadId);
+    const metadata = await this.readMetadata(objectId, params.threadId);
     if (
       !metadata
       || metadata.threadId !== params.threadId
       || metadata.disposition === "passed_through"
-      || this.outputs.get(params.objectId) === undefined
-      || this.outputGenerations.get(params.objectId) !== generation
+      || this.outputs.get(objectId) === undefined
+      || this.outputGenerations.get(objectId) !== generation
     ) {
       return undefined;
     }
-    return this.prepareExactDelivery({ ...params, generation, turnId: metadata.turnId });
+    return this.prepareExactDelivery({ ...params, objectId, generation, turnId: metadata.turnId });
   }
 
   /** Host-issued schemas and bounded command excerpts can pass through Code Mode together.
@@ -1190,9 +1225,10 @@ export class TokenMiserStore {
   }
 
   private async readAuthorizedObject(
-    objectId: string,
+    reference: string,
     threadId: string,
   ): Promise<TokenMiserStoredObject | undefined> {
+    const objectId = this.outputs.resolveId(reference);
     if (!await this.isCurrentRetention(threadId, this.outputGenerations.get(objectId))) return undefined;
     const metadata = await this.readMetadata(objectId, threadId);
     if (

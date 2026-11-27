@@ -272,7 +272,12 @@ describe("TokenMiserService", () => {
       },
     });
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
-    expect(result?.stopReason).toContain(metadata!.objectId);
+    const handle = /Output reference: (o[0-9]+)\b/u.exec(result!.stopReason)?.[1];
+    expect(handle).toBe("o1");
+    expect(result?.stopReason).not.toContain(metadata!.objectId);
+    expect(await store.readAll({ objectId: handle!, threadId: "thread-1" })).toEqual(
+      { ...await store.readAll({ objectId: metadata!.objectId, threadId: "thread-1" }), objectId: handle },
+    );
     expect(result?.hookSpecificOutput.response_id).toBe(metadata!.objectId);
   });
 
@@ -1579,7 +1584,7 @@ describe("TokenMiserService code-mode reduction", () => {
     };
     expect(replacement).toMatchObject({
       kind: "tool_output_group_summary",
-      groupId: "cell-1",
+      groupId: "o1",
       members: [
         { toolName: "Bash", summary: "Found alpha matches." },
         { toolName: "Read", summary: "Found beta matches." },
@@ -1591,14 +1596,21 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(metadata).toMatchObject({
       groupId: "cell-1",
       originalCharacters: 59,
-      groupMembers: replacement.members.map((member) => ({ ...member, summary: "Output summarized." })),
+      groupMembers: replacement.members.map((member) => ({
+        toolName: member.toolName, objectId: expect.stringMatching(/^[a-f0-9-]{36}$/u), summary: "Output summarized.",
+      })),
     });
     expect(metadata!.replacementCharacters).toBe(
       replacementText.length
       + codeModePayload([]).model_visible_overhead_characters,
     );
+    const selector = { objectId: replacement.members[1]!.objectId, groupId: replacement.groupId };
+    const source = await store.readSelectionSource({ ...selector, threadId: "thread-1" });
+    expect(source).toMatchObject({ objectId: replacement.groupId, memberId: selector.objectId });
+    expect(source?.text).toContain("needle-beta");
+    expect(await store.readSelectionSource({ ...selector, threadId: "foreign" })).toBeUndefined();
     const batch = await store.readGroupBatch({
-      groupId: "cell-1",
+      groupId: replacement.groupId,
       threadId: "thread-1",
       operations: [
         {
@@ -1615,7 +1627,8 @@ describe("TokenMiserService code-mode reduction", () => {
       maxOutputChars: 5_000,
     });
     expect(batch).toMatchObject({
-      groupId: "cell-1",
+      groupId: replacement.groupId,
+      sourceObjectId: replacement.groupId,
       results: [
         { objectId: replacement.members[1]!.objectId, text: "2: needle-beta" },
         { objectId: replacement.members[0]!.objectId, text: "alpha" },
@@ -1672,10 +1685,14 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(utf8ByteLength(replacement)).toBeLessThanOrEqual(600);
     expect(() => JSON.parse(replacement)).not.toThrow();
     const [metadata] = await store.listMetadata();
-    expect(replacement).toContain("cell-1");
-    for (const member of metadata!.groupMembers!) {
-      expect(replacement).toContain(member.objectId);
-    }
+    const group = JSON.parse(replacement);
+    const handles: string[] = group.members.map((member: string | { objectId: string }) =>
+      typeof member === "string" ? member : member.objectId);
+    expect(new Set([group.groupId, ...handles]).size).toBe(metadata!.groupMembers!.length + 1);
+    expect([group.groupId, ...handles].every((handle) => /^o[0-9]+$/u.test(handle))).toBe(true);
+    const batch = await store.readGroupBatch({ threadId: "thread-1", groupId: group.groupId,
+      operations: handles.map((objectId) => ({ objectId, mode: "head", lines: 1 })) });
+    expect(batch?.results.every((result) => typeof result.text === "string")).toBe(true);
   });
 
   it("shares Luna's 20k projected-input cap across every grouped member", async () => {
@@ -1889,7 +1906,8 @@ describe("TokenMiserService code-mode reduction", () => {
     const [metadata] = await store.listMetadata();
     const replacement = response!.replacement![0]!.text;
     expect(replacement.length).toBeLessThanOrEqual(100);
-    expect(replacement).toContain(`Output reference: ${metadata!.objectId}`);
+    expect(replacement).toMatch(/Output reference: o[0-9]+\b/u);
+    expect(replacement).not.toContain(metadata!.objectId);
     expect(metadata!.baselineParentTokens).toBe(25);
     expect(metadata!.replacementCharacters).toBeLessThanOrEqual(
       100 + codeModePayload([]).model_visible_overhead_characters,
@@ -2178,12 +2196,14 @@ describe("TokenMiserService code-mode reduction", () => {
       bytes.subarray(bytes.length - Math.ceil(maxBytes / 2)),
     ]).toString("utf8");
     expect(visible).toContain("NEW_LOG_RESULT");
-    expect(visible).toContain(`Output reference: ${prepared!.staged.metadata.objectId}`);
+    const handle = /Output reference: (o[0-9]+)\b/u.exec(visible)?.[1];
+    expect(handle).toBeDefined();
+    expect(visible).not.toContain(prepared!.staged.metadata.objectId);
     expect(prepared!.staged.metadata.replacementCharacters).toBeGreaterThan(100);
     await prepared!.staged.persist();
     await prepared!.staged.commit();
     expect((await store.readAll({
-      objectId: prepared!.staged.metadata.objectId, threadId: "thread-1",
+      objectId: handle!, threadId: "thread-1",
     }))?.text).toContain("new logs");
   });
 

@@ -19,17 +19,21 @@ registerHooks({ load(url, context, next) {
 } });
 const { AgentToolMcpServer } = await import("../src/main/agent-tools/agent-tool-mcp-server.ts");
 const { AgentToolRouter, toMcpToolResponse } = await import("../src/main/agent-tools/agent-tool-router.ts");
+const { buildTokenMiserToolDefinitions } = await import("../src/main/agent-tools/token-miser-agent-tools.ts");
 const { boundedCommandTools } = await import("../src/main/agent-tools/bounded-command-tool.ts");
 const { buildPwrAgentToolSearchDefinition, withPwrAgentToolDiscovery } = await import("../src/main/agent-tools/pwragent-tool-search.ts");
 const { BoundedCommandCapture } = await import("../src/main/token-miser/bounded-command.ts");
 const { acpToolUpdateNotifications } = await import("../src/main/acp/acp-live-notifications.ts");
 
 const [provider, variant, executable] = process.argv.slice(2);
-if (!["agy", "codex", "claude"].includes(provider) || !["raw", "bounded", "capture", "deny", "cancel", "interrupt", "interrupt-raw", "readonly", "readonly-raw", "code-mode", "code-mode-raw", "code-mode-reducer", "code-mode-helper", "code-mode-batch", "code-mode-raw-batch", "code-mode-discovery"].includes(variant)) {
-  throw new Error("Usage: benchmark-bounded-command.mjs agy|codex|claude raw|bounded|capture|deny|cancel|interrupt|interrupt-raw|readonly|readonly-raw|code-mode|code-mode-raw|code-mode-reducer|code-mode-helper|code-mode-batch|code-mode-raw-batch|code-mode-discovery [binary]");
+if (!["agy", "codex", "claude"].includes(provider) || !["raw", "bounded", "capture", "deny", "cancel", "interrupt", "interrupt-raw", "readonly", "readonly-raw", "code-mode", "code-mode-raw", "code-mode-reducer", "code-mode-helper", "code-mode-batch", "code-mode-raw-batch", "code-mode-discovery", "managed-handles", "code-mode-managed-handles"].includes(variant)) {
+  throw new Error("Usage: benchmark-bounded-command.mjs agy|codex|claude raw|bounded|capture|deny|cancel|interrupt|interrupt-raw|readonly|readonly-raw|code-mode|code-mode-raw|code-mode-reducer|code-mode-helper|code-mode-batch|code-mode-raw-batch|code-mode-discovery|managed-handles|code-mode-managed-handles [binary]");
 }
 const desktop = fileURLToPath(new URL("../", import.meta.url));
 const codeMode = variant.startsWith("code-mode") || process.env.PWRAGENT_BENCHMARK_CODE_MODE === "1";
+const managedHandles = variant.endsWith("managed-handles");
+if (managedHandles && provider !== "codex") throw new Error("This probe requires the managed Codex executable.");
+const directTools = provider === "codex" && !codeMode && (managedHandles || process.env.PWRAGENT_BENCHMARK_DIRECT_TOOLS === "1");
 const raw = ["raw", "code-mode-raw", "code-mode-raw-batch"].includes(variant);
 const discovery = variant === "code-mode-discovery";
 const readonly = variant === "readonly" || variant === "readonly-raw";
@@ -105,7 +109,9 @@ const workflowProbe = [
   '    except Exception as e:',
   '        print(name, type(e).__name__, str(e)[:400])',
 ].join("\n");
-const prompt = codeMode && provider === "agy"
+const prompt = managedHandles
+  ? "Run git diff once in the native shell with max_output_tokens 10000. Use the output reference you receive to search for 'diff --git' using the Token Miser retrieval tool. For a group, use its group and member references with the batch search. Report the reference(s) and the matching filename. Never print the full patch or prepare a foreground capture."
+  : codeMode && provider === "agy"
   ? "Test your native run_workflow's direct tool support. Call run_workflow exactly once with WaitMsBeforeAsync=10000 and this exact inline Script. Report each result or denial, then stop.\n\n" + workflowProbe
   : variant === "code-mode-raw-batch" ? task + " Call the four tools serially inside one native JavaScript Code Mode cell and emit their results."
   : discovery ? "Discover capture_token_miser_command with pwragent.tool_search. Then run the task in one native JavaScript Code Mode cell, emitting only the summaries and retrieval handles. " + task
@@ -119,8 +125,15 @@ let workflowAnswer = "";
 let claudeTools;
 let claudeResult;
 const backend = provider === "agy" ? "acp:antigravity" : provider;
+const { TokenMiserStore } = await import("../src/main/token-miser/token-miser-store.ts");
+const { StateDb } = await import("../src/main/state/state-db.ts");
+const { SqliteTokenMiserStorage } = await import("../src/main/storage/token-miser-storage-sqlite.ts");
+const db = StateDb.open(path.join(artifact, "state.db"));
+let reducerObservations = 0;
+const captureStore = new TokenMiserStore(artifact, { storage: new SqliteTokenMiserStorage(db),
+  onCodeModeObservationUpdated: () => { reducerObservations++; } });
 let caller;
-const capture = new BoundedCommandCapture(async (ctx) => !!caller
+const capture = new BoundedCommandCapture(() => captureStore.issueOutputHandle(), async (ctx) => !!caller
   && ctx.backend === caller.backend && ctx.threadId === caller.threadId && ctx.turnId === caller.turnId,
   async (_ctx, command) => original.includes(command), () => helper);
 let [definition] = boundedCommandTools(capture);
@@ -158,7 +171,20 @@ async function verifyRetrieval(context, issue, summary) {
   results.push({ objectId: issue.objectId, command: issue.original, bytes: offset, sha256: hash.digest("hex"), summary });
 }
 
-const router = new AgentToolRouter([{ ...definition, dispatch: async (args, context) => {
+const deliveredReferences = new Set();
+const modelReferences = [];
+const router = new AgentToolRouter(managedHandles ? buildTokenMiserToolDefinitions(captureStore).map((tool) => ({
+  ...tool, dispatch: async (args, context) => {
+    const result = await tool.dispatch(args, context);
+    if (result.ok && ["search_token_miser_output", "read_token_miser_output_batch"].includes(tool.name)
+      && /headers\.css/u.test(JSON.stringify(result.contentItems))) {
+      const refs = [args.groupId, args.objectId, ...(args.operations ?? []).map((op) => op.objectId)].filter(Boolean);
+      if (refs.some((id) => !deliveredReferences.has(id))) throw new Error("Lookup used a reference absent from earlier model-visible tool output.");
+      modelReferences.push(...refs);
+    }
+    return result;
+  },
+})) : [{ ...definition, dispatch: async (args, context) => {
   const result = await definition.dispatch(args, context);
   if (result.ok && args.command) issues.push({ original: args.command, ...result.data });
   if (!readonly && result.ok && args.objectId && Object.keys(args).length === 1 && !results.some((r) => r.objectId === args.objectId)) {
@@ -216,21 +242,14 @@ function observe(notification) {
 async function runRpc() {
   const acp = provider === "agy";
   let bridge;
-  let db;
   let reducer;
-  let reducerObservations = 0;
   const evaluations = [];
   const cells = new AsyncLocalStorage();
-  if (variant === "code-mode-reducer" || (provider === "codex" && codeMode && process.env.PWRAGENT_BENCHMARK_MANAGED_REDUCER === "1")) {
+  if (managedHandles || variant === "code-mode-reducer" || (provider === "codex" && codeMode && process.env.PWRAGENT_BENCHMARK_MANAGED_REDUCER === "1")) {
     const { TokenMiserHookBridge } = await import("../src/main/token-miser/token-miser-hook-bridge.ts");
     const { TokenMiserService } = await import("../src/main/token-miser/token-miser-service.ts");
-    const { TokenMiserStore } = await import("../src/main/token-miser/token-miser-store.ts");
-    const { StateDb } = await import("../src/main/state/state-db.ts");
-    const { SqliteTokenMiserStorage } = await import("../src/main/storage/token-miser-storage-sqlite.ts");
     const { buildCodexTokenMiserConfig } = await import("../src/main/app-server/codex-thread-config.ts");
-    db = StateDb.open(path.join(artifact, "state.db"));
-    managedStore = new TokenMiserStore(artifact, { storage: new SqliteTokenMiserStorage(db),
-      onCodeModeObservationUpdated: () => { reducerObservations++; } });
+    managedStore = captureStore;
     [definition] = boundedCommandTools(capture, managedStore);
     class ObservedService extends TokenMiserService {
       prepareCodeModeOutput(payload, options) {
@@ -239,17 +258,38 @@ async function runRpc() {
         () => super.prepareCodeModeOutput(payload, options));
       }
     }
-    const service = new ObservedService({ store: managedStore, isEnabled: () => true, generateSummary: async () => {
-      evaluations.push(cells.getStore());
-      return { status: "unavailable", reason: "Benchmark records evaluation requests without starting another provider." };
+    const service = new ObservedService({ store: managedStore, isEnabled: () => true,
+      codeModeGroupingVersion: () => 1, postToolUseExactOutputVersion: () => 1,
+      generateSummary: async ({ prompt: evidence }) => {
+        evaluations.push(cells.getStore());
+        if (managedHandles) {
+          const ids = /^Member IDs: (.+)$/mu.exec(evidence)?.[1].split(", ");
+          return { status: "ok", object: { disposition: "summarize", summary: "Git emitted a patch.",
+            usefulDetails: [], ...(ids ? { members: ids.map((toolCallId) => ({ toolCallId, summary: "Git emitted a patch." })) } : {}) } };
+        }
+        return { status: "unavailable", reason: "Benchmark records evaluation requests without starting another provider." };
     } });
     bridge = new TokenMiserHookBridge({ service, stateDir: artifact });
     await bridge.start();
     reducer = buildCodexTokenMiserConfig(bridge.codeModeReducerDescriptorPath).features.code_mode;
   }
   const searchRouter = new AgentToolRouter([buildPwrAgentToolSearchDefinition(specs, managedStore)]);
+  // The subscription catalog currently selects code_mode_only even when the feature flags are off.
+  // Use the supported local catalog override to exercise App Server's separate direct tool path.
+  const directArgs = [];
+  if (directTools) {
+    const catalog = JSON.parse(execFileSync(executable || "codex", ["debug", "models", "--bundled"], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }));
+    const model = catalog.models.find((entry) => entry.slug === "gpt-6.1-sol");
+    if (!model) throw new Error("Missing direct-probe model in bundled catalog.");
+    delete model.tool_mode;
+    const catalogPath = path.join(artifact, "direct-model.json");
+    await writeFile(catalogPath, JSON.stringify({ models: [model] }));
+    directArgs.push("-c", `model_catalog_json=${JSON.stringify(catalogPath)}`, "-c", "features.code_mode=false", "-c", "features.code_mode_only=false");
+  }
   const child = spawn(executable || (acp ? "agy" : "codex"), acp ? ["acp", "--process-per-session"]
-    : ["app-server", "-c", 'model_reasoning_effort="low"'], { cwd, stdio: ["pipe", "pipe", "pipe"] });
+    : ["app-server", ...directArgs, "-c", 'model_reasoning_effort="low"'], { cwd,
+      ...(managedHandles ? { env: { ...process.env, PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH: bridge.bridgeDescriptorPath } } : {}),
+      stdio: ["pipe", "pipe", "pipe"] });
   const errors = createWriteStream(path.join(artifact, "stderr"), { mode: 0o600 });
   child.stderr.pipe(errors);
   const frames = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
@@ -265,6 +305,14 @@ async function runRpc() {
     const m = JSON.parse(value);
     record("frame", m);
     const p = m.params;
+    if (managedHandles && m.method === "rawResponseItem/completed"
+      && ["function_call_output", "custom_tool_call_output"].includes(p.item?.type)) {
+      const output = p.item.output;
+      const text = typeof output === "string" ? output : output.map((part) => part.text ?? "").join("\n");
+      for (const match of text.matchAll(/(?:Output reference: |"(?:groupId|objectId)":\s*")(o[1-9][0-9]*)\b/gu)) {
+        deliveredReferences.add(match[1]);
+      }
+    }
     if (m.method === "rawResponseItem/completed" && p.item?.type === "custom_tool_call" && p.item.name === "exec") codeCells++;
     if (m.method === "turn/started") activate(p.threadId, p.turn.id);
     if (m.method === "item/started" || m.method === "item/completed") observe(m);
@@ -306,9 +354,9 @@ async function runRpc() {
     }
   }
   try {
-    const clientInfo = { name: "pwragent", version: "1" };
+    const clientInfo = { name: managedHandles ? "pwragent-desktop" : "pwragent", version: "1" };
     await call("initialize", acp ? { protocolVersion: 1, clientInfo, clientCapabilities: { terminal: false, fs: { readTextFile: false, writeTextFile: false } } }
-      : { clientInfo, capabilities: { experimentalApi: true } });
+      : { clientInfo, capabilities: { experimentalApi: true, ...(managedHandles ? { pwrdrvrTokenMiser: { version: 1, activationNonce: bridge.activationNonce } } : {}) } });
     if (acp) {
       const { sessionId } = await call("session/new", { cwd, mcpServers: [registration.server] });
       activate(sessionId, randomUUID());
@@ -316,6 +364,9 @@ async function runRpc() {
     } else {
       send({ method: "initialized", params: {} });
       const { thread } = await call("thread/start", { cwd, ephemeral: true, sandbox: readonly ? "read-only" : "workspace-write",
+        ...(managedHandles ? { pwrdrvrTokenMiser: { version: 1, enabled: true } } : {}),
+        ...(directTools ? { experimentalRawEvents: true, model: "gpt-6.1-sol",
+          config: { features: { code_mode: false, code_mode_only: false, code_mode_tool_search: false } } } : {}),
         ...(codeMode ? { experimentalRawEvents: true, config: { features: { code_mode: reducer ? { ...reducer, enabled: true } : true, code_mode_only: true, code_mode_tool_search: true } } } : {}),
         approvalPolicy: negative ? "untrusted" : "never", dynamicTools: specs });
       await call("turn/start", { threadId: thread.id, input: [{ type: "text", text: prompt }] });
@@ -340,7 +391,12 @@ async function runRpc() {
       }
     }
     await verifyInterruption();
-    if (bridge) {
+    if (managedHandles) {
+      if (!evaluations.length || !modelReferences.length) {
+        throw new Error("The parent did not successfully retrieve the patch using a short managed reference.");
+      }
+      record("managed_model_references", modelReferences);
+    } else if (bridge) {
       record("managed_reducer", { reducerObservations, evaluations });
       if (!reducerObservations || evaluations.some((cell) => !discovery || !cell?.discovery || cell.size < 5000)) {
         throw new Error("Expected managed cell observations and no second evaluation of bounded command results.");
@@ -351,7 +407,6 @@ async function runRpc() {
     clearTimeout(timer);
     child.kill();
     await bridge?.close();
-    db?.close();
     errors.end();
   }
 }
@@ -432,14 +487,16 @@ try {
     throw new Error("Claude Code Mode capability changed or the fixture did not complete.");
   }
   if (discovery && !searches) throw new Error("The fixture did not search the deferred catalog.");
+  if (directTools && codeCells > 0) throw new Error("Direct probe entered native Code Mode.");
   if (provider === "codex" && codeMode && codeCells < 1) throw new Error("No native Code Mode cell observed.");
-  if ((variant === "capture" || (provider === "codex" && variant.startsWith("code-mode") && !raw)) && !original.every((cmd) => results.some((r) => r.command === cmd && r.bytes > 0))) throw new Error("Missing captured fixture output.");
-  await writeFile(path.join(artifact, "result.json"), JSON.stringify({ cwd, provider, executable, variant, codeMode, codeCells, results, helperRuns }, null, 2), { mode: 0o600 });
+  if (!managedHandles && (variant === "capture" || (provider === "codex" && variant.startsWith("code-mode") && !raw)) && !original.every((cmd) => results.some((r) => r.command === cmd && r.bytes > 0))) throw new Error("Missing captured fixture output.");
+  await writeFile(path.join(artifact, "result.json"), JSON.stringify({ cwd, provider, executable, variant, codeMode, directTools, codeCells, results, modelReferences, helperRuns }, null, 2), { mode: 0o600 });
   console.log(artifact);
   if (helperMode && (helperRuns.length !== 1 || helperRuns[0].status !== "ok")) throw new Error("Expected one successful isolated Codex helper call.");
 } finally {
   caller = undefined;
   await capture.close();
+  db.close();
   await helperClient?.close();
   await server.close();
   trace.end();

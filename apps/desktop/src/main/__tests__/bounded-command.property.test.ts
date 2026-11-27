@@ -16,10 +16,11 @@ it.skipIf(process.platform === "win32")("retains the native command's bytes and 
   let enabled = true;
   let approved = false;
   const select = vi.fn(async () => 0);
-  const capture = new BoundedCommandCapture(async () => enabled, async () => approved,
+  const store = new TestTokenMiserStore(dir);
+  const capture = new BoundedCommandCapture(() => store.issueOutputHandle(), async () => enabled, async () => approved,
     () => ({ identity: "fixture", label: "fixture", select }));
   const generateSummary = vi.fn(async () => ({ status: "failed" as const, reason: "unexpected helper call" }));
-  const managed = new TokenMiserService({ store: new TestTokenMiserStore(dir), isEnabled: () => true, generateSummary });
+  const managed = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
   const run = (cmd: string) => spawnSync(shell, ["-c", cmd], {
     cwd: dir, env: { ...process.env, BOUNDED_COMMAND_FIXTURE: "environment preserved" },
   });
@@ -45,11 +46,15 @@ it.skipIf(process.platform === "win32")("retains the native command's bytes and 
       await expect(capture.inspect(caller, objectId)).rejects.toThrow("completion receipt");
       const result = run(native);
       expect(result.status).toBe(command === "git diff" ? 0 : 1);
-      expect(result.stdout.toString().trim()).toBe(`pwragent-${objectId}:${result.status}`);
+      expect(objectId).toMatch(/^o[0-9]+$/u);
+      expect(result.stdout.toString().trim()).toMatch(/^pwragent-[a-f0-9-]{36}:[01]$/u);
+      expect(result.stdout.toString()).not.toContain(`pwragent-${objectId}:`);
       // A different tool, thread, or item cannot turn its stdout into a completion receipt.
       capture.observe(caller, { id: "foreign", command: "echo", completed: true, output: result.stdout.toString() });
       await expect(capture.inspect(caller, objectId)).rejects.toThrow("completion receipt");
       capture.observe(caller, { id: "call", command: native, completed: false });
+      capture.observe(caller, { id: "call", completed: true, output: `pwragent-${objectId}:0` });
+      await expect(capture.inspect(caller, objectId)).rejects.toThrow("completion receipt");
       capture.observe(caller, { id: "other", completed: true, output: result.stdout.toString() });
       await expect(capture.inspect(caller, objectId)).rejects.toThrow("completion receipt");
       capture.observe(caller, { id: "call", completed: true, output: result.stdout.toString() });
@@ -109,7 +114,8 @@ it.skipIf(process.platform === "win32")("retains the native command's bytes and 
 
 it.skipIf(process.platform === "win32")("on terminal delivery stops only the still-running native capture identified by this turn", async () => {
   const owner = { ...caller, backend: "codex" as const };
-  const capture = new BoundedCommandCapture(async () => true, async () => true);
+  const store = new TestTokenMiserStore("terminal-capture");
+  const capture = new BoundedCommandCapture(() => store.issueOutputHandle(), async () => true, async () => true);
   try {
     const { command, objectId } = await capture.prepare(owner, "git diff");
     capture.observe(owner, { id: "item", processId: "123", command, completed: false });
@@ -139,7 +145,8 @@ it.skipIf(process.platform === "win32")("classifies ambiguous hunks once within 
   });
   let helper = { identity: "fixture", label: "fixture", select };
   const approve = vi.fn(async () => true);
-  const capture = new BoundedCommandCapture(async () => true, approve, () => helper);
+  const store = new TestTokenMiserStore(dir);
+  const capture = new BoundedCommandCapture(() => store.issueOutputHandle(), async () => true, approve, () => helper);
   const run = (cmd: string) => spawnSync(shell, ["-c", cmd], { cwd: dir });
   try {
     run("git init -q");
@@ -159,7 +166,6 @@ it.skipIf(process.platform === "win32")("classifies ambiguous hunks once within 
     const summaries = await Promise.all([capture.inspect(caller, id), capture.inspect(caller, id)]);
     expect(summaries[0]).toBe(summaries[1]);
     expect(summaries[0]).toContain("+b detail 0");
-    const store = new TestTokenMiserStore(dir);
     store.startTurn(caller.threadId, caller.turnId);
     const [tool] = boundedCommandTools(capture, store);
     const deliveries = [];
@@ -202,6 +208,33 @@ it.skipIf(process.platform === "win32")("classifies ambiguous hunks once within 
     expect(signal.aborted).toBe(true);
     await result;
   } finally {
+    await capture.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform === "win32")("keeps concurrent capture handles distinct through expiry and reissue", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "concurrent-captures-"));
+  const store = new TestTokenMiserStore(dir);
+  const capture = new BoundedCommandCapture(() => store.issueOutputHandle(), async () => true, async () => true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const tickets = await Promise.all(Array.from({ length: 24 }, () => capture.prepare(caller, "git diff")));
+    expect(new Set(tickets.map((ticket) => ticket.objectId)).size).toBe(24);
+    for (const ticket of tickets) {
+      await expect(capture.inspect({ ...caller, threadId: "foreign" }, ticket.objectId)).rejects.toThrow("unavailable");
+    }
+    const ticket = tickets[0]!;
+    expect(spawnSync("git", ["init", "-q"], { cwd: dir }).status).toBe(0);
+    const executed = spawnSync(shell, ["-c", ticket.command], { cwd: dir, encoding: "utf8" });
+    capture.observe(caller, { id: "first", command: ticket.command, completed: true, output: executed.stdout });
+    expect(await capture.inspect(caller, ticket.objectId)).toContain("git diff exited");
+    vi.advanceTimersByTime(300_001);
+    const next = await capture.prepare(caller, "git diff");
+    expect(tickets.some(({ objectId }) => objectId === next.objectId)).toBe(false);
+    await expect(capture.readBytes(caller, ticket.objectId, 0)).rejects.toThrow("unavailable");
+  } finally {
+    vi.useRealTimers();
     await capture.close();
     await rm(dir, { recursive: true, force: true });
   }

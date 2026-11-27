@@ -1925,7 +1925,10 @@ export class DesktopBackendRegistry {
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
-  private readonly boundedCommandCapture = new BoundedCommandCapture(async (caller) => {
+  private readonly boundedCommandCapture = new BoundedCommandCapture(() => {
+    if (!this.tokenMiserStore) throw new Error("Token Miser storage is unavailable.");
+    return this.tokenMiserStore.issueOutputHandle();
+  }, async (caller) => {
     if (this.closed || !this.isLiveDynamicToolCall(caller.backend, caller)
       || !this.resolveTokenMiserBoundedCommands()) return false;
     const enabled = this.boundedCommandsEnabled(

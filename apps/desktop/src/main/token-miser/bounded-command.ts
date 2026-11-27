@@ -10,6 +10,8 @@ import { BOUNDED_HELPER_TIMEOUT_MS, type BoundedCommandHelper } from "./bounded-
 
 type Caller = Pick<AgentToolCallContext, "backend" | "threadId" | "turnId">;
 type Ticket = {
+  handle: string;
+  receipt: string;
   caller: Caller;
   command: string;
   shell: string;
@@ -135,10 +137,12 @@ async function commandSummary(ticket: Ticket, resolveHelper: () => BoundedComman
 /** Execution stays in the native shell. The owner only reads its own open file descriptor. */
 export class BoundedCommandCapture {
   private readonly tickets = new Map<string, Ticket>();
+  private readonly idsByHandle = new Map<string, string>();
   private preparing = 0;
   private closed = false;
   private sweep?: Promise<void>;
   constructor(
+    private readonly issueHandle: () => string,
     private readonly eligible: (caller: Caller) => Promise<boolean>,
     private readonly approve: (caller: Caller, command: string, helper?: string) => Promise<boolean>,
     private readonly resolveHelper: () => BoundedCommandHelper | undefined = () => undefined,
@@ -159,21 +163,24 @@ export class BoundedCommandCapture {
       }
       await (this.sweep ??= removeAbandonedCaptures().catch(() => { this.sweep = undefined; }));
       const id = randomUUID();
+      const handle = this.issueHandle();
+      const receipt = randomUUID();
       const filename = path.join(tmpdir(), `pwragent-capture-${process.pid}-${randomUUID()}.log`);
       const file = await open(filename, "wx+", 0o600);
       const target = /^[\w./-]+$/u.test(filename) ? filename : quote(filename);
       // The native approval includes the original command and its output destination.
       // The receipt is emitted only after the command returns, including on failure.
-      const shell = `test -f ${target} || exit 125; { if ${command}; then rc=0; else rc=$?; fi; } > ${target} 2>&1 || exit 125; echo pwragent-${id}:$rc; exit "$rc"`;
+      const shell = `test -f ${target} || exit 125; { if ${command}; then rc=0; else rc=$?; fi; } > ${target} 2>&1 || exit 125; echo pwragent-${receipt}:$rc; exit "$rc"`;
       const timer = this.expireAfterRetention(id);
-      this.tickets.set(id, { caller: { backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId }, command, shell, filename, file, timer, helperIdentity: helper?.identity, lifetime: new AbortController() });
+      this.tickets.set(id, { handle, receipt, caller: { backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId }, command, shell, filename, file, timer, helperIdentity: helper?.identity, lifetime: new AbortController() });
+      this.idsByHandle.set(handle, id);
       try {
         if (this.closed || !await this.eligible(caller) || !this.tickets.has(id)) throw new Error("Capture closed.");
       } catch (error) {
         await this.remove(id);
         throw error;
       }
-      return { objectId: id, command: shell };
+      return { objectId: handle, command: shell };
     } finally {
       this.preparing--;
     }
@@ -194,7 +201,7 @@ export class BoundedCommandCapture {
         clearTimeout(ticket.timer);
       }
       if (ticket.itemId !== item.id || !item.completed || !item.output) continue;
-      const receipt = new RegExp(`(?:^|\\n)pwragent-${id}:(\\d{1,3})(?:\\r?\\n|$)`, "u").exec(item.output);
+      const receipt = new RegExp(`(?:^|\\n)pwragent-${ticket.receipt}:(\\d{1,3})(?:\\r?\\n|$)`, "u").exec(item.output);
       if (receipt && Number(receipt[1]) <= 255) {
         ticket.status = Number(receipt[1]);
         ticket.timer = this.expireAfterRetention(id);
@@ -220,7 +227,7 @@ export class BoundedCommandCapture {
   }
 
   private async retained(caller: Caller, id: string) {
-    const ticket = this.tickets.get(id);
+    const ticket = this.tickets.get(this.idsByHandle.get(id) ?? id);
     if (!ticket || scope(caller) !== scope(ticket.caller) || !await this.eligible(caller)) {
       throw new Error("Output expired or unavailable for this turn.");
     }
@@ -265,6 +272,7 @@ export class BoundedCommandCapture {
     const ticket = this.tickets.get(id);
     if (!ticket) return;
     this.tickets.delete(id);
+    this.idsByHandle.delete(ticket.handle);
     ticket.lifetime.abort();
     clearTimeout(ticket.timer);
     try {
