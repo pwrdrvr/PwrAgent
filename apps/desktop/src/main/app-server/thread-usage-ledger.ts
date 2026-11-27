@@ -164,8 +164,14 @@ import { isDevelopment, logDebug } from "./registry-debug-log";
 
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const TOKEN_MISER_LEDGER_BATCH_SIZE = 64;
+const TOKEN_MISER_LEGACY_CLEANUP_DELAY_MS = 30_000;
 
-type TokenMiserLedgerWriteOptions = { publishPricing?: boolean; historical?: boolean };
+type TokenMiserLedgerWriteOptions = {
+  publishPricing?: boolean;
+  historical?: boolean;
+  chargesOnly?: boolean;
+  staleGateCards?: Set<string>;
+};
 
 /** Collaborators the composition root builds for this module. */
 export interface ThreadUsageLedgerDependencies {
@@ -511,6 +517,8 @@ export class ThreadUsageLedger {
   private tokenMiserStoragePreparation?: Promise<void>;
   private tokenMiserStoragePrepared = false;
   private tokenMiserReplayStoragePreparation?: Promise<void>;
+  private tokenMiserLegacyCleanupTimer?: ReturnType<typeof setTimeout>;
+  private tokenMiserLegacyCleanup?: Promise<void>;
 
   /**
    * The settlement of the last queued live gate publish. Each publish waits
@@ -521,6 +529,8 @@ export class ThreadUsageLedger {
 
   private readonly tokenMiserHistoryRepairs = new Map<string | undefined, Promise<void>>();
   private readonly repairedTokenMiserHistory = new Set<string | undefined>();
+  private readonly tokenMiserChargeRepairs = new Map<string | undefined, Promise<void>>();
+  private readonly repairedTokenMiserCharges = new Set<string | undefined>();
   private readonly tokenMiserReplayRestorations = new Map<string, Promise<void>>();
   private readonly restoredTokenMiserReplayThreads = new Set<string>();
   private readonly tokenMiserLiveCompactionBoundaries = new Map<string, number>();
@@ -2852,8 +2862,7 @@ export class ThreadUsageLedger {
     await this.emitThreadPricingUpdated({ backend: "codex", threadId });
   }
 
-  /** Import old storage before the first actual consumer. The owner always
-   * has a store so it can still display historical accounting when off. */
+  /** Explicit readers can join or start the import even with Token Miser off. */
   prepareTokenMiserStorage(): Promise<void> {
     const store = this.host().tokenMiserStore;
     if (!store || this.context.lifecycle.closed) return Promise.resolve();
@@ -2874,43 +2883,76 @@ export class ThreadUsageLedger {
     this.restoredTokenMiserReplayThreads.clear();
   }
 
+  scheduleTokenMiserLegacyCleanup(): void {
+    const store = this.host().tokenMiserStore;
+    if (!store || this.tokenMiserLegacyCleanupTimer || this.tokenMiserLegacyCleanup) return;
+    // Remove old raw payloads even when nobody opens accounting. A fresh
+    // profile has no legacy directory and needs no SQLite migration write.
+    this.tokenMiserLegacyCleanupTimer = setTimeout(() => {
+      this.tokenMiserLegacyCleanupTimer = undefined;
+      this.tokenMiserLegacyCleanup = this.runTokenMiserSideEffect("legacyCleanup", async () => {
+        if (!this.tokenMiserStoragePrepared && await store.hasLegacyFiles()) {
+          await this.prepareTokenMiserStorage();
+        }
+      });
+    }, TOKEN_MISER_LEGACY_CLEANUP_DELAY_MS);
+    this.tokenMiserLegacyCleanupTimer.unref();
+  }
+
   async drainTokenMiserLedgerWork(): Promise<void> {
+    clearTimeout(this.tokenMiserLegacyCleanupTimer);
+    this.tokenMiserLegacyCleanupTimer = undefined;
     await Promise.allSettled([
+      this.tokenMiserLegacyCleanup,
       this.tokenMiserStoragePreparation,
       ...this.tokenMiserHistoryRepairs.values(),
+      ...this.tokenMiserChargeRepairs.values(),
       ...this.tokenMiserReplayRestorations.values(),
     ]);
   }
 
   /** Backfill derived pricing and cards only when their historical view is
    * requested. Replay observations have their own thread-scoped restore. */
-  repairTokenMiserHistory(threadId?: string): Promise<void> {
+  repairTokenMiserHistory(threadId?: string, { chargesOnly = false } = {}): Promise<void> {
     const store = this.host().tokenMiserStore;
     if (!store || this.context.lifecycle.closed || this.repairedTokenMiserHistory.has(threadId)
       || this.repairedTokenMiserHistory.has(undefined)) return Promise.resolve();
-    const pending = this.tokenMiserHistoryRepairs.get(threadId);
+    const repairs = chargesOnly ? this.tokenMiserChargeRepairs : this.tokenMiserHistoryRepairs;
+    const repaired = chargesOnly ? this.repairedTokenMiserCharges : this.repairedTokenMiserHistory;
+    if (repaired.has(threadId)) return Promise.resolve();
+    const pending = repairs.get(threadId)
+      ?? (chargesOnly ? this.tokenMiserHistoryRepairs.get(threadId) : undefined);
     if (pending) return pending;
-    const repair = this.repairTokenMiserLedgerPages(store, threadId).then((complete) => {
-      if (complete) this.repairedTokenMiserHistory.add(threadId);
+    const repair = this.repairTokenMiserLedgerPages(store, threadId, chargesOnly).then((complete) => {
+      if (complete) repaired.add(threadId);
     }).catch((error) => {
       backendRegistryLog.warn("Token Miser ledger reconciliation failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-    }).finally(() => { this.tokenMiserHistoryRepairs.delete(threadId); });
-    this.tokenMiserHistoryRepairs.set(threadId, repair);
+    }).finally(() => { repairs.delete(threadId); });
+    repairs.set(threadId, repair);
     return repair;
   }
 
-  private async repairTokenMiserLedgerPages(store: TokenMiserStore, threadId?: string): Promise<boolean> {
+  private async repairTokenMiserLedgerPages(store: TokenMiserStore, threadId: string | undefined, chargesOnly: boolean): Promise<boolean> {
     await this.prepareTokenMiserStorage();
     const pricingChanged = new Set<string>();
     let complete = true;
     await yieldToEventLoop();
-    for (const page of store.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE, threadId)) {
+    for (const page of store.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE, threadId, true)) {
       if (this.context.lifecycle.closed) return false;
       try {
-        const changed = await this.persistTokenMiserLedgerEntries(page, { historical: true, publishPricing: false });
+        const staleGateCards = new Set<string>();
+        const options = { historical: true, publishPricing: false, chargesOnly, staleGateCards };
+        const changed = await this.persistTokenMiserLedgerEntries(page, options);
         for (const id of changed) pricingChanged.add(id);
+        if (staleGateCards.size > 0) {
+          const fresh = [...staleGateCards].flatMap((id) => store.readPersistedMetadata(id) ?? []);
+          staleGateCards.clear();
+          for (const id of await this.persistTokenMiserLedgerEntries(fresh, options)) pricingChanged.add(id);
+          // A gate that keeps changing remains eligible on the next read.
+          if (staleGateCards.size > 0) complete = false;
+        }
       } catch (error) {
         complete = false;
         backendRegistryLog.warn("Token Miser ledger page persistence failed", {
@@ -3945,6 +3987,7 @@ export class ThreadUsageLedger {
     const byThread = new Map<string, TokenMiserObjectMetadata[]>();
     for (const entry of metadata) {
       if (options.historical && this.pendingTokenMiserInterceptions.has(entry.objectId)) continue;
+      if (options.chargesOnly && !entry.helperUsage?.tokenUsage) continue;
       const entries = byThread.get(entry.threadId) ?? [];
       entries.push(entry);
       byThread.set(entry.threadId, entries);
@@ -3957,7 +4000,7 @@ export class ThreadUsageLedger {
         ? (await usage.readThreadPricing?.({ backend: "codex", threadId }))?.lines
         : undefined;
       const toolAccounting = this.context.stores.toolAccounting;
-      const fallbackReplays = !toolAccounting.readTokenMiserLegacyReplayCounts
+      const fallbackReplays = !options.chargesOnly && !toolAccounting.readTokenMiserLegacyReplayCounts
         && entries.some((entry) => entry.replayTrackingVersion !== 2)
         ? indexTokenMiserCachedReplays((await toolAccounting.readThreadToolAccounting?.({
             backend: "codex", includeAllInvocations: true, threadId,
@@ -3975,9 +4018,9 @@ export class ThreadUsageLedger {
         const monitorIds = batch.map(tokenMiserMonitorId);
         const pricingLines = fallbackPricing ?? await usage.readTokenMiserGatePricingLines?.({
           backend: "codex", threadId, sourceItemIds: monitorIds,
-          turnIds: [...new Set(batch.map((entry) => entry.turnId))],
+          turnIds: options.chargesOnly ? [] : [...new Set(batch.map((entry) => entry.turnId))],
         }) ?? [];
-        const legacyGates = batch.filter((entry) => entry.replayTrackingVersion !== 2);
+        const legacyGates = options.chargesOnly ? [] : batch.filter((entry) => entry.replayTrackingVersion !== 2);
         const counts = legacyGates.length > 0
           ? await toolAccounting.readTokenMiserLegacyReplayCounts?.({ backend: "codex", threadId, gates: legacyGates })
           : undefined;
@@ -3994,9 +4037,9 @@ export class ThreadUsageLedger {
         // one. A previous in-memory artifact cannot stand in for the database
         // after a peer write, deletion, or rolled-back transaction.
         const existingSubAgents = new Map((
-          await this.context.stores.subAgents.getThreadSubAgents({
+          (options.chargesOnly ? [] : await this.context.stores.subAgents.getThreadSubAgents({
             backend: "codex", threadId, monitorIds,
-          })
+          }))
         ).map((card) => [card.monitorId, card]));
         for (const entry of batch) {
           if (options.historical && this.pendingTokenMiserInterceptions.has(entry.objectId)) continue;
@@ -4015,11 +4058,11 @@ export class ThreadUsageLedger {
           // Owner ids change every process; parentTurnId still participates
           // so old cards acquire the rail's turn nesting on reconciliation.
           if (
-            !existingSubAgent
+            !options.chargesOnly && (!existingSubAgent
             || tokenMiserSubAgentProjectionChanged(
               existingSubAgent,
               { parentTurnId: entry.turnId, tokenMiserAccounting: accounting.tokenMiserAccounting },
-            )
+            ))
           ) {
             const { subAgent } = this.buildTokenMiserLedgerArtifact({ entry, indexes, accounting });
             subAgents.push(subAgent);
@@ -4037,12 +4080,13 @@ export class ThreadUsageLedger {
 
       if (subAgents.length > 0) {
         if (typeof this.context.stores.subAgents.upsertThreadSubAgents === "function") {
-          await this.context.stores.subAgents.upsertThreadSubAgents({
+          const changedGates = await this.context.stores.subAgents.upsertThreadSubAgents({
             backend: "codex",
             threadId,
             subAgents,
             ...(expectedGateMetadata ? { expectedGateMetadata } : {}),
           });
+          for (const id of changedGates ?? []) options.staleGateCards?.add(id);
         } else {
           for (const subAgent of subAgents) {
             await this.context.stores.subAgents.upsertThreadSubAgent({

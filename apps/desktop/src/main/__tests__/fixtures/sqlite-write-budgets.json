@@ -1,4 +1,7 @@
 {
+  "token-miser-history-gate-conflict": {"commits": 3, "note": "A peer advances a gate during repair, then the reader writes its missing charge and retries its card once.", "observedWalBytes": 119480, "rowsChanged": 5, "statements": 5},
+  "token-miser-background-legacy-cleanup": {"commits": 2, "note": "One delayed upgrade pass imports one retained gate and marks the migration complete after removing its raw payload.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
+  "token-miser-thread-family-charge-repair": {"commits": 1, "note": "A family pricing read recovers one missing helper charge for a local child without repairing cards.", "observedWalBytes": 82400, "rowsChanged": 3, "statements": 3},
   "token-miser-restore-before-migration": {"commits": 1, "note": "One explicit restore records a live retention key before a possible legacy import.", "observedWalBytes": 8272, "rowsChanged": 1, "statements": 1},
   "token-miser-cold-replay-stop": {"commits": 2, "note": "First usage settles 65 gates compacted while closed, at most one commit per 64-gate page.", "observedWalBytes": 57680, "rowsChanged": 65, "statements": 65},
   "token-miser-history-peer-repair": {"commits": 3, "note": "One peer metadata edit between pages and two repaired cards during an explicit history read.", "observedWalBytes": 53560, "rowsChanged": 3, "statements": 3},

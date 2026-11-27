@@ -315,7 +315,8 @@ describe("Token Miser persistence work budgets", () => {
     }
   }));
 
-  it("keeps a peer card whose metadata advanced after the historical page was read", ownLedgerTest(async () => {
+  it.each([false, true])("materializes current gate metadata after a peer write (peer also writes its card: %s)", ownLedgerTest(async (peerWritesCard) => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-token-miser-peer-history-");
     const db = StateDb.open(temp.dbPath);
     const peerDb = StateDb.open(temp.dbPath);
@@ -325,22 +326,27 @@ describe("Token Miser persistence work budgets", () => {
       const tokenMiserStore = new TokenMiserStore(path.join(temp.tempDir, "objects"), { storage });
       const { ledger, store } = fixture(db, tokenMiserStore);
       const peer = fixture(peerDb);
-      const original = gate(0);
+      const original = { ...gate(0), objectId: "00000000-0000-4000-8000-000000000001" };
       const newer = { ...original, retrievedCharacters: 800 };
       storage.writeMetadata(original);
+      await ledger.prepareTokenMiserStorage();
       const getCards = store.getThreadSubAgents.bind(store);
       vi.spyOn(store, "getThreadSubAgents").mockImplementationOnce(async (request) => {
         peerStorage.writeMetadata(newer);
-        await peer.internals.persistTokenMiserLedgerEntries([newer]);
+        if (peerWritesCard) await peer.internals.persistTokenMiserLedgerEntries([newer]);
         return getCards(request);
       });
 
-      await ledger.repairTokenMiserHistory(THREAD);
+      const { writes } = await measureSqliteWrites(() => ledger.repairTokenMiserHistory(THREAD));
 
-      const request = { backend: "codex", threadId: THREAD, monitorId: "system:token-miser:gate-0" } as const;
+      const request = { backend: "codex", threadId: THREAD, monitorId: `system:token-miser:${original.objectId}` } as const;
       const card = await store.getThreadSubAgent(request);
       expect(card?.tokenMiserAccounting?.revealedParentTokens)
         .toBe(estimateTokenCount(newer.replacementCharacters) + estimateTokenCount(newer.retrievedCharacters));
+      if (!peerWritesCard) {
+        expectSqliteWriteBudget({ scenario: "token-miser-history-gate-conflict", writes,
+          note: "A peer advances a gate during repair, then the reader writes its missing charge and retries its card once." });
+      }
     } finally {
       peerDb.close();
       db.close();

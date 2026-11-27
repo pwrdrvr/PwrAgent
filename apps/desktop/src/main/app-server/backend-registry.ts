@@ -5246,6 +5246,18 @@ export class DesktopBackendRegistry {
     await this.prepareTokenMiserRuntime();
   }
 
+  scheduleTokenMiserLegacyCleanup(): void {
+    if (!this.closed) this.threadUsageLedger.scheduleTokenMiserLegacyCleanup();
+  }
+
+  async repairTokenMiserFamilyCharges(
+    members: ReadonlyArray<{ backend: AppServerBackendKind; threadId: string }>,
+  ): Promise<void> {
+    for (const { backend, threadId } of members) {
+      if (backend === "codex") await this.threadUsageLedger.repairTokenMiserHistory(threadId, { chargesOnly: true });
+    }
+  }
+
   refreshProvidersAtStartup(permit: ProviderDiscoveryPermit): Promise<void> {
     assertProviderDiscoveryPermit(permit, ["startup"]);
     if (this.shutdownRequested) return Promise.resolve();

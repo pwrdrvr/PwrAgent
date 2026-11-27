@@ -445,11 +445,11 @@ export class TokenMiserStore {
   }
 
   async readMetadata(objectId: string, threadId?: string): Promise<TokenMiserObjectMetadata | undefined> {
-    const metadata = this.readMetadataRow(objectId, threadId);
+    const metadata = this.readPersistedMetadata(objectId, threadId);
     return metadata ? mergeReplayUpdate(metadata, this.replayUpdates.get(objectId)) : undefined;
   }
 
-  private readMetadataRow(objectId: string, threadId?: string): TokenMiserObjectMetadata | undefined {
+  readPersistedMetadata(objectId: string, threadId?: string): TokenMiserObjectMetadata | undefined {
     if (!isSafeObjectId(objectId)) return undefined;
     return this.storage.readMetadata(objectId, threadId);
   }
@@ -808,12 +808,12 @@ export class TokenMiserStore {
       mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
   }
 
-  *listMetadataPages(limit: number, threadId?: string): Iterable<TokenMiserObjectMetadata[]> {
+  *listMetadataPages(limit: number, threadId?: string, persistedOnly = false): Iterable<TokenMiserObjectMetadata[]> {
     let after: TokenMiserObjectRecord | undefined;
     for (;;) {
       const { entries, next } = this.storage.readMetadataPage(after, limit, threadId);
       if (entries.length === 0) return;
-      yield entries.map((entry) => mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
+      yield persistedOnly ? entries : entries.map((entry) => mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
       if (!next) return;
       after = next;
     }
@@ -1019,7 +1019,7 @@ export class TokenMiserStore {
     const committed: TokenMiserObjectMetadata[] = [];
     this.storage.runExclusive(() => {
       for (const id of ids) {
-        const current = this.readMetadataRow(id);
+        const current = this.readPersistedMetadata(id);
         const pending = this.replayUpdates.get(id);
         if (!current || !pending) continue;
         const merged = mergeReplayUpdate(current, pending);
@@ -1078,6 +1078,16 @@ export class TokenMiserStore {
 
   hasCompletedLegacyImport(): boolean {
     return this.storage.hasLegacyMigration(this.legacyMigrationKey);
+  }
+
+  async hasLegacyFiles(): Promise<boolean> {
+    return await withTokenMiserFileOperation(() => fs.stat(this.rootDir)).then(
+      (stat) => stat.isDirectory(),
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      },
+    );
   }
 
   async prune(_params?: { maxAgeMs: number; maxBytes: number; now?: number }): Promise<void> {
@@ -1314,7 +1324,7 @@ export class TokenMiserStore {
       const changed: TokenMiserObjectMetadata[] = [];
       this.storage.runExclusive(() => {
         for (const id of params.objectIds) {
-          const row = this.readMetadataRow(id, params.threadId);
+          const row = this.readPersistedMetadata(id, params.threadId);
           if (!row) continue;
           const current = mergeReplayUpdate(row, this.replayUpdates.get(id));
           if (row.replayTrackingVersion === 2 && row.replayTrackingStoppedAt === undefined
@@ -1355,7 +1365,7 @@ export class TokenMiserStore {
       const apply = () => {
         const pending = this.replayUpdates.get(objectId);
         if (reason === "flushed" && !pending) return;
-        const row = reason === "replay" && pending ? pending.view : this.readMetadataRow(objectId);
+        const row = reason === "replay" && pending ? pending.view : this.readPersistedMetadata(objectId);
         if (!row) { this.replayUpdates.delete(objectId); return; }
         const current = reason === "replay" ? row : mergeReplayUpdate(row, pending);
         const metadata = { ...current };

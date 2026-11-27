@@ -15,9 +15,11 @@ import type {
   ThreadToolInvocationRecord,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
-import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
+import type { TokenMiserCodeModeObservation, TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { DesktopBackendRegistry, disposeDesktopBackendRegistry, initializeDesktopBackendRegistry } from "../app-server/backend-registry";
+import * as navigationQuerySource from "../app-server/navigation-query-source";
+import { createLocalThreadFamilyPricingReader } from "../app-server/thread-family-pricing-source";
 import { indexTokenMiserCachedReplays, indexTokenMiserPricingLines } from "../app-server/token-miser-ledger-index";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -25,6 +27,7 @@ import { disposeAppState, initializeAppState } from "../state/app-state";
 import { disposeDesktopSettingsService, initializeDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { initializeDesktopConfigStore } from "../settings/config-store/desktop-config-store-singleton";
 import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
+import { TokenMiserStore as PersistedTokenMiserStore } from "../token-miser/token-miser-store";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import { diagnosticExcerpt, TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
@@ -100,6 +103,90 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         legacy.mockRestore();
         pricing.mockRestore();
         cards.mockRestore();
+        disposeDesktopSettingsService();
+        disposeAppState();
+      }
+    }
+  });
+
+  it("recovers a child's missing helper charge on the first family pricing read", async () => {
+    await registry.close();
+    const { overlayStore, stateDb: profileDb } = initializeAppState();
+    profileDb.stopGc();
+    await overlayStore.moveLegacyThreadUsageActivities();
+    const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(profileDb);
+    const threads: NavigationSnapshot["threads"] = ["parent", "child", "unrelated"].map((id) => ({
+      id, source: "codex", title: id, titleSource: "derived",
+      createdAt: 1, updatedAt: 1, linkedDirectories: [], inbox: { inInbox: false },
+      ...(id === "child" ? { parentThreadId: "parent" } : {}),
+    }));
+    const index = vi.spyOn(navigationQuerySource, "loadLocalNavigationQueryIndex").mockResolvedValue({ directories: [], threads });
+    try {
+      initializeDesktopConfigStore();
+      initializeDesktopSettingsService();
+      registry = initializeDesktopBackendRegistry(() => createDesktopBackendRegistry({ overlayStore, mcpConnectionService: null, resolveTokenMiserEnabled: () => false }));
+      const startup = registry as unknown as { subAgentStartupReconciliation: Promise<void>; usageTurnStartupRepair: Promise<void> };
+      await Promise.all([startup.subAgentStartupReconciliation, startup.usageTurnStartupRepair]);
+      for (const id of ["child", "unrelated"]) {
+        storage.writeMetadata({ ...metadata(randomUUID(), `${id}-helper`), threadId: id, replayTrackingVersion: 2 });
+      }
+      const read = createLocalThreadFamilyPricingReader(undefined);
+      const request = { backend: "codex", threadId: "parent" } as const;
+      const ledger = registryModules(registry).threadUsageLedger;
+      await ledger.prepareTokenMiserStorage();
+      if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: profileDb.raw, dbPath: profileDb.raw.name });
+      const { result: family, writes } = await measureSqliteWrites(() => read(request));
+      expect(family.members.find((member) => member.threadId === "child")?.totalCostMicros).toBeGreaterThan(0);
+      expectSqliteWriteBudget({ scenario: "token-miser-thread-family-charge-repair", writes,
+        note: "A family pricing read recovers one missing helper charge for a local child without repairing cards." });
+      expect(await overlayStore.readThreadPricingSummaries([{ backend: "codex", threadId: "unrelated" }])).toEqual([]);
+      expect(await overlayStore.listThreadSubAgents({ backend: "codex", threadId: "child" })).toEqual([]);
+      const repeated = await measureSqliteWrites(() => read(request));
+      expect(repeated.result.members).toEqual(family.members);
+      expect(repeated.writes.commits).toBe(0);
+    } finally {
+      index.mockRestore();
+      try { await disposeDesktopBackendRegistry(); } finally {
+        disposeDesktopSettingsService();
+        disposeAppState();
+      }
+    }
+  });
+
+  it("removes legacy payloads after startup without a Token Miser read", async () => {
+    await registry.close();
+    const { overlayStore, stateDb: profileDb } = initializeAppState();
+    profileDb.stopGc();
+    await overlayStore.moveLegacyThreadUsageActivities();
+    const legacy = path.join(directory, "objects");
+    const gate = metadata(randomUUID(), "helper");
+    const payload = path.join(legacy, `${gate.objectId}.txt`);
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.writeFile(payload, "legacy raw output");
+    await fs.writeFile(path.join(legacy, `${gate.objectId}.json`), JSON.stringify(gate));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      initializeDesktopConfigStore();
+      initializeDesktopSettingsService();
+      registry = createDesktopBackendRegistry({ overlayStore, mcpConnectionService: null, resolveTokenMiserEnabled: () => false });
+      const startup = registry as unknown as { subAgentStartupReconciliation: Promise<void>; usageTurnStartupRepair: Promise<void> };
+      await Promise.all([startup.subAgentStartupReconciliation, startup.usageTurnStartupRepair]);
+      const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(profileDb);
+      Object.assign(registry, { tokenMiserStore: new PersistedTokenMiserStore(legacy, { storage }) });
+      registry.scheduleTokenMiserLegacyCleanup();
+      expect(await fs.readFile(payload, "utf8")).toBe("legacy raw output");
+      if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: profileDb.raw, dbPath: profileDb.raw.name });
+      const { writes } = await measureSqliteWrites(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+        await registryModules(registry).threadUsageLedger.drainTokenMiserLedgerWork();
+      });
+      await expect(fs.stat(payload)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(storage.readMetadata(gate.objectId)).toMatchObject({ objectId: gate.objectId });
+      expectSqliteWriteBudget({ scenario: "token-miser-background-legacy-cleanup", writes,
+        note: "One delayed upgrade pass imports one retained gate and marks the migration complete after removing its raw payload." });
+    } finally {
+      vi.useRealTimers();
+      try { await registry.close(); } finally {
         disposeDesktopSettingsService();
         disposeAppState();
       }

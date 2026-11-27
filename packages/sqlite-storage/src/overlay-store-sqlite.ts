@@ -4517,7 +4517,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     threadId: string;
     subAgents: ThreadSubAgentSummary[];
     expectedGateMetadata?: ReadonlyMap<string, { objectId: string; payload: string }>;
-  }): Promise<void> {
+  }): Promise<string[] | void> {
     if (params.subAgents.length === 0) return;
     const storageKey = encodeThreadIdentityKeyForStorage(
       buildThreadIdentityKey(params.backend, params.threadId),
@@ -4525,7 +4525,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // Immediate: the legacy-card check reads before it writes, and upgrading a
     // read snapshot fails at once (SQLITE_BUSY_SNAPSHOT) if another instance
     // committed in between.
-    this.stateDb.raw.transaction(() => {
+    return this.stateDb.raw.transaction(() => {
       this.subAgentTable.moveLegacyCards(storageKey);
       const expected = params.expectedGateMetadata;
       if (!expected) {
@@ -4544,10 +4544,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         payload: string;
       }>;
       const current = new Map(rows.map((row) => [row.object_id, row.payload]));
+      const changedGates: string[] = [];
       this.subAgentTable.upsert(storageKey, params.subAgents.filter(({ monitorId }) => {
         const snapshot = expected.get(monitorId);
-        return snapshot !== undefined && current.get(snapshot.objectId) === snapshot.payload;
+        if (!snapshot) return false;
+        const payload = current.get(snapshot.objectId);
+        if (payload === snapshot.payload) return true;
+        if (payload !== undefined) changedGates.push(snapshot.objectId);
+        return false;
       }));
+      return changedGates;
     }).immediate();
   }
 

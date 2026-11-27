@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { readFileSync, writeFileSync } from "node:fs";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
-import { storageHistoryPolicy, setStorageHistoryPreference, claimStorageMaintenance, compactStorage, eligibleStorageThreads, fenceStorageRetention, observeStorageArchive, readStorageMaintenance, STORAGE_GRACE_MS, STORAGE_INTERVAL_MS, STORAGE_MIN_BYTES, storageDetailStatements, storageMaintenanceDue, writeStorageMaintenance } from "../state/storage-maintenance";
+import { storageHistoryPolicy, setStorageHistoryPreference, claimStorageMaintenance, compactStorage, createTokenMiserGateSlice, eligibleStorageThreads, fenceStorageRetention, observeStorageArchive, readStorageMaintenance, STORAGE_GRACE_MS, STORAGE_INTERVAL_MS, STORAGE_MIN_BYTES, storageDetailSlices, storageMaintenanceDue, writeStorageMaintenance } from "../state/storage-maintenance";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
@@ -56,7 +56,7 @@ it("preserves the last record of a helper charge during archive cleanup", () => 
     insert.run("unsettled", identity.threadId, JSON.stringify({ helperUsage: { tokenUsage: { inputTokens: 100 } } }));
     insert.run("policy", identity.threadId, "{}");
     const cleanup = () => {
-      for (const op of storageDetailStatements(state.raw, identity)) op.statement.run(...op.parameters);
+      for (const op of storageDetailSlices(state.raw, identity)) op.run();
     };
     const gates = () => state.raw.prepare("SELECT object_id FROM token_miser_objects").pluck().all();
     cleanup();
@@ -102,7 +102,7 @@ it.each([
     const owner = codexOnly ? codex : acp;
     expect(eligibleStorageThreads(state.raw, identities, STORAGE_GRACE_MS)).toEqual([owner]);
     expect(eligibleStorageThreads(state.raw, identities.filter((id) => id !== owner), STORAGE_GRACE_MS)).toEqual([]);
-    for (const op of storageDetailStatements(state.raw, owner)) op.statement.run(...op.parameters);
+    for (const op of storageDetailSlices(state.raw, owner)) op.run();
     expect(eligibleStorageThreads(state.raw, identities, STORAGE_GRACE_MS)).toEqual([]);
   } finally { state.close(); }
 });
@@ -118,12 +118,12 @@ it("resumes remaining history, then excludes cleaned archives across restarts wi
     state.raw.transaction(() => {
       for (let i = 0; i < 129; i++) insert.run(String(i), identity.threadId, 0, "history");
     })();
-    const slice = storageDetailStatements(state.raw, identity).find((op) => op.statement.source.includes("token_miser_objects"))!;
-    expect(slice.statement.run(...slice.parameters).changes).toBe(128);
+    const slice = createTokenMiserGateSlice(state.raw, identity.threadId);
+    expect(slice.run().changes).toBe(128);
     state.close();
     state = StateDb.open(fixture.dbPath);
     expect(eligibleStorageThreads(state.raw, [identity], now)).toEqual([identity]);
-    for (const op of storageDetailStatements(state.raw, identity)) op.statement.run(...op.parameters);
+    for (const op of storageDetailSlices(state.raw, identity)) op.run();
     state.close();
     state = StateDb.open(fixture.dbPath);
     observeStorageArchive(state.raw, identity.backend, identity.threadId, true, now);
@@ -161,8 +161,8 @@ it("preserves metadata, unknown threads and oversized objects across resumable s
       insert.run("giant", "fixture", 0, "x".repeat(300000));
     })();
     const runSlice = () => {
-      const op = storageDetailStatements(state.raw, { backend: "codex", threadId: "fixture" }).find((entry) => entry.statement.source.includes("token_miser_objects"))!;
-      return state.raw.transaction(() => op.statement.run(...op.parameters).changes).immediate();
+      const op = createTokenMiserGateSlice(state.raw, "fixture");
+      return state.raw.transaction(() => op.run().changes).immediate();
     };
     expect(runSlice()).toBe(128);
     state.close();
@@ -196,10 +196,10 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     state.raw.transaction(() => { for (let i = 0; i < 128; i++) insert.run(String(i), "fixture", 0, "x".repeat(1024)); })();
     state.raw.pragma("wal_autocheckpoint=0");
     state.raw.pragma("wal_checkpoint(TRUNCATE)");
-    const op = storageDetailStatements(state.raw, { backend: "codex", threadId: "fixture" }).find((entry) => entry.statement.source.includes("token_miser_objects"))!;
+    const op = createTokenMiserGateSlice(state.raw, "fixture");
     const { writes: deletion } = await measureSqliteWrites(() => state.raw.transaction(() => {
       fenceStorageRetention(state.raw, { backend: "codex", threadId: "fixture" });
-      return op.statement.run(...op.parameters);
+      return op.run();
     }).immediate());
     const wal = readFileSync(fixture.dbPath + "-wal");
     // The generic counter sees file growth, which truncation can hide. Read the
@@ -258,13 +258,27 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
   } finally { state.close(); removeTempStateDbDir(fixture.tempDir); }
 });
 
+it("counts protected gates against the candidate limit before reaching a later deletable gate", () => {
+  const state = StateDb.open(":memory:");
+  try {
+    const insert = state.raw.prepare("INSERT INTO token_miser_objects VALUES (?,?,?,?)");
+    insert.run("protected", "fixture", 0, JSON.stringify({ helperUsage: { tokenUsage: {} } }));
+    insert.run("deletable", "fixture", 0, "history");
+    const op = createTokenMiserGateSlice(state.raw, "fixture");
+    expect(state.raw.transaction(() => op.run(1)).immediate()).toEqual({ changes: 0, more: true });
+    expect(state.raw.transaction(() => op.run(1)).immediate()).toEqual({ changes: 1, more: true });
+    expect(state.raw.transaction(() => op.run(1)).immediate()).toEqual({ changes: 0, more: false });
+    expect(state.raw.prepare("SELECT object_id FROM token_miser_objects").all()).toEqual([{ object_id: "protected" }]);
+  } finally { state.close(); }
+});
+
 it("caps logical bytes within a slice, not only record count", () => {
   const state = StateDb.open(":memory:");
   try {
     const insert = state.raw.prepare("INSERT INTO token_miser_objects VALUES (?,?,?,?)");
     for (let i = 0; i < 10; i++) insert.run(String(i), "fixture", 0, "x".repeat(100000));
-    const op = storageDetailStatements(state.raw, { backend: "codex", threadId: "fixture" }).find((entry) => entry.statement.source.includes("token_miser_objects"))!;
-    expect(op.statement.run(...op.parameters).changes).toBe(2);
+    const op = createTokenMiserGateSlice(state.raw, "fixture");
+    expect(op.run().changes).toBe(2);
   } finally { state.close(); }
 });
 
