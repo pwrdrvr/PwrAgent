@@ -10,6 +10,7 @@ import {
   type BackendRateLimitSummary,
 } from "../../../lib/backend-status-format";
 import { HoverCardBridge, type BridgedHoverCard } from "../../../lib/hover-card-bridge";
+import { groupRateLimitsByScope } from "../../../lib/rate-limit-scopes";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   useLocalUsagePace,
@@ -20,10 +21,25 @@ import { RateLimitRow } from "./RateLimitRow";
 
 type PeekDesktopApi = Pick<DesktopApi, "openUsageActivity" | "readUsageActivity">;
 
-/** One provider's line in the peek: its tightest limit, or none reported. */
+/**
+ * One of a provider's shared allowances in the peek, by its longest window
+ * (Weekly where it has one): Antigravity's "Claude/GPT" and "Gemini" pools
+ * are two, a single plan is one with no `scope`.
+ */
+export type ProviderPeekScope = {
+  /** Null for a provider's only scope, which shows no subheader. */
+  scope: string | null;
+  /** The row label: the window alone, "Weekly". */
+  window: string;
+  limit: BackendRateLimitSummary;
+  usedPercent?: number;
+};
+
+/** One provider in the peek: a line per allowance, or none reported. */
 export type ProviderPeekEntry = {
   backend: BackendSummary;
-  limit?: BackendRateLimitSummary;
+  scopes: ProviderPeekScope[];
+  /** The fullest shown allowance, which orders the providers. */
   usedPercent?: number;
 };
 
@@ -34,9 +50,43 @@ function chartableBackends(backends: readonly BackendSummary[]): BackendSummary[
 }
 
 /**
- * Each available provider's tightest limit, worst first. A provider that
- * reported no percentage sorts after every one that did, in the panel's
- * order, so the peek reads as "what runs out first".
+ * Each scope's longest window, which is Weekly wherever the provider has
+ * one; the 5h windows stay on the AI providers panel. A provider whose limits
+ * have no window (a credit balance) shows its fullest one instead.
+ */
+function providerPeekScopes(backend: BackendSummary, now: number): ProviderPeekScope[] {
+  const visible = selectVisibleRateLimits(backend);
+  // The panel's filter, in the provider's own order: Antigravity's pools
+  // read as it reports them, not as the panel sorts its rows.
+  const shown = new Set(visible);
+  const scopes = groupRateLimitsByScope((backend.rateLimits ?? []).filter((limit) => shown.has(limit)));
+  const usedPercentOf = (limit: BackendRateLimitSummary) => describeRateLimitRow(limit, now).usedPercent;
+  if (scopes.length) {
+    return scopes.map((group) => {
+      const { limit, window } = group.windows[0]!;
+      const usedPercent = usedPercentOf(limit);
+      return {
+        scope: group.scope,
+        window: window.label,
+        limit,
+        ...(usedPercent === undefined ? {} : { usedPercent }),
+      };
+    });
+  }
+  let fullest: ProviderPeekScope | undefined;
+  for (const limit of visible) {
+    const usedPercent = usedPercentOf(limit);
+    if (usedPercent === undefined || (fullest?.usedPercent ?? -1) >= usedPercent) continue;
+    fullest = { scope: null, window: describeRateLimitRow(limit, now).label.replace(/ limit$/i, ""), limit, usedPercent };
+  }
+  return fullest ? [fullest] : [];
+}
+
+/**
+ * Each available provider with its allowances, fullest provider first. A
+ * provider that reported no percentage sorts after every one that did, in
+ * the panel's order, so the peek reads as "what runs out first". Scopes keep
+ * the provider's own order.
  */
 export function providerPeekEntries(
   backends: readonly BackendSummary[],
@@ -45,13 +95,13 @@ export function providerPeekEntries(
   const entries = backends
     .filter((backend) => backend.available)
     .map((backend, order) => {
-      let tightest: { limit: BackendRateLimitSummary; usedPercent: number } | undefined;
-      for (const limit of selectVisibleRateLimits(backend)) {
-        const usedPercent = describeRateLimitRow(limit, now).usedPercent;
-        if (usedPercent === undefined) continue;
-        if (!tightest || usedPercent > tightest.usedPercent) tightest = { limit, usedPercent };
-      }
-      return { order, entry: { backend, ...tightest } satisfies ProviderPeekEntry };
+      const scopes = providerPeekScopes(backend, now);
+      const percents = scopes.flatMap((scope) => scope.usedPercent === undefined ? [] : [scope.usedPercent]);
+      const usedPercent = percents.length ? Math.max(...percents) : undefined;
+      return {
+        order,
+        entry: { backend, scopes, ...(usedPercent === undefined ? {} : { usedPercent }) } satisfies ProviderPeekEntry,
+      };
     });
   return entries
     .sort((left, right) =>
@@ -185,21 +235,26 @@ export function ProviderGaugePeekCard(props: {
       </div>
       {entries.length ? (
         <ul className="provider-peek__list">
-          {entries.map(({ backend, limit }) => (
+          {entries.map(({ backend, scopes }) => (
             <li key={backend.kind} className="provider-peek__provider">
               <span className="provider-peek__name">
                 <span aria-hidden="true" className="backend-status-list__dot" />
                 {backend.label}
               </span>
-              {limit ? (
-                <dl className="backend-status-list__metadata-grid rail-limit-grid provider-peek__grid">
-                  <RateLimitRow
-                    limit={limit}
+              {scopes.length ? scopes.map((entry) => (
+                <div key={entry.scope ?? ""} className="provider-peek__scope">
+                  {/* Named only where the provider has more than one. */}
+                  {entry.scope !== null ? (
+                    <span className="provider-peek__scope-name">{entry.scope}</span>
+                  ) : null}
+                  <PeekLimitRow
+                    window={entry.window}
+                    limit={entry.limit}
                     now={now}
                     account={pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "")}
                   />
-                </dl>
-              ) : (
+                </div>
+              )) : (
                 <span className="provider-peek__none">
                   {backend.account?.planType
                     ? `${formatBackendPlanType(backend, backend.account.planType)} · no limits reported`
@@ -224,5 +279,26 @@ export function ProviderGaugePeekCard(props: {
         </button>
       </div>
     </>
+  );
+}
+
+/**
+ * The panel's limit row under a window-only label in one fixed column, so
+ * every provider's bar starts at the same edge and runs the same width. The
+ * panel's own label (the scope and "limit" too) stays on the panel.
+ */
+function PeekLimitRow(props: {
+  window: string;
+  limit: BackendRateLimitSummary;
+  now: number;
+  account: Parameters<typeof RateLimitRow>[0]["account"];
+}) {
+  return (
+    <div className="provider-peek__limit">
+      <span className="provider-peek__window">{props.window}</span>
+      <dl className="backend-status-list__metadata-grid provider-peek__stat">
+        <RateLimitRow limit={props.limit} now={props.now} account={props.account} />
+      </dl>
+    </div>
   );
 }

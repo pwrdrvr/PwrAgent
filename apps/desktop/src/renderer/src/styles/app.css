@@ -10585,7 +10585,8 @@ button.stack-display__thread,
 }
 
 /* The AI provider gauge's peek (`ProviderGaugePeek`): each provider's
-   tightest limit on the AI providers panel's limit rows, worst first. */
+   Weekly limit per allowance on the AI providers panel's limit rows,
+   fullest provider first. */
 .provider-peek {
   width: 290px;
   padding-bottom: 8px;
@@ -10616,9 +10617,43 @@ button.stack-display__thread,
   font-weight: 600;
 }
 
-.provider-peek__grid {
-  margin-top: 4px;
-  font-size: 11.5px;
+.provider-peek__scope-name {
+  display: block;
+  margin: 6px 0 0 13px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* One fixed window column ("WEEKLY" is the longest word), the same for
+   every provider, so every bar shares its left edge and width. A stat line
+   too long for the column beside it wraps above the bar, never beside a
+   narrower one. */
+.provider-peek__limit {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: baseline;
+  margin: 4px 0 0 13px;
+}
+
+.provider-peek__window {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.provider-peek__stat {
+  display: block;
+  grid-column: auto;
+}
+
+/* The panel's own label names the scope and "limit"; the window column
+   above replaces it. */
+.provider-peek__stat dt {
+  display: none;
 }
 
 .provider-peek__none {
