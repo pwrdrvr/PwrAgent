@@ -90,7 +90,7 @@ import type { AgentToolCallContext } from "./agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "./federation/federated-forge-read-service";
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../shared/navigation-diagnostic-cause";
 import { setBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
-import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
+import { NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD, navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { forgeRuleProjectLabel } from "@pwragent/shared/contracts/forge-agent-tools";
 import { AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL, CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
@@ -161,6 +161,7 @@ function invalidateNavigationEvent(event: AgentEvent): void {
   if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) {
     navigationQueryPool.invalidateQueryOwner(event.federationTarget, navigationDiagnosticCause(event), navigationDiagnosticTrigger(event), event);
   }
+  if (event.notification.method === NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD) return;
   navigationQueryPool.invalidateExactOwner(event.federationTarget,
     typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
 }
@@ -824,6 +825,9 @@ wireOwnerRendererEvents();
       queues.events.emit("operatorRequestsChanged", { reason: "questions" });
     }
   }));
+  // The prewarm starts after the shell creates its window. Admit saved
+  // navigation before owner metadata or a window can start a live listing.
+  if (bootMode === "active-profile" && config.read("onboarding").completed) registry.markStartupProviderRefreshPending();
   void startAppServerOwnerNavigation().catch((error) => {
     mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
   });

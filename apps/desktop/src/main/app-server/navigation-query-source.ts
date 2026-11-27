@@ -7,6 +7,7 @@ import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
+  NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD,
   navigationPullRequestKeysMayMatch,
   navigationQueryEventRequiresRefresh,
 } from "@pwragent/shared/navigation-query-events";
@@ -42,6 +43,7 @@ import { readNavigationCheckouts } from "../git-info/directory-store";
 const indexReads = new NavigationIndexReadPool(1_000, 15_000);
 const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = getDesktopStackReader();
+const navigationQueryLog = getMainLogger("pwragent:navigation-query");
 
 export type StackPrRelevanceScope = {
   prKeys: ReadonlySet<string>;
@@ -123,7 +125,8 @@ export function stackIndexEventInvalidates(
   notification: { method: string; params?: unknown },
   prScope?: StackPrRelevanceScope,
 ): boolean {
-  if (viewerOnlyNavigationEvent(notification.method)) return false;
+  if (viewerOnlyNavigationEvent(notification.method)
+    || notification.method === NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD) return false;
   if (notification.method === "pullRequest/status/updated") {
     return pullRequestStatusEventRelevant(notification.params, prScope);
   }
@@ -199,11 +202,15 @@ export function navigationPullRequestProjection(options: {
   kind: NavigationQueryRequest["query"]["kind"];
   signal?: AbortSignal;
   registry?: DesktopBackendRegistry;
+  backgroundValidation?: boolean;
 }): NavigationPullRequestProjection {
   const priority = options.kind === "star-map" ? PR_METADATA_PRIORITY.background : PR_METADATA_PRIORITY.page;
   const verify = (batches: PrSummary[][]) => {
     const registry = options.registry ?? getDesktopBackendRegistry();
-    return Promise.all(batches.map((prs) => registry.canonicalizeNavigationPullRequests(prs, { signal: options.signal, priority: () => priority })));
+    const demand = { signal: options.signal, priority: () => priority };
+    return Promise.all(batches.map((prs) => options.backgroundValidation
+      ? readSidebarPullRequests(registry, prs, demand)
+      : registry.canonicalizeNavigationPullRequests(prs, demand)));
   };
   return {
     verify,
@@ -212,6 +219,73 @@ export function navigationPullRequestProjection(options: {
       return verify(getDesktopOverlayStore().readNavigationPullRequests(threads));
     },
   };
+}
+
+const pendingSidebarNotifications = new WeakSet<DesktopBackendRegistry>();
+
+function publishSidebarEnrichment(registry: DesktopBackendRegistry): void {
+  if (pendingSidebarNotifications.has(registry)) return;
+  pendingSidebarNotifications.add(registry);
+  setImmediate(() => {
+    pendingSidebarNotifications.delete(registry);
+    void registry.publishLocalEvent({ backend: "codex", notification: {
+      method: NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD, params: {},
+    } }).catch((error: unknown) => navigationQueryLog.warn("sidebar enrichment notification failed", { error: String(error) }));
+  });
+}
+
+type SidebarPrValidation = { accepted?: Set<string>; expiresAt: number; pending: boolean };
+const sidebarPrValidations = new WeakMap<DesktopBackendRegistry, Map<string, SidebarPrValidation>>();
+const SIDEBAR_PR_VALIDATION_REUSE_MS = 60_000;
+const MAX_SIDEBAR_PR_VALIDATIONS = 256;
+
+function needsSidebarPrValidation(pr: PrSummary): boolean {
+  return !pr.explicitlyAttached && Boolean(pr.linkedDirectoryPaths?.length);
+}
+
+async function readSidebarPullRequests(registry: DesktopBackendRegistry, prs: PrSummary[],
+  demand: { signal?: AbortSignal; priority: () => number }): Promise<PrSummary[]> {
+  const canonical = await registry.canonicalizeNavigationPullRequests(prs, demand, false);
+  const automatic = canonical.filter(needsSidebarPrValidation);
+  if (!automatic.length) return canonical;
+  // Status changes alone do not invalidate a checkout's attachment verdict.
+  const key = createHash("sha256").update(JSON.stringify(automatic.map((pr) => [buildPullRequestStatusKey(pr),
+    pr.sourceRepository, pr.headRefName, pr.linkedDirectoryPaths]))).digest("base64url");
+  let validations = sidebarPrValidations.get(registry);
+  if (!validations) sidebarPrValidations.set(registry, validations = new Map());
+  let validation = validations.get(key);
+  if (!validation && validations.size >= MAX_SIDEBAR_PR_VALIDATIONS) {
+    // Keep fresh verdicts through a multi-page refresh. Cycling them through
+    // this cache would keep republishing the same validation results.
+    const now = Date.now();
+    const reusable = [...validations].find(([, entry]) => !entry.pending && entry.expiresAt <= now);
+    if (!reusable) {
+      return registry.getStartupProviderRefreshStatus?.()?.state === "checking"
+        ? canonical.filter((pr) => !needsSidebarPrValidation(pr))
+        : registry.canonicalizeNavigationPullRequests(canonical, demand);
+    }
+    validations.delete(reusable[0]);
+  }
+  if (!validation) validations.set(key, validation = { expiresAt: 0, pending: false });
+  const accept = (pr: PrSummary) => !needsSidebarPrValidation(pr)
+    || validation.accepted?.has(buildPullRequestStatusKey(pr)) === true;
+  const visible = canonical.filter(accept);
+  if (!validation.pending && validation.expiresAt <= Date.now()) {
+    validation.pending = true;
+    const oldKeys = validation.accepted ?? new Set<string>();
+    void registry.canonicalizeNavigationPullRequests(automatic, {
+      priority: () => PR_METADATA_PRIORITY.background, signal: AbortSignal.timeout(30_000),
+    })
+      .then((verified) => {
+        const keys = new Set(verified.map(buildPullRequestStatusKey));
+        validation.accepted = keys;
+        if (keys.size !== oldKeys.size || [...keys].some((entry) => !oldKeys.has(entry))) publishSidebarEnrichment(registry);
+      }).finally(() => {
+        validation.expiresAt = Date.now() + SIDEBAR_PR_VALIDATION_REUSE_MS;
+        validation.pending = false;
+      }).catch((error: unknown) => navigationQueryLog.warn("sidebar PR validation failed", { error: String(error) }));
+  }
+  return visible;
 }
 export function navigationQueryShowsStacks(
   query: NavigationQueryRequest["query"],
@@ -240,16 +314,17 @@ export const STARTUP_COVERAGE_WAIT_MARGIN_MS = 1_000;
  * `checking`, so a read made in the first seconds after launch was refused as
  * incomplete. Such a read waits for the check to end, within the caller's
  * deadline less a margin. After that it answers as before, with `checking`
- * when the check is still running. Sidebar queries never wait: they draw
- * `checking` and refresh on `navigation/providerThreads/refreshed`.
+ * when the check is still running. Pin refreshes and sidebar queries draw
+ * `checking` and can refresh on `navigation/providerThreads/refreshed`.
  */
 export async function awaitStartupProviderCoverage(params: {
   query: { kind: string };
+  readReason?: NavigationQueryRequest["readReason"];
   deadlineAt?: number;
   registry?: Pick<DesktopBackendRegistry, "getStartupProviderRefreshStatus" | "onEvent">;
   signal?: AbortSignal;
 }): Promise<void> {
-  if (params.query.kind !== "group-members" || params.deadlineAt === undefined) return;
+  if (params.query.kind !== "group-members" || params.readReason === "pins" || params.deadlineAt === undefined) return;
   const registry = params.registry ?? getDesktopBackendRegistry();
   const checking = () => registry.getStartupProviderRefreshStatus?.()?.state === "checking";
   const waitMs = params.deadlineAt - STARTUP_COVERAGE_WAIT_MARGIN_MS - Date.now();
@@ -285,6 +360,8 @@ export async function loadLocalNavigationQueryIndex(params: {
   callerReason: string;
   /** List provider threads afresh rather than from the thread-list cache. */
   refreshProviders?: boolean;
+  /** Display and coverage checks can use saved membership while discovery runs. */
+  useSavedStartupInventory?: boolean;
   /** Actions that use checkout membership as authority need live Git verification. */
   requireVerifiedDirectories?: boolean;
   /** This caller renders thread stack membership. */
@@ -305,10 +382,12 @@ export async function loadLocalNavigationQueryIndex(params: {
   const backend = params.backend ?? "all";
   const reads = params.requireVerifiedDirectories ? actionIndexReads : indexReads;
   const publishesSidebar = backend === "all" && !params.requireVerifiedDirectories;
+  const useSavedStartupInventory = params.useSavedStartupInventory && registry.getStartupProviderRefreshStatus?.()?.state === "checking";
   // A refresh reads under its own key: it must not be served a retained or
   // in-flight index that predates it, nor overtake other readers' scans.
   const keyFor = (variant: (string | number)[]) => JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
-    ...variant, ...(params.refreshProviders ? ["refresh-providers"] : [])]);
+    ...variant, ...(params.refreshProviders ? ["refresh-providers"] : []),
+    ...(useSavedStartupInventory ? ["saved-startup"] : [])]);
   const selectedStackDetail = params.includeStacks && params.callerReason === "selected-stack-detail";
   const key = keyFor([
     ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
@@ -335,6 +414,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       // A PR status observation changes page chips, not the compact index's
       // attachments. The page reads those statuses from the live registry.
       const viewerEvent = viewerOnlyNavigationEvent(event.notification.method);
+      if (event.notification.method === NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD) return;
       if ((params.includeStacks ? stackIndexEventInvalidates(event.notification, stackPrScope)
         : !viewerEvent
           && event.notification.method !== "pullRequest/status/updated"
@@ -439,7 +519,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       : undefined;
     const directoryScopeCheckpoint = publishesSidebar ? registry.navigationDirectoryScope?.checkpoint() : undefined;
     if (publishesSidebar) latestVisibilityScanByRegistry.set(registry, observedAt);
-    const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
+    const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint, useSavedStartupInventory }), observedAt };
     // Creation uses the same complete membership that the sidebar just read.
     // Waiting for owner PR metadata work can leave visibility uninitialized
     // even after the directory and its pins have appeared in the window.
@@ -459,6 +539,111 @@ export async function loadLocalNavigationQueryIndex(params: {
     }
     return createNavigationQuerySnapshot(index, undefined, undefined, previous());
   }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source");
+}
+
+type SidebarStackFields = Pick<NavigationThreadSummary, "stackMemberships" | "stackLeadPrKey">;
+type SidebarStackRow = { binding: string; fields: SidebarStackFields };
+
+function sidebarStackBinding(row: NavigationThreadSummary): string {
+  return JSON.stringify([row.projectKey, row.primaryGitRepository, row.observedGitBranch ?? row.gitBranch,
+    row.linkedDirectories.map((directory) => [directory.worktreePath ?? directory.path, directory.repositoryKey, directory.gitBranch]),
+    row.prs?.map((pr) => [buildPullRequestStatusKey(pr), pr.headRefName, pr.linkedDirectoryPaths])]);
+}
+
+type SidebarStackRead = {
+  epoch?: number;
+  version?: string;
+  expiresAt: number;
+  rows: Map<string, SidebarStackRow>;
+  pending: boolean;
+  requestedAgain: boolean;
+};
+const sidebarStackReads = new WeakMap<DesktopBackendRegistry, {
+  overlay: ReturnType<typeof getDesktopOverlayStore>;
+  reads: Map<AppServerBackendScope, SidebarStackRead>;
+}>();
+const sidebarStackSnapshots = new WeakMap<NavigationQueryIndex, { rows: SidebarStackRead["rows"]; index: NavigationQueryIndex }>();
+
+/** Sidebar membership and selection can render while the stack lease verifies Git. */
+export async function loadSidebarNavigationQueryIndex(
+  params: Parameters<typeof loadLocalNavigationQueryIndex>[0],
+): Promise<NavigationQueryIndex> {
+  const { includeStacks, ...source } = params;
+  const local = await loadLocalNavigationQueryIndex({ ...source, useSavedStartupInventory: true });
+  params.signal?.throwIfAborted();
+  // Discovery publishes a replacement inventory. Let it settle before
+  // starting an inventory-wide scan on the checkouts it may replace.
+  if (!includeStacks || local.coverage?.state === "checking") return local;
+  const registry = params.registry ?? getDesktopBackendRegistry();
+  const backend = params.backend ?? "all";
+  const overlay = getDesktopOverlayStore();
+  const epoch = stackInputEpoch(registry);
+  let state = sidebarStackReads.get(registry);
+  if (state?.overlay !== overlay) sidebarStackReads.set(registry, state = { overlay, reads: new Map() });
+  const { reads } = state;
+  let read = reads.get(backend);
+  if (!read) {
+    if (reads.size >= 8) {
+      const reusable = [...reads].find(([, entry]) => !entry.pending);
+      if (!reusable) return local;
+      reads.delete(reusable[0]);
+    }
+    reads.set(backend, read = { rows: new Map(), expiresAt: 0, pending: false, requestedAgain: false });
+  }
+  const current = read.epoch === epoch?.value && read.version === navigationIndexVersion(registry, overlay, false);
+  if (!current || read.expiresAt <= Date.now()) refreshSidebarStacks(read, registry, params, epoch);
+  if (!read.rows.size) return local;
+  const rows = read.rows;
+  const snapshot = sidebarStackSnapshots.get(local);
+  if (snapshot?.rows === rows) return snapshot.index;
+  const index = createNavigationQuerySnapshot({ ...local, threads: local.threads.map((row) => {
+    const stack = !row.federation && rows.get(buildThreadIdentityKey(row.source, row.id));
+    return stack && stack.binding === sidebarStackBinding(row) ? { ...row, ...stack.fields } : row;
+  }) }, undefined, local);
+  sidebarStackSnapshots.set(local, { rows, index });
+  return index;
+}
+
+function refreshSidebarStacks(read: SidebarStackRead, registry: DesktopBackendRegistry,
+  params: Parameters<typeof loadLocalNavigationQueryIndex>[0], epoch?: { value: number }): void {
+  if (read.pending) {
+    read.requestedAgain = true;
+    return;
+  }
+  read.pending = true;
+  const overlay = getDesktopOverlayStore();
+  const startedEpoch = epoch?.value;
+  const version = navigationIndexVersion(registry, overlay, false);
+  const isCurrent = () => getDesktopOverlayStore() === overlay
+    && startedEpoch === epoch?.value && version === navigationIndexVersion(registry, overlay, false);
+  // Use the owner index lease so a pin publication or the closing of one
+  // window cannot cancel Git work shared by the local sidebars.
+  void loadLocalNavigationQueryIndex({ backend: params.backend, registry: params.registry,
+    callerReason: params.callerReason, includeStacks: true, signal: AbortSignal.timeout(30_000) })
+    .then((index) => {
+      if (!isCurrent()) return;
+      const rows = new Map<string, SidebarStackRow>();
+      for (const row of index.threads) {
+        if (row.stackMemberships?.length) rows.set(buildThreadIdentityKey(row.source, row.id), {
+          binding: sidebarStackBinding(row),
+          fields: { stackMemberships: row.stackMemberships, stackLeadPrKey: row.stackLeadPrKey },
+        });
+      }
+      const changed = rows.size !== read.rows.size || [...rows].some(([key, value]) =>
+        JSON.stringify(value) !== JSON.stringify(read.rows.get(key)));
+      read.epoch = startedEpoch;
+      read.version = version;
+      read.expiresAt = Date.now() + STACK_DETAIL_REUSE_MS;
+      if (changed) {
+        read.rows = rows;
+        publishSidebarEnrichment(registry);
+      }
+    }).finally(() => {
+      read.pending = false;
+      const requestedAgain = read.requestedAgain;
+      read.requestedAgain = false;
+      if (requestedAgain && getDesktopOverlayStore() === overlay && !isCurrent()) refreshSidebarStacks(read, registry, params, epoch);
+    }).catch((error: unknown) => navigationQueryLog.warn("sidebar stack refresh failed", { error: String(error) }));
 }
 
 async function projectNavigationCheckoutDirectories(
@@ -840,6 +1025,7 @@ async function buildLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
   callerReason: string;
   refreshProviders?: boolean;
+  useSavedStartupInventory?: boolean;
   requireVerifiedDirectories?: boolean;
   registry: DesktopBackendRegistry;
   signal: AbortSignal;
@@ -848,22 +1034,28 @@ async function buildLocalNavigationQueryIndex(params: {
   const registry = params.registry;
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
+  const provider = backend === "all" ? undefined : backend;
+  const saved = params.useSavedStartupInventory && !params.refreshProviders && !params.requireVerifiedDirectories
+    ? registry.readStartupNavigationThreads?.(provider) : undefined;
   // Membership refreshes also run on navigation and directory-announcer
   // timers. Opening a thread counts through its own foreground read.
-  const listedThreads = await withCodexRequestActivity({ countsAsActivity: false }, () =>
+  const listedThreads = await (saved ?? withCodexRequestActivity({ countsAsActivity: false }, () =>
     registry.listThreads({
-      backend: backend === "all" ? undefined : backend,
+      backend: provider,
       callerReason: params.callerReason,
       enrichDirectories: params.requireVerifiedDirectories === true,
       skipPendingDirectoryEnrichment: !params.requireVerifiedDirectories,
       ...(params.refreshProviders || params.requireVerifiedDirectories ? { forceRefresh: true } : {}),
-    }));
+    })));
   params.signal?.throwIfAborted();
+  // Finish a saved-state paint even if discovery publishes during its
+  // projection. New readers can join the live index on the next pass.
+  const checkpoint = saved ? () => {} : params.checkpoint;
   // An overtaken scan whose follow-up already has readers hands them over
   // here instead of spending CPU on a projection nobody would keep.
-  params.checkpoint();
+  checkpoint();
   const checkoutProjection = await projectNavigationCheckoutDirectories(
-    listedThreads, params.signal, params.checkpoint, params,
+    listedThreads, params.signal, checkpoint, params,
   );
   params.signal.throwIfAborted();
   const index = overlayStore.readNavigationQueryIndex({
@@ -905,7 +1097,7 @@ async function buildLocalNavigationQueryIndex(params: {
   // listing this index was built from, so a recovered Codex completes the
   // next index and a later Codex failure cannot pass as complete.
   const coverage: NavigationQueryIndex["coverage"] =
-    registry.getStartupProviderRefreshStatus?.()?.state === "checking"
+    saved || registry.getStartupProviderRefreshStatus?.()?.state === "checking"
       ? { state: "checking" }
       : registry.isIncompleteThreadList?.(listedThreads)
         ? { state: "degraded", failedProviders: 1 }

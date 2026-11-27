@@ -23,7 +23,7 @@ import {
 import { parseThreadIdentityKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { rankThreadJumpMatches, sortThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
-import type { PinnedNavigationReadState } from "./federation-collection-client";
+import { PinnedNavigationCoveragePending, type PinnedNavigationReadState } from "./federation-collection-client";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { compactNavigationSearchResult } from "./navigation-search-result";
 import { ThreadInfoStore } from "../app-server/thread-info-store";
@@ -222,6 +222,7 @@ export class RemoteThreadSummaryCache {
   private readonly peerGenerations = new Map<string, number>();
   /** Peers whose most recent background refresh failed while connected. */
   private readonly refreshFailures = new Set<string>();
+  private readonly pendingProviderChecks = new Map<string, number>();
   private readonly missingPinSignatures = new Map<string, string>();
   /**
    * Thread keys a background pass proved archived, keyed by instance and
@@ -360,6 +361,7 @@ export class RemoteThreadSummaryCache {
       for (const owner of instanceId ? [instanceId] : this.mountedOwners()) this.uncertainPinnedMembership.add(owner);
     }
     if (instanceId === undefined) {
+      this.pendingProviderChecks.clear();
       this.globalGeneration += 1;
       for (const id of this.cache.keys()) this.expirePeerSnapshot(id);
       this.archivedCache.clear();
@@ -367,6 +369,7 @@ export class RemoteThreadSummaryCache {
       this.refreshMountedPins();
       return;
     }
+    this.pendingProviderChecks.delete(instanceId);
     this.peerGenerations.set(
       instanceId,
       (this.peerGenerations.get(instanceId) ?? 0) + 1,
@@ -415,6 +418,7 @@ export class RemoteThreadSummaryCache {
     clearTimeout(this.watchedExpiryTimer);
     this.watchedExpiryTimer = undefined;
     this.pinnedReadStates.clear();
+    this.pendingProviderChecks.clear();
     this.uncertainPinnedMembership.clear();
     this.unpublishedPinnedRows.clear();
     this.publishedPinnedRows.clear();
@@ -1060,6 +1064,9 @@ export class RemoteThreadSummaryCache {
     // Keep one complete refresh (including archive proof) per owner. A newer
     // invalidation fences its result and is consumed by one follow-up below.
     if (this.pinnedRefreshes.has(instanceId)) return;
+    const now = this.options.now?.() ?? Date.now();
+    if ((this.pendingProviderChecks.get(instanceId) ?? -Infinity) > now) return;
+    this.pendingProviderChecks.delete(instanceId);
     this.pinnedRefreshes.add(instanceId);
     const generation = this.generationFor(instanceId);
     const cached = this.cache.get(instanceId);
@@ -1108,6 +1115,14 @@ export class RemoteThreadSummaryCache {
       },
       (error: unknown) => {
         if (generation !== this.generationFor(instanceId) || !this.hasMountedDemand(instanceId)) return;
+        if (error instanceof PinnedNavigationCoveragePending) {
+          // The owner's provider publication normally fences this read. The
+          // ordinary retry window covers peers that miss that notification.
+          this.pendingProviderChecks.set(instanceId,
+            (this.options.now?.() ?? Date.now()) + (this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS));
+          if (this.refreshFailures.delete(instanceId)) this.options.onPinnedSummariesRefreshed?.(instanceId);
+          return;
+        }
         this.refreshFailures.add(instanceId);
         if (!failedBefore) {
           this.options.onPinnedRefreshProblem?.({ instanceId, requestedCount: refs.length,

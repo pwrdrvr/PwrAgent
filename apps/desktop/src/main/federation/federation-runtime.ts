@@ -7850,8 +7850,9 @@ function localBackendOperations(
           load: ({ signal, deadlineAt }) => getDesktopNavigationQueryStore().readPage({
             pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal }),
             loadIndex: async () => {
-              await awaitStartupProviderCoverage({ query: request.query, deadlineAt, signal });
+              await awaitStartupProviderCoverage({ query: request.query, readReason: request.readReason, deadlineAt, signal });
               return loadLocalNavigationQueryIndex({ backend: request.backend,
+                useSavedStartupInventory: request.query.kind === "group-members",
                 callerReason: "federation-navigation-query", includeStacks: navigationQueryShowsStacks(request.query, request.consumer), signal });
             },
             request, scopeKey,
