@@ -389,6 +389,15 @@ describe("first-column pin heuristic properties", () => {
     );
   });
 
+  it("auto-pins bold row titles averaging exactly 54 display columns", () => {
+    // The titles are 55 and 53 columns wide, so only their average is at the limit.
+    const matrix = boldRowTitleMatrix(3, [
+      "Managed gateway configuration for external tool servers",
+      "Dynamic tool discovery with a configurable schema cap",
+    ]);
+    expect(profilePinRecommendation(matrix)).toBe("auto");
+  });
+
   it("offers manual pinning when bold row titles average over 54 characters", () => {
     const matrix = boldRowTitleMatrix(3, [
       "a&AA Aa-&/-&A& Aaa0a0&-a AaA/A/-a-A A000&a&a a-&&-a& a0a",
