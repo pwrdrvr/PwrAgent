@@ -33,6 +33,13 @@ import { defaultOpenPullRequest } from "./ThreadRow";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
+import type { IntegratedTerminalPaneRemote } from "../../lib/useIntegratedTerminals";
+import { threadTerminalRequest } from "../../lib/thread-terminal-request";
+import {
+  threadCardOpenTargets,
+  type ThreadCardOpenTarget,
+} from "./thread-card-open-targets";
+import { ThreadOpenInMenuItems } from "./ThreadOpenInMenuItems";
 import {
   threadInfoRowFacts,
   type ThreadInfoContext,
@@ -230,6 +237,11 @@ import {
   useAttentionHoverCard,
 } from "./AttentionSignals";
 
+type ThreadCardOpenIn = {
+  targets: readonly ThreadCardOpenTarget[];
+  run: (target: ThreadCardOpenTarget) => void;
+};
+
 type ThreadContextMenuPosition = {
   x: number;
   y: number;
@@ -360,6 +372,8 @@ type SidebarProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
   /** Thread keys with a live integrated terminal in the main process. */
   terminalThreadKeys?: Record<string, boolean>;
+  /** Shows a thread's integrated terminal panel, starting one if none is open. */
+  onOpenThreadTerminal?: (threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => void;
   inputRequestThreadKeys?: Record<string, boolean>;
   /**
    * Identity key → pending outbound-message state, for the
@@ -948,6 +962,8 @@ function SidebarContent(props: SidebarProps) {
         pullRequest?: PrSummary;
         thread: NavigationThreadSummary;
         threads: NavigationThreadSummary[];
+        /** The thread card's open icons past its row, from the card's ⋯. */
+        openIn?: ThreadCardOpenIn;
       }
     | undefined
   >();
@@ -2239,7 +2255,8 @@ function SidebarContent(props: SidebarProps) {
 
   const openThreadContextMenu = useEventCallback((
     thread: NavigationThreadSummary,
-    position: ThreadContextMenuPosition
+    position: ThreadContextMenuPosition,
+    openIn?: ThreadCardOpenIn,
   ): void => {
     rememberMenuOpener(contextMenuOpenerRef, contextMenuRef);
     // Symmetric with `openDirectoryContextMenu`'s
@@ -2256,6 +2273,7 @@ function SidebarContent(props: SidebarProps) {
       requestedPosition: position,
       thread,
       threads: resolveContextMenuThreads(thread),
+      ...(openIn ? { openIn } : {}),
     });
   });
 
@@ -3779,6 +3797,60 @@ function SidebarContent(props: SidebarProps) {
     directoryMenuCanForgeAutomation || directoryMenuForgeRepository !== undefined;
 
   /**
+   * The thread card's open icons and its "Open in…" overflow, each opening
+   * `folder`, the thread's primary one. Apps and the file manager are this
+   * machine's, so only a local thread with a folder gets them; the
+   * integrated terminal runs wherever the thread does.
+   */
+  function threadCardOpen(
+    thread: NavigationThreadSummary,
+    folder: { label: string; path: string } | undefined,
+  ): { row: ThreadCardOpenTarget[]; more: ThreadCardOpenTarget[]; run: (target: ThreadCardOpenTarget) => void } | undefined {
+    const local = !thread.federation && !federationTarget;
+    const applications = props.localApplications;
+    const openApplication = getDesktopApi()?.openApplication;
+    const localFolder = local && !thread.workspaceMissing ? folder : undefined;
+    const terminal = props.onOpenThreadTerminal && !federationViewer ? threadTerminalRequest(thread) : undefined;
+    const openable = (candidate: { canOpenWorkspace: boolean }) => candidate.canOpenWorkspace;
+    const withApps = localFolder && applications && openApplication ? applications : undefined;
+    const targets = threadCardOpenTargets({
+      editors: withApps?.editors.filter(openable) ?? [],
+      ...(withApps ? { preferredEditorId: resolvePreferredEditor(withApps)?.id } : {}),
+      terminals: withApps?.terminals.filter(openable) ?? [],
+      ...(withApps ? { preferredTerminalId: withApps.preferredTerminalId.value } : {}),
+      integratedTerminal: terminal !== undefined,
+      ...(localFolder && canRevealPath ? { fileManagerLabel: revealInFileManagerLabel(props.platform) } : {}),
+    });
+    if (!targets.row.length) return undefined;
+    const run = (target: ThreadCardOpenTarget): void => {
+      if (target.kind === "integrated-terminal") {
+        if (!terminal) return;
+        // The panel belongs to the thread view, so the thread opens first,
+        // as a plain row click opens it: a single selection, anchored here.
+        selectionAnchorKeyRef.current = threadSummaryIdentityKey(thread);
+        selectionAnchorDirectoryKeyRef.current = undefined;
+        setThreadBatch(undefined);
+        props.onSelectThread(thread);
+        props.onOpenThreadTerminal?.(terminal.threadKey, terminal.cwd, terminal.remote);
+        return;
+      }
+      if (!localFolder) return;
+      if (target.kind === "file-manager") {
+        props.onRevealPath?.(localFolder.path, localFolder.label);
+        return;
+      }
+      void openApplication?.({
+        applicationId: target.application.id,
+        kind: target.application.kind,
+        targetPath: localFolder.path,
+      }).catch((error: unknown) => {
+        console.warn("[sidebar] Could not open the thread's folder", error);
+      });
+    };
+    return { ...targets, run };
+  }
+
+  /**
    * The thread card's actions: the context menu's handlers and gates for one
    * thread, plus the composer's open-in-app request for a thread on this
    * machine. A peer's thread gets only what works on that peer.
@@ -3788,61 +3860,41 @@ function SidebarContent(props: SidebarProps) {
     row: HTMLElement,
   ): SidebarThreadCardActions {
     const live = navigationThreadByKey.get(threadSummaryIdentityKey(thread)) ?? thread;
-    const local = !thread.federation && !federationTarget;
-    const applications = props.localApplications;
-    const openApplication = getDesktopApi()?.openApplication;
-    const openable = (candidate: { canOpenWorkspace: boolean }) => candidate.canOpenWorkspace;
     const branch = getThreadNamedBranch(thread);
     const facts = threadCardRowFacts(thread);
     const prUrl = facts.pr?.pr.url;
+    const open = threadCardOpen(thread, facts.folders[0]);
     // The card's ⋯ holds both archives for a thread with sub-threads. Its
     // row's own count answers here, on every hover and update; the loaded
     // rows, which can run ahead of that count, are walked only on a click.
     const hasChildThreads = ordinaryChildCountOf(live) > 0;
     const openMenu = (anchor: HTMLElement): void => {
       const rect = anchor.getBoundingClientRect();
-      openThreadContextMenu(thread, { x: rect.left, y: rect.bottom + 4, anchorTop: rect.top });
+      openThreadContextMenu(
+        thread,
+        { x: rect.left, y: rect.bottom + 4, anchorTop: rect.top },
+        open?.more.length ? { targets: open.more, run: open.run } : undefined,
+      );
       // The card closes with the menu open; focus goes back to the row.
       contextMenuOpenerRef.current = row.querySelector<HTMLElement>(".thread-row__open");
     };
     return {
-      ...(local && applications && openApplication && !thread.workspaceMissing
-        ? {
-            open: {
-              editors: applications.editors.filter(openable),
-              preferredEditor: resolvePreferredEditor(applications),
-              terminal: applications.terminals.find((candidate) =>
-                candidate.canOpenWorkspace && candidate.id === applications.preferredTerminalId.value)
-                ?? applications.terminals.find(openable),
-              ...(canRevealPath
-                ? {
-                    reveal: {
-                      label: revealInFileManagerLabel(props.platform),
-                      run: (folder: { label: string; path: string }) => props.onRevealPath?.(folder.path, folder.label),
-                    },
-                  }
-                : {}),
-              run: (application, folder) => {
-                void openApplication({
-                  applicationId: application.id,
-                  kind: application.kind,
-                  targetPath: folder.path,
-                }).catch((error: unknown) => {
-                  console.warn("[sidebar] Could not open the thread's folder", error);
-                });
-              },
-            },
-          }
-        : {}),
+      ...(open?.row.length ? { open: { targets: open.row, run: open.run } } : {}),
       ...(branch ? { copyBranch: () => copyFromContextMenu(branch) } : {}),
       ...(prUrl
         ? {
-            openPullRequest: () => defaultOpenPullRequest(prUrl),
             showPullRequest: () => {
-              // The row's own chip shows the PR's card; a density that hides
-              // the chip opens the PR instead.
+              // The row's own chip shows the PR's card, and its rollup the
+              // card of several; a density that hides them opens the lead PR.
+              const shown = (element: HTMLElement) => element.getClientRects().length > 0;
+              if (facts.pr?.more) {
+                const rollup = [...row.querySelectorAll<HTMLElement>("[data-pr-rollup]")].find(shown);
+                if (rollup) rollup.click();
+                else defaultOpenPullRequest(prUrl);
+                return;
+              }
               const chip = [...row.querySelectorAll<HTMLElement>("[data-pr-chip]")]
-                .find((element) => element.dataset.prUrl === prUrl && element.getClientRects().length > 0);
+                .find((element) => element.dataset.prUrl === prUrl && shown(element));
               if (chip) chip.focus();
               else defaultOpenPullRequest(prUrl);
             },
@@ -4531,6 +4583,16 @@ function SidebarContent(props: SidebarProps) {
                   </>
                 ) : (
                   <>
+                    {contextMenu.openIn ? (
+                      <>
+                        <ThreadOpenInMenuItems
+                          targets={contextMenu.openIn.targets}
+                          run={contextMenu.openIn.run}
+                          onDone={() => setContextMenu(undefined)}
+                        />
+                        <div className="thread-context-menu__separator" role="separator" />
+                      </>
+                    ) : null}
                     {contextMenuCanRemoveRemotePin ? (
                       <div className="thread-context-menu__section">
                         <button

@@ -9,16 +9,12 @@ import {
   type RefObject,
 } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
-import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
 import {
   ArchiveIcon,
   CheckIcon,
-  ChevronDownIcon,
-  CopyIcon,
   FolderIcon,
   MoreVerticalIcon,
   PinIcon,
-  PullRequestIcon,
   TerminalIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
@@ -47,9 +43,7 @@ import {
   type ThreadInfoRowFacts,
 } from "../thread-detail/thread-info";
 import { PROJECT_CARD_HOVER_DELAY_MS } from "./ProjectHeaderCard";
-
-/** A folder the card can open: the thread's primary one first. */
-export type SidebarThreadCardFolder = { label: string; path: string };
+import type { ThreadCardOpenTarget } from "./thread-card-open-targets";
 
 /**
  * What the card can do for one thread. Each entry is one of the sidebar's
@@ -57,19 +51,20 @@ export type SidebarThreadCardFolder = { label: string; path: string };
  * thread does not offer (a peer's thread has no local editor).
  */
 export type SidebarThreadCardActions = {
-  /** Apps on this machine that open the thread's folders. */
+  /**
+   * The row's open icons (`threadCardOpenTargets`), each opening the
+   * thread's primary folder; the rest wait in the ⋯ menu's "Open in…".
+   */
   open?: {
-    editors: readonly DesktopApplicationDiscoveryCandidate[];
-    preferredEditor?: DesktopApplicationDiscoveryCandidate;
-    terminal?: DesktopApplicationDiscoveryCandidate;
-    /** "Show in Finder" and the like. */
-    reveal?: { label: string; run: (folder: SidebarThreadCardFolder) => void };
-    run: (application: DesktopApplicationDiscoveryCandidate, folder: SidebarThreadCardFolder) => void;
+    targets: readonly ThreadCardOpenTarget[];
+    run: (target: ThreadCardOpenTarget) => void;
   };
   copyBranch?: () => void;
-  /** Shows the PR's own card, or opens it where the row has no PR chip. */
+  /**
+   * Shows the row's own PR card: the PR's for one, the rollup for several.
+   * Opens the lead PR where the row's density hides its chip.
+   */
   showPullRequest?: () => void;
-  openPullRequest?: () => void;
   pin?: { pinned: boolean; toggle: () => void };
   /** Mark read: the thread leaves Attention. */
   markRead?: () => void;
@@ -103,15 +98,6 @@ export type SidebarThreadCardHandle = {
   /** A press anywhere: a card still waiting out its delay never opens. */
   cancelPending: () => void;
 };
-
-type Expanded = "apps" | "folders" | undefined;
-
-/**
- * The app the editor split opens, for this window's session: the operator's
- * last pick from the split's menu, else the preferred editor. `reveal` is
- * the file manager.
- */
-let lastOpenChoice: string | undefined;
 
 /**
  * One hover card for every thread row in the sidebar, like the project
@@ -154,9 +140,8 @@ export const SidebarThreadCardHost = forwardRef<
   const crossingRowRef = useRef<HTMLElement | null>(null);
   bridgeCardRef.current.holds = (trigger) =>
     Boolean(heldRowRef.current?.contains(trigger) || crossingRowRef.current?.contains(trigger));
-  const [expanded, setExpanded] = useState<Expanded>();
 
-  const content = (threadKey: string, row: HTMLElement, open: Expanded): ReactElement | null => {
+  const content = (threadKey: string, row: HTMLElement): ReactElement | null => {
     const thread = optionsRef.current.readThread(threadKey);
     if (!thread) return null;
     return (
@@ -165,22 +150,20 @@ export const SidebarThreadCardHost = forwardRef<
         thread={thread}
         facts={optionsRef.current.rowFacts(thread)}
         actions={optionsRef.current.actionsFor(thread, row)}
-        expanded={open}
-        onExpand={setExpanded}
         onDone={hide}
       />
     );
   };
 
-  // A live row (its PR, its Git state) and an expanded list both redraw the
-  // open card in place; `update` re-measures it against the viewport.
+  // A live row (its PR, its Git state) redraws the open card in place;
+  // `update` re-measures it against the viewport.
   useEffect(() => {
     if (!visible || !shown) return;
-    const next = content(shown.threadKey, shown.row, expanded);
+    const next = content(shown.threadKey, shown.row);
     if (next) update(next);
     else hide();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.options, expanded, visible]);
+  }, [props.options, visible]);
 
   // The row's card is its description while it is up.
   useEffect(() => {
@@ -204,12 +187,11 @@ export const SidebarThreadCardHost = forwardRef<
     const open = (target: HTMLElement, threadKey: string, delayed: boolean): void => {
       // A dragged row passes over others; none of them is being asked about.
       if (isNativeDragInteractionActive()) return;
-      const node = content(threadKey, target, undefined);
+      const node = content(threadKey, target);
       if (!node) return;
       setShown({ threadKey, row: target });
       heldRowRef.current = target.closest(ROW_SELECTOR) ?? target;
       crossingRowRef.current = null;
-      setExpanded(undefined);
       // Focus opens at once; a pointer swaps at once while any sidebar card is up.
       const swap = sidebarPrCardBridge.enterTrigger(bridgeCardRef.current);
       if (!delayed || swap) {
@@ -220,7 +202,7 @@ export const SidebarThreadCardHost = forwardRef<
       // chip's card shown meanwhile cancels it through the bridge.
       sidebarPrCardBridge.delaying(bridgeCardRef.current);
       pendingRef.current = true;
-      showAfterDelay(target, () => content(threadKey, target, undefined), PROJECT_CARD_HOVER_DELAY_MS);
+      showAfterDelay(target, () => content(threadKey, target), PROJECT_CARD_HOVER_DELAY_MS);
     };
     return {
       enter: (target, threadKey) => open(target, threadKey, true),
@@ -389,8 +371,6 @@ function SidebarThreadCardContent(props: {
   thread: NavigationThreadSummary;
   facts: ThreadInfoRowFacts;
   actions: SidebarThreadCardActions;
-  expanded: Expanded;
-  onExpand: (expanded: Expanded) => void;
   onDone: () => void;
 }): ReactElement {
   const { thread, actions, onDone } = props;
@@ -412,14 +392,18 @@ function SidebarThreadCardContent(props: {
       info={info}
       row={props.facts}
       onCopyBranch={actions.copyBranch}
-      onOpenPullRequest={actions.showPullRequest}
+      onOpenPullRequest={actions.showPullRequest
+        ? () => {
+            // Several PRs open the row's rollup card, which pins on its own;
+            // one PR's card takes this one's place through the bridge.
+            if (props.facts.pr?.more) onDone();
+            actions.showPullRequest?.();
+          }
+        : undefined}
       actions={(
         <ThreadCardActions
           actions={actions}
-          folders={props.facts.folders}
           running={info.facts?.running === true}
-          expanded={props.expanded}
-          onExpand={props.onExpand}
           onDone={onDone}
         />
       )}
@@ -449,233 +433,102 @@ function useThreadCardCost(thread: NavigationThreadSummary): ThreadInfoCost | { 
 
 function ThreadCardActions(props: {
   actions: SidebarThreadCardActions;
-  folders: readonly SidebarThreadCardFolder[];
   running: boolean;
-  expanded: Expanded;
-  onExpand: (expanded: Expanded) => void;
   onDone: () => void;
 }): ReactElement {
-  const { actions, folders, onDone } = props;
-  const open = folders.length ? actions.open : undefined;
-  const choices = open ? openChoices(open) : [];
-  const choice = choices.find((entry) => entry.id === lastOpenChoice)
-    ?? choices.find((entry) => entry.id === open?.preferredEditor?.id)
-    ?? choices[0];
-  const primary = folders[0];
-  const runChoice = (entry: OpenChoice, folder: SidebarThreadCardFolder): void => {
-    lastOpenChoice = entry.id;
-    onDone();
-    entry.run(folder);
-  };
-  const [copied, setCopied] = useState(false);
-  const copiedTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
+  const { actions, onDone } = props;
+  const open = actions.open;
   return (
     // Pointer shortcuts, out of the Tab order like the project card's: the
     // keyboard reaches each one from the row's own menu.
     <div className="sidebar-thread-card__actions" aria-hidden="true">
-      {open && choice && primary ? (
-        <>
-          <div className="sidebar-thread-card__split">
-            <button
-              className="sidebar-thread-card__row"
-              tabIndex={-1}
-              type="button"
-              onClick={() => {
-                if (folders.length > 1) {
-                  props.onExpand(props.expanded === "folders" ? undefined : "folders");
-                  return;
-                }
-                runChoice(choice, primary);
-              }}
-            >
-              {choice.icon}
-              <span className="sidebar-thread-card__row-label">{choice.label}</span>
-            </button>
-            {choices.length > 1 ? (
-              <button
-                aria-label="Choose an app"
-                className="sidebar-thread-card__row sidebar-thread-card__chevron"
-                tabIndex={-1}
-                type="button"
-                onClick={() => props.onExpand(props.expanded === "apps" ? undefined : "apps")}
-              >
-                <ChevronDownIcon size={12} aria-hidden="true" />
-              </button>
-            ) : null}
-          </div>
-          {props.expanded === "folders" ? (
-            <div className="sidebar-thread-card__sublist">
-              {folders.map((folder) => (
-                <button
-                  key={folder.path}
-                  className="sidebar-thread-card__row"
-                  tabIndex={-1}
-                  type="button"
-                  onClick={() => runChoice(choice, folder)}
-                >
-                  <FolderIcon size={13} aria-hidden="true" />
-                  <span className="sidebar-thread-card__row-label">{folder.label}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {props.expanded === "apps" ? (
-            <div className="sidebar-thread-card__sublist">
-              {choices.map((entry) => (
-                <button
-                  key={entry.id}
-                  className={`sidebar-thread-card__row${entry.id === choice.id ? " is-current" : ""}`}
-                  tabIndex={-1}
-                  type="button"
-                  onClick={() => {
-                    lastOpenChoice = entry.id;
-                    props.onExpand(folders.length > 1 ? "folders" : undefined);
-                    if (folders.length === 1) runChoice(entry, primary);
-                  }}
-                >
-                  {entry.icon}
-                  <span className="sidebar-thread-card__row-label">{entry.name}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </>
-      ) : null}
-      {open?.terminal && primary ? (
-        <button
-          className="sidebar-thread-card__row"
-          tabIndex={-1}
-          type="button"
+      {open?.targets.map((target) => (
+        <CardIconButton
+          key={target.id}
+          label={target.label}
           onClick={() => {
             onDone();
-            open.run(open.terminal!, primary);
+            open.run(target);
           }}
         >
-          <TerminalIcon size={13} aria-hidden="true" />
-          <span className="sidebar-thread-card__row-label">Open terminal here</span>
-        </button>
-      ) : null}
-      {actions.copyBranch ? (
-        <button
-          className="sidebar-thread-card__row"
-          tabIndex={-1}
-          type="button"
-          onClick={() => {
-            actions.copyBranch?.();
-            setCopied(true);
-            window.clearTimeout(copiedTimer.current);
-            copiedTimer.current = window.setTimeout(() => setCopied(false), 1200);
-          }}
+          <OpenTargetIcon target={target} />
+        </CardIconButton>
+      ))}
+      <span className="sidebar-thread-card__actions-spacer" />
+      {actions.pin ? (
+        <CardIconButton
+          label={actions.pin.pinned ? "Unpin thread" : "Pin thread"}
+          pressed={actions.pin.pinned}
+          onClick={actions.pin.toggle}
         >
-          <CopyIcon size={13} aria-hidden="true" />
-          <span className="sidebar-thread-card__row-label">{copied ? "Copied" : "Copy branch name"}</span>
-        </button>
+          <PinIcon size={14} aria-hidden="true" />
+        </CardIconButton>
       ) : null}
-      {actions.openPullRequest ? (
-        <button
-          className="sidebar-thread-card__row"
-          tabIndex={-1}
-          type="button"
+      {/* A running thread has no Stop here yet; Mark read and Archive wait
+          until it is idle, as the design swaps them out while it runs. */}
+      {!props.running && actions.markRead ? (
+        <CardIconButton
+          label="Mark read"
           onClick={() => {
             onDone();
-            actions.openPullRequest?.();
+            actions.markRead?.();
           }}
         >
-          <PullRequestIcon size={13} aria-hidden="true" />
-          <span className="sidebar-thread-card__row-label">Open pull request</span>
-        </button>
+          <CheckIcon size={14} aria-hidden="true" />
+        </CardIconButton>
       ) : null}
-      <div className="sidebar-thread-card__buttons">
-        {actions.pin ? (
-          <button
-            aria-label={actions.pin.pinned ? "Unpin thread" : "Pin thread"}
-            aria-pressed={actions.pin.pinned}
-            className={`sidebar-thread-card__button sidebar-thread-card__button--icon${
-              actions.pin.pinned ? " is-on" : ""
-            }`}
-            tabIndex={-1}
-            type="button"
-            onClick={actions.pin.toggle}
-          >
-            <PinIcon size={13} aria-hidden="true" />
-          </button>
-        ) : null}
-        {/* A running thread has no Stop here yet; Mark read and Archive wait
-            until it is idle, as the design swaps them out while it runs. */}
-        {!props.running && actions.markRead ? (
-          <button
-            className="sidebar-thread-card__button"
-            tabIndex={-1}
-            type="button"
-            onClick={() => {
-              onDone();
-              actions.markRead?.();
-            }}
-          >
-            <CheckIcon size={12} aria-hidden="true" />
-            Mark read
-          </button>
-        ) : null}
-        {!props.running && actions.archive ? (
-          <button
-            className="sidebar-thread-card__button"
-            tabIndex={-1}
-            type="button"
-            onClick={(event) => {
-              actions.archive?.(event.currentTarget);
-              onDone();
-            }}
-          >
-            <ArchiveIcon size={12} aria-hidden="true" />
-            Archive
-          </button>
-        ) : null}
-        <span className="sidebar-thread-card__buttons-spacer" />
-        <button
-          aria-label="More thread actions"
-          className="sidebar-thread-card__button sidebar-thread-card__button--icon"
-          tabIndex={-1}
-          type="button"
-          onClick={(event) => {
-            const anchor = event.currentTarget;
-            actions.openMenu(anchor);
+      {!props.running && actions.archive ? (
+        <CardIconButton
+          label="Archive thread"
+          onClick={(anchor) => {
+            actions.archive?.(anchor);
             onDone();
           }}
         >
-          <MoreVerticalIcon size={13} aria-hidden="true" />
-        </button>
-      </div>
+          <ArchiveIcon size={14} aria-hidden="true" />
+        </CardIconButton>
+      ) : null}
+      <CardIconButton
+        label="More thread actions"
+        onClick={(anchor) => {
+          actions.openMenu(anchor);
+          onDone();
+        }}
+      >
+        <MoreVerticalIcon size={14} aria-hidden="true" />
+      </CardIconButton>
     </div>
   );
 }
 
-type OpenChoice = {
-  id: string;
-  name: string;
-  /** "Open in VS Code", "Show in Finder". */
+/** One 28px icon in the card's row, named by its tooltip. */
+function CardIconButton(props: {
   label: string;
-  icon: ReactElement;
-  run: (folder: SidebarThreadCardFolder) => void;
-};
+  pressed?: boolean;
+  onClick: (anchor: HTMLElement) => void;
+  children: ReactElement;
+}): ReactElement {
+  return (
+    <button
+      aria-label={props.label}
+      {...(props.pressed === undefined ? {} : { "aria-pressed": props.pressed })}
+      className={`sidebar-thread-card__icon tooltip-target${props.pressed ? " is-on" : ""}`}
+      data-tooltip={props.label}
+      tabIndex={-1}
+      type="button"
+      onClick={(event) => props.onClick(event.currentTarget)}
+    >
+      {props.children}
+    </button>
+  );
+}
 
-function openChoices(open: NonNullable<SidebarThreadCardActions["open"]>): OpenChoice[] {
-  const choices: OpenChoice[] = open.editors.map((application) => ({
-    id: application.id,
-    name: application.name,
-    label: `Open in ${application.name}`,
-    icon: <AppIcon application={application} className="sidebar-thread-card__app-icon" size={14} />,
-    run: (folder) => open.run(application, folder),
-  }));
-  if (open.reveal) {
-    const reveal = open.reveal;
-    choices.push({
-      id: "reveal",
-      name: reveal.label.replace(/^Show in /, ""),
-      label: reveal.label,
-      icon: <FolderIcon size={13} aria-hidden="true" />,
-      run: reveal.run,
-    });
+/** An app's own icon, as the composer's launchers show it, or the kind's glyph. */
+export function OpenTargetIcon(props: { target: ThreadCardOpenTarget }): ReactElement {
+  const { target } = props;
+  if (target.kind === "application") {
+    return <AppIcon application={target.application} className="sidebar-thread-card__app-icon" size={16} />;
   }
-  return choices;
+  if (target.kind === "integrated-terminal") return <TerminalIcon size={14} aria-hidden="true" />;
+  return <FolderIcon size={14} aria-hidden="true" />;
 }

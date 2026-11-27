@@ -10,20 +10,45 @@ import {
   type BackendRateLimitSummary,
 } from "../../../lib/backend-status-format";
 import { HoverCardBridge, type BridgedHoverCard } from "../../../lib/hover-card-bridge";
+import { groupRateLimitsByScope } from "../../../lib/rate-limit-scopes";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   useLocalUsagePace,
   usagePaceAccountKey,
   usagePaceRefreshKey,
 } from "../../federation-activity/useLocalUsagePace";
+import { describeLimitPace } from "../../federation-activity/usage-activity-presentation";
+import {
+  limitSeriesFor,
+  limitUsageDropped,
+  type LimitAccount,
+} from "../../federation-activity/usage-limits";
+import { fiveHourLatchKey, fiveHourLatches, type FiveHourSample } from "./five-hour-latch";
 import { RateLimitRow } from "./RateLimitRow";
 
 type PeekDesktopApi = Pick<DesktopApi, "openUsageActivity" | "readUsageActivity">;
 
-/** One provider's line in the peek: its tightest limit, or none reported. */
+/**
+ * One of a provider's shared allowances in the peek, by its longest window
+ * (Weekly where it has one): Antigravity's "Claude/GPT" and "Gemini" pools
+ * are two, a single plan is one with no `scope`.
+ */
+export type ProviderPeekScope = {
+  /** Null for a provider's only scope, which shows no subheader. */
+  scope: string | null;
+  /** The row label: the window alone, "Weekly". */
+  window: string;
+  limit: BackendRateLimitSummary;
+  usedPercent?: number;
+  /** The scope's 5h window, shown under its Weekly one while at risk. */
+  fiveHour?: BackendRateLimitSummary;
+};
+
+/** One provider in the peek: a line per allowance, or none reported. */
 export type ProviderPeekEntry = {
   backend: BackendSummary;
-  limit?: BackendRateLimitSummary;
+  scopes: ProviderPeekScope[];
+  /** The fullest shown allowance, which orders the providers. */
   usedPercent?: number;
 };
 
@@ -34,9 +59,45 @@ function chartableBackends(backends: readonly BackendSummary[]): BackendSummary[
 }
 
 /**
- * Each available provider's tightest limit, worst first. A provider that
- * reported no percentage sorts after every one that did, in the panel's
- * order, so the peek reads as "what runs out first".
+ * Each scope's longest window, which is Weekly wherever the provider has
+ * one; the 5h windows stay on the AI providers panel. A provider whose limits
+ * have no window (a credit balance) shows its fullest one instead.
+ */
+function providerPeekScopes(backend: BackendSummary, now: number): ProviderPeekScope[] {
+  const visible = selectVisibleRateLimits(backend);
+  // The panel's filter, in the provider's own order: Antigravity's pools
+  // read as it reports them, not as the panel sorts its rows.
+  const shown = new Set(visible);
+  const scopes = groupRateLimitsByScope((backend.rateLimits ?? []).filter((limit) => shown.has(limit)));
+  const usedPercentOf = (limit: BackendRateLimitSummary) => describeRateLimitRow(limit, now).usedPercent;
+  if (scopes.length) {
+    return scopes.map((group) => {
+      const { limit, window } = group.windows[0]!;
+      const usedPercent = usedPercentOf(limit);
+      const fiveHour = group.windows.find((entry) => entry !== group.windows[0] && entry.window.minutes === 300);
+      return {
+        scope: group.scope,
+        window: window.label,
+        limit,
+        ...(usedPercent === undefined ? {} : { usedPercent }),
+        ...(fiveHour ? { fiveHour: fiveHour.limit } : {}),
+      };
+    });
+  }
+  let fullest: ProviderPeekScope | undefined;
+  for (const limit of visible) {
+    const usedPercent = usedPercentOf(limit);
+    if (usedPercent === undefined || (fullest?.usedPercent ?? -1) >= usedPercent) continue;
+    fullest = { scope: null, window: describeRateLimitRow(limit, now).label.replace(/ limit$/i, ""), limit, usedPercent };
+  }
+  return fullest ? [fullest] : [];
+}
+
+/**
+ * Each available provider with its allowances, fullest provider first. A
+ * provider that reported no percentage sorts after every one that did, in
+ * the panel's order, so the peek reads as "what runs out first". Scopes keep
+ * the provider's own order.
  */
 export function providerPeekEntries(
   backends: readonly BackendSummary[],
@@ -45,13 +106,13 @@ export function providerPeekEntries(
   const entries = backends
     .filter((backend) => backend.available)
     .map((backend, order) => {
-      let tightest: { limit: BackendRateLimitSummary; usedPercent: number } | undefined;
-      for (const limit of selectVisibleRateLimits(backend)) {
-        const usedPercent = describeRateLimitRow(limit, now).usedPercent;
-        if (usedPercent === undefined) continue;
-        if (!tightest || usedPercent > tightest.usedPercent) tightest = { limit, usedPercent };
-      }
-      return { order, entry: { backend, ...tightest } satisfies ProviderPeekEntry };
+      const scopes = providerPeekScopes(backend, now);
+      const percents = scopes.flatMap((scope) => scope.usedPercent === undefined ? [] : [scope.usedPercent]);
+      const usedPercent = percents.length ? Math.max(...percents) : undefined;
+      return {
+        order,
+        entry: { backend, scopes, ...(usedPercent === undefined ? {} : { usedPercent }) } satisfies ProviderPeekEntry,
+      };
     });
   return entries
     .sort((left, right) =>
@@ -111,6 +172,11 @@ export function useProviderGaugePeek(options: {
     if (visible) bridge.shown(cardRef.current);
     else bridge.hidden(cardRef.current);
   }, [bridge, visible]);
+  // Every snapshot steps the 5h latches, open peek or not: a window that
+  // crossed 80% between glances shows on the next one.
+  useEffect(() => {
+    observeFiveHourWindows(options.backends, Date.now());
+  }, [options.backends]);
   // Fresh limits arrive with each turn; keep an open peek current.
   useEffect(() => {
     if (visible) update(content());
@@ -185,21 +251,36 @@ export function ProviderGaugePeekCard(props: {
       </div>
       {entries.length ? (
         <ul className="provider-peek__list">
-          {entries.map(({ backend, limit }) => (
+          {entries.map(({ backend, scopes }) => (
             <li key={backend.kind} className="provider-peek__provider">
               <span className="provider-peek__name">
                 <span aria-hidden="true" className="backend-status-list__dot" />
                 {backend.label}
               </span>
-              {limit ? (
-                <dl className="backend-status-list__metadata-grid rail-limit-grid provider-peek__grid">
-                  <RateLimitRow
-                    limit={limit}
-                    now={now}
-                    account={pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "")}
-                  />
-                </dl>
-              ) : (
+              {scopes.length ? scopes.map((entry) => {
+                const account = pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "");
+                const fiveHour = entry.fiveHour
+                  ? observeFiveHour(backend, entry.fiveHour, account, now)
+                  : undefined;
+                return (
+                  <div key={entry.scope ?? ""} className="provider-peek__scope">
+                    {/* Named only where the provider has more than one. */}
+                    {entry.scope !== null ? (
+                      <span className="provider-peek__scope-name">{entry.scope}</span>
+                    ) : null}
+                    <PeekLimitRow window={entry.window} limit={entry.limit} now={now} account={account} />
+                    {fiveHour?.shown ? (
+                      <PeekLimitRow
+                        window="5h"
+                        limit={entry.fiveHour!}
+                        now={now}
+                        account={account}
+                        warning={fiveHour.warning}
+                      />
+                    ) : null}
+                  </div>
+                );
+              }) : (
                 <span className="provider-peek__none">
                   {backend.account?.planType
                     ? `${formatBackendPlanType(backend, backend.account.planType)} · no limits reported`
@@ -225,4 +306,83 @@ export function ProviderGaugePeekCard(props: {
       </div>
     </>
   );
+}
+
+/**
+ * The panel's limit row under a window-only label in one fixed column, so
+ * every provider's bar starts at the same edge and runs the same width. The
+ * panel's own label (the scope and "limit" too) stays on the panel.
+ */
+function PeekLimitRow(props: {
+  window: string;
+  limit: BackendRateLimitSummary;
+  now: number;
+  account: LimitAccount | undefined;
+  /** On pace to run out before the reset. */
+  warning?: boolean;
+}) {
+  return (
+    <div className={`provider-peek__limit${props.warning ? " is-warning" : ""}`}>
+      <span className="provider-peek__window">{props.window}</span>
+      <dl className="backend-status-list__metadata-grid provider-peek__stat">
+        <RateLimitRow limit={props.limit} now={props.now} account={props.account} />
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * Where a limit's pace lands at its reset, exactly as `RateLimitRow`'s pace
+ * line reads it ("On pace for about N% at the reset"), so a 5h row that
+ * appears agrees with its own pace text; 100 when it runs out first.
+ * Undefined while unknown: under 30 minutes of the window, no pace, or a
+ * reading the series has not caught up with.
+ */
+export function projectedPercentAtReset(
+  limit: BackendRateLimitSummary,
+  account: LimitAccount | undefined,
+  now: number,
+): number | undefined {
+  const used = describeRateLimitRow(limit, now).usedPercent;
+  const series = limitSeriesFor(account, limit);
+  if (!series || used === undefined || used >= 100 || series.latest.usedPercent >= 100
+    || limitUsageDropped(series.latest.usedPercent, used) || series.latest.resetAt !== limit.resetAt
+    || (limit.resetAt !== undefined && limit.resetAt <= now)) return undefined;
+  const pace = describeLimitPace(series, now, true);
+  if (!pace) return undefined;
+  if (pace.projection.kind === "full") return 100;
+  return pace.projection.percent < used ? undefined : pace.projection.percent;
+}
+
+function fiveHourSample(limit: BackendRateLimitSummary, projectedPercent: number | undefined, now: number): FiveHourSample {
+  const usedPercent = describeRateLimitRow(limit, now).usedPercent;
+  return {
+    ...(usedPercent === undefined ? {} : { usedPercent }),
+    ...(projectedPercent === undefined ? {} : { projectedPercent }),
+    ...(limit.resetAt === undefined ? {} : { resetAt: limit.resetAt }),
+  };
+}
+
+/** Steps a scope's 5h latch with this reading and its pace. */
+function observeFiveHour(
+  backend: BackendSummary,
+  limit: BackendRateLimitSummary,
+  account: LimitAccount | undefined,
+  now: number,
+): { shown: boolean; warning: boolean } {
+  const projected = projectedPercentAtReset(limit, account, now);
+  const sample = fiveHourSample(limit, projected, now);
+  const shown = fiveHourLatches.observe(fiveHourLatchKey(backend.kind, limit), sample);
+  // Out already, or on pace to be before the reset.
+  return { shown, warning: (sample.usedPercent ?? 0) >= 100 || (projected ?? 0) >= 100 };
+}
+
+/** A snapshot's readings, without a pace: they can show a row or start a window. */
+function observeFiveHourWindows(backends: readonly BackendSummary[], now: number): void {
+  for (const { backend, scopes } of providerPeekEntries(backends, now)) {
+    for (const entry of scopes) {
+      if (!entry.fiveHour) continue;
+      fiveHourLatches.observe(fiveHourLatchKey(backend.kind, entry.fiveHour), fiveHourSample(entry.fiveHour, undefined, now));
+    }
+  }
 }

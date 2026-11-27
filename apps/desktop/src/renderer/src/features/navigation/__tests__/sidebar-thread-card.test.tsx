@@ -110,7 +110,10 @@ type SidebarParams = {
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onSetThreadPin?: (thread: NavigationThreadSummary, pinned: boolean) => Promise<void>;
   onRevealPath?: (path: string, label: string) => void;
+  onSelectThread?: (thread: NavigationThreadSummary) => void;
+  onOpenThreadTerminal?: (threadKey: string, cwd?: string, remote?: unknown) => void;
   applications?: DesktopApplicationsSnapshot;
+  selectedItemKey?: string;
 };
 
 function renderSidebar(params: SidebarParams) {
@@ -127,6 +130,7 @@ function sidebarElement(params: SidebarParams) {
       loading={false}
       threads={params.threads}
       localApplications={params.applications}
+      selectedItemKey={params.selectedItemKey}
       localMachineLabel="Studio-Mac"
       platform="darwin"
       onBrowseModeChange={() => undefined}
@@ -135,7 +139,8 @@ function sidebarElement(params: SidebarParams) {
       onMarkThreadsSeen={params.onMarkThreadsSeen}
       onOpenLaunchpad={async () => undefined}
       onRevealPath={params.onRevealPath}
-      onSelectThread={() => undefined}
+      onSelectThread={params.onSelectThread ?? (() => undefined)}
+      onOpenThreadTerminal={params.onOpenThreadTerminal}
       onSetThreadPin={params.onSetThreadPin}
     />
   );
@@ -481,64 +486,254 @@ describe("sidebar thread card", () => {
     expect(within(shown).queryByRole("button", { name: /Archive/, hidden: true })).toBeNull();
   });
 
-  it("opens a local thread's folder in the last editor, with a folder choice for two", () => {
+  const WORKTREE_THREAD: Partial<NavigationThreadSummary> = {
+    linkedDirectories: [
+      { id: "w", label: "PwrAgnt", path: "/src/PwrAgnt", worktreePath: "/wt/PwrAgnt", kind: "worktree" },
+      { id: "t", label: "t3code", path: "/src/t3code", kind: "local" },
+    ],
+    projectKey: "/wt/PwrAgnt",
+  };
+
+  function iconRow(shown: HTMLElement): HTMLButtonElement[] {
+    return [...shown.querySelectorAll<HTMLButtonElement>(".sidebar-thread-card__actions button")];
+  }
+
+  it("lays out one icon row: open icons, then the thread's own actions", () => {
+    (window as { pwragent?: unknown }).pwragent = { openApplication: vi.fn(async () => ({})) };
+    renderSidebar({
+      applications: APPLICATIONS,
+      threads: [thread("a", { ...WORKTREE_THREAD, gitBranch: "fix/x", prs: [pr(7)], inbox: { inInbox: true, reason: "new-thread" } })],
+      onMarkThreadsSeen: async () => undefined,
+      onArchiveThread: async () => undefined,
+      onSetThreadPin: async () => undefined,
+      onRevealPath: () => undefined,
+      onOpenThreadTerminal: () => undefined,
+    });
+    const shown = hoverOpen("a");
+    // The fifth open target, Cursor, waits in the ⋯ menu.
+    expect(iconRow(shown).map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Open in VS Code",
+      "Open in Ghostty",
+      "Open terminal here",
+      "Show in Finder",
+      "Pin thread",
+      "Mark read",
+      "Archive thread",
+      "More thread actions",
+    ]);
+    for (const button of iconRow(shown)) {
+      // Icon-only, named by its tooltip.
+      expect(button).toHaveAttribute("data-tooltip", button.getAttribute("aria-label"));
+      expect(button).toHaveClass("tooltip-target");
+      expect(button.textContent).toBe("");
+    }
+    // The text rows are gone: the fact rows copy the branch and show the PR.
+    expect(within(shown).queryByRole("button", { name: "Copy branch name", hidden: true })).toBeNull();
+    expect(within(shown).queryByRole("button", { name: "Open pull request", hidden: true })).toBeNull();
+    expect(within(shown).queryByRole("button", { name: "Choose an app", hidden: true })).toBeNull();
+  });
+
+  // The keyboard model matches the project card's button row: the icons are
+  // pointer shortcuts, and Tab moves from row to row without entering the
+  // card; the row's own menu reaches every action.
+  it("keeps the icon row out of the Tab order", () => {
+    (window as { pwragent?: unknown }).pwragent = { openApplication: vi.fn(async () => ({})) };
+    renderSidebar({
+      applications: APPLICATIONS,
+      threads: [thread("a", { ...WORKTREE_THREAD, updatedAt: 2 }), thread("b")],
+      onArchiveThread: async () => undefined,
+      onSetThreadPin: async () => undefined,
+    });
+    const open = row("a").querySelector<HTMLElement>(".thread-row__open")!;
+    fireEvent.keyDown(open, { key: "Tab" });
+    fireEvent.focusIn(open);
+    const shown = card()!;
+    expect(shown.querySelector(".sidebar-thread-card__actions")).toHaveAttribute("aria-hidden", "true");
+    const tabbable = [...shown.querySelectorAll<HTMLElement>("button, [tabindex]")]
+      .filter((element) => element.tabIndex >= 0);
+    expect(tabbable).toEqual([]);
+    expect(iconRow(shown).length).toBeGreaterThan(0);
+  });
+
+  it("opens the thread's primary folder from each open icon", () => {
+    const openApplication = vi.fn(async () => ({}));
+    (window as { pwragent?: unknown }).pwragent = { openApplication };
+    const onRevealPath = vi.fn();
+    const onSelectThread = vi.fn();
+    const onOpenThreadTerminal = vi.fn();
+    renderSidebar({
+      applications: APPLICATIONS,
+      threads: [thread("a", WORKTREE_THREAD)],
+      onRevealPath,
+      onSelectThread,
+      onOpenThreadTerminal,
+    });
+    fireEvent.click(within(hoverOpen("a")).getByRole("button", { name: "Open in VS Code", hidden: true }));
+    expect(openApplication).toHaveBeenLastCalledWith({ applicationId: "vscode", kind: "editor", targetPath: "/wt/PwrAgnt" });
+    expect(card()).toBeNull();
+    fireEvent.click(within(hoverOpen("a")).getByRole("button", { name: "Open in Ghostty", hidden: true }));
+    expect(openApplication).toHaveBeenLastCalledWith({ applicationId: "ghostty", kind: "terminal", targetPath: "/wt/PwrAgnt" });
+    fireEvent.click(within(hoverOpen("a")).getByRole("button", { name: "Show in Finder", hidden: true }));
+    expect(onRevealPath).toHaveBeenCalledWith("/wt/PwrAgnt", "PwrAgnt");
+    // The integrated terminal opens in the thread's view, so the thread opens first.
+    fireEvent.click(within(hoverOpen("a")).getByRole("button", { name: "Open terminal here", hidden: true }));
+    expect(onSelectThread).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }));
+    expect(onOpenThreadTerminal).toHaveBeenCalledWith("codex:a", "/wt/PwrAgnt", undefined);
+    expect(onSelectThread.mock.invocationCallOrder[0]).toBeLessThan(onOpenThreadTerminal.mock.invocationCallOrder[0]!);
+  });
+
+  // Found in review: the card selected the thread without what a plain row
+  // click does, so a multi-select batch outlived the new selection.
+  it("opens the terminal's thread as a plain row click does: no batch left", () => {
+    const threads = ["a", "b", "c"].map((id, index) =>
+      thread(id, { updatedAt: 10 - index, inbox: { inInbox: true, reason: "new-thread" } }));
+    renderSidebar({
+      threads,
+      selectedItemKey: "codex:a",
+      onMarkThreadsSeen: async () => undefined,
+      onOpenThreadTerminal: () => undefined,
+    });
+    const open = (id: string) => row(id).querySelector<HTMLElement>(".thread-row__open")!;
+    fireEvent.click(open("b"), { metaKey: true, ctrlKey: true });
+    fireEvent.contextMenu(open("a"));
+    expect(screen.getByRole("menuitem", { name: "Mark 2 Threads Read" })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    fireEvent.click(within(hoverOpen("c")).getByRole("button", { name: "Open terminal here", hidden: true }));
+    fireEvent.contextMenu(open("a"));
+    expect(screen.queryByRole("menuitem", { name: /Mark \d+ Threads Read/ })).toBeNull();
+  });
+
+  it("puts the open icons past four in the ⋯ menu's Open in…", () => {
     const openApplication = vi.fn(async () => ({}));
     (window as { pwragent?: unknown }).pwragent = { openApplication };
     renderSidebar({
       applications: APPLICATIONS,
-      threads: [thread("a", {
-        linkedDirectories: [
-          { id: "w", label: "PwrAgnt", path: "/src/PwrAgnt", worktreePath: "/wt/PwrAgnt", kind: "worktree" },
-          { id: "t", label: "t3code", path: "/src/t3code", kind: "local" },
-        ],
-        projectKey: "/wt/PwrAgnt",
-      })],
+      threads: [thread("a", WORKTREE_THREAD)],
+      onRevealPath: () => undefined,
+      onOpenThreadTerminal: () => undefined,
     });
-    let shown = hoverOpen("a");
-    fireEvent.click(within(shown).getByRole("button", { name: /Open in VS Code/, hidden: true }));
-    shown = card()!;
-    fireEvent.click(within(shown).getByRole("button", { name: "t3code", hidden: true }));
-    expect(openApplication).toHaveBeenLastCalledWith({ applicationId: "vscode", kind: "editor", targetPath: "/src/t3code" });
-
-    shown = hoverOpen("a");
-    fireEvent.click(within(shown).getByRole("button", { name: "Choose an app", hidden: true }));
-    fireEvent.click(within(card()!).getByRole("button", { name: "Cursor", hidden: true }));
-    fireEvent.click(within(card()!).getByRole("button", { name: "PwrAgnt", hidden: true }));
+    fireEvent.click(within(hoverOpen("a")).getByRole("button", { name: "More thread actions", hidden: true }));
+    const menu = screen.getByRole("menu");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open in…" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Cursor" }));
     expect(openApplication).toHaveBeenLastCalledWith({ applicationId: "cursor", kind: "editor", targetPath: "/wt/PwrAgnt" });
+    expect(screen.queryByRole("menu")).toBeNull();
 
-    // The split remembers the pick.
-    shown = hoverOpen("a");
-    expect(within(shown).getByRole("button", { name: /Open in Cursor/, hidden: true })).toBeInTheDocument();
-    fireEvent.click(within(shown).getByRole("button", { name: /Open terminal here/, hidden: true }));
-    expect(openApplication).toHaveBeenLastCalledWith({ applicationId: "ghostty", kind: "terminal", targetPath: "/wt/PwrAgnt" });
+    // Four or fewer leave the menu as it was; a right-click never has it.
+    cleanup();
+    renderSidebar({ applications: APPLICATIONS, threads: [thread("a", WORKTREE_THREAD)] });
+    fireEvent.click(within(hoverOpen("a")).getByRole("button", { name: "More thread actions", hidden: true }));
+    expect(within(screen.getByRole("menu")).queryByRole("menuitem", { name: "Open in…" })).toBeNull();
   });
 
   it("offers a peer's thread only what works on that peer", () => {
     (window as { pwragent?: unknown }).pwragent = { openApplication: vi.fn() };
+    const peerThread = (capabilities: string[]) => thread("a", {
+      gitBranch: "docs/rewrite",
+      linkedDirectories: [{ id: "d", label: "mathathon", path: "/src/mathathon", kind: "local" }],
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "lab" }, backend: "codex", threadId: "a" },
+        instanceLabel: "lab-mini",
+        peerStatus: "connected",
+        capabilities,
+      } as unknown as NavigationThreadSummary["federation"],
+    });
+    const onOpenThreadTerminal = vi.fn();
+    const hoverPeer = (): HTMLElement => {
+      // A peer's row is keyed by its owner too; it is the only row here.
+      move(document.querySelector(".sidebar")!, document.querySelector(".thread-row-shell .thread-row__title")!);
+      act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+      return card()!;
+    };
     renderSidebar({
       applications: APPLICATIONS,
-      threads: [thread("a", {
-        gitBranch: "docs/rewrite",
-        linkedDirectories: [{ id: "d", label: "mathathon", path: "/src/mathathon", kind: "local" }],
-        federation: {
-          ref: { target: { scope: "remote", instanceId: "lab" }, backend: "codex", threadId: "a" },
-          instanceLabel: "lab-mini",
-          peerStatus: "connected",
-          capabilities: [],
-        } as unknown as NavigationThreadSummary["federation"],
-      })],
+      threads: [peerThread([])],
       onArchiveThread: async () => undefined,
+      onRevealPath: () => undefined,
+      onOpenThreadTerminal,
     });
-    // A peer's row is keyed by its owner too; it is the only row here.
-    move(document.querySelector(".sidebar")!, document.querySelector(".thread-row-shell .thread-row__title")!);
-    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
-    const shown = card()!;
+    let shown = hoverPeer();
     expect(shown).toHaveTextContent("lab-mini");
     expect(shown).toHaveTextContent("peer");
-    expect(within(shown).queryByRole("button", { name: /Open in/, hidden: true })).toBeNull();
-    expect(within(shown).queryByRole("button", { name: /terminal/, hidden: true })).toBeNull();
-    // Archive needs the peer's turn_control grant, which this peer withholds.
-    expect(within(shown).queryByRole("button", { name: /Archive/, hidden: true })).toBeNull();
-    expect(within(shown).getByRole("button", { name: "Copy branch name", hidden: true })).toBeInTheDocument();
+    // This machine's apps and file manager cannot open a peer's folder, and
+    // this peer withholds its terminal and turn_control (Archive).
+    expect(iconRow(shown).map((button) => button.getAttribute("aria-label"))).toEqual(["More thread actions"]);
+    expect(within(shown).getByRole("button", { name: "Copy branch name docs/rewrite", hidden: true })).toBeInTheDocument();
+    cleanup();
+
+    renderSidebar({
+      applications: APPLICATIONS,
+      threads: [peerThread(["remote_pty"])],
+      onRevealPath: () => undefined,
+      onOpenThreadTerminal,
+    });
+    shown = hoverPeer();
+    expect(iconRow(shown).map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Open terminal here",
+      "More thread actions",
+    ]);
+    fireEvent.click(within(shown).getByRole("button", { name: "Open terminal here", hidden: true }));
+    expect(onOpenThreadTerminal).toHaveBeenCalledWith(
+      "codex:a",
+      undefined,
+      expect.objectContaining({ instanceId: "lab", instanceLabel: "lab-mini" }),
+    );
+  });
+
+  it("copies the branch from its fact row, with a hint and a brief Copied", async () => {
+    const copy = vi.fn(async () => undefined);
+    (window as { pwragent?: unknown }).pwragent = { copyText: copy };
+    renderSidebar({ threads: [thread("a", { gitBranch: "fix/table-header" })] });
+    const shown = hoverOpen("a");
+    const branch = within(shown).getByRole("button", { name: "Copy branch name fix/table-header", hidden: true });
+    // The glyph is in the row from the start; CSS shows it on hover or focus.
+    expect(branch.querySelector(".thread-info-card__copy-hint")).not.toBeNull();
+    fireEvent.click(branch);
+    await act(async () => undefined);
+    expect(copy).toHaveBeenCalledWith("fix/table-header");
+    expect(branch).toHaveTextContent("Copied");
+    act(() => vi.advanceTimersByTime(1200));
+    expect(branch).not.toHaveTextContent("Copied");
+  });
+
+  describe("the PR fact row", () => {
+    function showRects(): void {
+      vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(
+        () => [new DOMRect(0, 0, 40, 16)] as unknown as DOMRectList,
+      );
+    }
+
+    it("opens one PR's own card", () => {
+      showRects();
+      renderSidebar({ threads: [thread("a", { prs: [pr(7)] })] });
+      const shown = hoverOpen("a");
+      const fact = within(shown).getByRole("button", { name: "Open pull request #7", hidden: true });
+      expect(fact).toHaveTextContent("#7 · ");
+      fireEvent.click(fact);
+      expect(document.activeElement).toBe(row("a").querySelector("[data-pr-chip]"));
+    });
+
+    it("shows several as the lead PR and +N, and opens the row's rollup card", () => {
+      showRects();
+      const open = vi.spyOn(window, "open").mockImplementation(() => null);
+      renderSidebar({ threads: [thread("a", { prs: [pr(7), pr(8), pr(9)] })] });
+      const shown = hoverOpen("a");
+      const fact = within(shown).getByRole("button", { name: /^Show 3 pull requests, #\d+ leading$/, hidden: true });
+      expect(fact.textContent).toMatch(/#\d+ \+2/);
+      expect(fact).not.toHaveTextContent("more");
+      fireEvent.click(fact);
+      expect(card()).toBeNull();
+      expect(row("a").querySelector("[data-pr-rollup]")).toHaveAttribute("aria-expanded", "true");
+      expect(document.querySelector(".pr-rollup-popover")).not.toBeNull();
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it("opens the lead PR where the row's density hides its rollup", () => {
+      const open = vi.spyOn(window, "open").mockImplementation(() => null);
+      renderSidebar({ threads: [thread("a", { prs: [pr(7), pr(8)] })] });
+      fireEvent.click(within(hoverOpen("a")).getByRole("button", { name: /^Show 2 pull requests/, hidden: true }));
+      expect(open).toHaveBeenCalledWith(expect.stringMatching(/\/pull\/[78]$/), "_blank", "noopener,noreferrer");
+    });
   });
 });
