@@ -1,10 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { useMemo, type ComponentProps } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useLayoutEffect, useMemo, type ComponentProps } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationLaunchpadDraft, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { useThreadNavigation } from "../../../lib/useThreadNavigation";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { Composer as ProductionComposer } from "../Composer";
 
@@ -286,6 +287,56 @@ describe("composer controls layout", () => {
     });
     expect(runCodexEnvironmentAction).toHaveBeenCalledWith(expect.objectContaining({ actionId: "test", threadId: "thread-env" }));
     expect(setCodexThreadEnvironment).not.toHaveBeenCalled();
+  });
+
+  it("renders the last owner configuration on the first commit of a revisit while revalidating it", async () => {
+    const row = { ...environmentThread, codexEnvironmentRuntime: undefined, codexEnvironmentOptions: undefined };
+    const other = { ...row, id: "other" };
+    const nextRead = createDeferred<void>();
+    let revisiting = false;
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async ({ ref }) => {
+      if (ref.threadId === row.id && revisiting) await nextRead.promise;
+      return {
+        protocol: 2, ref, revision: revisiting ? "new" : "initial", identity: "present", readiness: "ready",
+        thread: ref.threadId === other.id ? other : revisiting ? row : environmentThread,
+      };
+    });
+    const api: DesktopApi = {
+      getNavigationQueryPage: async (request) => navigationQueryFixture(request, { threads: [row, other] }),
+      getNavigationSelectedDetail: read,
+    };
+    const commits: Array<{ id?: string; run: boolean; environment: boolean; authorized: boolean }> = [];
+    function ThreadComposer() {
+      const navigation = useThreadNavigation(api);
+      useLayoutEffect(() => {
+        commits.push({
+          id: navigation.selectedThread?.id,
+          run: Boolean(document.querySelector('[data-composer-fold="run"]')),
+          environment: Boolean(document.querySelector('[data-composer-fold="details"] [aria-label*="environment" i]')),
+          authorized: navigation.selectedThreadConfigurationReady,
+        });
+      });
+      return <>
+        <button onClick={() => navigation.selectThread(row)}>Select A</button>
+        <button onClick={() => navigation.selectThread(other)}>Select B</button>
+        <Composer backends={[backendSummary()]} disabled={!navigation.selectedThreadConfigurationReady}
+          onSetExecutionMode={async () => undefined} skills={[]} thread={navigation.selectedThread}
+          threadConfigurationReady={navigation.selectedThreadDetailReady} />
+      </>;
+    }
+    render(<ThreadComposer />);
+    await act(async () => { fireEvent.click(screen.getByText("Select A")); });
+    await waitFor(() => expect(commits.at(-1)).toMatchObject({ id: row.id, run: true, environment: true }));
+    await act(async () => { fireEvent.click(screen.getByText("Select B")); });
+    await waitFor(() => expect(commits.at(-1)).toMatchObject({ id: other.id, run: false, authorized: true }));
+    revisiting = true;
+    commits.length = 0;
+    read.mockClear();
+    await act(async () => { fireEvent.click(screen.getByText("Select A")); });
+    expect(commits.find((commit) => commit.id === row.id)).toMatchObject({ run: true, environment: true, authorized: false });
+    expect(read.mock.calls.filter(([request]) => request.ref.threadId === row.id)).toHaveLength(1);
+    await act(async () => nextRead.resolve());
+    expect(commits.at(-1)).toMatchObject({ id: row.id, run: false, environment: false, authorized: true });
   });
 
   it("draws the Details-bound controls and ▶ only once the thread's configuration has loaded", async () => {

@@ -118,6 +118,7 @@ import { resolveThreadParentKey } from "@pwragent/shared/subthreads";
 import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import type { DesktopApi } from "./desktop-api";
 import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } from "./useNavigationDirectoryDisclosure";
+import { useComposerConfigurationPreview } from "./useComposerConfigurationPreview";
 import { useNavigationSelectedDetail } from "./useNavigationSelectedDetail";
 import {
   navigationIdentityFromThreadKey,
@@ -3433,11 +3434,7 @@ export function useThreadNavigation(
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
   selectedThreadConfigurationReady: boolean;
-  /**
-   * The selected thread's detail read has loaded, so `selectedThread` is no
-   * longer only its sidebar row. Unlike `selectedThreadConfigurationReady`,
-   * a workspace handoff in flight does not clear it.
-   */
+  /** Exact configuration is available to display, including a preview while revisiting a thread. */
   selectedThreadDetailReady: boolean;
   selectedWorkspaceHandoffPending: boolean;
   selectedThreadConfigurationError?: string;
@@ -6152,13 +6149,19 @@ export function useThreadNavigation(
       setPendingWorkspaceHandoff(undefined);
     }
   }, [pendingWorkspaceHandoff, selectedThreadKey, selectedWorkspaceHandoffPending]);
-  const selectedThreadDetailReady = navigationSelectionAuthorizesComposer(selectedDetail.state);
+  const composerPreview = useComposerConfigurationPreview(desktopApi, selectedDetail.state, selectedRow);
+  const composerAuthorized = navigationSelectionAuthorizesComposer(selectedDetail.state);
+  const selectedThreadDetailReady = composerAuthorized || Boolean(composerPreview);
   const selectedThreadConfigurationReady =
-    selectedThreadDetailReady
+    composerAuthorized
     && !selectedWorkspaceHandoffPending;
   const selectedThread = useMemo(() => {
     const authoritativeThread = selectedDetail.state?.detail?.thread;
-    if (!authoritativeThread) return selectedRow;
+    if (!authoritativeThread) {
+      if (!selectedRow || !composerPreview) return selectedRow;
+      return { ...selectedRow, ...composerPreview,
+        primaryGitRepository: selectedRow.primaryGitRepository ?? composerPreview.primaryGitRepository };
+    }
     const detailThread = restorePendingEnvironmentFailure(
       authoritativeThread,
       pendingEnvironmentFailures[threadSummaryIdentityKey(authoritativeThread)],
@@ -6180,7 +6183,7 @@ export function useThreadNavigation(
       : hydrated;
     return rendererFederationTarget?.scope !== "remote" && configured.federation?.ref.target.scope === "remote"
       ? { ...configured, pinnedRank: selectedRow?.pinnedRank } : configured;
-  }, [selectedDetail.state?.detail?.thread, selectedRow, optimisticThread, pendingEnvironmentFailures, rendererFederationTarget]);
+  }, [selectedDetail.state?.detail?.thread, selectedRow, composerPreview, optimisticThread, pendingEnvironmentFailures, rendererFederationTarget]);
 
   const selectedDirectory = useMemo(() => {
     if (activeFederatedLaunchpad) {
