@@ -50,6 +50,7 @@ import {
 } from "../storage/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { FederationStore } from "../storage/federation-store";
 import {
   measureSqliteWrites,
   resetSqliteWriteMetrics,
@@ -1350,9 +1351,15 @@ describe("DesktopFederationRuntime", () => {
       expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(false);
       announce("gateway", {});
       expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(false);
+      announce("gateway", { status: "disconnected" });
+      expect(runtime.resourceCheckoutPeers(["owner"]).has("owner")).toBe(false);
       announce("gateway", { resourceCheckoutProtocol: 2, permissionRole: "full" });
       expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(true);
       expect(runtime.resourceCheckoutPeers().get("owner")).toBe("connected");
+      announce("gateway", { status: "disconnected", permissionRole: "full" });
+      expect(runtime.resourceCheckoutPeers(["owner"]).get("owner")).toBe("disconnected");
+      expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(false);
+      announce("gateway", { resourceCheckoutProtocol: 2, permissionRole: "full" });
       role.mockReturnValue("contained");
       expect(runtime.resourceCheckoutPeers().size).toBe(0);
       expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(false);
@@ -1362,6 +1369,55 @@ describe("DesktopFederationRuntime", () => {
       announce("gateway", { resourceCheckoutProtocol: 2, status: "revoked" });
       expect(runtime.resourceCheckoutPeers().has("owner")).toBe(false);
     } finally { role.mockRestore(); }
+  });
+
+  it.each([8, 16, 32])("reuses the checkout enrollment snapshot across idle polls with %i peers", (size) => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    harness.localInstanceId = "viewer";
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    const getPeer = vi.fn(() => undefined);
+    const listPeers = vi.fn(() => []);
+    harness.store = () => ({ getPeer, listPeers });
+    const role = vi.spyOn(containment, "localMemberRole").mockReturnValue("full");
+    try {
+      for (let i = 0; i < size; i++) {
+        harness.router.registerConnection({ ...createConnection({ peerId: `peer-${i}` }), resourceCheckoutProtocol: 2 });
+      }
+      for (let i = 0; i < 4; i++) expect(runtime.resourceCheckoutPeers().size).toBe(size);
+      expect(getPeer.mock.calls.length + listPeers.mock.calls.length).toBeLessThanOrEqual(1);
+      expect(runtime.resourceCheckoutPeerConnected("peer-0")).toBe(true);
+      expect(getPeer).toHaveBeenCalledWith("peer-0");
+    } finally { role.mockRestore(); }
+  });
+
+  it("drops cached checkout membership when a second connection to the profile revokes a peer", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "checkout-roster-"));
+    const file = path.join(dir, "state.db");
+    const reader = StateDb.open(file);
+    const writer = StateDb.open(file);
+    const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);
+    const db = vi.spyOn(appState, "getAppStateDb").mockReturnValue(reader);
+    const role = vi.spyOn(containment, "localMemberRole").mockReturnValue("full");
+    try {
+      const runtime = new DesktopFederationRuntime();
+      const harness = runtime as unknown as RuntimeHarness;
+      harness.router = new FederationRouter({ localInstanceId: "viewer" });
+      harness.router.registerConnection({ ...createConnection({ peerId: "owner" }), resourceCheckoutProtocol: 2 });
+      const store = new FederationStore(writer);
+      store.upsertPeer({ peer: { id: "owner", label: "Fixture", role: "client", status: "connected", capabilities: [] }, updatedAt: 1 });
+      expect(runtime.resourceCheckoutPeers().get("owner")).toBe("connected");
+      store.revokePeer("owner", 2);
+      expect(runtime.resourceCheckoutPeers().has("owner")).toBe(false);
+      expect(runtime.resourceCheckoutPeerConnected("owner")).toBe(false);
+    } finally {
+      role.mockRestore();
+      db.mockRestore();
+      initialized.mockRestore();
+      writer.close();
+      reader.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("records gateway-advertised peers for client instance health and opening", () => {

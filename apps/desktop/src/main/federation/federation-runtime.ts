@@ -1330,14 +1330,20 @@ export class DesktopFederationRuntime {
   // Only a directory received from the enrolled upstream gateway may vouch for a sibling.
   private checkoutGatewayDirectory = new Map<string, FederationPeerSummary>();
 
+  private checkoutRoster?: {
+    gateway?: string; authFailed: boolean; externalVersion: number;
+    peers: ReadonlyMap<string, "connected" | "disconnected">;
+  };
+
   private checkoutPeerState(
     id: string, direct: ReturnType<FederationRouter["getConnection"]>,
     enrolled: FederationPeerSummary | undefined, gateway: string | undefined,
   ): "connected" | "disconnected" | undefined {
     const upstream = gateway && this.router?.getConnection(gateway);
-    const sibling = gateway && this.lastConnectionFailureKind !== "auth" ? this.checkoutGatewayDirectory.get(id) : undefined;
+    const sibling = gateway === this.gatewayInstanceId && gateway && this.lastConnectionFailureKind !== "auth"
+      ? this.checkoutGatewayDirectory.get(id) : undefined;
     if (this.assignedRoles.get(id) === "contained" || enrolled?.permissionRole === "contained" || enrolled?.status === "revoked" || enrolled?.revokedAt
-      || (sibling?.permissionRole !== undefined && sibling.permissionRole !== "full") || sibling?.status === "revoked" || sibling?.revokedAt) return;
+      || (sibling?.permissionRole !== undefined && sibling.permissionRole !== "full") || sibling?.status === "revoked" || sibling?.status === "rejected" || sibling?.revokedAt) return;
     if (id === gateway && this.lastConnectionFailureKind === "auth") return;
     if (direct) return direct.resourceCheckoutProtocol === 2 ? "connected" : undefined;
     if (id === gateway) return "disconnected";
@@ -1357,19 +1363,28 @@ export class DesktopFederationRuntime {
       this.store().getPeer(id), this.checkoutGatewayId()) === "connected";
   }
 
-  resourceCheckoutPeers(known: Iterable<string> = []): Map<string, "connected" | "disconnected"> {
-    const peers = new Map<string, "connected" | "disconnected">();
-    if (localMemberRole() !== "full") return peers;
-    const ids = new Set(known);
-    for (const id of this.checkoutGatewayDirectory.keys()) ids.add(id);
-    for (const connection of this.router?.listConnections() ?? []) ids.add(connection.peerId);
-    if (!ids.size) return peers;
+  resourceCheckoutPeers(known: Iterable<string> = []): ReadonlyMap<string, "connected" | "disconnected"> {
+    if (localMemberRole() !== "full") return new Map();
+    if (!this.router && !this.checkoutGatewayDirectory.size && known[Symbol.iterator]().next().done) return new Map();
     const gateway = this.checkoutGatewayId();
-    const store = this.store();
+    const authFailed = this.lastConnectionFailureKind === "auth";
+    // Another process sharing the profile can revoke an enrollment. Local changes invalidate at their source.
+    const externalVersion = isAppStateInitialized() ? desktopFederationState.externalChangeVersion() : 0;
+    const cached = this.checkoutRoster;
+    if (cached && cached.gateway === gateway && cached.authFailed === authFailed && cached.externalVersion === externalVersion) {
+      return cached.peers;
+    }
+    const peers = new Map<string, "connected" | "disconnected">();
+    const ids = new Set(this.checkoutGatewayDirectory.keys());
+    for (const connection of this.router?.listConnections() ?? []) ids.add(connection.peerId);
+    if (gateway) ids.add(gateway);
+    const enrolled = new Map(this.store().listPeers({ includeRevoked: true }).map(peer => [peer.id, peer]));
+    for (const id of enrolled.keys()) ids.add(id);
     for (const id of ids) {
-      const status = this.checkoutPeerState(id, this.router?.getConnection(id), store.getPeer(id), gateway);
+      const status = this.checkoutPeerState(id, this.router?.getConnection(id), enrolled.get(id), gateway);
       if (status) peers.set(id, status);
     }
+    this.checkoutRoster = { gateway, authFailed, externalVersion, peers };
     return peers;
   }
 
@@ -2126,6 +2141,7 @@ export class DesktopFederationRuntime {
     this.router = undefined;
     this.listenUrl = undefined;
     this.gatewayUrl = undefined;
+    this.checkoutRoster = undefined;
     this.checkoutGatewayDirectory.clear();
     this.gatewayInstanceId = undefined;
     this.configuredEndpoints = [];
@@ -2562,6 +2578,7 @@ export class DesktopFederationRuntime {
    */
   private recordAssignedRole(peerId: string, role: FederationPeerRole): void {
     const previous = this.assignedRoles.get(peerId);
+    if (previous !== role) this.checkoutRoster = undefined;
     this.assignedRoles.set(peerId, role);
     if (peerId === this.gatewayInstanceId) {
       const { before, after } = recordGatewayAssignedMemberRole(peerId, role);
@@ -2575,6 +2592,7 @@ export class DesktopFederationRuntime {
   }
 
   async setPeerRole(peerId: string, role: FederationPeerRole): Promise<FederationPeerSummary> {
+    this.checkoutRoster = undefined;
     this.store().setPeerRole(peerId, role, Date.now());
     const connection = this.router?.getConnection(peerId);
     if (connection && role === "contained") {
@@ -2599,6 +2617,7 @@ export class DesktopFederationRuntime {
       throw new Error("Federation peer is not enrolled.");
     }
     const revokedAt = Date.now();
+    this.checkoutRoster = undefined;
     store.revokePeer(peerId, revokedAt);
     this.server?.closePeer(peerId);
     this.unregisterPeer(peerId);
@@ -5182,6 +5201,7 @@ export class DesktopFederationRuntime {
     }
     this.installEgressPolicy(client);
     this.client = client;
+    this.checkoutRoster = undefined;
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
       capabilities: client.capabilities,
@@ -5503,6 +5523,7 @@ export class DesktopFederationRuntime {
 
     this.rpcByPeer.get(connection.peerId)?.rejectAll(new FederationPeerUnavailableError(connection.peerId));
     this.rpcByPeer.delete(connection.peerId);
+    this.checkoutRoster = undefined;
     this.router?.registerConnection({
       peerId: connection.peerId,
       capabilities: connection.capabilities,
@@ -5552,6 +5573,7 @@ export class DesktopFederationRuntime {
     this.shutdown.disconnected(peerId);
     this.peerDirectoryReceivers.delete(peerId);
     this.removeEventSubscriptionsForPeer(peerId);
+    this.checkoutRoster = undefined;
     this.router?.unregisterConnection(peerId);
     // Remote PTY sessions this peer opened get the 10s reap grace; if the
     // peer reconnects first, registerGatewayConnection cancels the reap.
@@ -6086,7 +6108,18 @@ export class DesktopFederationRuntime {
       peers = complete;
     }
     if (sourcePeerId && sourcePeerId === this.gatewayInstanceId && sourcePeerId === envelope.sourceInstanceId) {
-      this.checkoutGatewayDirectory = new Map(peers.map((peer) => [peer.id, peer]));
+      this.checkoutRoster = undefined;
+      this.checkoutGatewayDirectory = new Map(peers.map(peer => {
+        // An offline directory entry carries enrollment only. Retain negotiated support solely for
+        // a previously observed member, until a new connection, removal or role change supersedes it.
+        const previous = this.checkoutGatewayDirectory.get(peer.id);
+        if (peer.status === "disconnected" && peer.permissionRole !== "contained" && !peer.revokedAt
+          && previous?.resourceCheckoutProtocol === 2 && previous.permissionRole !== "contained" && !previous.revokedAt
+          && (previous.status === "connected" || previous.status === "disconnected")) {
+          return [peer.id, { ...peer, resourceCheckoutProtocol: 2 }];
+        }
+        return [peer.id, peer];
+      }));
     }
     const previousPeers = new Map(this.remotePeerDirectory);
     this.remotePeerDirectory.clear();

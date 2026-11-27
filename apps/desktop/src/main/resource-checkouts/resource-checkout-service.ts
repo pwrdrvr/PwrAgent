@@ -210,8 +210,8 @@ export class DesktopResourceCheckoutService {
   isCountedResource(resourceId: string): boolean {
     const binding = this.localBindings.get(resourceId);
     if (binding) return binding.definition.counted;
-    const remote = this.catalog.current().get(resourceId);
-    if (remote) return remote.view.resource.sharing.mode === "counted";
+    const remote = this.catalog.destination(resourceId);
+    if (remote) return remote.counted;
     if (resourceId === this.machineDefinition.resourceId) return this.machineDefinition.counted;
     return this.machine?.records(resourceId)[0]?.definition.counted ?? false;
   }
@@ -425,12 +425,6 @@ export class DesktopResourceCheckoutService {
     this.poll();
   }
 
-  private async refreshPeerAfterAction(owner: string): Promise<void> {
-    if (this.closing || this.closed) return;
-    await this.catalog.refresh(undefined, owner);
-    this.poll();
-  }
-
   private readPeerRoster(known: Iterable<string>): CheckoutPeers {
     try {
       const peers = this.options.checkoutPeers?.(known) ?? new Map();
@@ -452,17 +446,16 @@ export class DesktopResourceCheckoutService {
   }
 
   async discover(actor: CheckoutActor): Promise<ExternalView[]> {
-    await this.refreshPeers();
     return this.readView(actor, await this.catalog.refresh(this.subject(actor)));
   }
 
   async status(actor: CheckoutActor, resourceId: string, key: string): Promise<CheckoutStatus | undefined> {
     const binding = this.localBindings.get(resourceId);
-    const remote = !binding && this.catalog.current().get(resourceId);
+    const remote = !binding && this.catalog.destination(resourceId);
     if (remote) {
       if (!this.peerConnected(remote.owner)) return undefined;
       const response = await this.catalog.request<CheckoutStatus | null>(remote.owner, {
-        operation: "status", resourceId, key, epoch: remote.view.authority.epoch, subject: this.subject(actor),
+        operation: "status", resourceId, key, epoch: remote.epoch, subject: this.subject(actor),
       });
       return this.peerConnected(remote.owner) ? response ?? undefined : undefined;
     }
@@ -474,7 +467,7 @@ export class DesktopResourceCheckoutService {
   }
 
   async perform(value: unknown, actor = this.operator, handoff = false): Promise<ResourceCheckoutActionResult> {
-    let remoteOwner: string | undefined;
+    let remoteAction = false;
     let action;
     try {
       action = parseCheckoutAction(value);
@@ -488,7 +481,7 @@ export class DesktopResourceCheckoutService {
       if (action.kind === "register_definition") {
         if (!this.machine || this.machineConflict) return rejectCheckout("ownership_unresolved", "Machine ownership is unresolved.");
         const { draft } = action;
-        if (this.localBindings.has(draft.canonicalKey) || this.catalog.current().has(draft.canonicalKey)) {
+        if (this.localBindings.has(draft.canonicalKey) || this.catalog.destination(draft.canonicalKey)) {
           return rejectCheckout("conflict", "This canonical key has a configured Federation authority.");
         }
         const owner = this.options.viewer.instanceId;
@@ -505,7 +498,7 @@ export class DesktopResourceCheckoutService {
         } });
       }
       const binding = this.localBindings.get(action.resourceId);
-      const remote = !binding && this.catalog.current().get(action.resourceId);
+      const remote = !binding && this.catalog.destination(action.resourceId);
       const executor = action.kind === "delegate_execution"
         ? this.checkoutExecutor(action.executor, !!binding || !!remote)
         : undefined;
@@ -518,12 +511,12 @@ export class DesktopResourceCheckoutService {
         return this.performWithExecutor(this.external!, actor, action, executor);
       }
       if (remote) {
-        if (!this.peerConnected(remote.owner) || remote.view.authority.status === "unreachable") {
+        if (!this.peerConnected(remote.owner) || !remote.reachable) {
           return rejectCheckout("authority_unreachable", "The Federation authority is unreachable.");
         }
-        remoteOwner = remote.owner;
+        remoteAction = true;
         return await this.catalog.request(remote.owner, {
-          operation: "perform", resourceId: action.resourceId, action, epoch: remote.view.authority.epoch, subject: this.subject(actor),
+          operation: "perform", resourceId: action.resourceId, action, epoch: remote.epoch, subject: this.subject(actor),
         });
       }
       if (!this.machine || this.machineConflict) return rejectCheckout("ownership_unresolved", "Machine ownership is unresolved.");
@@ -538,8 +531,8 @@ export class DesktopResourceCheckoutService {
       this.options.warn(error);
       return { outcome: "unknown", message: "The authority did not confirm the outcome. Check status or retry with the same key." };
     } finally {
-      this.poll();
-      if (remoteOwner) await this.refreshPeerAfterAction(remoteOwner);
+      // Remote snapshots converge on the normal poll. Deliver the owner’s receipt immediately.
+      if (!remoteAction) this.poll();
     }
   }
 
@@ -549,8 +542,8 @@ export class DesktopResourceCheckoutService {
     if (this.closing || this.closed || signal.aborted) return "rejected";
     const binding = this.localBindings.get(token.resourceId);
     if (!binding) {
-      const remote = this.catalog.current().get(token.resourceId);
-      if (!remote || remote.view.authority.epoch !== token.epoch || !this.peerConnected(remote.owner)) return "rejected";
+      const remote = this.catalog.destination(token.resourceId);
+      if (!remote || remote.epoch !== token.epoch || !this.peerConnected(remote.owner)) return "rejected";
       return await this.catalog.request(remote.owner, {
         operation: "lab_execution", resourceId: token.resourceId, epoch: token.epoch, token, cost, subject: this.subject(actor),
       });

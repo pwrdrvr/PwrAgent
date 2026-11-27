@@ -78,3 +78,51 @@ it("erases a cached catalog when the authority withdraws access on a live connec
   await expect(catalog.request("owner", { operation: "status" })).rejects.toThrow("Denied");
   expect(catalog.current().size).toBe(0);
 });
+
+it("keeps the previous complete owner page when a peer returns a malformed projection", async () => {
+  const peers: CheckoutPeers = new Map([["owner", "connected"], ["other", "connected"]]);
+  let bad: Record<string, unknown> | undefined;
+  const catalog = new CheckoutPeerCatalog(() => peers, async <T>(owner: string) => {
+    const row = view(owner, `lab:${owner}`);
+    if (owner === "owner" && bad) Object.assign(row.resource, bad);
+    return catalogPage("session", [row], 0, (item) => item) as T;
+  }, () => 1);
+  await catalog.refresh();
+  for (bad of [
+    { allocations: [null] }, { allocations: [{ holder: { kind: "thread" } }] },
+    { queue: [{ requester: { kind: "thread", thread: {} } }] }, { queue: [null] },
+    { allocations: [{ holder: { kind: "operator", label: "Fixture" }, delegatedExecutor: {} }] },
+    { sharing: null },
+  ]) {
+    const rows = await catalog.refresh();
+    expect(rows.get("lab:owner")?.view.resource).toMatchObject({ condition: "unreachable", allocations: [], queue: [] });
+    expect(rows.get("lab:other")?.view.authority.status).toBe("reachable");
+  }
+});
+
+it("fences an older operator response after a subject discovers the owner's new epoch", async () => {
+  const peers: CheckoutPeers = new Map([["owner", "connected"]]);
+  const pending = Promise.withResolvers<void>();
+  let epoch = 1;
+  let delayOperator = false;
+  const catalog = new CheckoutPeerCatalog(() => peers, async <T>(id: string, input: unknown) => {
+    const row = view(id, "lab:one");
+    row.authority.epoch = epoch;
+    if ((input as { subject?: unknown }).subject) row.resource.actions.release = { allowed: true };
+    else if (delayOperator) await pending.promise;
+    return catalogPage("session", [row], 0, item => item) as T;
+  }, () => 1);
+  await catalog.refresh();
+  delayOperator = true;
+  const old = catalog.refresh();
+  epoch++;
+  const subject = await catalog.refresh({ backend: "codex", threadId: "worker" });
+  expect(subject.get("lab:one")?.view.resource.actions.release).toEqual({ allowed: true });
+  pending.resolve();
+  await old;
+  expect(catalog.destination("lab:one")).toMatchObject({ owner: "owner", epoch, reachable: true });
+  expect(catalog.current().has("lab:one")).toBe(false);
+  await catalog.refresh();
+  expect(catalog.current().get("lab:one")?.view.authority.epoch).toBe(epoch);
+  expect(catalog.current().get("lab:one")?.view.resource.actions.release).toBeUndefined();
+});

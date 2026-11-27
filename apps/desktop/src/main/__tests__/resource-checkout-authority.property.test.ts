@@ -623,6 +623,46 @@ describe("the persisted resource checkout authority", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it.each(["subject discovery", "action receipt"])("routes from a confirmed owner without unrelated catalog reads for %s", async (scenario) => {
+    const harness = createHarness();
+    const authority = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "owner", instanceLabel: "Owner", profile: "default", machineId: "host" },
+      bindings: [{ authorityInstanceId: "owner", authorityMachineId: "host",
+        definition: { ...definition, authorityId: `checkout:owner:${resourceId}` } }],
+      checkoutPeers: () => new Map([["viewer", "connected"]]), now: () => 1, warn: () => {},
+      externalStore: openResourceCheckoutStore(path.join(harness.root, "external.db"), "host"),
+      requestPeer: async () => { throw new Error("Unexpected outbound call"); },
+    });
+    const catalogReads: string[] = [];
+    const client = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "viewer", instanceLabel: "Viewer", profile: "dev", machineId: "client" },
+      bindings: [], checkoutPeers: () => new Map([["owner", "connected"]]), now: () => 1, warn: () => {},
+      requestPeer: async <T>(_instance: string, input: unknown) => {
+        const op = input as { operation: string; subject?: unknown };
+        if (op.operation === "catalog") {
+          catalogReads.push(op.subject ? "subject" : "operator");
+          if (scenario === "subject discovery" && !op.subject) throw new Error("Operator read timed out");
+        }
+        return authority.receivePeer("viewer", input) as T;
+      },
+    });
+    try {
+      const worker = client.threadActor("codex", "worker");
+      if (scenario === "subject discovery") {
+        expect((await client.discover(worker)).find(row => row.resource.resourceId === resourceId)?.resource.condition).toBe("available");
+      } else await client.refreshPeers();
+      const receipt = await client.perform(request("hold"), worker);
+      expect(receipt.outcome).toBe("granted");
+      await expect(client.status(worker, resourceId, "hold")).resolves.toMatchObject({ state: "granted" });
+      expect(catalogReads).toEqual([scenario === "subject discovery" ? "subject" : "operator"]);
+      if (scenario === "subject discovery") {
+        const row = (await client.discover(worker)).find(item => item.resource.resourceId === resourceId);
+        expect(row?.resource.actions.release?.allowed).toBe(true);
+        expect(client.read().resources.find(item => item.resourceId === resourceId)?.actions.release?.allowed).toBeFalsy();
+      }
+    } finally { client.close(); authority.close(); harness.close(); }
+  });
+
   it("retains external ownership on partitions, replays a lost receipt, and blocks stale or foreign requests", async () => {
     const harness = createHarness();
     let authority: DesktopResourceCheckoutService | undefined;

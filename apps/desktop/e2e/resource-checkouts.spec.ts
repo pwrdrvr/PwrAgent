@@ -225,6 +225,16 @@ test("an enrolled Federation peer reconnects to the same external authority", as
     const remoteHold = await perform(client.window, { ...action, resourceId: siblingResource, idempotencyKey: "sibling-hold" });
     if (remoteHold.outcome !== "granted") throw new Error("Expected the sibling authority to grant the checkout.");
     expect(await siblingRow(sibling.window)).toMatchObject({ allocations: [{ allocationId: remoteHold.allocationId, viewerOwns: false }] });
+    const held = { allocationId: remoteHold.allocationId, generation: remoteHold.generation };
+    await expect.poll(() => siblingRow(client!.window)).toMatchObject({ allocations: [{ ...held, lastKnown: false }] });
+    await sibling.window.evaluate(async () =>
+      await (window as unknown as { pwragent: DesktopApi }).pwragent.setFederationEnabled!(false));
+    await expect.poll(() => siblingRow(client!.window)).toMatchObject({ condition: "unreachable", allocations: [{ ...held, lastKnown: true }] });
+    const gatewaySnapshot = await read(client.window);
+    expect(gatewaySnapshot.authorities.find(item => item.authorityId === `checkout:${ownerId}:${resourceId}`)?.status).toBe("reachable");
+    await sibling.window.evaluate(async () =>
+      await (window as unknown as { pwragent: DesktopApi }).pwragent.setFederationEnabled!(true));
+    await expect.poll(() => siblingRow(client!.window)).toMatchObject({ condition: "busy", allocations: [{ ...held, lastKnown: false }] });
     expect(await perform(client.window, { kind: "release", resourceId: siblingResource, idempotencyKey: "sibling-release",
       generation: remoteHold.generation, allocationId: remoteHold.allocationId })).toMatchObject({ outcome: "accepted" });
     await owner.window.evaluate(async (peerId) =>
