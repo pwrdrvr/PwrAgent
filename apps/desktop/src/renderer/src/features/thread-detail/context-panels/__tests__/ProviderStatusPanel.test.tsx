@@ -310,7 +310,7 @@ describe("ProviderStatusPanel", () => {
     expect(valueFor("Credits")).toHaveTextContent(/^100$/);
   });
 
-  it("keeps a credit balance off a Plan line that names no plan", () => {
+  it("shows an API-billing account's balance in its Credits row", () => {
     render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { type: "apiKey", requiresOpenaiAuth: true } }]} />);
     expect(valueFor("Plan")).toHaveTextContent(/^API billing$/);
     expect(valueFor("Credits")).toHaveTextContent(/^100$/);

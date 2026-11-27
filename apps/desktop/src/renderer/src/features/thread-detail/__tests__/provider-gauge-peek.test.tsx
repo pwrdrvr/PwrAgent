@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ReadUsageActivityResponse } from "@pwragent/shared/contracts/usage-activity";
+import { describeRateLimitRow } from "../../../lib/backend-status-format";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { ThreadContextPanel } from "../ThreadContextPanel";
@@ -538,7 +539,8 @@ describe("AI provider gauge peek", () => {
     const row = peek()!.querySelector(".provider-peek__limit")!;
     expect(row.querySelector(".provider-peek__percent")).toHaveTextContent(/^53%$/);
     const reset = row.querySelector(".provider-peek__detail .provider-peek__phrase");
-    expect(reset?.textContent).toMatch(/^resets \S+ \d{1,2}:\d\d\s?(AM|PM)$/);
+    // The whole reset, in the runner's own locale, in one phrase.
+    expect(reset?.textContent).toBe(describeRateLimitRow({ ...weekly, usedPercent: 53 }, now).reset);
     const pace = row.querySelector(".provider-peek__pace")!;
     const phrases = [...pace.querySelectorAll(".provider-peek__phrase")].map((node) => node.textContent!);
     // Everything after the rate is phrases; a line can break only between them.

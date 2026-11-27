@@ -20,12 +20,8 @@ import {
   usagePaceAccountKey,
   usagePaceRefreshKey,
 } from "../../federation-activity/useLocalUsagePace";
-import { describeLimitPace, limitPaceOutcomePhrases } from "../../federation-activity/usage-activity-presentation";
-import {
-  limitSeriesFor,
-  limitUsageDropped,
-  type LimitAccount,
-} from "../../federation-activity/usage-limits";
+import { limitPaceOutcomePhrases } from "../../federation-activity/usage-activity-presentation";
+import type { LimitAccount } from "../../federation-activity/usage-limits";
 import { capLatchSample, fiveHourLatchKey, fiveHourLatches, type FiveHourSample } from "./five-hour-latch";
 import { limitRowPace } from "./limit-pace";
 
@@ -87,8 +83,10 @@ function chartableBackends(backends: readonly BackendSummary[]): BackendSummary[
 function providerPeekScopes(
   backend: BackendSummary,
   now: number,
-): { scopes: ProviderPeekScope[]; caps: ProviderPeekCap[] } {
+): { scopes: ProviderPeekScope[]; caps: ProviderPeekCap[]; credits?: BackendRateLimitSummary } {
   const visible = selectVisibleRateLimits(backend);
+  const credits = visible.find(isCreditsRateLimit);
+  const withCredits = credits ? { credits } : {};
   // The panel's filter, in the provider's own order: Antigravity's pools
   // read as it reports them, not as the panel sorts its rows.
   const shown = new Set(visible);
@@ -106,7 +104,7 @@ function providerPeekScopes(
         ...(usedPercent === undefined ? {} : { usedPercent }),
         ...(fiveHour ? { fiveHour: fiveHour.limit } : {}),
       };
-    }), caps: providerPeekCaps(backend, visible, now) };
+    }), caps: providerPeekCaps(backend, visible, now), ...withCredits };
   }
   let fullest: ProviderPeekScope | undefined;
   for (const limit of visible) {
@@ -115,7 +113,7 @@ function providerPeekScopes(
     fullest = { scope: null, window: describeRateLimitRow(limit, now).label.replace(/ limit$/i, ""), limit, usedPercent };
   }
   // With no window to show, the fullest limit is the row, a cap included.
-  return { scopes: fullest ? [fullest] : [], caps: [] };
+  return { scopes: fullest ? [fullest] : [], caps: [], ...withCredits };
 }
 
 /**
@@ -150,8 +148,7 @@ export function providerPeekEntries(
   const entries = backends
     .filter((backend) => backend.available)
     .map((backend, order) => {
-      const { scopes, caps } = providerPeekScopes(backend, now);
-      const credits = selectVisibleRateLimits(backend).find(isCreditsRateLimit);
+      const { scopes, caps, credits } = providerPeekScopes(backend, now);
       const percents = [
         ...caps.map((cap) => cap.usedPercent),
         ...scopes.flatMap((scope) => scope.usedPercent === undefined ? [] : [scope.usedPercent]),
@@ -417,7 +414,7 @@ export function PeekLimitRow(props: {
       <span className="provider-peek__window">{props.window}</span>
       {used !== undefined ? (
         <>
-          <span className="backend-status-list__meter provider-peek__bar" aria-hidden="true">
+          <span className={`backend-status-list__meter provider-peek__bar${used >= 100 ? " is-full" : ""}`} aria-hidden="true">
             <i style={{ width: `${used}%` }} />
             {projected !== undefined && projected > used ? (
               <s
@@ -426,7 +423,9 @@ export function PeekLimitRow(props: {
               />
             ) : null}
           </span>
-          <b className="backend-status-list__figure provider-peek__percent">{formatUsedPercent(used)}%</b>
+          <b className={`backend-status-list__figure provider-peek__percent${short ? " is-short" : ""}`}>
+            {formatUsedPercent(used)}%
+          </b>
         </>
       ) : (
         <span className="provider-peek__value">
@@ -464,26 +463,18 @@ export function PeekLimitRow(props: {
 }
 
 /**
- * Where a limit's pace lands at its reset, exactly as `RateLimitRow`'s pace
- * line reads it ("On pace for about N% at the reset"), so a 5h row that
- * appears agrees with its own pace text; 100 when it runs out first.
- * Undefined while unknown: under 30 minutes of the window, no pace, or a
- * reading the series has not caught up with.
+ * Where a limit's pace lands at its reset, read from the same `limitRowPace`
+ * that draws the row's hatch and pace line, so a 5h row that appears agrees
+ * with its own pace; 100 when it runs out first. Undefined while unknown:
+ * under 30 minutes of the window, no pace, or a reading the series has not
+ * caught up with.
  */
 export function projectedPercentAtReset(
   limit: BackendRateLimitSummary,
   account: LimitAccount | undefined,
   now: number,
 ): number | undefined {
-  const used = describeRateLimitRow(limit, now).usedPercent;
-  const series = limitSeriesFor(account, limit);
-  if (!series || used === undefined || used >= 100 || series.latest.usedPercent >= 100
-    || limitUsageDropped(series.latest.usedPercent, used) || series.latest.resetAt !== limit.resetAt
-    || (limit.resetAt !== undefined && limit.resetAt <= now)) return undefined;
-  const pace = describeLimitPace(series, now, true);
-  if (!pace) return undefined;
-  if (pace.projection.kind === "full") return 100;
-  return pace.projection.percent < used ? undefined : pace.projection.percent;
+  return limitRowPace(limit, describeRateLimitRow(limit, now).usedPercent, account, now)?.projectedPercent;
 }
 
 function fiveHourSample(limit: BackendRateLimitSummary, projectedPercent: number | undefined, now: number): FiveHourSample {

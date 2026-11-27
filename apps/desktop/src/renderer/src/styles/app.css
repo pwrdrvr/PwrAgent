@@ -10662,6 +10662,15 @@ button.stack-display__thread,
   margin-top: 0;
 }
 
+/* The panel's tones: a window that ran out, a pace that runs out first. */
+.provider-peek__bar.is-full i {
+  background: var(--danger-text);
+}
+
+.provider-peek__percent.is-short {
+  color: var(--status-warning-text);
+}
+
 .provider-peek__percent {
   justify-self: end;
   white-space: nowrap;
