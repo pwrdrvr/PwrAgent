@@ -1514,7 +1514,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   });
 
   it("the enrolled Outpost retries an unclaimed workspace refusal without replacing its native owner", async ({ signal, onTestFinished }) => {
-    const starting = startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES });
+    // This test's finishing hook joins startup before the daemon's own hook.
+    const starting = startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, signal });
     let displaced: string | undefined;
     onTestFinished(async () => {
       const host = await starting.catch(() => undefined);

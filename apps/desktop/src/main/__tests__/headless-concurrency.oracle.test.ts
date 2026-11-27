@@ -6,6 +6,8 @@ import path from "node:path";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { expect, inject, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
+// Keep the build script in Vitest's watch graph. Global setup runs the build.
+import "../../../scripts/build-headless.mjs";
 import { requireOracleFixture } from "../../test-setup/oracle-fixture-context";
 import { ensureNamedProfileExists } from "../profile";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
@@ -232,7 +234,7 @@ it("joins every close caller to the actual process and pipe retirement", async (
 it("rejects readiness when its test aborts at the child's ready message", async () => {
   const aborted = new AbortController();
   const reason = new Error("controlled test abort at native readiness");
-  let retire!: () => Promise<void>;
+  let retire: (() => Promise<void>) | undefined;
   try {
     const host = builtHost(aborted.signal, (child, close) => {
       retire = close;
@@ -242,7 +244,7 @@ it("rejects readiness when its test aborts at the child's ready message", async 
     });
     await expect(host).rejects.toBe(reason);
   } finally {
-    await retire();
+    await retire?.();
   }
 });
 

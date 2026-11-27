@@ -6,6 +6,8 @@ import path from "node:path";
 import fc from "fast-check";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { expect, inject, it, onTestFinished } from "vitest";
+// Keep the build script in Vitest's watch graph. Global setup runs the build.
+import "../../../scripts/build-headless.mjs";
 import { requireOracleFixture } from "../../test-setup/oracle-fixture-context";
 import { ensureNamedProfileExists } from "../profile";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";

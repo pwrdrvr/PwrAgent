@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { build } from "esbuild";
-import { buildHeadless } from "../../../../scripts/build-headless.mjs";
+import type { buildHeadless as buildHeadlessRuntime } from "../../../../scripts/build-headless.mjs";
 
-export async function buildHeadlessDriverFixture(root: string) {
+export async function buildHeadlessDriverFixture(root: string, buildHeadless: typeof buildHeadlessRuntime) {
   const outputDirectory = path.join(root, "runtime");
   const fixture = path.join(import.meta.dirname, "../fixtures/owner-conformance-codex-transport.ts");
   await buildHeadless({ outputDirectory, sourcemap: false, logLevel: "warning", plugins: [{ name: "conformance-provider", setup(builder) {
