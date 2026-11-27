@@ -1012,6 +1012,15 @@ function messagingRoutesHeader(): Element | null {
   );
 }
 
+/**
+ * Expands Experimental → Soon to be removed. Its collapse state outlives a
+ * test, so only a collapsed group is toggled.
+ */
+function openSoonToBeRemoved() {
+  const header = screen.getByRole("button", { name: /Soon to be removed/ });
+  if (header.getAttribute("aria-expanded") === "false") fireEvent.click(header);
+}
+
 describe("SettingsScreen", () => {
   it("shows and copies a runnable Linux update fallback after a failed check", async () => {
     const manualUpdate = {
@@ -2600,7 +2609,8 @@ describe("SettingsScreen", () => {
     ).not.toBeDisabled();
 
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
-    const tokenMiserSwitch = getLabeledSwitch("Automatically reduce tool output in managed Codex");
+    openSoonToBeRemoved();
+    const tokenMiserSwitch = getLabeledSwitch("Reduce tool output in managed Codex — Token Miser (Legacy)");
     expect(tokenMiserSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(tokenMiserSwitch);
     await waitFor(() => {
@@ -5044,7 +5054,7 @@ describe("SettingsScreen", () => {
     const settings = createSettingsState(snapshot);
     const view = render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
       initialSection="experimental" settings={settings} onClose={() => undefined} />);
-    const toggle = screen.getByRole("switch", { name: "Focused summaries — Token Miser" });
+    const toggle = screen.getByRole("switch", { name: "Focused summaries — Token Miser (Legacy)" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(toggle).not.toBeDisabled();
     fireEvent.click(toggle);
@@ -5076,7 +5086,7 @@ describe("SettingsScreen", () => {
       onClose={() => undefined}
     />);
     const toggle = screen.getByRole("switch", {
-      name: "Review hidden polling loops — Token Miser",
+      name: "Review hidden polling loops — Token Miser (Legacy)",
     });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
@@ -5109,7 +5119,7 @@ describe("SettingsScreen", () => {
       onClose={() => undefined}
     />);
     const toggle = screen.getByRole("switch", {
-      name: "Capture diagnostic samples — Token Miser",
+      name: "Capture diagnostic samples — Token Miser (Legacy)",
     });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
@@ -5148,7 +5158,7 @@ describe("SettingsScreen", () => {
 
     // Capture is off, but saved files outlive the switch, so the folder shows.
     expect(screen.getByRole("switch", {
-      name: "Capture diagnostic samples — Token Miser",
+      name: "Capture diagnostic samples — Token Miser (Legacy)",
     })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(directory)).toBeInTheDocument();
 
@@ -5170,10 +5180,12 @@ describe("SettingsScreen", () => {
     snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
     render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
       initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
-    const toggle = screen.getByRole("switch", { name: "Capture foreground command output" });
+    const toggle = screen.getByRole("switch", { name: "Capture command output — Token Miser (v2)" });
     expect(toggle).toBeDisabled();
     expect(toggle).not.toBeChecked();
-    expect(screen.getByText("Foreground command capture requires a supported POSIX owner.")).toBeVisible();
+    expect(screen.getByText("Needs macOS or Linux. This machine cannot capture command output.")).toBeVisible();
+    expect(within(screen.getByRole("region", { name: "Token Miser (v2)" }))
+      .getByRole("button", { name: /Token Miser \(v2\).*Unavailable/ })).toBeInTheDocument();
   });
 
   it("saves a bounded-command helper with stock Codex while managed Token Miser is off", async () => {
@@ -5183,17 +5195,120 @@ describe("SettingsScreen", () => {
     const settings = createSettingsState(snapshot);
     render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
       initialSection="experimental" settings={settings} onClose={() => undefined} />);
-    const choices = screen.getByRole("radiogroup", { name: "Helper for ambiguous command output" });
-    const section = screen.getByRole("region", { name: "Token Miser" });
+    const section = screen.getByRole("region", { name: "Token Miser (v2)" });
     const switches = within(section).getAllByRole("switch");
-    expect(switches[0]).toHaveAccessibleName("Capture foreground command output");
-    expect(switches[1]).toHaveAccessibleName("Enable on threads by default — Token Miser");
-    expect(switches[2]).toHaveAccessibleName("Automatically reduce tool output in managed Codex");
+    expect(switches).toHaveLength(2);
+    expect(switches[0]).toHaveAccessibleName("Capture command output — Token Miser (v2)");
+    expect(switches[1]).toHaveAccessibleName("Use on threads by default — Token Miser");
     expect(switches[0]).toBeChecked();
-    expect(switches[2]).not.toBeChecked();
-    expect(within(choices).getByRole("radio", { name: "Local rules only" })).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(within(choices).getByRole("radio", { name: "Decision model" }));
-    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserBoundedHelper: "decision" } }));
+    // Legacy lives in its own card under Soon to be removed.
+    expect(within(section).queryByText("Reduce tool output in managed Codex")).not.toBeInTheDocument();
+    const picker = within(section).getByRole("combobox", { name: "Pick an excerpt with a model" });
+    expect(picker).toHaveTextContent("Don’t use a model");
+    expect(within(section).getByText(/Rules on this Mac pick what the agent sees/)).toBeInTheDocument();
+    fireEvent.click(picker);
+    // Older choices are never offered to a profile that did not save them.
+    expect(screen.queryByRole("option", { name: /saved earlier/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /^OpenAI Decisions/ }));
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserBoundedHelper: "openai" } }));
+  });
+
+  it("shows what each thread type's excerpt picker runs and saves one row without touching the others", async () => {
+    const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserBoundedHelper = { value: "configured", source: "config" };
+    const helperModels = {
+      defaultModel: "gpt-5.5",
+      helpers: {
+        thread_titles: { model: "gpt-5.5", reasoningEffort: "high" },
+        token_miser_capture_antigravity: { backend: "acp:grok", model: "grok-fast" },
+        helper_from_a_newer_build: { model: "kept" },
+      },
+    };
+    snapshot.models.helperModels = helperModels;
+    const backends = [
+      { kind: "codex", label: "Codex", available: true, launchpadOptions: {
+        reasoningEfforts: ["low", "medium", "high"],
+        models: [{ id: "gpt-5.5", label: "GPT-5.5" }],
+      } },
+      { kind: "claude", label: "Claude", available: true, launchpadOptions: {
+        models: [{ id: "claude-haiku-5-5", label: "Haiku 5.5" }],
+      } },
+      { kind: "acp:grok", label: "Grok", available: true, launchpadOptions: {
+        models: [{ id: "grok-fast", label: "Grok Fast" }],
+      } },
+    ] as unknown as BackendSummary[];
+    const settings = createSettingsState(snapshot);
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      cachedBackends={backends} initialSection="experimental" settings={settings} onClose={() => undefined} />);
+    const section = within(screen.getByRole("region", { name: "Token Miser (v2)" }));
+    expect(section.getByRole("combobox", { name: "Pick an excerpt with a model" }))
+      .toHaveTextContent("Helper model for each thread type");
+    // Only Codex threads inherit the saved Helper model.
+    expect(section.getByText(/your Helper model from AI Providers → Helpers/)).toHaveTextContent("Runs GPT-5.5 on Codex");
+    expect(section.getByText(/Choose a model on Claude/)).toHaveTextContent(
+      "Until then Claude threads get the no-model result.",
+    );
+    expect(section.getByText(/on Grok, low effort/)).toHaveTextContent("Runs Grok Fast on Grok, low effort.");
+
+    chooseModelSettingsOption("Model", /Haiku 5\.5/, "Excerpt picker for Claude threads");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      models: {
+        helperModels: {
+          ...helperModels,
+          helpers: { ...helperModels.helpers, token_miser_capture_claude: { model: "claude-haiku-5-5" } },
+        },
+      },
+    }));
+  });
+
+  it.each([
+    ["codex", "Codex Token Miser helper (saved earlier)", /Output evaluation helper on Codex/],
+    ["decision", "Default decision model (saved earlier)", /follows AI Providers → Decisions/],
+  ] as const)("keeps a saved %s helper choice as saved, without offering it again", (saved, label, line) => {
+    const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserBoundedHelper = { value: saved, source: "config" };
+    snapshot.models.decisionModels = { model: "jev" };
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+    const section = within(screen.getByRole("region", { name: "Token Miser (v2)" }));
+    const picker = section.getByRole("combobox", { name: "Pick an excerpt with a model" });
+    expect(picker).toHaveTextContent(label);
+    expect(section.getByText(line)).toBeInTheDocument();
+    expect(section.getByText("Kept as you saved it. Choosing another option replaces it.")).toBeInTheDocument();
+    const options = selectOptionLabels(picker);
+    expect(options.filter((option) => option.includes("saved earlier"))).toEqual([label]);
+  });
+
+  it("names the decision provider, its model, readiness and cost without falling back to another", () => {
+    const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserBoundedHelper = { value: "openai", source: "config" };
+    // A ready Jev must not stand in for an OpenAI choice that has no key.
+    snapshot.models.decisionModels = { model: "jev" };
+    snapshot.models.decisionSecrets = {
+      localApiKey: { configured: false, source: "unset", writable: true },
+      jevApiKey: { configured: true, source: "keychain", writable: true },
+    };
+    snapshot.models.openaiDecisions = { apiKey: { configured: false, source: "unset", writable: true } };
+    const view = render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+    const section = () => within(screen.getByRole("region", { name: "Token Miser (v2)" }));
+    expect(section().getByText(/needs an API key in AI Providers → OpenAI Decisions/)).toHaveTextContent(
+      "gpt-6-luna needs an API key in AI Providers → OpenAI Decisions. Until then the agent gets the no-model result.",
+    );
+    expect(section().getByText(/Paid per call to your OpenAI API project/)).toHaveTextContent("$0.10 per");
+    expect(section().queryByText(/TypeSafe Jev\. API key stored/)).not.toBeInTheDocument();
+
+    snapshot.experimental.tokenMiserBoundedHelper = { value: "local", source: "config" };
+    snapshot.models.decisionModels = { model: "jev", local: { enabled: false } };
+    view.rerender(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState({ ...snapshot })} onClose={() => undefined} />);
+    expect(section().getByText(/The local decision model is off/)).toBeInTheDocument();
   });
 
   it("keeps command capture available while managed Codex is unavailable", () => {
@@ -5206,9 +5321,13 @@ describe("SettingsScreen", () => {
     };
     render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
       initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
-    const section = within(screen.getByRole("region", { name: "Token Miser" }));
-    expect(section.getByRole("button", { name: /Token Miser.*Default on/ })).toBeInTheDocument();
-    expect(section.getByText("Codex could not load the gate")).toBeInTheDocument();
+    const v2 = within(screen.getByRole("region", { name: "Token Miser (v2)" }));
+    expect(v2.getByRole("button", { name: /Token Miser \(v2\).*On/ })).toBeInTheDocument();
+    expect(v2.getByRole("switch", { name: "Capture command output — Token Miser (v2)" })).toBeChecked();
+    openSoonToBeRemoved();
+    const legacy = within(screen.getByRole("region", { name: "Token Miser (Legacy)" }));
+    expect(legacy.getByRole("button", { name: /Token Miser \(Legacy\).*Not running/ })).toBeInTheDocument();
+    expect(legacy.getByText("Codex could not load the gate")).toBeInTheDocument();
   });
 
   it("lets an available Token Miser experiment default threads on or off", async () => {
@@ -5234,7 +5353,7 @@ describe("SettingsScreen", () => {
 
     expect(screen.getByText("Opt-in")).toBeInTheDocument();
     const defaultSwitch = screen.getByRole("switch", {
-      name: "Enable on threads by default — Token Miser",
+      name: "Use on threads by default — Token Miser",
     });
     expect(defaultSwitch).toHaveAttribute("aria-checked", "false");
     expect(defaultSwitch).not.toBeDisabled();
@@ -5743,8 +5862,9 @@ describe("SettingsScreen", () => {
       />,
     );
 
+    openSoonToBeRemoved();
     const availabilitySwitch = screen.getByRole("switch", {
-      name: "Automatically reduce tool output in managed Codex",
+      name: "Reduce tool output in managed Codex — Token Miser (Legacy)",
     });
     fireEvent.click(availabilitySwitch);
 

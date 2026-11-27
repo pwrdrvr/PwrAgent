@@ -64183,3 +64183,65 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   padding: 12px 18px 14px;
   border-top: 1px solid var(--border-subtle);
 }
+
+/* Token Miser (v2): the two worked examples, then one model pill per
+   thread type under the excerpt picker. */
+.settings-token-miser__examples {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.settings-token-miser__example {
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.settings-token-miser__example p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.settings-token-miser__example .settings-token-miser__example-title {
+  margin-bottom: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-token-miser__status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-token-miser__origins {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  gap: 10px 14px;
+  align-items: start;
+  margin-top: 8px;
+}
+
+.settings-token-miser__origin {
+  display: contents;
+}
+
+.settings-token-miser__origin-name {
+  padding-top: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-token-miser__origin-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
