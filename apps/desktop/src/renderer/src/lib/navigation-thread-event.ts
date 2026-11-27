@@ -26,6 +26,9 @@ export function applyCheckoutHibernationUpdate<T extends NavigationThreadSummary
   let next = thread;
   if (params.workspace !== undefined) {
     const { workspaceHibernated: _previous, checkoutHibernated: _mark, ...rest } = next;
+    if (params.workspace?.restoring && rest.workspaceMissing?.worktreePath === params.workspace.worktreePath) {
+      delete rest.workspaceMissing;
+    }
     // A restore in progress is still the hibernated checkout until it ends.
     next = (params.workspace
       ? { ...rest, workspaceHibernated: params.workspace, checkoutHibernated: true }

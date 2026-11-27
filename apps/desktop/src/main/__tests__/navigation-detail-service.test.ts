@@ -184,10 +184,11 @@ describe("NavigationDetailService", () => {
     vi.restoreAllMocks();
   });
 
-  async function selectedWithSubAgents({ gitStatus, backend = "codex", linkedDirectories }: {
+  async function selectedWithSubAgents({ gitStatus, backend = "codex", linkedDirectories, checkoutHibernation }: {
     gitStatus?: NavigationDirectoryGitStatus;
     backend?: AppServerBackendKind;
     linkedDirectories?: NavigationThreadSummary["linkedDirectories"];
+    checkoutHibernation?: ReturnType<DesktopBackendRegistry["readCheckoutHibernation"]>;
   } = {}) {
     const selected = { ...thread("selected"), source: backend, executionMode: "full-access" as const };
     if (gitStatus) selected.linkedDirectories = ["primary", "secondary", "tools"].map((name) => ({
@@ -203,7 +204,7 @@ describe("NavigationDetailService", () => {
       hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
       listLiveTokenMiserSubAgents: () => [],
       readLiveSubAgentRevisionSource: () => [],
-      readCheckoutHibernation: () => ({ restoring: false }),
+      readCheckoutHibernation: () => checkoutHibernation ?? { restoring: false },
       readSelectedWorkspaceGitStatus: async () => gitStatus,
       mergeLiveTokenMiserSubAgents: (_id: string, cards: ThreadSubAgentSummary[]) => mocks.newestFirst(cards),
     } as unknown as DesktopBackendRegistry);
@@ -213,6 +214,22 @@ describe("NavigationDetailService", () => {
     expect(Buffer.byteLength(JSON.stringify(detail))).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_RESULT_BYTES);
     return { service, detail, request };
   }
+
+  it("reports an in-flight checkout retry during an exact detail refresh", async () => {
+    const repositoryPath = mkdtempSync(path.join(os.tmpdir(), "pwragent-restore-detail-"));
+    const worktreePath = path.join(repositoryPath, "missing");
+    const progress = { worktreePath, repositoryPath, hibernatedAt: 1, restoring: true, restorePhase: "checkout" as const };
+    try {
+      const { detail } = await selectedWithSubAgents({
+        linkedDirectories: [{ id: "worktree", kind: "worktree", path: repositoryPath, worktreePath, label: "Fixture" }],
+        checkoutHibernation: { restoring: true, progress, restoreFailure: { worktreePath, message: "Previous refusal" } },
+      });
+      expect(detail.thread?.workspaceHibernated).toEqual(progress);
+      expect(detail.thread?.workspaceMissing).toBeUndefined();
+    } finally {
+      rmSync(repositoryPath, { recursive: true, force: true });
+    }
+  });
 
   it("reads the selected PR-less thread's primary repository from its checkout", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "pwragent-selected-repo-"));

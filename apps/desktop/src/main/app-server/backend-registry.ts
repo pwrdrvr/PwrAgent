@@ -955,13 +955,13 @@ import {
   isLikelyToolManagedWorktreePath,
   linkedDirectoryWorktreePath,
   normalizeLinkedDirectoryKind,
+  normalizeWorktreePathForComparison,
   overlayHasHandoffWorkspace,
   pendingStartedThreadMatchesFilter,
   pendingStartedThreadWorkspaceMatches,
   readCurrentGitBranch,
   resolveBranchDriftExpectedBranch,
   resolveExpectedThreadBranch,
-  resolveLinkedDirectoryWorkspaceCwd,
   resolveThreadWorkspaceCwd,
   retainPendingStartedThreadWorkspace,
   toForwardSlashes,
@@ -12608,11 +12608,7 @@ export class DesktopBackendRegistry {
         // bridge result, and only config inventory needs the resolved cwd.
         const cwdPreparation =
           params.backend === "codex"
-            ? this.resolveThreadEnvironmentCwd(
-                params.backend,
-                params.threadId,
-                overlay,
-              )
+            ? this.resolveCodexTurnCwd(params.threadId, overlay)
             : Promise.resolve(undefined);
         const runtimePreparation = tokenMiserEnabledForThread
           ? this.prepareTokenMiserRuntime()
@@ -19913,35 +19909,44 @@ export class DesktopBackendRegistry {
     threadId: string,
     overlay?: ThreadOverlayState,
   ): Promise<string | undefined> {
-    const pendingThread = this.pendingStartedThreads.get(
-      buildThreadIdentityKey(backend, threadId),
-    );
-    if (pendingThread) {
-      const pendingCwd = resolveThreadWorkspaceCwd(
-        pendingThread,
-        overlay?.extraLinkedDirectories,
-      );
-      if (pendingCwd?.trim()) {
-        return pendingCwd.trim();
-      }
-    }
+    return (await this.resolveThreadEnvironmentWorkspace(backend, threadId, overlay)).cwd;
+  }
 
+  private async resolveThreadEnvironmentWorkspace(
+    backend: AppServerBackendKind,
+    threadId: string,
+    overlay?: ThreadOverlayState,
+  ): Promise<{ cwd?: string; thread?: AppServerThreadSummary }> {
+    const pending = this.pendingStartedThreads.get(buildThreadIdentityKey(backend, threadId));
+    const directories = overlay?.extraLinkedDirectories;
+    const pendingCwd = pending && resolveThreadWorkspaceCwd(pending, directories)?.trim();
+    if (pendingCwd) return { cwd: pendingCwd, thread: pending };
     const thread = await this.findThreadForWorkspaceHandoff({
-      backend,
-      callerReason: "turn-cwd",
-      freshness: "last-known",
-      threadId,
+      backend, callerReason: "turn-cwd", freshness: "last-known", threadId,
     });
-    const threadCwd = resolveThreadWorkspaceCwd(
-      thread,
-      overlay?.extraLinkedDirectories,
-    );
-    if (threadCwd?.trim()) {
-      return threadCwd.trim();
-    }
+    const cwd = resolveThreadWorkspaceCwd(thread, directories)?.trim() || undefined;
+    return { cwd, thread };
+  }
 
-    return resolveLinkedDirectoryWorkspaceCwd(overlay?.extraLinkedDirectories)?.trim() ||
-      undefined;
+  private async resolveCodexTurnCwd(threadId: string, overlay?: ThreadOverlayState): Promise<string | undefined> {
+    const { cwd, thread } = await this.resolveThreadEnvironmentWorkspace("codex", threadId, overlay);
+    if (!cwd) return undefined;
+    const target = normalizeWorktreePathForComparison(cwd);
+    const worktree = isLikelyToolManagedWorktreePath(cwd)
+      || [...(thread?.linkedDirectories ?? []), ...(overlay?.extraLinkedDirectories ?? [])].some((directory) => {
+        const worktreePath = linkedDirectoryWorktreePath(directory);
+        return worktreePath !== undefined && normalizeWorktreePathForComparison(worktreePath) === target;
+      });
+    if (worktree) {
+      // Hibernation has already had a chance to restore. Check the actual
+      // turn cwd before announcing a start or letting Codex resume into it.
+      const available = await stat(cwd).then((entry) => entry.isDirectory(), (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
+        throw error;
+      });
+      if (!available) throw new Error(`The thread's worktree is missing. Open the thread to recover its workspace: ${cwd}`);
+    }
+    return cwd;
   }
 
   private async recordCodexWorktreeOwnerThread(params: {
