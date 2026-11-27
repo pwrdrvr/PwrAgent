@@ -1,0 +1,56 @@
+name: Profile scaling audit
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'ci:scaling-audit') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci:scaling-audit')
+    concurrency:
+      group: scaling-audit-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        with:
+          node-version: "24.22.1"
+          working-directory: baseline
+          cache-electron: "true"
+      - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        with:
+          node-version: "24.22.1"
+          working-directory: candidate
+          cache-electron: "true"
+      - name: Compare matched workloads
+        run: python3 candidate/scripts/scaling-audit/run.py --base baseline --candidate candidate --cases 25 --output audit
+      - name: Summarize comparison
+        if: always()
+        run: |
+          if test -f audit/summary.md; then
+            cat audit/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Audit did not complete. Inspect the failing step and available per-revision results." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: scaling-audit-${{ github.run_attempt }}
+          path: audit/
+          retention-days: 7
