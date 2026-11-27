@@ -30,11 +30,13 @@ const nextPrompt = "Summarize the proposed fix for the checkout test in one sent
 const answer = "Wait for the hydrated rows.";
 const replyUsage = { input_tokens: 200, output_tokens: 8 };
 const codexModel = "gpt-5.5";
+const helperTitle = "Inspect checkout wait condition";
+const isTitleHelperRequest = (body: RequestBody) => JSON.stringify(body).includes("# Thread title guidelines");
 
-function codexResponse(index: number) {
+function codexResponse(index: number, text: string) {
   const item = {
     id: `msg_fixture_${index}`, type: "message", role: "assistant", status: "completed",
-    content: [{ type: "output_text", text: answer, annotations: [] }],
+    content: [{ type: "output_text", text, annotations: [] }],
   };
   const response = {
     id: `resp_fixture_${index}`, object: "response", status: "completed", output: [item],
@@ -81,11 +83,12 @@ type TurnMetrics = { bytes: number; calls: number; primaryBytes: number; inputBy
 type Metrics = { [K in keyof TurnMetrics as `first${Capitalize<K>}` | `next${Capitalize<K>}`]: number };
 
 function turnMetrics(samples: Sample[], prompt: string, agentInstructions?: string): TurnMetrics {
-  const largestBodyBytes = Math.max(...samples.map(({ bytes }) => bytes));
-  const primary = samples.findLast(({ bytes, body }) =>
-    bytes === largestBodyBytes && JSON.stringify(body).includes(prompt)
-    && (agentInstructions === undefined || JSON.stringify(body).includes(agentInstructions)));
-  expect(primary, "largest model request carries the configured prompt and instructions").toBeDefined();
+  const primary = samples.filter(({ body }) => !isTitleHelperRequest(body)
+    && JSON.stringify(body).includes(prompt)
+    && (agentInstructions === undefined || JSON.stringify(body).includes(agentInstructions)))
+    .reduce<Sample | undefined>((largest, sample) =>
+      !largest || sample.bytes >= largest.bytes ? sample : largest, undefined);
+  expect(primary, "primary model request carries the configured prompt and instructions").toBeDefined();
   const { body, bytes } = primary!;
   const input = body.input ?? body.messages ?? body.contents ?? [];
   const messageRole = (item: unknown): unknown =>
@@ -108,9 +111,9 @@ function turnMetrics(samples: Sample[], prompt: string, agentInstructions?: stri
   };
 }
 
-function antigravityResponse() {
+function antigravityResponse(text: string) {
   return `data: ${JSON.stringify({
-    candidates: [{ content: { role: "model", parts: [{ text: answer }] }, finishReason: "STOP", index: 0 }],
+    candidates: [{ content: { role: "model", parts: [{ text }] }, finishReason: "STOP", index: 0 }],
     usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 8, totalTokenCount: 208 },
   })}\n\n`;
 }
@@ -141,9 +144,10 @@ async function startModelEndpoint(provider: Provider) {
       }
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as RequestBody;
       requests.push({ bytes, route, body });
-      const reply = provider === "codex" ? codexResponse(requests.length)
+      const text = isTitleHelperRequest(body) ? JSON.stringify({ title: helperTitle }) : answer;
+      const reply = provider === "codex" ? codexResponse(requests.length, text)
         : provider === "claude" ? claudeResponse(requests.length, body.model)
-          : antigravityResponse();
+          : antigravityResponse(text);
       response.writeHead(200, { "Content-Type": "text/event-stream" });
       response.end(reply);
     } catch {
@@ -303,7 +307,7 @@ async function captureModelRequests(
     registry = createDesktopBackendRegistry({
       codexClient, overlayStore: new SqliteOverlayStore(db), messagingStore: null,
       mcpConnectionService: mcp?.service ?? null,
-      threadTitleGenerationService: null, discoverLocalAcpAgents: async () => [],
+      discoverLocalAcpAgents: async () => [],
       acpAgentStore, acpSessionStore: new AcpSessionStore(db),
       createAcpTransport: (agent) => {
         if (!agent.launchDescriptor) throw new Error("Missing benchmark ACP launch descriptor.");
@@ -321,28 +325,36 @@ async function captureModelRequests(
         } }),
       },
     });
-    const terminal: Array<{ method: string; params: unknown }> = [];
-    registry.onEvent(({ backend, notification }) => {
-      if (backend === provider && (notification.method === "turn/completed" || notification.method === "turn/failed")) {
-        terminal.push(notification);
-      }
-    });
     const { threadId } = await registry.startThread({
       backend: provider, cwd, ...codexPolicy,
       ...(mcp ? { mcpConnectionIds: mcp.connectionIds } : {}),
       ...(provider === "codex" ? { model: codexModel } : provider === "claude" ? { model: "sonnet" } : {}),
       ...(comparison ? {} : { agent: { name: "Checkout test fixture", instructions } }),
     });
+    const terminal: Array<{ method: string; params: unknown }> = [];
+    registry.onEvent(({ backend, notification }) => {
+      if (backend === provider && (notification.method === "turn/completed" || notification.method === "turn/failed")
+        && notification.params.threadId === threadId) {
+        terminal.push(notification);
+      }
+    });
     async function measureTurn(index: number, text: string): Promise<Capture> {
       const start = endpoint.requests.length;
       await registry!.startTurn({ backend: provider, threadId, ...codexPolicy, input: [{ type: "text", text }] });
       await vi.waitFor(() => expect(terminal[index]).toBeDefined(), { timeout: 15_000 });
       expect(terminal[index]!.method, JSON.stringify({ terminal: terminal[index], paths: endpoint.paths })).toBe("turn/completed");
+      await registry!.whenThreadTitleGenerationSettledForTests();
       const requests = endpoint.requests.slice(start);
       return { metrics: turnMetrics(requests, text, comparison ? undefined : instructions), requests };
     }
     const first = await measureTurn(0, initialPrompt);
     const next = await measureTurn(1, nextPrompt);
+    // Antigravity also makes its native title request for the helper session.
+    const expectedHelperCalls = provider === antigravity ? 2 : provider === "codex" ? 1 : 0;
+    expect.soft(first.requests.filter(({ body }) => isTitleHelperRequest(body)).length,
+      `${provider} first-turn PwrAgent title helper traffic`).toBe(expectedHelperCalls);
+    expect.soft(next.requests.filter(({ body }) => isTitleHelperRequest(body)).length,
+      `${provider} follow-up PwrAgent title helper traffic`).toBe(0);
     if (mcp) {
       const acpReport = provider === antigravity
         ? await registry.describeThreadMcpConnections({ backend: provider, threadId }) : undefined;
@@ -371,10 +383,10 @@ async function captureModelRequests(
 }
 
 // Byte ceilings leave headroom for native runtime and OS metadata. Call
-// ceilings track the actual fixture, including Antigravity's title request.
+// ceilings include native and PwrAgent title-generation traffic.
 const ceilings: Record<Provider, Metrics> = {
   codex: {
-    firstBytes: 58_000, firstCalls: 1, nextBytes: 59_000, nextCalls: 1,
+    firstBytes: 84_000, firstCalls: 2, nextBytes: 59_000, nextCalls: 1,
     firstPrimaryBytes: 58_000, firstInputBytes: 2_600, firstInstructionBytes: 38_000, firstToolBytes: 16_500,
     nextPrimaryBytes: 59_000, nextInputBytes: 3_500, nextInstructionBytes: 38_000, nextToolBytes: 16_500,
   },
@@ -384,18 +396,18 @@ const ceilings: Record<Provider, Metrics> = {
     nextPrimaryBytes: 75_000, nextInputBytes: 1_600, nextInstructionBytes: 29_000, nextToolBytes: 44_000,
   },
   [antigravity]: {
-    firstBytes: 58_000, firstCalls: 2, nextBytes: 57_000, nextCalls: 1,
+    firstBytes: 106_000, firstCalls: 4, nextBytes: 57_000, nextCalls: 1,
     firstPrimaryBytes: 55_000, firstInputBytes: 1_650, firstInstructionBytes: 21_000, firstToolBytes: 32_000,
     nextPrimaryBytes: 56_000, nextInputBytes: 2_500, nextInstructionBytes: 21_000, nextToolBytes: 32_000,
   },
 };
 
 const mcpCeilings = {
-  codex: { firstBytes: 60_000, nextBytes: 62_000, firstToolBytes: 19_000, nextToolBytes: 19_000 },
+  codex: { firstBytes: 86_000, nextBytes: 62_000, firstToolBytes: 19_000, nextToolBytes: 19_000 },
   claude: { firstBytes: 90_000, nextBytes: 92_000, firstToolBytes: 45_000, nextToolBytes: 45_000 },
   // The pinned Antigravity runtime uses stdio MCP and advertises a subset of
   // the catalog up front. Budget that path separately until it can defer tools.
-  [antigravity]: { firstBytes: 125_000, nextBytes: 124_000, firstToolBytes: 100_000, nextToolBytes: 100_000 },
+  [antigravity]: { firstBytes: 173_000, nextBytes: 124_000, firstToolBytes: 100_000, nextToolBytes: 100_000 },
 } satisfies Record<Provider, Pick<Metrics, "firstBytes" | "nextBytes" | "firstToolBytes" | "nextToolBytes">>;
 
 function hasFullMcpSchemas({ requests }: Capture): boolean {
@@ -423,7 +435,10 @@ it.runIf(Boolean(artifactPath || (codexExecutable && antigravityExecutable)))(
       };
       results.push({ provider, observed, ceilings: ceilings[provider] });
     }
-    if (artifactPath) await writeFile(artifactPath, JSON.stringify({ version: 1, results }) + "\n");
+    if (artifactPath) {
+      const baseSha = process.env.PWRAGENT_MODEL_BENCH_BASE_SHA ?? null;
+      await writeFile(artifactPath, JSON.stringify({ version: 2, baseSha, results }) + "\n");
+    }
     for (const { provider, observed, ceilings: limits } of results) {
       for (const key of Object.keys(limits) as Array<keyof Metrics>) {
         expect.soft(observed[key], `${provider} ${key}`).toBeLessThanOrEqual(limits[key]);

@@ -8,7 +8,8 @@ const metric = (bytes) => ({
   nextPrimaryBytes: bytes + 10, nextInputBytes: 25, nextInstructionBytes: 30, nextToolBytes: 40,
 });
 export const result = (codex, claude, antigravity = 150) => ({
-  version: 1,
+  version: 2,
+  baseSha: null,
   results: [
     { provider: "codex", observed: metric(codex), ceilings: metric(300) },
     { provider: "claude", observed: metric(claude), ceilings: metric(340) },

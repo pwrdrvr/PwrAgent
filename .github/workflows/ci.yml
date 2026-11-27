@@ -382,28 +382,31 @@ jobs:
           PWRAGENT_MODEL_BENCH_AGY: ${{ steps.model-runtimes.outputs.directory }}/agy
           PWRAGENT_MODEL_BENCH_RESULT: ${{ runner.temp }}/model-request-result.json
           PWRAGENT_MODEL_BENCH_MCP_RESULT: ${{ runner.temp }}/model-request-mcp-result.json
-        run: >-
-          pnpm test apps/desktop/src/main/__tests__/model-request-size.test.ts
-          scripts/ci/model-request-report.property.test.mjs scripts/ci/model-request-report.test.mjs --maxWorkers=2
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            PWRAGENT_MODEL_BENCH_BASE_SHA="$(node -e 'process.stdout.write(require("./scripts/ci/model-request-report.cjs").testedMergeBase())')"
+            export PWRAGENT_MODEL_BENCH_BASE_SHA
+          fi
+          pnpm test apps/desktop/src/main/__tests__/model-request-size.test.ts \
+            scripts/ci/model-request-report.property.test.mjs scripts/ci/model-request-report.test.mjs --maxWorkers=2
 
       - name: Upload model request measurements
         if: ${{ !cancelled() && (steps.model-request.outcome == 'success' || steps.model-request.outcome == 'failure') }}
         uses: actions/upload-artifact@v7
         with:
-          name: model-request-results
+          name: model-request-results-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/model-request-result.json
           if-no-files-found: ${{ steps.model-request.outcome == 'success' && 'error' || 'ignore' }}
-          overwrite: true
           retention-days: 30
 
       - name: Upload large MCP catalog measurements
         if: ${{ !cancelled() && (steps.model-request.outcome == 'success' || steps.model-request.outcome == 'failure') }}
         uses: actions/upload-artifact@v7
         with:
-          name: model-request-mcp-results
+          name: model-request-mcp-results-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/model-request-mcp-result.json
           if-no-files-found: ${{ steps.model-request.outcome == 'success' && 'error' || 'ignore' }}
-          overwrite: true
           retention-days: 30
 
   build:

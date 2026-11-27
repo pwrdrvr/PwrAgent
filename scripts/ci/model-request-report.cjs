@@ -1,11 +1,13 @@
-const { spawnSync } = require("node:child_process");
-const { readdirSync, statSync } = require("node:fs");
+const { execFileSync, spawnSync } = require("node:child_process");
+const { mkdtempSync, rmSync, writeFileSync } = require("node:fs");
+const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 
 const ARTIFACT = "model-request-results";
 const RESULT = "model-request-result.json";
 const MARKER = "<!-- pwragent-model-request -->";
 const MAX_ARTIFACT_BYTES = 16 * 1024;
+const GIT_SHA = /^[a-f0-9]{40}$/;
 const PROVIDERS = { codex: "Codex", claude: "Claude", "acp:antigravity": "Antigravity" };
 const SUMMARY_METRICS = {
   firstBytes: "First turn total body bytes",
@@ -37,7 +39,8 @@ function validMetrics(value) {
 }
 
 function validateResult(result) {
-  if (!hasKeys(result, ["version", "results"]) || result.version !== 1
+  if (!hasKeys(result, ["version", "baseSha", "results"]) || result.version !== 2
+    || (result.baseSha !== null && (typeof result.baseSha !== "string" || !GIT_SHA.test(result.baseSha)))
     || !Array.isArray(result.results) || result.results.length !== Object.keys(PROVIDERS).length) {
     return undefined;
   }
@@ -55,13 +58,23 @@ function validateResult(result) {
   return result;
 }
 
-function readArtifact(directory) {
-  if (!directory) return undefined;
+function testedMergeBase(cwd = process.cwd()) {
+  // Read the commit object directly so both parents are visible in a shallow
+  // checkout of GitHub's synthetic merge.
+  const commit = execFileSync("git", ["cat-file", "commit", "HEAD"], { cwd, encoding: "utf8" });
+  const headers = commit.split("\n\n", 1)[0];
+  const parents = [...headers.matchAll(/^parent ([a-f0-9]{40})$/gm)];
+  if (parents.length !== 2) throw new Error("Expected CI to test a two-parent PR merge.");
+  return parents[0][1];
+}
+
+function readArtifact(data) {
+  const bytes = data instanceof ArrayBuffer ? Buffer.from(data) : data;
+  if (!Buffer.isBuffer(bytes) || bytes.length > MAX_ARTIFACT_BYTES) return undefined;
+  const directory = mkdtempSync(join(tmpdir(), "model-request-report-"));
   try {
-    const files = readdirSync(directory, { withFileTypes: true });
-    if (files.length !== 1 || !files[0].isFile() || !files[0].name.endsWith(".zip")) return undefined;
-    const archive = join(directory, files[0].name);
-    if (statSync(archive).size > MAX_ARTIFACT_BYTES) return undefined;
+    const archive = join(directory, "measurement.zip");
+    writeFileSync(archive, bytes);
     // Stream only the known file. No archive entry can write to the workspace.
     const result = spawnSync("/usr/bin/unzip", ["-p", archive, RESULT], {
       encoding: "utf8", maxBuffer: MAX_ARTIFACT_BYTES, timeout: 5_000,
@@ -70,6 +83,8 @@ function readArtifact(directory) {
     return validateResult(JSON.parse(result.stdout));
   } catch {
     return undefined;
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 }
 
@@ -135,10 +150,10 @@ function renderComment({ current, baseline, source, baselineRun, exactBase, runU
     });
     if (changes.length) lines.push("**Ceiling changes**", "", ...changes, "");
   }
-  lines.push("Real agent processes sent these HTTP request bodies to local fake model endpoints. Totals include auxiliary model calls. The breakdown measures JSON fields in the largest request of each turn.",
+  lines.push("Real agent processes sent these HTTP request bodies to local fake model endpoints. Totals include PwrAgent and native title generation. The breakdown measures JSON fields in the primary conversation request.",
     "",
-    `The \`model-request-mcp-results\` artifact in the [CI run](${runUrl(source.id)}) contains measurements for the large MCP catalog.`,
-    "", `Baseline ${baseline ? `[\`${baselineRun.sha.slice(0, 7)}\`](${runUrl(baselineRun.id)})` : "unavailable"} · PR ${sourceLink} · Source CI ${source.conclusion}`);
+    `The \`model-request-mcp-results-attempt-${source.attempt}\` artifact in the [CI run](${runUrl(source.id)}) contains measurements for the large MCP catalog.`,
+    "", `Baseline ${baseline ? `[\`${baselineRun.sha.slice(0, 7)}\`](${runUrl(baselineRun.id)})` : "unavailable"} · PR ${sourceLink} · CI attempt ${source.attempt} · ${source.conclusion}`);
   return lines.join("\n");
 }
 
@@ -150,7 +165,7 @@ function matchesPull(pull, source, repositoryId) {
 
 async function findPull(github, context, source) {
   const repositoryId = context.payload.repository.id;
-  if (!source.head_repository?.id || !source.head_branch || !/^[a-f0-9]{40}$/.test(source.head_sha)) return undefined;
+  if (!source.head_repository?.id || !source.head_branch || !GIT_SHA.test(source.head_sha)) return undefined;
   const associated = source.pull_requests ?? [];
   if (associated.length === 1) {
     const { data: pull } = await github.rest.pulls.get({ ...context.repo, pull_number: associated[0].number });
@@ -165,61 +180,67 @@ async function findPull(github, context, source) {
   return matching.length === 1 ? matching[0] : undefined;
 }
 
-async function artifactForRun(github, repo, runId) {
-  const { data } = await github.rest.actions.listWorkflowRunArtifacts({
-    ...repo, run_id: runId, name: ARTIFACT, per_page: 100,
-  });
-  const artifact = data.artifacts.find(({ name, expired }) => name === ARTIFACT && !expired);
-  return artifact?.size_in_bytes <= MAX_ARTIFACT_BYTES ? artifact : undefined;
+function findAttemptArtifact(artifacts, attempt) {
+  const name = `${ARTIFACT}-attempt-${attempt}`;
+  return artifacts.find((artifact) => artifact.name === name && !artifact.expired
+    && artifact.size_in_bytes > 0 && artifact.size_in_bytes <= MAX_ARTIFACT_BYTES);
 }
 
-async function resolve({ github, context, core }) {
-  const source = context.payload.workflow_run;
-  const pull = await findPull(github, context, source);
-  if (!pull) return core.info("No current pull request into main matches this CI run.");
-  const current = await artifactForRun(github, context.repo, source.id);
-  if (!current && source.conclusion === "success") {
-    return core.info("This CI run has no model request artifact. Measurement may have been skipped.");
+async function downloadMeasurement(github, repo, run, core) {
+  if (!Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) return undefined;
+  try {
+    const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+      ...repo, run_id: run.id, name: `${ARTIFACT}-attempt-${run.run_attempt}`, per_page: 100,
+    });
+    const artifact = findAttemptArtifact(data.artifacts, run.run_attempt);
+    if (!artifact) return undefined;
+    const archive = await github.rest.actions.downloadArtifact({
+      ...repo, artifact_id: artifact.id, archive_format: "zip",
+      request: { signal: AbortSignal.timeout(5_000) },
+    });
+    return readArtifact(archive.data);
+  } catch {
+    core.info(`Could not read model request artifact for run ${run.id} attempt ${run.run_attempt}.`);
+    return undefined;
   }
+}
 
-  const baseSha = source.pull_requests?.find(({ number }) => number === pull.number)?.base?.sha;
+async function findBaseline(github, repo, source, baseSha, core) {
   const runs = async (filters) => {
     const { data } = await github.rest.actions.listWorkflowRuns({
-      ...context.repo, workflow_id: source.workflow_id, branch: "main", event: "push",
+      ...repo, workflow_id: source.workflow_id, branch: "main", event: "push",
       status: "success", per_page: 8, ...filters,
     });
     return data.workflow_runs;
   };
-  const [exactRuns, recentRuns] = current ? await Promise.all([
-    baseSha ? runs({ head_sha: baseSha }) : [],
+  const [exactRuns, recentRuns] = await Promise.all([
+    runs({ head_sha: baseSha }),
     runs({}),
-  ]) : [[], []];
+  ]);
   const candidates = new Map([...exactRuns, ...recentRuns].map((run) => [run.id, run]));
-  let baseline;
   for (const run of candidates.values()) {
-    const artifact = await artifactForRun(github, context.repo, run.id);
-    if (artifact) {
-      baseline = { id: run.id, sha: run.head_sha, artifactId: artifact.id };
-      break;
+    const baseline = await downloadMeasurement(github, repo, run, core);
+    if (baseline?.baseSha === null) {
+      return {
+        baseline, baselineRun: { id: run.id, sha: run.head_sha }, exactBase: run.head_sha === baseSha,
+      };
     }
   }
-  core.setOutput("pull", pull.number);
-  core.setOutput("current_artifact", current?.id ?? "");
-  core.setOutput("baseline_artifact", baseline?.artifactId ?? "");
-  core.setOutput("baseline_run", baseline?.id ?? "");
-  core.setOutput("baseline_sha", baseline?.sha ?? "");
-  core.setOutput("exact_base", Boolean(baseline && baseline.sha === baseSha));
+  return {};
 }
 
-async function publish({ github, context, core }, env = process.env) {
+async function publish({ github, context, core }) {
   const run = context.payload.workflow_run;
-  const pullNumber = Number(env.MODEL_REPORT_PULL);
-  const current = readArtifact(env.MODEL_REPORT_PR_DIR);
-  const baseline = readArtifact(env.MODEL_REPORT_BASE_DIR);
+  const matchedPull = await findPull(github, context, run);
+  if (!matchedPull) return core.info("No current pull request into main matches this CI run.");
+  const pullNumber = matchedPull.number;
+  const measurement = await downloadMeasurement(github, context.repo, run, core);
+  const current = measurement?.baseSha ? measurement : undefined;
+  if (!current && run.conclusion === "success") {
+    return core.info("This successful CI attempt has no usable model request measurement.");
+  }
   const source = { sha: run.head_sha, id: run.id, number: run.run_number, attempt: run.run_attempt, conclusion: run.conclusion };
-  const baselineRun = { id: Number(env.MODEL_REPORT_BASE_RUN), sha: env.MODEL_REPORT_BASE_SHA };
   const runUrl = (id) => `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${id}`;
-  const body = renderComment({ current, baseline, source, baselineRun, exactBase: env.MODEL_REPORT_EXACT_BASE === "true", runUrl });
   const params = { ...context.repo, issue_number: pullNumber };
   const comments = await github.paginate(github.rest.issues.listComments, { ...params, per_page: 100 });
   const existing = comments.find((comment) => comment.user?.login === "github-actions[bot]" && comment.body?.startsWith(MARKER));
@@ -230,6 +251,8 @@ async function publish({ github, context, core }, env = process.env) {
     return core.info("The comment already has a newer or more complete measurement for this head.");
   }
 
+  const comparison = current ? await findBaseline(github, context.repo, run, current.baseSha, core) : {};
+  const body = renderComment({ current, source, runUrl, ...comparison });
   const { data: pull } = await github.rest.pulls.get({ ...context.repo, pull_number: pullNumber });
   if (!matchesPull(pull, run, context.payload.repository.id)) {
     return core.info("The pull request no longer matches this CI run.");
@@ -241,4 +264,4 @@ async function publish({ github, context, core }, env = process.env) {
   }
 }
 
-module.exports = { publish, readArtifact, renderComment, resolve, validateResult };
+module.exports = { findAttemptArtifact, publish, readArtifact, renderComment, testedMergeBase, validateResult };

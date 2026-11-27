@@ -94,10 +94,11 @@ real credential is needed. The artifact contains only byte and call counts.
 
 The check budgets each provider's total request body bytes, number of
 model calls, primary request body, input and history, instructions, and tools.
-The primary request is the largest model request in the turn. Instruction
+The primary request is the largest request for the conversation turn. Instruction
 bytes cover system fields and system or developer messages. Instructions
 embedded in a user message count toward input and history. The totals include
-auxiliary model calls, such as Antigravity's title-generation call.
+auxiliary model calls, including PwrAgent's title helper and Antigravity's
+native title generation.
 
 The same job configures three fake MCP connections with 80 tools each and
 checks the first turn and follow-up again for each provider. It fails on
@@ -106,12 +107,12 @@ or Antigravity in gateway mode adds fixture tool schemas before discovery.
 Antigravity's stdio fallback has a separate ceiling that accounts for eager
 tool schemas.
 
-The job uploads `model-request-results` for the default case and
-`model-request-mcp-results` for the large catalog even when a ceiling fails.
+The job uploads `model-request-results-attempt-N` for the default case and
+`model-request-mcp-results-attempt-N` for the large catalog even when a ceiling fails.
 The publisher on `main` compares the default case in one comment per PR into
-`main`. It uses the successful push for the recorded PR base when available
-and otherwise uses a recent successful `main` push with measurements. Docs-only
-PRs that skip Lint do not produce measurements.
+`main`. It uses the first parent of the merge CI actually tested, and falls
+back to a recent successful `main` push when the exact base has no usable
+measurements. Docs-only PRs that skip Lint do not produce measurements.
 
 For a local run, set `PWRAGENT_MODEL_BENCH_CODEX` and `PWRAGENT_MODEL_BENCH_AGY`
 to the pinned executables in an OS temp directory, then run

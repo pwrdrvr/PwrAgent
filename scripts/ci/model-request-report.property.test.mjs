@@ -71,7 +71,31 @@ it("requires every provider and rejects a primary body larger than its whole tur
   const current = result(105, 200, 330);
   expect(report.validateResult(current)).toBe(current);
   expect(report.validateResult({ ...current, results: current.results.slice(0, 2) })).toBeUndefined();
-  expect(report.validateResult({ ...current, version: 2 })).toBeUndefined();
+  expect(report.validateResult({ ...current, version: 1 })).toBeUndefined();
+  expect(report.validateResult({ ...current, baseSha: "main" })).toBeUndefined();
   current.results[2].observed.firstPrimaryBytes += 1;
   expect(report.validateResult(current)).toBeUndefined();
+});
+
+it("selects artifacts only from the completed attempt across full and partial reruns", () => {
+  fc.assert(fc.property(
+    fc.array(fc.constantFrom("partial-rerun", "full-without-upload", "full-with-upload"), { minLength: 1, maxLength: 8 }),
+    (reruns) => {
+      const artifacts = [];
+      const completed = new Map();
+      for (const [index, kind] of ["full-with-upload", ...reruns].entries()) {
+        const attempt = index + 1;
+        if (kind === "full-with-upload") {
+          const id = attempt * 100;
+          artifacts.unshift({ id, name: `model-request-results-attempt-${attempt}`, size_in_bytes: 500 });
+          completed.set(attempt, id);
+        }
+        // GitHub retains prior uploads under the same run ID. Even a
+        // redelivered event can describe only what that attempt uploaded.
+        for (let delivered = attempt; delivered > 0; delivered--) {
+          expect(report.findAttemptArtifact(artifacts, delivered)?.id).toBe(completed.get(delivered));
+        }
+      }
+    },
+  ), { examples: [[["partial-rerun", "full-without-upload", "full-with-upload"]]] });
 });
