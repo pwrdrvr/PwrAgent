@@ -20,6 +20,51 @@ type ReadingAnchor = {
   offset: number;
 };
 
+type ReadingBlockIndex = {
+  elements: Element[];
+  positionsById?: Map<string, number>;
+};
+
+function appendReadingBlock(index: ReadingBlockIndex, element: Element) {
+  if (element.id) {
+    index.positionsById ??= new Map();
+    index.positionsById.set(element.id, index.elements.length);
+  }
+  index.elements.push(element);
+}
+
+function updateImageTiles(
+  index: ReadingBlockIndex,
+  line: Element,
+  nodes: NodeList,
+  append = false,
+): boolean {
+  const positions = index.positionsById;
+  if (!positions) return false;
+  for (const node of nodes) {
+    if (!(node instanceof Element)) continue;
+    const position = positions.get(node.id);
+    const current = line.ownerDocument.getElementById(node.id);
+    if (current?.parentElement !== line) return false;
+    if (position === undefined) {
+      if (!append || current !== node) return false;
+      appendReadingBlock(index, node);
+      continue;
+    }
+    // The preview and its error fallback share a tile id. Verify the slot
+    // against its neighbors so removals and reorders rebuild.
+    const { previousElementSibling: previous, nextElementSibling: next } = current;
+    if (previous && positions.get(previous.id) !== position - 1) return false;
+    const nextPosition = next ? positions.get(next.id) : undefined;
+    // A later mutation record can carry an appending sibling after the last
+    // indexed tile. Its own record verifies the append before indexing it.
+    const nextIsNewTail = nextPosition === undefined && position === index.elements.length - 1;
+    if (next && nextPosition !== position + 1 && !nextIsNewTail) return false;
+    index.elements[position] = current;
+  }
+  return true;
+}
+
 // Find the last start at or above the reading line. If that box has ended,
 // anchor the next one so a gap above it doesn't select a box out of view.
 function readingBlock(
@@ -50,7 +95,7 @@ function readingBlock(
 export function createTranscriptReadingAnchor() {
   let anchor: ReadingAnchor | undefined;
   let observer: MutationObserver | undefined;
-  const rowBlocks = new WeakMap<Element, Element[]>();
+  const rowBlocks = new WeakMap<Element, ReadingBlockIndex>();
 
   const updateBlocks = (records: MutationRecord[]) => {
     for (const { target, addedNodes, removedNodes, nextSibling } of records) {
@@ -66,16 +111,26 @@ export function createTranscriptReadingAnchor() {
         && nextSibling === null && removedNodes.length === 0) {
         for (const node of addedNodes) {
           if (!(node instanceof Element)) continue;
-          if (node.matches("article, aside")) blocks.push(node);
-          for (const block of node.querySelectorAll(INNER_READING_BLOCKS)) blocks.push(block);
+          if (node.matches("article, aside")) appendReadingBlock(blocks, node);
+          for (const block of node.querySelectorAll(INNER_READING_BLOCKS)) appendReadingBlock(blocks, block);
+        }
+        continue;
+      }
+
+      if (target.matches(IMAGE_LINES)) {
+        // The folded gallery is the last block in its row. Live reviews can
+        // add previews while it is being read, so index just the new tiles.
+        const appending = removedNodes.length === 0 && nextSibling === null
+          && target.matches(".transcript-work-phase-group__images");
+        if (!updateImageTiles(blocks, target, removedNodes)
+          || !updateImageTiles(blocks, target, addedNodes, appending)) {
+          rowBlocks.delete(row);
         }
         continue;
       }
 
       // Text streaming inside an existing block doesn't affect the index.
-      // A removed node has lost its parent, so use the mutation target to
-      // recognize direct children of an image line or work phase.
-      if (target === row || target.matches(`${IMAGE_LINES}, .transcript-work-phase-group__content`)) {
+      if (target === row || target.matches(".transcript-work-phase-group__content")) {
         rowBlocks.delete(row);
         continue;
       }
@@ -107,11 +162,12 @@ export function createTranscriptReadingAnchor() {
       if (observer) updateBlocks(observer.takeRecords());
       let blocks = rowBlocks.get(row);
       if (!blocks) {
-        blocks = Array.from(row.querySelectorAll(READING_BLOCK_SELECTOR));
+        blocks = { elements: [] };
+        for (const block of row.querySelectorAll(READING_BLOCK_SELECTOR)) appendReadingBlock(blocks, block);
         rowBlocks.set(row, blocks);
       }
-      const element = blocks.length > 0
-        ? readingBlock(blocks.length, (index) => blocks[index], line)
+      const element = blocks.elements.length > 0
+        ? readingBlock(blocks.elements.length, (index) => blocks.elements[index], line)
         : firstBox;
       const rect = element.getBoundingClientRect();
       if (rect.height > 0) {
@@ -120,9 +176,15 @@ export function createTranscriptReadingAnchor() {
     },
 
     restore(scroller: HTMLElement, prepending = false): boolean {
-      if (!anchor || !scroller.contains(anchor.element)) {
-        anchor = undefined;
-        return false;
+      if (!anchor) return false;
+      const { element } = anchor;
+      if (!scroller.contains(element)) {
+        const replacement = element.id && scroller.ownerDocument.getElementById(element.id);
+        if (!replacement || !scroller.contains(replacement)) {
+          anchor = undefined;
+          return false;
+        }
+        anchor.element = replacement;
       }
       if (scroller.scrollTop <= 0 && !prepending) {
         anchor = undefined;
