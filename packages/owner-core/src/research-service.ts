@@ -1051,7 +1051,8 @@ export class ResearchService {
         }
       }
       const approach = this.storage.approaches(run.id, { worker: thread }).find((a) => a.worker?.turnId === turnId);
-      if (!approach || ["ended", "stopped", "failed"].includes(approach.state)) {
+      // A queued resume can still carry the last turn's ID after that turn was retired.
+      if (!approach || ["ended", "stopped", "failed"].includes(approach.state) || this.turnEnded(run.id, approach.id, turnId)) {
         if (current.status === "stopping") this.finishStopping(current);
         continue;
       }
