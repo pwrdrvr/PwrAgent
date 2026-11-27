@@ -142,7 +142,7 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { backendDefaultModel } from "@pwragent/shared/model-defaults";
-import { Composer, type ComposerProps } from "../composer/Composer";
+import { Composer, type ComposerProps, type ComposerReviewSetup } from "../composer/Composer";
 import type { ComposerTerminalToggleProps } from "../composer/ComposerTerminalToggle";
 import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
@@ -2271,7 +2271,7 @@ export function ThreadView(props: ThreadViewProps) {
     todoReviewRequest,
     startTodoReview,
     todoReviewSetup,
-    handleReviewSetupTodoChange,
+    handleReviewSetupChange,
     handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,
@@ -3204,7 +3204,7 @@ export function ThreadView(props: ThreadViewProps) {
           onReplySubmissionSettled: handleReplySubmissionSettled,
           reviewRequest: todoReviewRequest,
           onReviewRequestHandled: handleReviewRequestHandled,
-          onReviewSetupTodoChange: handleReviewSetupTodoChange,
+          onReviewSetupChange: handleReviewSetupChange,
           focusRequest: props.composerFocusRequest,
           onFocusRequestHandled: props.onComposerFocusRequestHandled,
           composerInsertRequest: props.composerInsertRequest,
@@ -4947,10 +4947,11 @@ function useThreadQuestionReplies(
     });
   });
   // The card whose review the composer's panel is setting up. The card
-  // waits on the panel instead of offering a second Start review.
-  const [reviewSetupTodoId, setReviewSetupTodoId] = useState<string>();
-  const handleReviewSetupTodoChange = useEventCallback((todoId: string | undefined) => {
-    setReviewSetupTodoId(todoId);
+  // waits on the panel, and offers the panel's Start review in place of its
+  // own while that button is enabled and on screen.
+  const [reviewSetup, setReviewSetup] = useState<ComposerReviewSetup>();
+  const handleReviewSetupChange = useEventCallback((setup: ComposerReviewSetup | undefined) => {
+    setReviewSetup(setup);
   });
   // Show brings the panel back into view with the card's earlier answer
   // about open steps, so it does not ask again.
@@ -4960,8 +4961,13 @@ function useThreadQuestionReplies(
   });
   const queuedReviewTodoIds = useQueuedReviewTodoIds(props.composerDraftStore);
   const todoReviewSetup = useMemo<ThreadTodoReviewSetup>(
-    () => ({ todoId: reviewSetupTodoId, onShow: showTodoReviewSetup, queuedTodoIds: queuedReviewTodoIds }),
-    [reviewSetupTodoId, showTodoReviewSetup, queuedReviewTodoIds],
+    () => ({
+      todoId: reviewSetup?.todoId,
+      ...(reviewSetup?.start ? { start: reviewSetup.start } : {}),
+      onShow: showTodoReviewSetup,
+      queuedTodoIds: queuedReviewTodoIds,
+    }),
+    [reviewSetup, showTodoReviewSetup, queuedReviewTodoIds],
   );
   const handleReviewRequestHandled = useEventCallback((requestId: number) => {
     setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));
@@ -5085,7 +5091,7 @@ function useThreadQuestionReplies(
     todoReviewRequest,
     startTodoReview,
     todoReviewSetup,
-    handleReviewSetupTodoChange,
+    handleReviewSetupChange,
     handleReviewRequestHandled,
     handleReviewStarted,
     doTodoHere,

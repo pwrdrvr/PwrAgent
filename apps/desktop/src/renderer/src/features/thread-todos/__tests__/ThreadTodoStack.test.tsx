@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -600,6 +601,31 @@ describe("ThreadTodoStack", () => {
     expect(container.querySelector("[data-todo-id='r']")?.hasAttribute("data-review-setup")).toBe(false);
   });
 
+  it("starts the review from the spot of its Start review while the panel can start it", () => {
+    const review = todo({ id: "r", kind: "review", action: { type: "start_review" } });
+    const view = createView([review]);
+    const onShow = vi.fn();
+    const run = vi.fn();
+    const { container } = render(
+      <ThreadTodoStack
+        threadKey="codex:thread-a"
+        todos={[review]}
+        view={view}
+        onStartReview={vi.fn()}
+        reviewSetup={{ todoId: "r", onShow, start: { label: "Start review", run } }}
+      />,
+    );
+
+    expect(screen.getByText("Ready to start")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: `Show review setup for ${review.title}` })).toBeNull();
+    const buttons = container.querySelectorAll("[data-todo-id='r'] .thread-todo-card__footer button");
+    const start = buttons[buttons.length - 1]!;
+    expect(start.textContent).toBe("Start review");
+    fireEvent.click(start);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onShow).not.toHaveBeenCalled();
+  });
+
   it("offers Undo after Done", async () => {
     const reminder = todo({ id: "u" });
     const view = createView([reminder]);
@@ -994,6 +1020,63 @@ describe("thread to-do checklists", () => {
       fireEvent.click(screen.getByRole("button", { name: "Squash merge" }));
     });
     expect(view.run).toHaveBeenCalledWith(merge, { mergeMethod: "squash", allowOpenItems: true });
+  });
+
+  // The confirming click lands where the first one did. The stack hangs from
+  // the top, so nothing above the footer may change when a card asks, and
+  // the button that goes ahead keeps the first step's rightmost slot.
+  it("asks without moving the card's buttons: nothing above the footer changes", () => {
+    const aboveFooter = (card: Element): string[] => {
+      const out: string[] = [];
+      for (const child of card.children) {
+        if (child.classList.contains("thread-todo-card__footer")) return out;
+        out.push(child.outerHTML);
+      }
+      throw new Error("The card has no footer.");
+    };
+    const lastButton = (card: Element): HTMLButtonElement => {
+      const buttons = card.querySelectorAll<HTMLButtonElement>(".thread-todo-card__footer button");
+      return buttons[buttons.length - 1]!;
+    };
+    fc.assert(
+      fc.property(
+        fc.constantFrom("merge" as const, "review" as const),
+        fc.array(fc.boolean(), { minLength: 0, maxLength: 4 }),
+        (kind, checked) => {
+          fc.pre(kind === "merge" || checked.includes(false));
+          cleanup();
+          const card = todo({
+            id: "same-spot",
+            kind,
+            action: kind === "merge"
+              ? { type: "merge_pull_request", pullRequest: "42" }
+              : { type: "start_review" },
+            ...(checked.length ? { items: steps(checked) } : {}),
+          });
+          const { container } = render(
+            <ThreadTodoStack
+              threadKey="codex:same-spot"
+              todos={[card]}
+              view={createView([card])}
+              onStartReview={vi.fn()}
+            />,
+          );
+          const article = container.querySelector("[data-todo-id='same-spot']")!;
+          const before = aboveFooter(article);
+          const first = lastButton(article);
+          const label = first.textContent;
+          fireEvent.click(first);
+          // The card is asking now: its question sits under the buttons.
+          const question = article.querySelector(".thread-todo-card__confirm");
+          expect(question).not.toBeNull();
+          expect(article.querySelector(".thread-todo-card__footer")!
+            .compareDocumentPosition(question!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+          expect(aboveFooter(article)).toEqual(before);
+          expect(lastButton(article).textContent).toBe(label);
+        },
+      ),
+      { numRuns: 25, examples: [["merge", []], ["review", [false]]] },
+    );
   });
 
   it("keeps a lone collapsed card's progress on its chip", () => {

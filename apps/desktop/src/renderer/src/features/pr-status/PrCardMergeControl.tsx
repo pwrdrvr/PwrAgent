@@ -13,6 +13,7 @@ import {
 import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
 import { PendingSpinner } from "../../components/PendingSpinner";
 import { CheckIcon, ChevronDownIcon, MergeIcon, MergeQueueIcon } from "../../icons";
+import type { TooltipKeep } from "../../lib/useViewportTooltip";
 import type { PullRequestMergeService } from "./pull-request-merge-context";
 import { usePullRequestMergeOffer } from "./usePullRequestMergeOffer";
 
@@ -75,6 +76,11 @@ export function pullRequestMergeCheckWarning(pr: PrSummary): string | undefined 
  * repository's), then a confirmation. Everything stays inside the card. A
  * floating menu would take the pointer out of the hover card and close it.
  *
+ * The merge row keeps its place on screen through every step: the button
+ * that goes ahead sits at the row's right edge, where the pill's label was,
+ * the question opens above the row, and the card is placed again around it.
+ * A second click in the same spot confirms.
+ *
  * Like Copy URL and Detach, these are pointer shortcuts out of the Tab
  * order; the chip's menu offers the same merge through a dialog.
  */
@@ -86,8 +92,8 @@ export function PrCardMergeControl(props: {
   trailing: ReactNode;
   /** The PR's stack membership, which says whether a merge lands layers below it. */
   stack?: CompactStackMembership;
-  /** The card's height changed, so it must be placed again. */
-  onLayoutChange: () => void;
+  /** The card's height changed, so it must be placed again, keeping `keep` in place. */
+  onLayoutChange: (keep?: TooltipKeep) => void;
 }) {
   const { pr, service, onLayoutChange } = props;
   const offer = usePullRequestMergeOffer(pr, props.thread, service);
@@ -98,6 +104,16 @@ export function PrCardMergeControl(props: {
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
+  const mergeRowRef = useRef<HTMLDivElement>(null);
+  // Where the merge row sat on screen when one of its buttons was pressed.
+  const heldRowTop = useRef<number | undefined>(undefined);
+  const holdRow = (): void => {
+    heldRowTop.current = mergeRowRef.current?.getBoundingClientRect().top;
+  };
+  const step = (next: Phase): void => {
+    holdRow();
+    setPhase(next);
+  };
   // A card near the window's bottom edge has to move up as it grows.
   const layoutKey = `${phase.kind}|${offer.kind}|${stackPlan?.kind ?? ""}`;
   const firstLayout = useRef(true);
@@ -106,11 +122,14 @@ export function PrCardMergeControl(props: {
       firstLayout.current = false;
       return;
     }
-    onLayoutChange();
+    const row = mergeRowRef.current;
+    const top = heldRowTop.current;
+    heldRowTop.current = undefined;
+    onLayoutChange(row && top !== undefined ? { element: row, top } : undefined);
   }, [layoutKey, onLayoutChange]);
 
   const run = (method: ThreadTodoMergeMethod, remember: boolean): void => {
-    setPhase({ kind: "running" });
+    step({ kind: "running" });
     void service.merge({
       thread: props.thread, pr, method, rememberMethod: remember,
       ...(stackPlan?.kind === "with_layers_below" ? { mergeOpenLayersBelow: stackPlan.below } : {}),
@@ -119,43 +138,45 @@ export function PrCardMergeControl(props: {
     });
   };
 
-  if (phase.kind === "confirm" && (offer.kind === "merge" || offer.kind === "queue")) {
+  const confirm = phase.kind === "confirm" && (offer.kind === "merge" || offer.kind === "queue") ? phase : undefined;
+  let question: ReactNode = null;
+  let control: ReactNode = null;
+  if (confirm) {
     const warning = pullRequestMergeCheckWarning(pr);
     const plan = stackPlan;
-    return (
-      <div className="pr-status-card__confirm" aria-hidden="true">
+    question = (
+      <div className="pr-status-card__confirm">
         <span className="pr-status-card__confirm-question">
-          {pullRequestMergeQuestion(pr, offer.kind === "queue" ? { queue: offer.noun } : { method: phase.method }, plan)}
+          {pullRequestMergeQuestion(pr, offer.kind === "queue" ? { queue: offer.noun } : { method: confirm.method }, plan)}
         </span>
         {plan ? <span className="pr-status-card__confirm-warning">{githubStackMergeNote(plan, pr.number)}</span> : null}
         {warning ? <span className="pr-status-card__confirm-warning">{warning}</span> : null}
-        <div className="pr-status-card__confirm-buttons">
-          <button
-            type="button"
-            tabIndex={-1}
-            className="button thread-todo-card__button thread-todo-card__button--quiet"
-            onClick={() => setPhase({ kind: "idle" })}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            tabIndex={-1}
-            className="button button--primary thread-todo-card__button"
-            onClick={() => run(phase.method, phase.remember)}
-          >
-            {offer.kind === "queue" ? <MergeQueueIcon size={12} /> : <MergeIcon size={12} />}
-            {offer.kind === "queue" ? plan?.kind === "with_layers_below" ? `Add ${plan.count} PRs to queue` : "Add to queue"
-              : plan?.kind === "with_layers_below" ? pullRequestMergeButtonLabel(phase.method, plan)
-              : THREAD_TODO_MERGE_METHOD_LABELS[phase.method].verb}
-          </button>
-        </div>
       </div>
     );
-  }
-
-  let control: ReactNode = null;
-  if (phase.kind === "running") {
+    control = (
+      <>
+        <button
+          type="button"
+          tabIndex={-1}
+          className="button thread-todo-card__button thread-todo-card__button--quiet"
+          onClick={() => step({ kind: "idle" })}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          className="button button--primary thread-todo-card__button"
+          onClick={() => run(confirm.method, confirm.remember)}
+        >
+          {offer.kind === "queue" ? <MergeQueueIcon size={12} /> : <MergeIcon size={12} />}
+          {offer.kind === "queue" ? plan?.kind === "with_layers_below" ? `Add ${plan.count} PRs to queue` : "Add to queue"
+            : plan?.kind === "with_layers_below" ? pullRequestMergeButtonLabel(confirm.method, plan)
+            : THREAD_TODO_MERGE_METHOD_LABELS[confirm.method].verb}
+        </button>
+      </>
+    );
+  } else if (phase.kind === "running") {
     control = (
       <span className="pr-status-card__merge-status">
         <PendingSpinner pairing="paired" size="sm" />
@@ -188,7 +209,7 @@ export function PrCardMergeControl(props: {
         type="button"
         tabIndex={-1}
         className="button button--primary thread-todo-card__button"
-        onClick={() => setPhase({ kind: "confirm", method: "squash", remember: false })}
+        onClick={() => step({ kind: "confirm", method: "squash", remember: false })}
       >
         <MergeQueueIcon size={12} />
         {offer.again ? `Add to ${noun} again`
@@ -201,7 +222,7 @@ export function PrCardMergeControl(props: {
         type="button"
         tabIndex={-1}
         className="button button--primary thread-todo-card__button"
-        onClick={() => setPhase({ kind: "confirm", method: offer.method, remember: false })}
+        onClick={() => step({ kind: "confirm", method: offer.method, remember: false })}
       >
         <MergeIcon size={12} />
         {pullRequestMergeButtonLabel(offer.method, stackPlan)}
@@ -218,7 +239,7 @@ export function PrCardMergeControl(props: {
             className="todo-split__chevron"
             aria-label="Merge options"
             aria-expanded={open}
-            onClick={() => setPhase(open ? { kind: "idle" } : { kind: "methods" })}
+            onClick={() => step(open ? { kind: "idle" } : { kind: "methods" })}
           >
             <ChevronDownIcon size={12} />
           </button>
@@ -226,7 +247,7 @@ export function PrCardMergeControl(props: {
             type="button"
             tabIndex={-1}
             className="todo-split__primary"
-            onClick={() => setPhase({ kind: "confirm", method: offer.method, remember: false })}
+            onClick={() => step({ kind: "confirm", method: offer.method, remember: false })}
           >
             <MergeIcon size={12} />
             {pullRequestMergeButtonLabel(offer.method, stackPlan)}
@@ -243,7 +264,8 @@ export function PrCardMergeControl(props: {
       className="pr-status-card__actions pr-status-card__actions--merge"
       aria-hidden="true"
     >
-      {control ? <div className="pr-status-card__merge-row">{control}</div> : null}
+      {question}
+      {control ? <div ref={mergeRowRef} className="pr-status-card__merge-row">{control}</div> : null}
       {phase.kind === "methods" && offer.kind === "merge" ? (
         <div className="pr-status-card__methods">
           <span className="pr-status-card__section-title">Merge with</span>
@@ -253,7 +275,7 @@ export function PrCardMergeControl(props: {
               type="button"
               tabIndex={-1}
               className="pr-status-card__method"
-              onClick={() => setPhase({ kind: "confirm", method, remember: true })}
+              onClick={() => step({ kind: "confirm", method, remember: true })}
             >
               <span className="pr-status-card__method-check">
                 {method === offer.method ? <CheckIcon size={12} /> : null}

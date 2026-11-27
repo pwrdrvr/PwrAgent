@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import fc from "fast-check";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
@@ -109,7 +109,7 @@ function checkedPullRequestUrls(): string[] {
 function renderRequest(
   thread: NavigationThreadSummary,
   request: ComposerProps["reviewRequest"],
-  onReviewSetupTodoChange?: (todoId: string | undefined) => void,
+  onReviewSetupChange?: ComposerProps["onReviewSetupChange"],
 ) {
   return render(
     <Composer
@@ -123,7 +123,7 @@ function renderRequest(
         gitStatus: { originRepository: "github.com/fixture/project", syncState: "untracked" },
       }}
       disabled={false}
-      onReviewSetupTodoChange={onReviewSetupTodoChange}
+      onReviewSetupChange={onReviewSetupChange}
       reviewRequest={request}
       skills={[]}
       thread={thread}
@@ -202,7 +202,7 @@ describe("a review card's pull request", () => {
       pullRequest: prs[0]!.url,
     }, reports);
     await act(async () => undefined);
-    expect(reports).toHaveBeenLastCalledWith("todo-review");
+    expect(reports).toHaveBeenLastCalledWith(expect.objectContaining({ todoId: "todo-review" }));
     expect(screen.getByText("From to-do")).toBeInTheDocument();
     expect(screen.getByText("Review #4346 Change 4346")).toBeInTheDocument();
     await act(async () => {
@@ -210,5 +210,57 @@ describe("a review card's pull request", () => {
     });
     expect(reports).toHaveBeenLastCalledWith(undefined);
     expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+  });
+
+  // The card offers the panel's Start review exactly when the panel's own
+  // button would start it and can be seen; it never starts what the panel
+  // would refuse, or a review scrolled out of view.
+  it("offers the card a start only while the panel's Start review is enabled and in view", async () => {
+    const observers: { callback: IntersectionObserverCallback; target?: Element }[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      private readonly record: { callback: IntersectionObserverCallback; target?: Element };
+      constructor(callback: IntersectionObserverCallback) {
+        this.record = { callback };
+        observers.push(this.record);
+      }
+      observe(target: Element) { this.record.target = target; }
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    });
+    try {
+      const prs = [makePr(4346), makePr(4337)];
+      const reports = vi.fn<(setup: Parameters<NonNullable<ComposerProps["onReviewSetupChange"]>>[0]) => void>();
+      renderRequest(makeThread(prs, "change-4337", true), {
+        id: 1,
+        threadId: "thread-review",
+        backend: "codex",
+        todo: { id: "todo-review" },
+        todoTitle: "Review #4346 Change 4346",
+        pullRequest: prs[0]!.url,
+      }, reports);
+      await act(async () => undefined);
+      const group = screen.getByRole("group", { name: "Review target" });
+      const panelStart = within(group).getByRole("button", { name: "Start review" });
+      expect(panelStart).toBeEnabled();
+      const observed = observers.find((entry) => entry.target === panelStart);
+      expect(observed).toBeDefined();
+      const report = (ratio: number) => act(async () => {
+        observed!.callback(
+          [{ target: panelStart, intersectionRatio: ratio, isIntersecting: ratio > 0 } as unknown as IntersectionObserverEntry],
+          {} as IntersectionObserver,
+        );
+      });
+      // Not yet measured: no start.
+      expect(reports.mock.lastCall?.[0]?.start).toBeUndefined();
+      await report(1);
+      expect(reports.mock.lastCall?.[0]).toMatchObject({ todoId: "todo-review", start: { label: "Start review" } });
+      await report(0.4);
+      expect(reports.mock.lastCall?.[0]).toEqual({ todoId: "todo-review" });
+      await report(1);
+      expect(reports.mock.lastCall?.[0]?.start?.label).toBe("Start review");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

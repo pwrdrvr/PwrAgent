@@ -9948,9 +9948,10 @@ button.stack-display__thread,
   color: var(--danger-text);
 }
 
-/* With a merge (`PrCardMergeControl`) the footer stacks: the merge row,
-   its method list when open, then Copy URL and Detach on the right edge as
-   before. Beside the links the pill would need about 290px of 256. */
+/* With a merge (`PrCardMergeControl`) the footer stacks: a confirmation's
+   question, the merge row, its method list when open, then Copy URL and
+   Detach on the right edge as before. Beside the links the pill would need
+   about 290px of 256. */
 .pr-status-card__actions--merge {
   flex-direction: column;
   justify-content: flex-start;
@@ -9958,11 +9959,15 @@ button.stack-display__thread,
 }
 
 /* Inset by the footer's -6px bleed, so the pill lines up with the card's
-   text rather than the links' hover fill. */
+   text rather than the links' hover fill. Its buttons sit on the right edge,
+   where the confirm button takes the pill's place under the pointer; a
+   status line keeps to the left. */
 .pr-status-card__merge-row {
   display: flex;
   min-width: 0;
   align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
   padding: 2px 6px 0;
 }
 
@@ -9977,6 +9982,7 @@ button.stack-display__thread,
   min-width: 0;
   align-items: center;
   gap: 6px;
+  margin-right: auto;
   padding: 3px 0;
   color: var(--text-secondary);
   font-size: 12px;
@@ -10032,14 +10038,13 @@ button.stack-display__thread,
   font-weight: 400;
 }
 
-/* A merge is never one click: the footer becomes the question. */
+/* A merge is never one click. The question opens above the merge row, so
+   the row, and the confirm button in the pill's place, stay where they were. */
 .pr-status-card__confirm {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  margin: 10px -6px -4px;
-  padding: 8px 6px 0;
-  border-top: 1px solid var(--border-subtle);
+  padding: 2px 6px 3px;
 }
 
 .pr-status-card__confirm-question {
@@ -10052,13 +10057,6 @@ button.stack-display__thread,
 .pr-status-card__confirm-warning {
   color: var(--status-warning-text);
   font-size: 11px;
-}
-
-.pr-status-card__confirm-buttons {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 5px;
 }
 
 .pr-status-card__action:focus-visible {
@@ -30300,8 +30298,9 @@ button.stack-display__thread,
   overflow-wrap: anywhere;
 }
 
+/* Under the footer: the buttons stay where the first step's button was. */
 .thread-todo-card__confirm {
-  margin: 8px 8px 0 22px;
+  margin: 6px 8px 0 22px;
   color: var(--text-primary);
   font-size: 12px;
   line-height: 17px;
@@ -62502,8 +62501,16 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   border-color: var(--accent-border);
 }
 
+/* From a zero basis, so a long status shortens rather than wrapping the
+   buttons beside it onto a lower line, out from under the pointer. The
+   actions then take the footer's width, which the status fills. */
+.thread-todo-card__actions:has(> .thread-todo-card__waiting) {
+  flex: 1 1 auto;
+}
+
 .thread-todo-card__waiting {
   display: inline-flex;
+  flex: 1 1 0;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -62512,6 +62519,13 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-size: 12px;
   font-weight: 500;
   line-height: 17px;
+}
+
+.thread-todo-card__waiting-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-todo-card__waiting-dot {
