@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { ThreadMarkdown as ProductionThreadMarkdown } from "../ThreadMarkdown";
+import * as markdownAnchors from "../markdown-anchors";
 import { MarkdownRenderingOptionsProvider, useIncrementalMarkdownRenderer } from "../../../lib/markdown-rendering-options";
 import { advanceIncrementalParse, type AdvanceOptions, type IncrementalParseState } from "@ai-markdown/engine";
 import remarkBreaks from "remark-breaks";
@@ -165,4 +166,87 @@ End.
   const disabled = advanceIncrementalParse(state, content, plainOptions);
   expect(disabled.usedIncremental).toBe(false);
   expect(disabled.hast).toEqual(advanceIncrementalParse(null, content, plainOptions).hast);
+});
+
+it("does not re-render frozen fragment links or ordered lists while subsequent paragraphs stream", () => {
+  const fragmentSpy = vi.spyOn(markdownAnchors, "isSafeMarkdownFragmentUrl");
+  const gutterSpy = vi.spyOn(markdownAnchors, "orderedListGutter");
+  try {
+    const linkCount = 32;
+    const streamChunks = 32;
+    const prefix =
+      "## Target\n\n"
+      + "9. Nine\n10. Ten\n\n"
+      + Array.from({ length: linkCount }, (_, i) => `Paragraph ${i} with [jump ${i}](#target).\n\n`).join("");
+
+    const view = render(<ThreadMarkdown text={prefix} />);
+    const firstLink = view.container.querySelector("a[href='#target']");
+    const fragmentCallsAfterPrefix = fragmentSpy.mock.calls.length;
+    const gutterCallsAfterPrefix = gutterSpy.mock.calls.length;
+
+    let content = prefix;
+    for (let chunk = 0; chunk < streamChunks; chunk += 1) {
+      content += `Streaming ordinary paragraph ${chunk} without links.\n\n`;
+      view.rerender(<ThreadMarkdown text={content} />);
+    }
+
+    // Pre-fix MarkdownAnchor subscribed to MarkdownRenderContext and re-rendered
+    // all L frozen fragment links on every chunk (32 x 32 = 1,024 calls).
+    expect(fragmentSpy.mock.calls.length - fragmentCallsAfterPrefix).toBe(0);
+    expect(gutterSpy.mock.calls.length - gutterCallsAfterPrefix).toBe(0);
+    expect(view.container.querySelector("a[href='#target']")).toBe(firstLink);
+  } finally {
+    fragmentSpy.mockRestore();
+    gutterSpy.mockRestore();
+  }
+});
+
+it.each([
+  [
+    "headings and fragment links",
+    (i: number) => `## Section ${i}\n\nSee [Section ${i}](#section-${i}).\n\n`,
+  ],
+  [
+    "GFM task lists",
+    (i: number) => `Batch ${i}:\n\n- [x] Done ${i}\n- [ ] Todo ${i}\n\n`,
+  ],
+  [
+    "separate multi-digit ordered lists",
+    (i: number) => `List ${i}:\n\n9. Nine\n10. Ten\n\n`,
+  ],
+] as const)("keeps incremental parsing linear for streaming %s", (_label, makeChunk) => {
+  let characters = 0;
+  const observe = () => (_tree: unknown, file: { value: unknown }) => {
+    characters += String(file.value).length;
+  };
+  const plugins: AdvanceOptions["remarkPlugins"] = [
+    remarkBreaks,
+    [remarkGfm, { singleTilde: false }],
+    remarkPullRequestReferences,
+    remarkTableProfile,
+    observe,
+  ];
+  const options: AdvanceOptions = {
+    remarkPlugins: plugins,
+    rehypePlugins: [],
+    remarkRehypeOptions: undefined,
+    depsKey: [plugins],
+    defListEnabled: false,
+    gfmTaskListItems: true,
+    mathFlow: false,
+  };
+  const chunks = 32;
+  let state: IncrementalParseState | null = null;
+  let content = "";
+  let incrementalFrames = 0;
+  for (let i = 0; i < chunks; i += 1) {
+    content += makeChunk(i);
+    const result = advanceIncrementalParse(state, content, options);
+    state = result.nextState;
+    if (result.usedIncremental) {
+      incrementalFrames += 1;
+    }
+  }
+  expect(incrementalFrames).toBe(chunks - 1);
+  expect(characters).toBeLessThanOrEqual(content.length * 2);
 });

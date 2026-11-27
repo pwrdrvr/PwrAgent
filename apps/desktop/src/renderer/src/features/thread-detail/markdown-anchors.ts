@@ -19,22 +19,34 @@ export function slugifyGithubHeading(text: string): string {
     .replace(/ /g, "-");
 }
 
-export function assignGithubHeadingSlugs(texts: readonly string[]): string[] {
-  const seen = new Set<string>();
-  return texts.map((text) => {
+class GithubHeadingSlugger {
+  private readonly seen = new Set<string>();
+  private readonly nextSuffix = new Map<string, number>();
+
+  slug(text: string): string {
     const base = slugifyGithubHeading(text);
     if (!base) {
       return "";
     }
-    let candidate = base;
-    let suffix = 1;
-    while (seen.has(candidate)) {
-      candidate = `${base}-${suffix}`;
-      suffix += 1;
+    if (!this.seen.has(base)) {
+      this.seen.add(base);
+      return base;
     }
-    seen.add(candidate);
+    let suffix = this.nextSuffix.get(base) ?? 1;
+    let candidate = `${base}-${suffix}`;
+    while (this.seen.has(candidate)) {
+      suffix += 1;
+      candidate = `${base}-${suffix}`;
+    }
+    this.nextSuffix.set(base, suffix + 1);
+    this.seen.add(candidate);
     return candidate;
-  });
+  }
+}
+
+export function assignGithubHeadingSlugs(texts: readonly string[]): string[] {
+  const slugger = new GithubHeadingSlugger();
+  return texts.map((text) => slugger.slug(text));
 }
 
 function safeDecodeFragment(fragment: string): string {
@@ -45,6 +57,15 @@ function safeDecodeFragment(fragment: string): string {
   }
 }
 
+function hasDirectFootnoteRef(element: Element): boolean {
+  for (let child = element.firstElementChild; child; child = child.nextElementSibling) {
+    if (child.tagName.toLowerCase() === "a" && child.hasAttribute("data-footnote-ref")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function headingSlugText(heading: HTMLElement): string {
   let text = "";
   const walk = (node: Node): void => {
@@ -52,14 +73,16 @@ function headingSlugText(heading: HTMLElement): string {
       text += node.textContent ?? "";
       return;
     }
-    if (
-      node instanceof Element
-      && node.tagName.toLowerCase() === "sup"
-      && node.querySelector("a[data-footnote-ref]")
-    ) {
-      return;
+    if (node instanceof Element) {
+      const tag = node.tagName.toLowerCase();
+      if (tag === "a" && node.hasAttribute("data-footnote-ref")) {
+        return;
+      }
+      if (tag === "sup" && hasDirectFootnoteRef(node)) {
+        return;
+      }
     }
-    for (const child of Array.from(node.childNodes)) {
+    for (let child = node.firstChild; child; child = child.nextSibling) {
       walk(child);
     }
   };
@@ -94,7 +117,7 @@ export function findMarkdownAnchorTarget(
     Array.from(exactCandidates, (candidate) => candidate.toLowerCase()),
   );
 
-  const elementsWithId = Array.from(root.querySelectorAll<HTMLElement>("[id]"));
+  const elementsWithId = root.querySelectorAll<HTMLElement>("[id]");
   let caseInsensitiveMatch: HTMLElement | null = null;
   for (const element of elementsWithId) {
     const id = element.id;
@@ -112,27 +135,24 @@ export function findMarkdownAnchorTarget(
     return caseInsensitiveMatch;
   }
 
-  const headings = Array.from(
-    root.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6"),
-  ).filter((heading) => !heading.closest("section[data-footnotes]"));
-  if (headings.length === 0) {
-    return null;
-  }
-
-  const slugs = assignGithubHeadingSlugs(headings.map(headingSlugText));
+  const headings = root.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6");
+  const slugger = new GithubHeadingSlugger();
   const targetSlug = decodedFragment.trim().toLowerCase();
   const strippedTargetSlug = targetSlug.startsWith(USER_CONTENT_PREFIX)
     ? targetSlug.slice(USER_CONTENT_PREFIX.length)
     : targetSlug;
   const rawSlug = rawFragment.trim().toLowerCase();
 
-  for (let index = 0; index < headings.length; index += 1) {
-    const slug = slugs[index];
+  for (const heading of headings) {
+    if (heading.closest("section[data-footnotes]")) {
+      continue;
+    }
+    const slug = slugger.slug(headingSlugText(heading));
     if (
       slug
       && (slug === targetSlug || slug === strippedTargetSlug || slug === rawSlug)
     ) {
-      return headings[index] ?? null;
+      return heading;
     }
   }
 

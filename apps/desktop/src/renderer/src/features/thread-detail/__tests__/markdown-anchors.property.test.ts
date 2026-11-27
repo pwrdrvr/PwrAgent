@@ -42,22 +42,65 @@ describe("markdown-anchors properties", () => {
     );
   });
 
-  it("assigns strictly unique GitHub-style slugs to every non-empty heading sequence", () => {
-    const headingWord = fc.constantFrom("Setup", "Setup 1", "API v2", "C++ & Rust", "Overview", "Notes");
+  it("assigns strictly unique GitHub-style slugs matching the naive deduplication oracle", () => {
+    const naiveOracle = (texts: readonly string[]): string[] => {
+      const seen = new Set<string>();
+      return texts.map((text) => {
+        const base = slugifyGithubHeading(text);
+        if (!base) {
+          return "";
+        }
+        let candidate = base;
+        let suffix = 1;
+        while (seen.has(candidate)) {
+          candidate = `${base}-${suffix}`;
+          suffix += 1;
+        }
+        seen.add(candidate);
+        return candidate;
+      });
+    };
+
+    const headingWord = fc.constantFrom(
+      "Setup",
+      "Setup 1",
+      "Setup 2",
+      "Setup-1",
+      "Setup-1-1",
+      "API v2",
+      "C++ & Rust",
+      "Overview",
+      "Notes",
+      "   ",
+    );
     fc.assert(
-      fc.property(fc.array(headingWord, { minLength: 1, maxLength: 20 }), (headings) => {
+      fc.property(fc.array(headingWord, { minLength: 1, maxLength: 30, size: "max" }), (headings) => {
         const slugs = assignGithubHeadingSlugs(headings);
-        expect(slugs).toHaveLength(headings.length);
+        expect(slugs).toEqual(naiveOracle(headings));
         const nonEmpty = slugs.filter(Boolean);
         expect(new Set(nonEmpty).size).toBe(nonEmpty.length);
-        for (let i = 0; i < headings.length; i += 1) {
-          const base = slugifyGithubHeading(headings[i]!);
-          if (base) {
-            expect(slugs[i] === base || slugs[i]!.startsWith(`${base}-`)).toBe(true);
-          }
-        }
       }),
     );
+  });
+
+  it("deduplicates repeated headings in linear Set.has lookups rather than quadratic rescans", () => {
+    const count = 500;
+    const headings = Array.from({ length: count }, () => "Details");
+    const originalHas = Set.prototype.has;
+    let hasCalls = 0;
+    Set.prototype.has = function (value: unknown) {
+      hasCalls += 1;
+      return originalHas.call(this, value);
+    };
+    try {
+      const slugs = assignGithubHeadingSlugs(headings);
+      expect(slugs[0]).toBe("details");
+      expect(slugs[count - 1]).toBe(`details-${count - 1}`);
+      // Pre-fix code restarted suffix=1 on every duplicate and made 125,250 lookups.
+      expect(hasCalls).toBeLessThanOrEqual(count * 3);
+    } finally {
+      Set.prototype.has = originalHas;
+    }
   });
 
   it("matches the brute-force maximum marker digit count for every ordered list range", () => {

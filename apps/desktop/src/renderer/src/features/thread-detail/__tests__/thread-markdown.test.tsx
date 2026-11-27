@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { scopeDesktopApiToFederationTarget } from "../../../lib/federation-desktop-api";
 import { ThreadMarkdown } from "../ThreadMarkdown";
+import { findMarkdownAnchorTarget } from "../markdown-anchors";
 import { HtmlPreviewPreferencesProvider } from "../../../lib/html-preview-preferences";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import { pressEscape, pressTab, walkTab } from "../../../test/tab-walk";
@@ -2470,6 +2471,37 @@ describe("ThreadMarkdown", () => {
       } else {
         delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
       }
+    }
+  });
+
+  it("resolves duplicate heading targets lazily and in linear Set.has lookups", () => {
+    const count = 200;
+    const root = document.createElement("div");
+    const headings: HTMLHeadingElement[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const heading = document.createElement("h2");
+      heading.textContent = "Details";
+      root.append(heading);
+      headings.push(heading);
+    }
+
+    const originalHas = Set.prototype.has;
+    let hasCalls = 0;
+    Set.prototype.has = function (value: unknown) {
+      hasCalls += 1;
+      return originalHas.call(this, value);
+    };
+    try {
+      expect(findMarkdownAnchorTarget(root, "#details")).toBe(headings[0]);
+      // Early-exits on the first heading instead of slugifying all 200.
+      expect(hasCalls).toBeLessThanOrEqual(50);
+
+      hasCalls = 0;
+      expect(findMarkdownAnchorTarget(root, `#details-${count - 1}`)).toBe(headings[count - 1]);
+      // Pre-fix code performed >20,000 lookups on 200 duplicate headings.
+      expect(hasCalls).toBeLessThanOrEqual(count * 4);
+    } finally {
+      Set.prototype.has = originalHas;
     }
   });
 });
