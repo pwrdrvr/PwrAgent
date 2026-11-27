@@ -164,6 +164,43 @@ export function normalizeDirectoryReferencePath(value: string): string {
     .replace(isWindowsFilesystemPath(value) ? /[/\\]+$/ : /\/+$/, "");
 }
 
+// Index both separators as edges. Only the queried path's native separator
+// establishes descent, so a backslash in a POSIX filename stays literal.
+const PATH_PARTS = /[^/\\]+|[/\\]/g;
+
+type ReferencePathNode = {
+  children: Map<string, ReferencePathNode>;
+  exact?: boolean;
+};
+
+class ReferencePathIndex {
+  private readonly root: ReferencePathNode = { children: new Map() };
+
+  add(path: string): void {
+    let node = this.root;
+    for (const part of path.match(PATH_PARTS) ?? []) {
+      let child = node.children.get(part);
+      if (!child) {
+        child = { children: new Map() };
+        node.children.set(part, child);
+      }
+      node = child;
+    }
+    node.exact = true;
+  }
+
+  matches(path: string, includeExact: boolean): boolean {
+    let node = this.root;
+    for (const part of path.match(PATH_PARTS) ?? []) {
+      const child = node.children.get(part);
+      if (!child) return false;
+      node = child;
+    }
+    return (includeExact && node.exact)
+      || node.children.has(isWindowsFilesystemPath(path) ? "\\" : "/");
+  }
+}
+
 /**
  * Resolve a draft's `@` chips to the tracked directories they reference —
  * the tilde-shortened form, the absolute form, or a file chip under either.
@@ -203,56 +240,47 @@ export function listReferencedDirectories(
       .filter((path): path is string => Boolean(path))
       .map(normalizeDirectoryReferencePath),
   );
-  const seenPaths = new Set<string>();
-  const referenced: NavigationDirectorySummary[] = [];
-  // A chip references a directory when its target is that directory or a
-  // path inside it. Compare whole path segments from the start: a chip for
-  // `~/app.bak` or `/backup/Users/me/app` does not reference `~/app`.
+  const destinationIndex = new ReferencePathIndex();
+  for (const destination of destinations) {
+    destinationIndex.add(destination);
+  }
   const containsPath = (path: string): boolean => {
     const target = normalizeDirectoryReferencePath(expandTildePath(path, homeDir));
-    if (!target) {
-      return false;
-    }
-    const separator = isWindowsFilesystemPath(target) ? "\\" : "/";
-    return destinations.some((destination) =>
-      destination === target || destination.startsWith(`${target}${separator}`));
+    return Boolean(target) && destinationIndex.matches(target, true);
   };
-  // Already-linked paths still participate in resolution, even when their
-  // directory row is outside the loaded page. Excluding them before choosing
-  // the deepest match would leave a tracked ancestor (including `~`) behind.
-  const matchedExcludedPaths = [...excluded].filter(containsPath);
+  // An already-linked descendant can shadow a loaded ancestor even when
+  // its own directory row is outside the loaded page.
+  const matchedPaths = new ReferencePathIndex();
+  for (const path of excluded) {
+    if (containsPath(path)) matchedPaths.add(path);
+  }
 
+  const seenPaths = new Set<string>();
+  const referenced: { directory: NavigationDirectorySummary; path: string }[] = [];
   for (const directory of directories) {
     if (!isReferenceableDirectory(directory)) {
       continue;
     }
-    const path = trimPath(directory.path);
+    const storedPath = directory.path;
+    const path = trimPath(storedPath);
     const key = normalizeDirectoryReferencePath(path);
     if (!path || seenPaths.has(key)) {
       continue;
     }
     if (containsPath(path)) {
       seenPaths.add(key);
-      referenced.push(directory);
+      // Shadow ancestors by stored path. Tilde expansion applies only when matching chips.
+      const matchedPath = normalizeDirectoryReferencePath(storedPath);
+      referenced.push({ directory, path: matchedPath });
+      matchedPaths.add(matchedPath);
     }
   }
 
-  // Nested tracked repos: a chip for `~/dev/app` also lies inside a tracked
-  // `~/dev`. Keep only the deepest match so the reference resolves to the
-  // repo the path actually points into.
-  return referenced.filter((directory) => {
-    const path = normalizeDirectoryReferencePath(directory.path!);
-    const separator = isWindowsFilesystemPath(path) ? "\\" : "/";
-    if (excluded.has(path) || matchedExcludedPaths.some((otherPath) =>
-      otherPath.startsWith(`${path}${separator}`))) {
-      return false;
+  const deepest: NavigationDirectorySummary[] = [];
+  for (const { directory, path } of referenced) {
+    if (!excluded.has(path) && !matchedPaths.matches(path, false)) {
+      deepest.push(directory);
     }
-    return !referenced.some((other) => {
-      if (other === directory) {
-        return false;
-      }
-      const otherPath = normalizeDirectoryReferencePath(other.path!);
-      return otherPath.startsWith(`${path}${separator}`);
-    });
-  });
+  }
+  return deepest;
 }
