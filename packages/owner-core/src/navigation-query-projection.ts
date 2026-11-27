@@ -115,6 +115,7 @@ type ProjectionIndex = {
 };
 
 export type NavigationProjectionWork = (stage: "index" | "children", threads: number) => void;
+export type NavigationDirectoryActivity = Pick<NavigationDirectorySummary, "latestUpdatedAt" | "needsAttentionCount">;
 
 type SnapshotShell = Omit<NavigationQueryIndex, "threads" | "directories" | "stacks" | "inputRequestThreadKeys" | "observedAt">;
 type CertifiedSnapshot = {
@@ -281,17 +282,31 @@ function patchSnapshotCollection<T extends object>(source: T[], replacements: Re
   return result;
 }
 
+function patchDirectoryActivity(source: NavigationDirectorySummary[], changes: ReadonlyMap<number, NavigationDirectoryActivity>): NavigationDirectorySummary[] {
+  if (!changes.size) return source;
+  const directories = source.slice();
+  const certified = certifiedCollections.has(source);
+  for (const [position, { latestUpdatedAt, needsAttentionCount }] of changes) {
+    // Only scalars change. All nested values still belong to the old snapshot.
+    const directory = { ...source[position]!, latestUpdatedAt, needsAttentionCount };
+    directories[position] = directory;
+    if (certified) certifiedRows.add(Object.freeze(directory));
+  }
+  if (certified) certifiedCollections.add(Object.freeze(directories));
+  return directories;
+}
+
 /** Publish one immutable owner observation for a batch with stable membership and
  * directory geometry. Cursor readers can still use every map in the older observation. */
 export function replaceNavigationQueryRows(index: NavigationQueryIndex, replacements: ReadonlyMap<number, NavigationThreadSummary>,
   inputRequestThreadKeys: ReadonlySet<string>, observedAt: number,
-  directoryCounts: ReadonlyMap<number, NavigationDirectorySummary>): NavigationQueryIndex {
+  directoryCounts: ReadonlyMap<number, NavigationDirectoryActivity>): NavigationQueryIndex {
   const previous = snapshots.get(index);
   const prepared = previous?.acceleration.projection;
   const sameKeys = isDeepStrictEqual(inputRequestThreadKeys, new Set(index.inputRequestThreadKeys));
-  if (!replacements.size && sameKeys) return index;
+  if (!replacements.size && !directoryCounts.size && sameKeys) return index;
   const detached = patchSnapshotCollection(index.threads, replacements);
-  const detachedDirectories = patchSnapshotCollection(index.directories, directoryCounts);
+  const detachedDirectories = patchDirectoryActivity(index.directories, directoryCounts);
   if (!prepared || !previous || !certifiedCollections.has(detached) || !certifiedCollections.has(detachedDirectories)) {
     return createNavigationQuerySnapshot({ ...index, threads: detached, directories: detachedDirectories, observedAt, inputRequestThreadKeys });
   }
@@ -1252,6 +1267,10 @@ function starMapProjectKey(
   return primary ? classifyDirectory(primary).key : "__no-project__";
 }
 
+function threadNeedsInput(thread: NavigationThreadSummary, index: NavigationQueryIndex): boolean {
+  return !thread.federation && (index.inputRequestThreadKeys?.has(buildThreadIdentityKey(thread.source, thread.id)) ?? false);
+}
+
 function starMapSignals(thread: NavigationThreadSummary, index: NavigationQueryIndex): NavigationStarMapSignals {
   const active = isActive(thread);
   const unread = thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen";
@@ -1259,7 +1278,7 @@ function starMapSignals(thread: NavigationThreadSummary, index: NavigationQueryI
     active,
     unread,
     attention: active || unread,
-    approval: !thread.federation && (index.inputRequestThreadKeys?.has(buildThreadIdentityKey(thread.source, thread.id)) ?? false),
+    approval: threadNeedsInput(thread, index),
     pr: thread.prs?.some((pr) => pr.state !== "merged" && pr.state !== "closed"
       && pr.lifecycleState !== "merged" && pr.lifecycleState !== "closed") ?? false,
     unpushed: (thread.gitWorkingState?.unpushedCommits ?? 0) > 0,
@@ -1845,7 +1864,7 @@ export function projectNavigationQuery(params: {
         childCount: childCountByParent.get(threadKey(thread)) ?? 0,
         ...(params.request.inventory === "viewer" && navigationIdentity(thread).ownerInstanceId
           ? { viewerChildCount: viewerChildCountByParent.get(threadKey(thread)) ?? 0 } : {}),
-        needsInput: starMapSignals(thread, params.index).approval,
+        needsInput: threadNeedsInput(thread, params.index),
         repositories,
         thread: parent?.ownerInstanceId && !thread.parentThreadInstanceId
           ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,

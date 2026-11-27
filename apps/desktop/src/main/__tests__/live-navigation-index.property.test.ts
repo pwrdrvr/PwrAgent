@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationQueryPage, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -61,7 +61,7 @@ function fixture(observe?: (event: AgentEvent) => void, durable = false,
     },
     cached: (_, id) => providers.get(id), refresh,
     projectRows: async (rows) => projectRows(rows), directories: async (threads) => { await gate; return directories(threads); },
-    inputKeys: () => new Set(), notify: () => complete.resolve(), failed: (error) => { throw error; },
+    inputKeys: () => new Set(), retentionChanged: () => {}, notify: () => complete.resolve(), failed: (error) => { throw error; },
   });
   const emit = (notification: AgentEvent["notification"]) => {
     const event = { backend: "codex" as const, notification };
@@ -342,14 +342,19 @@ it("patches local rows and counts underneath mounted peer pins", async () => {
       projections++;
       return append(index);
     } };
-    await f.live.viewer(first, viewer, "pins");
+    const mounted = await f.live.viewer(first, viewer, "pins");
+    using measured = vi.spyOn(Buffer, "byteLength");
     f.overlays.set("a", { inbox: { inInbox: true } });
     f.emit({ method: "navigation/thread/seen", params: { threadId: "a" } });
     const owner = await f.live.read();
     const patched = await f.live.viewer(owner, viewer, "pins");
+    expect(measured.mock.calls.filter(([payload]) => typeof payload === "string" && payload.includes('"threadKeys":'))).toHaveLength(0);
     const rebuilt = append(owner);
     expect(patched.threads).toEqual(rebuilt.threads);
     expect(patched.directories).toEqual(rebuilt.directories);
+    // Updating the unread count preserves immutable membership in both cursor generations.
+    expect(owner.directories[0]!.threadKeys).toBe(first.directories[0]!.threadKeys);
+    expect(patched.directories[0]!.threadKeys).toBe(mounted.directories[0]!.threadKeys);
     expect(projections).toBe(1);
   } finally { f.close(); }
 });

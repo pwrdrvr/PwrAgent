@@ -5,7 +5,7 @@ import { buildThreadIdentityKey, parseThreadIdentityKey, type NavigationThreadSu
 import { NAVIGATION_LIVE_INDEX_RECONCILED_METHOD, navigationInvalidationMayChangeMembership, navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
 import { isThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
 import { compactNavigationProviderRow } from "@pwragent/shared/navigation-state";
-import { createNavigationQuerySnapshot, replaceNavigationQueryRows, navigationQuerySnapshotAuxiliaryBytes, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { createNavigationQuerySnapshot, replaceNavigationQueryRows, navigationQuerySnapshotAuxiliaryBytes, type NavigationDirectoryActivity, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { retainedIndexBytes } from "./navigation-index-read-pool";
 import { nextNavigationObservation } from "./navigation-observation-clock";
 import { isDeepStrictEqual } from "node:util";
@@ -68,6 +68,10 @@ function jsonBytes(value: unknown): number {
   return value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
 }
 
+function directoryActivityBytes({ latestUpdatedAt, needsAttentionCount }: NavigationDirectoryActivity): number {
+  return jsonBytes({ latestUpdatedAt, needsAttentionCount });
+}
+
 function compact(row: ProviderRow): ProviderRow {
   return structuredClone({ ...compactNavigationProviderRow(row), nativeSubAgentCount: row.codexNativeSubAgents?.length ?? row.nativeSubAgentCount ?? 0 });
 }
@@ -123,7 +127,7 @@ export class LiveNavigationIndex {
       if (before !== undefined && previous && changes) {
         bytes = before;
         for (const i of changes.rows) bytes += jsonBytes(index.threads[i]) - jsonBytes(previous.threads[i]);
-        for (const i of changes.directories) bytes += jsonBytes(index.directories[i]) - jsonBytes(previous.directories[i]);
+        for (const i of changes.directories) bytes += directoryActivityBytes(index.directories[i]!) - directoryActivityBytes(previous.directories[i]!);
         if (index.inputRequestThreadKeys !== previous.inputRequestThreadKeys) {
           bytes += jsonBytes([...(index.inputRequestThreadKeys ?? [])]) - jsonBytes([...(previous.inputRequestThreadKeys ?? [])]);
         }
@@ -320,7 +324,7 @@ export class LiveNavigationIndex {
       const counts = new Map(patch.directories.map((pos) => {
         const mounted = page.index.directories[pos]!;
         const local = owner.directories[pos]!;
-        return [pos, { ...mounted, latestUpdatedAt: local.latestUpdatedAt,
+        return [pos, { latestUpdatedAt: local.latestUpdatedAt,
           needsAttentionCount: mounted.needsAttentionCount + local.needsAttentionCount - page.owner.directories[pos]!.needsAttentionCount }] as const;
       }));
       index = replaceNavigationQueryRows(page.index, rows, owner.inputRequestThreadKeys ?? new Set(), owner.observedAt!, counts);
@@ -538,7 +542,7 @@ export class LiveNavigationIndex {
     const projected = new Map((this.source.decorate?.(base) ?? base).map((row) => [key(row), row]));
     const replacements = new Map<number, NavigationThreadSummary>();
     let geometry = false;
-    const directories = new Map<number, NavigationQueryIndex["directories"][number]>();
+    const directories = new Map<number, NavigationDirectoryActivity>();
     for (const id of changes.keys()) {
       const row = projected.get(id);
       const previous = this.rows.get(id);
@@ -547,7 +551,7 @@ export class LiveNavigationIndex {
       if (!geometry && previous && row && (previous.inbox.inInbox !== row.inbox.inInbox || previous.updatedAt !== row.updatedAt)) {
         for (const position of this.directoryPositions.get(id) ?? []) {
           const directory = directories.get(position) ?? index.directories[position]!;
-          directories.set(position, { ...directory, latestUpdatedAt: Math.max(directory.latestUpdatedAt ?? 0, row.updatedAt ?? 0),
+          directories.set(position, { latestUpdatedAt: Math.max(directory.latestUpdatedAt ?? 0, row.updatedAt ?? 0),
             needsAttentionCount: directory.needsAttentionCount + Number(row.inbox.inInbox) - Number(previous.inbox.inInbox) });
         }
       }
