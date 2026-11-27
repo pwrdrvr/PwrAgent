@@ -4,7 +4,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { parseMachOLoadCommands } from "./native-helper-cache.mjs";
+import { linkedFilesFromTrace, parseMachOLoadCommands } from "./native-helper-cache.mjs";
+
+it("checks the filesystem once for repeated mentions of a linked archive", () => {
+  const archive = join(tmpdir(), "libvalue.a");
+  const other = join(tmpdir(), "libother.a");
+  const trace = [archive, other, archive, `${archive}(member.o)`].join("\n");
+  const checked = [];
+  const paths = linkedFilesFromTrace(trace, (path) => {
+    checked.push(path);
+    return true;
+  });
+  expect([...paths]).toEqual([archive, other]);
+  expect(checked).toEqual([archive, other]);
+});
 
 const loads = ["LC_LOAD_DYLIB", "LC_LOAD_WEAK_DYLIB", "LC_REEXPORT_DYLIB", "LC_LOAD_UPWARD_DYLIB", "LC_LAZY_LOAD_DYLIB"];
 
