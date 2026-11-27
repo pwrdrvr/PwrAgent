@@ -104,7 +104,8 @@ def run(repo, output, suites, args):
                    AUDIT_FILES=json.dumps(projects), AUDIT_CASES=str(args.cases), AUDIT_RESULTS=str(raw),
                    AUDIT_COPIES=str(args.copies), AUDIT_ARCHIVED=str(args.archived),
                    AUDIT_LEGACY_OWNER=str(int(label in ("v150", "v151", "v152"))),
-                   AUDIT_LIVE_INDEX=str(int(label in ("pr4590", "pr4590b"))))
+                   AUDIT_LIVE_INDEX=str(int((repo / MAIN.parent / "app-server/live-navigation-index.ts").is_file())),
+                   AUDIT_COUNT_PROJECTION=str(int("navigation" in suites)))
         result = subprocess.run(["pnpm", "exec", "vitest", "run", "--config", config, "--maxWorkers=1",
                                  "--testTimeout=180000", "--reporter=json", "--outputFile", str(output / "vitest.json")],
                                 cwd=repo, env=env)

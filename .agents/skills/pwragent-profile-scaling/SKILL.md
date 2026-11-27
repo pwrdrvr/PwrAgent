@@ -38,7 +38,7 @@ git worktree add --detach .local/v152 be957c66c90d74d759f04e34bc1aed70658b2257
 python3 scripts/scaling-audit/run.py --candidate .local/v152 --historical v152 --suites properties --output .local/v152-properties
 ```
 
-Omit `--suites` with `--historical` to select that revision's measured workloads. The manifest covers 1.5.0–1.5.2, three main snapshots and the Pricing, navigation and terminal PR heads. The 1.5 releases use the local owner navigation loader. Only the pinned #4590 heads enable the historical incremental oracle and two additional projection counters via a Vitest transform. Absent counters indicate missing instrumentation. The matched corpus uses repository model sources wherever they still match and retains three audit versions whose repository tests evolved.
+Omit `--suites` with `--historical` to select that revision's measured workloads. The manifest covers 1.5.0–1.5.2, three main snapshots and the Pricing, navigation and terminal PR heads. The 1.5 releases use the local owner navigation loader. The pinned #4590 heads enable the historical incremental oracle. Revisions with the live navigation index also count slot copies and lens predicate evaluations via a Vitest transform that verifies both instrumentation sites. Absent counters indicate missing instrumentation. The matched corpus uses repository model sources wherever they still match and retains three audit versions whose repository tests evolved.
 
 ## Native paint control
 
