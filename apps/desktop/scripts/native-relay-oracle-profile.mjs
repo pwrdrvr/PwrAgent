@@ -7,8 +7,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 
-export function appendNativeOracleTiming(record) {
-  const file = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE;
+export function appendNativeOracleTiming(record, file = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE) {
   if (!file) return;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   // Bound diagnostics independently of captured compiler stdout/stderr.
@@ -16,8 +15,15 @@ export function appendNativeOracleTiming(record) {
   fs.appendFileSync(file, JSON.stringify({ pid: process.pid, ...record }) + "\n");
 }
 
-export function profileNativeBuild(label, build) {
-  if (!process.env.PWRAGENT_NATIVE_ORACLE_PROFILE) return build();
+export function timeNativeOraclePhase(record, run, file = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE) {
+  if (!file) return run();
+  const started = performance.now();
+  try { return run(); }
+  finally { appendNativeOracleTiming({ ...record, ms: performance.now() - started }, file); }
+}
+
+export function profileNativeBuild(label, build, file = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE) {
+  if (!file) return build();
   const totals = new Map();
   const inspections = [];
   let inspectionsOmitted = 0;
@@ -92,6 +98,6 @@ export function profileNativeBuild(label, build) {
       completed: typeof output === "string",
       sealed: typeof output === "string" && fs.existsSync(`${output}.build.json`),
       lockRemaining: typeof output === "string" && fs.existsSync(`${output}.build-lock`),
-      phases: Object.fromEntries(totals), inspections, inspectionsOmitted });
+      phases: Object.fromEntries(totals), inspections, inspectionsOmitted }, file);
   }
 }
