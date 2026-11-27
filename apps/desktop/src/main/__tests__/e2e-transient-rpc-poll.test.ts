@@ -310,6 +310,7 @@ describe("desktop E2E fixture polls", () => {
   // "nothing to check".
   it("finds the fixtures that poll at all", () => {
     expect(fixturesWithPolls.map(({ entry }) => entry).sort()).toEqual([
+      "composer-row.ts",
       "electron-app.ts",
       "star-map-window.ts",
     ]);

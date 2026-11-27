@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
+import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 /**
  * The composer's control row is one line. Controls that do not fit fold into
@@ -17,24 +18,40 @@ function composerRow(page: Page): Locator {
 }
 
 /**
- * Whether `tier` is folded into ⋮, once the row has stopped refolding. A
- * control that arrives late (an environment list, a running dictation) folds
- * a frame after it appears, so one read is not enough.
+ * Whether `tier` is folded into ⋮, once `control` is in the row (folded or
+ * not) and the row has stopped refolding. A control that arrives late (the
+ * environment pickers load after the thread opens) folds a frame after it
+ * appears, so neither its absence nor one read of the row settles it.
  */
-export async function isComposerTierFolded(page: Page, tier: ComposerFoldTier): Promise<boolean> {
+export async function isComposerTierFolded(
+  page: Page,
+  tier: ComposerFoldTier,
+  control: Locator,
+): Promise<boolean> {
   const row = composerRow(page);
+  await expect(control.first()).toBeAttached();
   await expect(row).toHaveAttribute("data-folded-tiers", /^\d$/);
   let previous = "";
+  const settledFold = tolerateTransientRpcFailure(async () => {
+    const current = await row.evaluate((element) =>
+      `${element.getAttribute("data-folded-tiers")}:${element.querySelectorAll("[data-composer-fold]").length}`);
+    const settled = current === previous;
+    previous = current;
+    return settled;
+  });
   await expect
-    .poll(async () => {
-      const current = await row.evaluate((element) =>
-        `${element.getAttribute("data-folded-tiers")}:${element.querySelectorAll("[data-composer-fold]").length}`);
-      const settled = current === previous;
-      previous = current;
-      return settled;
-    }, { intervals: [100, 150, 200, 250] })
-    .toBe(true);
+    .poll(settledFold.read, {
+      intervals: [100, 150, 200, 250],
+      message: "the composer row kept refolding",
+    })
+    .toBe(true)
+    .catch(settledFold.rethrowWithLastFailure);
   return Number(await row.getAttribute("data-folded-tiers")) > FOLD_TIERS.indexOf(tier);
+}
+
+/** A row button by name, whether drawn or folded out of sight. */
+function rowButton(page: Page, name: RegExp | string): Locator {
+  return composerRow(page).getByRole("button", { name, exact: true, includeHidden: true });
 }
 
 /** Opens ⋮ and returns its menu. */
@@ -59,7 +76,7 @@ async function closeComposerThreadOptions(page: Page): Promise<void> {
  * choice's radio group in ⋮ when it has folded.
  */
 export async function chooseComposerOption(page: Page, control: RegExp, option: string): Promise<void> {
-  if (await isComposerTierFolded(page, "details")) {
+  if (await isComposerTierFolded(page, "details", rowButton(page, control))) {
     const menu = await openComposerThreadOptions(page);
     await menu.getByRole("menuitemradio", { name: option, exact: true }).click();
     await expect(menu).toBeHidden();
@@ -74,7 +91,7 @@ export async function chooseComposerOption(page: Page, control: RegExp, option: 
  * the checked radio in ⋮ when it has folded.
  */
 export async function expectComposerOption(page: Page, control: RegExp, option: string): Promise<void> {
-  if (await isComposerTierFolded(page, "details")) {
+  if (await isComposerTierFolded(page, "details", rowButton(page, control))) {
     const menu = await openComposerThreadOptions(page);
     await expect(menu.getByRole("menuitemradio", { name: option, exact: true }))
       .toHaveAttribute("aria-checked", "true");
@@ -85,19 +102,18 @@ export async function expectComposerOption(page: Page, control: RegExp, option: 
     .toContainText(option);
 }
 
-/** Expects the composer to offer no environment, in the row or in ⋮. */
+/**
+ * Expects the composer to offer no environment: no picker in the row, drawn
+ * or folded, so none in ⋮ either.
+ */
 export async function expectNoComposerEnvironment(page: Page): Promise<void> {
-  await expect(page.getByRole("button", { name: /^Environment(?::|$)/, exact: true })).toHaveCount(0);
-  if (await isComposerTierFolded(page, "details")) {
-    const menu = await openComposerThreadOptions(page);
-    await expect(menu.getByRole("menuitemradio", { name: "No environment", exact: true })).toHaveCount(0);
-    await closeComposerThreadOptions(page);
-  }
+  await expect(composerRow(page)).toHaveAttribute("data-folded-tiers", /^\d$/);
+  await expect(rowButton(page, /^Environment(?::|$)/)).toHaveCount(0);
 }
 
 /** Runs the selected environment command: the row's ▶, or its ▶ in ⋮. */
 export async function runComposerCommand(page: Page): Promise<void> {
-  if (await isComposerTierFolded(page, "run")) {
+  if (await isComposerTierFolded(page, "run", rowButton(page, "Run"))) {
     const menu = await openComposerThreadOptions(page);
     await menu
       .locator(".composer-thread-options__command", { has: page.locator("[aria-checked='true']") })
@@ -111,7 +127,7 @@ export async function runComposerCommand(page: Page): Promise<void> {
 
 /** Picks a workspace handoff action from the row's Workspace mode menu, or from ⋮. */
 export async function chooseComposerWorkspaceAction(page: Page, action: string): Promise<void> {
-  if (await isComposerTierFolded(page, "details")) {
+  if (await isComposerTierFolded(page, "details", rowButton(page, /^Workspace mode(?::|$)/))) {
     const menu = await openComposerThreadOptions(page);
     await menu.getByRole("menuitem", { name: action, exact: true }).click();
     return;
