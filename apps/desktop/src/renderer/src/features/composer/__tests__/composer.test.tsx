@@ -25385,6 +25385,37 @@ describe("Composer", () => {
     });
   });
 
+  it("sends catalog-ordered Markdown for a bare skill exposed in another skill's path", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        skills={[
+          { name: "one task", path: "/dir $two !" },
+          { name: "two", path: "/two" },
+        ]}
+        thread={{
+          id: "thread-1",
+          title: "Skill hydration",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "$one task and $two" } });
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: "[$one task](/dir [$two](/two) !) and [$two](/two)" }],
+    })));
+  });
+
   it("inserts skill markdown from autocomplete and sends it through startTurn", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,

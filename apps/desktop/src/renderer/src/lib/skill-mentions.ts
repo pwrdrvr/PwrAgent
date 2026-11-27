@@ -1,6 +1,9 @@
 import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { scanSkillMentionLinks } from "@pwragent/shared/skill-mention-links";
 import { bareMentionedSkills } from "./bare-skill-mentions";
+import { buildSkillLabelToken } from "./skill-label-hydration";
+
+export { buildSkillLabelToken, buildSkillMentionMarkdown, hydrateSkillLabelsWithMarkdown } from "./skill-label-hydration";
 
 export type SkillMentionPart =
   | {
@@ -34,22 +37,6 @@ function escapeRegExp(value: string): string {
 export function skillLabelMatcher(names: readonly string[]): RegExp {
   // Capture the leading boundary separately so a decoration starts at the $.
   return new RegExp(`(^|\\s)(\\$(?:${names.map(escapeRegExp).join("|")}))${SKILL_TOKEN_BOUNDARY}`, "g");
-}
-
-export function buildSkillLabelToken(
-  skill: Pick<AppServerSkillSummary, "name">
-): string {
-  return `$${skill.name}`;
-}
-
-export function buildSkillMentionMarkdown(
-  skill: Pick<AppServerSkillSummary, "name" | "path">
-): string {
-  if (!skill.path) {
-    return buildSkillLabelToken(skill);
-  }
-
-  return `[$${skill.name}](${skill.path})`;
 }
 
 export function parseSkillMentionParts(text: string, work?: { chars: number }): SkillMentionPart[] {
@@ -188,30 +175,6 @@ export function insertSkillLabel(params: {
     nextDraft,
     nextSelection: before.length + mention.length + (needsTrailingSpace ? 1 : 0),
   };
-}
-
-export function hydrateSkillLabelsWithMarkdown(
-  text: string,
-  skills: AppServerSkillSummary[]
-): string {
-  let output = text;
-
-  for (const skill of skills) {
-    if (!skill.path) {
-      continue;
-    }
-
-    const token = buildSkillLabelToken(skill);
-    const pattern = new RegExp(
-      `(^|\\s)${escapeRegExp(token)}${SKILL_TOKEN_BOUNDARY}`,
-      "g"
-    );
-    output = output.replace(pattern, (_match, prefix: string) => {
-      return `${prefix}${buildSkillMentionMarkdown(skill)}`;
-    });
-  }
-
-  return output;
 }
 
 export function buildSkillTooltip(skill: AppServerSkillSummary): string {
