@@ -228,6 +228,17 @@ it("keeps a viewer's mounted rows during a peer gap without listing its local ow
   } finally { gate.resolve(); f.close(); }
 });
 
+it("admits an owner-committed creation even when the provider has not announced the new identity", async () => {
+  const f = fixture();
+  try {
+    await f.live.read();
+    f.providers.set("new", { ...f.providers.get("a")!, id: "new", title: "Pending creation" });
+    f.emit({ method: "navigation/threadDirectories/updated", params: { reason: "thread-created", threadIds: ["new"] } });
+    expect((await f.live.read()).threads.map((row) => row.id)).toContain("new");
+    expect(f.lists).toEqual(["all"]);
+  } finally { f.close(); }
+});
+
 it("publishes a terminal provider watermark and title without blocking the mounted page or losing a later rename", async () => {
   const gate = Promise.withResolvers<AppServerThreadSummary>();
   const reads: string[] = [];

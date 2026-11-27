@@ -9389,11 +9389,19 @@ export class DesktopBackendRegistry {
   }
 
   private async startThreadPrepared(params: Parameters<DesktopBackendRegistry["startThread"]>[0], pending?: PendingThreadStartReporter): Promise<StartThreadResponse> {
-    return await new ThreadCreationLifecycle().prepare(async (resources) => await this.prepareThreadCreation(params, resources, pending), (stage, error) => {
+    const created = await new ThreadCreationLifecycle().prepare(async (resources) => await this.prepareThreadCreation(params, resources, pending), (stage, error) => {
       backendRegistryLog.warn("thread creation preparation cleanup failed", {
         backend: params.backend, stage, error: error instanceof Error ? error.message : String(error),
       });
     });
+    if (created.backend === "codex") {
+      // The provider may announce the identity before the owner's workspace,
+      // parent and pin are committed. The prepared row is now discoverable.
+      await this.threadDirectoryService.emitCodexDirectoryRelationshipsUpdated({
+        reason: "thread-created", threadIds: [created.threadId],
+      }).catch((error: unknown) => backendRegistryLog.warn("created thread navigation publication failed", { threadId: created.threadId, error: String(error) }));
+    }
+    return created;
   }
 
   private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation, pending?: PendingThreadStartReporter): Promise<PreparedThreadCreation<Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure">>> {

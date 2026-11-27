@@ -184,10 +184,12 @@ export class LiveNavigationIndex {
           provider.title = n.params.threadName.trim();
           provider.titleSource = normalizeRenamedTitleSource(n.params.titleSource);
         }
-        this.mark({ backend: event.backend, id, provider, activity: n.method === "thread/started" || n.method === "thread/unarchived"
+        const discovered = n.method === "thread/started" || n.method === "thread/unarchived"
+          || (n.method === "navigation/threadDirectories/updated" && n.params.reason === "thread-created");
+        this.mark({ backend: event.backend, id, provider, activity: discovered
           || n.method === "turn/completed" || n.method === "turn/failed" || n.method === "turn/cancelled",
           workers: n.method === "thread/subAgents/updated", directoriesChanged: n.method === "navigation/threadDirectories/updated",
-          discovered: n.method === "thread/started" || n.method === "thread/unarchived", removed: n.method === "thread/archived" || n.method === "thread/deleted" });
+          discovered, removed: n.method === "thread/archived" || n.method === "thread/deleted" });
       }
     }
     this.schedule();
