@@ -5,6 +5,7 @@ import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federati
 import type { NavigationThreadSummary, ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import type { DesktopApi } from "../desktop-api";
+import { threadSummaryIdentityKey } from "../federated-thread-events";
 import { readRendererFederationTarget } from "../federation-window";
 import { useThreadNavigation } from "../useThreadNavigation";
 
@@ -17,7 +18,16 @@ const helper = (monitorId: string): ThreadSubAgentSummary => ({
   monitorId, agentName: "Fixture helper", task: "Inspect contrived changes", status: "running", createdAt: 2_000, updatedAt: 2_000,
 });
 
-function fixture() {
+const visits = { rows: 0 };
+vi.mock("../navigation-window-demand", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../navigation-window-demand")>();
+  return { ...original, projectDisclosedNavigationParents: (...args: Parameters<typeof original.projectDisclosedNavigationParents>) => {
+    visits.rows += args[0]?.size ?? 0;
+    return original.projectDisclosedNavigationParents(...args);
+  } };
+});
+
+function fixture(extraRows = 0) {
   const local: NavigationThreadSummary = {
     id: "shared-thread", source: "codex", title: "Local fixture", titleSource: "explicit",
     linkedDirectories: [], inbox: { inInbox: true }, subAgents: [],
@@ -26,6 +36,7 @@ function fixture() {
     ...local, title: target.instanceId,
     federation: { instanceLabel: target.instanceId, ref: { backend: "codex", threadId: local.id, target } },
   }))];
+  for (let i = 0; i < extraRows; i++) threads.push({ ...local, id: `extra-${i}` });
   const listeners = new Set<(event: AgentEvent) => void>();
   let holdPages = false;
   // Keep refreshes pending after mounting: an event overlay must be visible
@@ -43,7 +54,7 @@ function fixture() {
     onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
   return {
-    api, read,
+    api, read, threads,
     holdPages: () => { holdPages = true; },
     send: (event: AgentEvent) => { for (const listener of listeners) listener(event); },
     emit: (target: FederationRemoteTarget, params: { subAgents?: ThreadSubAgentSummary[]; navigationChanged?: false }) => {
@@ -132,7 +143,7 @@ it("refreshes mounted navigation for a peer sub-agent invalidation without a pay
   unmount();
 });
 
-it("patches a non-open peer row from its own usage events without requesting navigation pages", async () => {
+it("retains each peer’s live card reading across a pending page without fetching another", async () => {
   const f = fixture();
   const { result } = renderHook(() => useThreadNavigation(f.api));
   await waitFor(() => expect(result.current.threads).toHaveLength(3));
@@ -158,8 +169,10 @@ it("patches a non-open peer row from its own usage events without requesting nav
   await act(async () => f.send({ backend: "codex", federationTarget: tower, notification: {
     method: "thread/contextWindow/updated", params: { threadId, usedTokens: 60, modelContextWindow: 200 },
   } }));
-  const reading = (target?: FederationRemoteTarget) => result.current.threads.find((thread) =>
-    threadOwner(thread) === target?.instanceId)?.contextWindow;
+  const reading = (target?: FederationRemoteTarget) => {
+    const row = result.current.threads.find((thread) => threadOwner(thread) === target?.instanceId)!;
+    return result.current.contextWindows.read(threadSummaryIdentityKey(row), row.contextWindow);
+  };
   expect(reading(studio)).toEqual({ totalTokens: 25, modelContextWindow: 100 });
   expect(reading(tower)).toEqual({ totalTokens: 60, modelContextWindow: 200 });
   expect(reading()).toBeUndefined();
@@ -171,4 +184,66 @@ it("patches a non-open peer row from its own usage events without requesting nav
   await act(async () => { gate.resolve(); await pending; });
   expect(reading(studio)).toEqual({ totalTokens: 25, modelContextWindow: 100 });
   expect(reading(tower)).toEqual({ totalTokens: 60, modelContextWindow: 200 });
+});
+
+const fill = (totalTokens: number) => ({ totalTokens, modelContextWindow: 100 });
+const contextEvent = (thread: NavigationThreadSummary, usedTokens: number, source?: "session" | "compaction"): AgentEvent => ({
+  backend: thread.source, notification: { method: "thread/contextWindow/updated",
+    params: { threadId: thread.id, usedTokens, modelContextWindow: 100, source } },
+});
+
+// The live model call wins until its fill reaches the owner page. Session hints
+// and billing/compaction telemetry are not observations of an ordinary model call.
+it.each([
+  { order: "event before read", source: "acp:fixture", initial: 25, live: 60, page: 25, expected: 60 },
+  { order: "first page pending", source: "acp:fixture", initial: 25, live: 60, page: 25, expected: 60 },
+  { order: "compaction", source: "acp:fixture", initial: 25, live: 60, page: 75, expected: 75 },
+  { order: "billing", source: "claude", initial: 25, live: 60, page: 75, expected: 75 },
+  { order: "repeat", source: "acp:fixture", initial: 25, live: 25, page: 10, expected: 25 },
+  { order: "session hint", source: "acp:fixture", initial: 25, live: 60, page: 75, expected: 75 },
+] as const)("resolves the card reading when $order", async ({ order, source, initial, live, page, expected }) => {
+  const f = fixture();
+  const thread = { ...f.threads[0]!, source, id: "meter", contextWindow: fill(initial) };
+  if (order !== "first page pending") f.threads.push(thread);
+  const { result } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.threads.length).toBe(f.threads.length));
+  const key = threadSummaryIdentityKey(thread);
+  const row = () => result.current.threads.find((entry) => entry.id === thread.id);
+  const reading = () => result.current.contextWindows.read(key, row()?.contextWindow);
+  const send = () => f.send(order === "billing" ? { backend: source, notification: {
+    method: "thread/tokenUsage/updated", params: { threadId: thread.id, tokenUsage: { total: { totalTokens: 750 } } },
+  } } : contextEvent(thread, live, order === "compaction" ? "compaction" : order === "session hint" ? "session" : undefined));
+  if (order === "event before read") await act(async () => send());
+  if (order === "first page pending") f.threads.push(thread);
+  thread.contextWindow = fill(page);
+  const gate = Promise.withResolvers<void>();
+  const original = f.read.getMockImplementation()!;
+  f.read.mockImplementation(async (request) => { const result = await original(request); await gate.promise; return result; });
+  let pending!: Promise<void>;
+  act(() => { pending = result.current.pagedNavigation.restart("lens"); });
+  await waitFor(() => expect(result.current.pagedNavigation.resources.get("lens")?.loading).toBe(true));
+  if (order !== "event before read") await act(async () => send());
+  if (order === "first page pending") expect(row()).toBeUndefined();
+  if (order === "compaction" || order === "billing" || order === "session hint") expect(reading()).toEqual(fill(initial));
+  await act(async () => { gate.resolve(); await pending; });
+  expect(row()?.contextWindow).toBeDefined();
+  expect(reading()).toEqual(fill(expected));
+  thread.contextWindow = fill(expected);
+  await act(async () => result.current.pagedNavigation.restart("lens"));
+  thread.contextWindow = fill(80);
+  await act(async () => result.current.pagedNavigation.restart("lens"));
+  expect(reading()).toEqual(fill(80));
+});
+
+it("visits no navigation rows and preserves the thread list across a burst of meter events", async () => {
+  const f = fixture(21);
+  const { result } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.threads).toHaveLength(10));
+  await act(async () => result.current.pagedNavigation.loadMore("lens"));
+  await waitFor(() => expect(result.current.threads).toHaveLength(24));
+  const before = result.current.threads;
+  visits.rows = 0;
+  for (let i = 0; i < 8; i++) await act(async () => f.send(contextEvent(f.threads[0]!, i)));
+  expect(visits.rows).toBe(0);
+  expect(result.current.threads).toBe(before);
 });

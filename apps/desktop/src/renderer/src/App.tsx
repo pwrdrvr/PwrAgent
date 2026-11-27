@@ -4782,6 +4782,7 @@ function DesktopAppShell(props: {
             newThreadFederationTargets={newThreadFederationTargets}
             localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
             localApplications={settings.snapshot?.applications}
+            contextWindows={navigation.contextWindows}
             readOpenThreadContext={readOpenThreadContext}
             platform={desktopApi?.platform}
             onRevealPath={revealProjectPath}

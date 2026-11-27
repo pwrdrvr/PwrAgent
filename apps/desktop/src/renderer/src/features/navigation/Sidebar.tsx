@@ -476,6 +476,7 @@ type SidebarProps = {
    * The open thread's context reading, for its card. A getter, so a reading
    * that changes every turn does not re-render the sidebar.
    */
+  contextWindows?: SidebarThreadCardOptions["contextWindows"];
   readOpenThreadContext?: () => (ThreadInfoContext & { threadKey: string }) | undefined;
   /** `process.platform`, for "Show in Finder" and "This Mac". */
   platform?: string;
@@ -2668,13 +2669,14 @@ function SidebarContent(props: SidebarProps) {
     row: HTMLElement,
   ): SidebarThreadCardActions => threadCardActionsFor(thread, row));
   const threadCardOptions = useMemo((): SidebarThreadCardOptions => ({
+    contextWindows: props.contextWindows,
     readThread: readThreadForCard,
     rowFacts: threadCardRowFacts,
     actionsFor: threadCardActions,
     // Refresh the open card when the row, its owner backend, or the Stop handler changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [
-    presentedByKey, props.backends, props.remoteBackends, props.onStopThread,
+    presentedByKey, props.contextWindows, props.backends, props.remoteBackends, props.onStopThread,
     readThreadForCard, threadCardActions, threadCardRowFacts,
   ]);
 

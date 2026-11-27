@@ -11,7 +11,8 @@ import type { CodexEnvironmentStartupFailure, LaunchpadCreationStatus } from "@p
 import type { NavigationAttentionScope, RemoteThreadPinPublication } from "@pwragent/shared/contracts/navigation";
 import { materializeObservableLaunchpad, LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
-import { applyCheckoutHibernationUpdate, applyThreadContextWindowEvent } from "./navigation-thread-event";
+import { NavigationContextWindows } from "./navigation-context-windows";
+import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
 import { readBridgedNavigationResumeState } from "./navigation-resume-state";
 import { findPeerCounterpartDirectory, type ProjectIdentity } from "./federation-project-match";
 import { FederatedDirectoryIndexCache } from "./federated-directory-index-cache";
@@ -3627,6 +3628,7 @@ export function useThreadNavigation(
     resolutions: ResolveProjectHeldWakeupsRequest["resolutions"],
   ) => Promise<ResolveProjectHeldWakeupsResponse>;
   loadedRows?: NavigationLoadedRows;
+  contextWindows: NavigationContextWindows;
   pagedNavigation: ReturnType<typeof useBoundedNavigationWindow>;
   /**
    * Paged resources whose landed page `threads` and `directories` do not
@@ -4203,9 +4205,7 @@ export function useThreadNavigation(
       [id, { request: resource.state.request, sequence: resource.state.pendingSequence }]));
     threadReactionPatchReadsRef.current.set(mutationKey, reads);
   }, []);
-  // A page already in flight when a live fill arrives may still supply other
-  // row facts. Keep the fill from the bus for that read only.
-  const contextPatchesByRequest = useRef(new WeakMap<object, { sequence: number; keys: Set<string> }>());
+  const [contextWindows] = useState(() => new NavigationContextWindows());
   const acceptedDefaultsRef = useRef<unknown>(undefined);
   const acceptedDraftHydrationRef = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
@@ -4224,6 +4224,10 @@ export function useThreadNavigation(
     const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
     if (changed && pages.size) {
       const changedPages = [...pages].filter(([id, page]) => acceptedPages.get(id) !== page);
+      for (const [id, page] of changedPages) {
+        const resource = boundedNavigation.resources.get(id);
+        if (!resource?.restoredFromCache && !resource?.state.stale) contextWindows.observePage(page);
+      }
       for (const [key, pending] of deferredArchiveRemovalsRef.current) {
         const resource = boundedNavigation.resources.get(pending.resourceId);
         const page = resource?.state.page;
@@ -4382,11 +4386,6 @@ export function useThreadNavigation(
               };
             }
           }
-          const resource = boundedNavigation.resources.get(id);
-          const patched = resource && contextPatchesByRequest.current.get(resource.state.request);
-          if (patched && patched.sequence === resource?.state.pendingSequence && patched.keys.has(key) && previous?.contextWindow) {
-            presentedRow = { ...presentedRow, contextWindow: previous.contextWindow };
-          }
           if (!suppressedArchivedThreadKeysRef.current.has(key)) threadRows.set(key, presentedRow);
         }
         for (const key of suppressedArchivedThreadKeysRef.current) threadRows.delete(key);
@@ -4432,7 +4431,7 @@ export function useThreadNavigation(
       setState((current) => current.loading === loading && current.refreshing === refreshing && current.error === error
         ? current : { ...current, loading, refreshing, error });
     }
-  }, [acceptedPages, boundedNavigation.resources, boundedNavigation.selectionAncestry, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
+  }, [acceptedPages, contextWindows, boundedNavigation.resources, boundedNavigation.selectionAncestry, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
   // The effect above folds a landed page into the rows, so a render in which
   // a page lands still shows the rows from before it. In that render the page
   // is not stale, yet nothing built from the rows reflects it. A selection's
@@ -4441,6 +4440,10 @@ export function useThreadNavigation(
   const pagesAwaitingRows = useMemo(() => [...boundedNavigation.resources]
     .filter(([id, resource]) => resource.state.page && acceptedPages.get(id) !== resource.state.page)
     .map(([id]) => id), [boundedNavigation.resources, acceptedPages]);
+
+  useLayoutEffect(() => {
+    if (!state.refreshing && !pagesAwaitingRows.length) contextWindows.settlePages(state.rows?.threadRows);
+  }, [contextWindows, pagesAwaitingRows, state.refreshing, state.rows?.threadRows]);
 
   const performRefresh = useCallback(async (
     preferredSelectionKey?: string, preferredOptimisticThread?: NavigationThreadSummary, forcePreferredSelection = false,
@@ -4747,28 +4750,7 @@ export function useThreadNavigation(
         const key = event.federationTarget?.scope === "remote"
           ? agentEventThreadIdentityKey(event, notification.params.threadId)
           : buildThreadIdentityKey(event.backend, notification.params.threadId);
-        const before = stateRef.current.rows?.threadRows.get(key);
-        if (!before) return;
-        const nextRow = applyThreadContextWindowEvent(before, event.backend, notification);
-        for (const resource of navigationResourcesRef.current.values()) {
-          if (!resource.loading) continue;
-          const { request, pendingSequence } = resource.state;
-          let patched = contextPatchesByRequest.current.get(request);
-          if (patched?.sequence !== pendingSequence) {
-            patched = { sequence: pendingSequence, keys: new Set() };
-            contextPatchesByRequest.current.set(request, patched);
-          }
-          patched.keys.add(key);
-        }
-        setState((current) => {
-          const row = current.rows?.threadRows.get(key);
-          if (!current.rows || !row) return current;
-          const next = row === before ? nextRow : applyThreadContextWindowEvent(row, event.backend, notification);
-          if (next === row) return current;
-          const threadRows = new Map(current.rows.threadRows);
-          threadRows.set(key, next);
-          return { ...current, rows: { ...current.rows, threadRows } };
-        });
+        contextWindows.observe(key, event.backend, notification, stateRef.current.rows?.threadRows.get(key)?.contextWindow);
         return;
       }
       if (method === "thread/start/pending") {
@@ -5268,6 +5250,7 @@ export function useThreadNavigation(
           threadId: string;
         };
         const threadKey = agentEventThreadIdentityKey(event, threadId);
+        contextWindows.forget(threadKey);
         updateArchivedThreadKey(threadKey, true);
         const row = stateRef.current.rows?.threadRows.get(threadKey);
         const deferRemoval = row && deferNestedArchiveRemoval(row);
@@ -5847,6 +5830,7 @@ export function useThreadNavigation(
     invalidateNavigation,
     deferNestedArchiveRemoval,
     composerPreviews,
+    contextWindows,
     updateArchivedThreadKey,
     noteDirectoryPatch,
     noteThreadReactionPatch,
@@ -11084,6 +11068,7 @@ export function useThreadNavigation(
     listProjectHeldWakeups,
     resolveProjectHeldWakeups,
     loadedRows: state.rows,
+    contextWindows,
     pagedNavigation: boundedNavigation,
     pagesAwaitingRows,
     selectedLaunchpadConfigurationReady: Boolean(activeFederatedLaunchpad) || launchpadConfiguration.ready,

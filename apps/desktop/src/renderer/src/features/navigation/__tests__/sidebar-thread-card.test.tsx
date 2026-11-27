@@ -10,6 +10,7 @@ import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
 } from "../../../lib/native-drag-interaction";
+import { NavigationContextWindows } from "../../../lib/navigation-context-windows";
 import { POINTER_AIM_SETTLE_MS } from "../../../lib/pointer-aim";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
@@ -118,6 +119,7 @@ type SidebarParams = {
   onSelectThread?: (thread: NavigationThreadSummary) => void;
   onOpenThreadTerminal?: (threadKey: string, cwd?: string, remote?: unknown) => void;
   applications?: DesktopApplicationsSnapshot;
+  contextWindows?: NavigationContextWindows;
   selectedItemKey?: string;
   readOpenThreadContext?: () => { threadKey: string; totalTokens: number; modelContextWindow: number };
 };
@@ -137,6 +139,7 @@ function sidebarElement(params: SidebarParams) {
       loading={false}
       threads={params.threads}
       localApplications={params.applications}
+      contextWindows={params.contextWindows}
       selectedItemKey={params.selectedItemKey}
       readOpenThreadContext={params.readOpenThreadContext}
       localMachineLabel="Studio-Mac"
@@ -231,6 +234,21 @@ describe("sidebar thread card", () => {
     } else {
       expect(shown).not.toHaveTextContent("Context");
     }
+  });
+
+  it("updates a visible meter only for the hovered identity and reads earlier events on open", () => {
+    const contextWindows = new NavigationContextWindows();
+    const observe = (id: string, usedTokens: number) => act(() => contextWindows.observe(`codex:${id}`, "codex", {
+      method: "thread/contextWindow/updated", params: { threadId: id, usedTokens, modelContextWindow: 100 },
+    }));
+    renderSidebar({ threads: [thread("a"), thread("b")], selectedItemKey: "codex:b", contextWindows });
+    observe("a", 25);
+    const shown = hoverOpen("a");
+    expect(shown).toHaveTextContent("25%");
+    observe("b", 80);
+    expect(shown).toHaveTextContent("25%");
+    observe("a", 60);
+    expect(shown.querySelector(".thread-info-card__context-used")).toHaveStyle({ width: "60%" });
   });
 
   it("opens at once on keyboard focus, and not on a click's or a script's focus", () => {
