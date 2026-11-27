@@ -21,7 +21,7 @@ import {
 } from "@pwragent/shared/contracts/navigation";
 import { type BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
-import { useEventCallback } from "../../lib/useEventCallback";
+import { useReviewCardStart, type ComposerReviewSetup } from "./useReviewCardStart";
 import { ModelDropdown } from "./ModelDropdown";
 import { ModelSettingsPicker, ModelSettingsQuickList, type ModelSettingsPickerProps } from "./ModelSettingsPicker";
 import { AccessPicker } from "./AccessPicker";
@@ -479,12 +479,7 @@ function isEditingOutsideComposer(): boolean {
     && !focused.closest("form.composer");
 }
 
-/** The review panel a to-do card opened, as that card sees it. */
-export type ComposerReviewSetup = {
-  todoId: string;
-  /** The panel's Start review, by its label, while the card may offer it. */
-  start?: { label: string; run: () => void };
-};
+export type { ComposerReviewSetup } from "./useReviewCardStart";
 
 export type ComposerProps = {
   codexSkillProfiles?: readonly CodexSkillProfile[];
@@ -3743,29 +3738,6 @@ function useComposerController(props: ComposerProps) {
     reviewConfigRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [reviewPanelArrival]);
   const reviewSetupTodoId = reviewConfig?.reviewTodo?.id;
-  // Whether all of the panel's Start review is on screen, inside the
-  // composer's scroll area and the window. A card offers the start only then,
-  // so it never starts a review the operator cannot see.
-  const [reviewStartInView, setReviewStartInView] = useState(false);
-  const reviewStartObserverRef = useRef<IntersectionObserver | undefined>(undefined);
-  const reviewStartButtonRef = useCallback((button: HTMLButtonElement | null) => {
-    reviewStartObserverRef.current?.disconnect();
-    reviewStartObserverRef.current = undefined;
-    if (!button) {
-      setReviewStartInView(false);
-      return;
-    }
-    if (typeof IntersectionObserver === "undefined") {
-      setReviewStartInView(true);
-      return;
-    }
-    const observer = new IntersectionObserver((entries) => {
-      const entry = entries[entries.length - 1];
-      if (entry) setReviewStartInView(entry.intersectionRatio >= 0.99);
-    }, { threshold: [0, 0.99] });
-    observer.observe(button);
-    reviewStartObserverRef.current = observer;
-  }, []);
 
   function useComposerSessionState() {
     const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
@@ -12279,24 +12251,15 @@ function useComposerController(props: ComposerProps) {
     : reviewPullRequestBatch
       ? `Start ${selectedReviewPullRequests.length} reviews`
       : "Start review";
-  // The card that opened this panel offers the panel's Start review in the
-  // spot of its own, while the button is enabled, on screen, and starts now.
-  const reviewCardStartLabel = reviewSetupTodoId && reviewStartInView && !reviewStartDisabled && !futureScheduledDraftSendAt
-    ? reviewStartLabel
-    : undefined;
-  const startReviewFromCard = useEventCallback(() => {
-    void submitConfiguredReviewComposer();
+  const reviewStartButtonRef = useReviewCardStart({
+    todoId: reviewSetupTodoId,
+    label: reviewStartLabel,
+    unavailable: reviewStartDisabled || Boolean(futureScheduledDraftSendAt),
+    start: () => {
+      void submitConfiguredReviewComposer();
+    },
+    onReviewSetupChange: props.onReviewSetupChange,
   });
-  const onReviewSetupChange = props.onReviewSetupChange;
-  useEffect(() => {
-    onReviewSetupChange?.(reviewSetupTodoId
-      ? {
-          todoId: reviewSetupTodoId,
-          ...(reviewCardStartLabel ? { start: { label: reviewCardStartLabel, run: startReviewFromCard } } : {}),
-        }
-      : undefined);
-  }, [onReviewSetupChange, reviewSetupTodoId, reviewCardStartLabel, startReviewFromCard]);
-  useEffect(() => () => onReviewSetupChange?.(undefined), [onReviewSetupChange]);
 
   function useComposerPresentation() {
     // Remote controls use the owner's feature gate/default, never the viewer's.
