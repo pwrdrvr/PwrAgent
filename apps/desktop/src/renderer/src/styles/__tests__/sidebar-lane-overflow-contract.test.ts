@@ -95,4 +95,23 @@ describe("sidebar lane horizontal overflow", () => {
     expect(lastValue(".pr-chip__repo", "overflow")).toBe("hidden");
     expect(lastValue(".pr-chip__repo", "text-overflow")).toBe("ellipsis");
   });
+
+  it("keeps a Details PR row's chip whole beside a long title", () => {
+    // The `min-width: 0` above let a long PR title in the Details tab's
+    // `Folders & git` rows out-shrink the chip beside it, clipping `#634` to
+    // `#6`. There the chip carries no repository prefix, so it never needs to
+    // give way; the title ellipsizes instead.
+    //
+    // A headless-Chromium run rendering the real Details, PRs, review picker,
+    // transcript, and sidebar chips over 3,000 generated cases (rail 240-640px,
+    // PR numbers up to nine digits, merge-queue badges, every density) found
+    // no clipped number with these rules; reverting the chip rule clipped one
+    // in 702 of 1,000. Unshrinkable, the chip then pushed Auto-fix past a
+    // 240px rail (the rail's floor) in 6 of 1,000, so the row wraps Auto-fix
+    // instead, and the title's zero basis keeps a long title from forcing it.
+    expect(lastValue(".details-row--pr > .pr-chip", "flex-shrink")).toBe("0");
+    expect(lastValue(".details-row__text", "min-width")).toBe("0");
+    expect(lastValue(".details-row--pr", "flex-wrap")).toBe("wrap");
+    expect(lastValue(".details-row--pr > .details-row__text", "flex-basis")).toBe("0");
+  });
 });

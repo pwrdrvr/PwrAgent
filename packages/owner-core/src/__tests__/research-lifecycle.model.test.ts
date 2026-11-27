@@ -498,7 +498,11 @@ describe("native research run lifecycle model", () => {
               const approach = run.approaches[op.approachIndex % run.approaches.length]!;
               if (approach.worker) {
                 const tid = op.wrongTurn ? `wrong-${cmdSeq}` : (approach.worker.turnId ?? `t-${++turnSeq}`);
+                const alreadyRetired = run.events.some(({ commandId }) =>
+                  commandId === `ended:${approach.id}:${tid}` || commandId === `stopped:${approach.id}:${tid}`);
                 service.observeEnd(approach.worker, tid, { failed: op.failed });
+                // A redelivered terminal observation cannot retire an approach's newer work.
+                if (alreadyRetired) expect(service.readItem(runId, approach.id, OP).item.record).toMatchObject({ state: approach.state });
               }
             } else if (op.kind === "observe_queue") {
               const run = service.read(runId, OP);
@@ -697,6 +701,53 @@ describe("native research run lifecycle model", () => {
     expect(adopted.activeWorkers).toBe(0);
     const stopped = await second.update(started.id, "stop-1", { action: "stop", reason: "Stop" }, OP);
     expect(stopped.status).toBe("stopped");
+    second.close();
+  });
+
+  it("ignores a conflicting terminal replay for a failed turn while its worker's resume is queued", async () => {
+    const storage = new MemoryResearchStorage();
+    const worker = { backend: "codex" as const, threadId: "w-1", turnId: "t-old" };
+    let liveOwner = "owner-1";
+    const makePorts = (ownerId: string, notify: ResearchPorts["notify"]): ResearchPorts => ({
+      ownerId,
+      ownerPid: 1,
+      ownerStartedAt: START_TIME,
+      isOwnerAlive: (o) => o.ownerId === liveOwner,
+      now: () => START_TIME,
+      schedule: () => () => {},
+      spawn: async (_c, _t, _title, _mode, onCreated) => { onCreated(worker); return worker; },
+      stop: async () => {},
+      notify,
+      cancelQueued: async () => ({}),
+      changed: () => {},
+      onError: (error) => { throw error; },
+    });
+    const first = new ResearchService(storage, makePorts("owner-1", () => new Promise(() => {})));
+    const { id } = await first.start({ objective: "Obj", workspaceMode: "none", approaches: [{ title: "A1", task: "T1" }] }, COORD_AGENT);
+    await first.update(id, "submit", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, COORD_AGENT);
+    first.observeEnd(worker, worker.turnId, { failed: true });
+    const submissionId = first.read(id, OP).submissions[0]!.id;
+    // The first owner dies with the revision send in flight.
+    void first.update(id, "review", { action: "review", submissionId, decision: "revision_requested", reason: "Revise" }, OP);
+    expect(first.read(id, OP).deliveries[0]?.state).toBe("pending");
+
+    liveOwner = "owner-2";
+    const second = new ResearchService(storage, makePorts(liveOwner, async () => ({ queueEntryId: "q-resume" })));
+    second.initialize();
+    await second.update(id, "resume", { action: "resume", approachIds: ["a1"] }, OP);
+    const queued = second.read(id, OP);
+    expect(queued.approaches[0]?.state).toBe("starting");
+    expect(queued.activeWorkers).toBe(1);
+
+    second.observeEnd(worker, worker.turnId);
+    expect(second.read(id, OP).revision).toBe(queued.revision);
+    expect(second.read(id, OP).approaches[0]).toEqual(queued.approaches[0]);
+
+    await second.observeStart(worker, "t-resumed");
+    second.observeEnd(worker, "t-resumed");
+    const ended = second.read(id, OP);
+    expect(ended.approaches[0]).toMatchObject({ state: "ended", worker: { turnId: "t-resumed" } });
+    expect(ended.activeWorkers).toBe(0);
     second.close();
   });
 

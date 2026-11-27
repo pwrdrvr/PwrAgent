@@ -9,6 +9,7 @@ import type { OracleFixture, PortableOutpostFixture } from "./oracle-fixture-con
 
 const headlessBuilder = fileURLToPath(new URL("../../scripts/build-headless.mjs", import.meta.url));
 const outpostManifest = fileURLToPath(new URL("../../../../packages/pwragent/package.json", import.meta.url));
+const testDirectory = fileURLToPath(new URL("../main/__tests__/", import.meta.url));
 type HeadlessBuilder = typeof import("../../scripts/build-headless.mjs");
 
 async function buildPortableOutpostFixture(root: string, buildHeadless: HeadlessBuilder["buildHeadless"]): Promise<PortableOutpostFixture> {
@@ -43,39 +44,54 @@ async function prepareFixture<T>(label: string, buildFixture: () => Promise<T>):
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
-  const fixtures: Array<{ dispose(): Promise<void> }> = [];
-  const prepareOwned = <T>(label: string, buildFixture: (root: string) => Promise<T>): Promise<OracleFixture<T>> => {
-    // Retain earlier watch outputs until all workers have retired.
+  type FixtureKey = "headlessDriver" | "portableOutpost";
+  const fixtures = new Map<FixtureKey, { dispose(): Promise<void> }>();
+  const prepareOwned = async <T>(
+    key: FixtureKey,
+    label: string,
+    buildFixture: (root: string) => Promise<T>,
+    publish: (output: OracleFixture<T>) => void,
+    rerun: boolean,
+  ): Promise<void> => {
     const fixture = createNativeHelperFixture(buildFixture);
-    fixtures.push(fixture);
-    return prepareFixture(label, () => fixture.ready);
+    const output = await prepareFixture(label, () => fixture.ready);
+    // A rerun can be requested while earlier workers still hold those paths.
+    if (rerun) await project.vitest.waitForTestRunEnd();
+    const previous = fixtures.get(key);
+    publish(output);
+    fixtures.set(key, fixture);
+    await previous?.dispose();
   };
+  const normalizeFile = (file: string) => file.replaceAll("\\", "/");
+  const consumer = (file: string) => normalizeFile(path.join(testDirectory, file));
   let preparing = Promise.resolve();
-  const prepare = async (specifications: TestSpecification[]): Promise<void> => {
+  const prepare = async (specifications: TestSpecification[], rerun = false): Promise<void> => {
     // Global setup runs before the pool applies its configured shard.
     const { config } = project.vitest;
     const selected = config.shard
       ? await new config.sequence.sequencer(project.vitest).shard([...specifications])
       : specifications;
-    const files = new Set(selected.filter((spec) => spec.project === project).map((spec) => path.basename(spec.moduleId)));
+    const files = new Set(selected.filter((spec) => spec.project === project).map((spec) => normalizeFile(spec.moduleId)));
     preparing = preparing.then(async () => {
       let builder: Promise<HeadlessBuilder> | undefined;
       const loadBuilder = () => builder ??= (async () => {
         // The global setup runner can retain evaluated imports on watch reruns.
         const digest = createHash("sha256").update(await readFile(headlessBuilder)).digest("hex");
-        return project.import<HeadlessBuilder>(`${headlessBuilder}?oracleBuilderSource=${digest}`);
+        return project.import<HeadlessBuilder>(`${normalizeFile(headlessBuilder)}?oracleBuilderSource=${digest}`);
       })();
-      if (files.has("headless-concurrency.oracle.test.ts") || files.has("headless-host.boot.oracle.test.ts")) {
-        project.provide("headlessDriver", await prepareOwned("headless driver", async (root) => {
+      if (files.has(consumer("headless-concurrency.oracle.test.ts")) || files.has(consumer("headless-host.boot.oracle.test.ts"))) {
+        await prepareOwned("headlessDriver", "headless driver", async (root) => {
           const { buildHeadlessDriverFixture } = await import("../main/__tests__/helpers/headless-driver-fixture");
           return buildHeadlessDriverFixture(root, (await loadBuilder()).buildHeadless);
-        }));
+        }, output => project.provide("headlessDriver", output), rerun);
       }
-      if (files.has("headless-portable-chunks.oracle.test.ts") || files.has("claude-session-reader.test.ts")) {
-        project.provide("portableOutpost", await prepareOwned("portable Outpost", async (root) =>
-          buildPortableOutpostFixture(root, (await loadBuilder()).buildHeadless)));
+      if (files.has(consumer("headless-portable-chunks.oracle.test.ts")) || files.has(consumer("claude-session-reader.test.ts"))) {
+        await prepareOwned("portableOutpost", "portable Outpost", async (root) => {
+          const { buildHeadless } = await loadBuilder();
+          return await buildPortableOutpostFixture(root, buildHeadless);
+        }, output => project.provide("portableOutpost", output), rerun);
       }
-      if (files.has("production-entry-host.oracle.test.ts")) {
+      if (files.has(consumer("production-entry-host.oracle.test.ts"))) {
         project.provide("desktopEntryHasFileKey", await prepareFixture("desktop entry", async () => {
           const { desktopEntryHasFileKey } = await import("../main/__tests__/helpers/production-entry-bundle");
           return desktopEntryHasFileKey();
@@ -85,9 +101,9 @@ export default async function setup(project: TestProject): Promise<() => Promise
     await preparing;
   };
   await prepare(project.vitest.state.getPaths().flatMap((file) => project.vitest.getModuleSpecifications(file)));
-  project.onTestsRerun(prepare);
+  project.onTestsRerun((specifications) => prepare(specifications, true));
   return async () => {
     await preparing;
-    await Promise.all(fixtures.map((fixture) => fixture.dispose()));
+    await Promise.all([...fixtures.values()].map((fixture) => fixture.dispose()));
   };
 }

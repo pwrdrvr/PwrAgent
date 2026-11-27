@@ -233,6 +233,23 @@ describe("FederationPtyService capability map", () => {
 });
 
 describe("FederationPtyService sessions", () => {
+  it("includes the owner's startup notice before the first shell output", async () => {
+    const pty = new FakePty();
+    const { service, sent } = createHarness({
+      spawnPty: async () => ({
+        pty, cwd: "/owner/home", shell: { file: "/bin/sh", args: [] },
+        startupNotice: "Workspace unavailable.\r\n",
+      }),
+    });
+    const { snapshot } = await service.open("peer-a", OPEN_REQUEST);
+    expect(snapshot?.data).toContain("Workspace unavailable.");
+    pty.emitData("$ ");
+    expect(sent).toContainEqual(expect.objectContaining({
+      method: "pty.output",
+      params: expect.objectContaining({ seq: snapshot!.seq + 1 }),
+    }));
+  });
+
   it("opens with the owner-resolved cwd and audits the open", async () => {
     const { audits, service } = createHarness();
     const opened = await service.open("peer-a", OPEN_REQUEST);
