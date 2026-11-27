@@ -18,6 +18,8 @@ import type {
  * as provider-owned is not, so keep this list wide rather than tight.
  */
 const OVERLAY_OWNED_ENTRY_ID_PREFIXES = [
+  // Supplemental receipts keep this ID even when frame compaction removes their origin.
+  "correspondence:",
   // Renderer-minted turn totals persisted through `persistThreadUsageActivity`.
   "live-turn-usage-",
   // Per-request usage synthesized while normalizing a Codex rollout item.

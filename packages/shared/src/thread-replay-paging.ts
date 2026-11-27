@@ -268,6 +268,7 @@ function trimReplayWithinByteBudget(
   let paginationBytes = measureJsonBytes(pagination);
   let replayBytesWithoutPagination = measureJsonBytes(empty) - paginationBytes;
   const messageRoles = new Set<AppServerThreadMessage["role"]>();
+  const lastProviderIndex = entries.findLastIndex(isCursorEntry);
   let start = entries.length;
   let fittedPagination = pagination;
   for (let index = entries.length - 1; index > 0; index -= 1) {
@@ -297,10 +298,29 @@ function trimReplayWithinByteBudget(
       fittedPagination = pagination;
     }
   }
-  if (start < entries.length) {
+  if (start < entries.length && (lastProviderIndex < 0 || start <= lastProviderIndex)) {
     return replayWithEntries(replay, entries.slice(start), fittedPagination);
   }
 
+  // A trailing overlay cannot name a continuation. Try compacting the
+  // anchored suffix before falling back to its provider row alone.
+  const anchor = entries[lastProviderIndex];
+  const hasPreviousPage = replay.pagination.hasPreviousPage
+    || (anchor ? lastProviderIndex > 0 : entries.length > 1);
+  if (anchor && lastProviderIndex < entries.length - 1) {
+    const pagination = mintEntryCursorPagination([anchor], hasPreviousPage);
+    const compacted = compactReplayWithinByteBudget({
+      replay: replayWithEntries(replay, entries.slice(lastProviderIndex), pagination),
+      maxBytes,
+      measureJsonBytes,
+    });
+    if (compacted.entries.length) return compacted;
+    const anchored = replayWithEntries(replay, [anchor], pagination);
+    if (measureJsonBytes(anchored) <= maxBytes) return anchored;
+    const compactAnchor = replayWithEntries(replay, [compactOversizedEntry(anchor)], pagination);
+    if (measureJsonBytes(compactAnchor) <= maxBytes) return compactAnchor;
+    if (start < entries.length) return replayWithEntries(replay, entries.slice(start), fittedPagination);
+  }
   const oversizedEntry = entries[entries.length - 1]!;
   const candidate = replayWithEntries(
     replay,
@@ -308,7 +328,7 @@ function trimReplayWithinByteBudget(
     // Compaction rewrites activity summaries that can identify overlay rows.
     mintEntryCursorPagination(
       [oversizedEntry],
-      replay.pagination.hasPreviousPage || entries.length > 1,
+      hasPreviousPage,
       isCursorEntry,
     ),
   );
@@ -384,6 +404,9 @@ function compactOversizedEntry(entry: AppServerThreadEntry): AppServerThreadEntr
         id: entry.id,
         role: entry.role,
         text: FEDERATION_OMITTED_ENTRY_TEXT,
+        ...(entry.origin?.systemReason === "thread-correspondence" ? {
+          origin: { kind: "pwragent", systemReason: "thread-correspondence" },
+        } : {}),
         ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
         ...(entry.phase ? { phase: entry.phase } : {}),
         ...(entry.turn ? { turn: entry.turn } : {}),

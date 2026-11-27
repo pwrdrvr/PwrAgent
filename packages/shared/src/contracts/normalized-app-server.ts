@@ -840,6 +840,8 @@ export type AppServerThreadMessageOrigin = {
   dependencyId?: string;
   stackNotice?: import("./thread-system-messages").StackNotice;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice" | "auto-compaction";
+  /** Sequence in the sender's durable correspondence log, scoped to this message ID. */
+  correspondenceRevision?: number;
   /**
    * The operator sent this agent-routed message by acting on a to-do card,
    * so a paused project's refusal of messages from other threads skips it.

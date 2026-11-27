@@ -1183,4 +1183,73 @@ describe("useThreadSessionState transcript ordering regressions (MBT shrunk coun
       session.close();
     }
   });
+
+  it("does not regress a newer owner receipt when a queued notification arrives during its read", async () => {
+    const origin = { kind: "pwragent" as const, systemReason: "thread-correspondence" as const };
+    const started: AppServerThreadEntry = {
+      type: "message", id: "correspondence:send", role: "assistant", text: "Started",
+      origin: { ...origin, correspondenceRevision: 3 },
+    };
+    const session = await mountSession({ backend: "codex", supportsPagination: true, snapshot: () => [] });
+    try {
+      act(() => {
+        void session.result.current.reload();
+        session.emit("item/completed", {
+          item: { id: started.id, type: "agentMessage", text: "Queued", origin: { ...origin, correspondenceRevision: 2 } },
+        });
+      });
+      await act(async () => {
+        const fresh = session.reads.shift()!;
+        // The owner captures Started after the queued notification was delivered.
+        fresh.resolve({ ...fresh.response, replay: { ...fresh.response.replay, entries: [started], messages: [started] } });
+      });
+      expect(session.result.current.entries).toMatchObject([{ id: started.id, text: "Started" }]);
+      act(() => {
+        session.emit("item/completed", {
+          item: { id: started.id, type: "agentMessage", text: "Queued", origin: { ...origin, correspondenceRevision: 2 } },
+        });
+      });
+      expect(session.result.current.entries).toMatchObject([{ id: started.id, text: "Started" }]);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("retains a newer live correspondence status when an older replay finishes", async () => {
+    const queued: AppServerThreadEntry = {
+      type: "message",
+      id: "correspondence:send",
+      role: "assistant",
+      text: "Queued",
+      createdAt: BASE_NOW,
+      parts: [{ type: "text", text: "Queued" }, { type: "file", name: "fixture.txt" }],
+      origin: { kind: "pwragent", systemReason: "thread-correspondence", correspondenceRevision: 2 },
+    };
+    const session = await mountSession({ backend: "codex", supportsPagination: true, snapshot: () => [queued] });
+    try {
+      act(() => {
+        session.emit("item/completed", {
+          item: { id: queued.id, type: "agentMessage", origin: queued.origin, createdAt: BASE_NOW, text: "Queued" },
+        });
+      });
+      act(() => {
+        void session.result.current.reload();
+        session.emit("item/completed", {
+          item: { id: queued.id, type: "agentMessage", origin: { ...queued.origin, correspondenceRevision: 3 }, createdAt: BASE_NOW, text: "Started" },
+        });
+      });
+      expect(session.result.current.entries).toMatchObject([{ id: queued.id, text: "Started" }]);
+
+      await act(async () => {
+        const stale = session.reads.shift()!;
+        stale.resolve(stale.response);
+      });
+      expect(session.result.current.entries).toMatchObject([{
+        id: queued.id, text: "Started", createdAt: BASE_NOW,
+        parts: [{ type: "text", text: "Started" }, { type: "file", name: "fixture.txt" }],
+      }]);
+    } finally {
+      session.close();
+    }
+  });
 });
