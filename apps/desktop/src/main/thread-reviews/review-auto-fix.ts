@@ -524,9 +524,13 @@ export class ReviewAutoFixDispatcher {
           // Keep ownership until admission. A queued start could otherwise
           // outlive the observation that cleared the gate.
           const hasHandoff = this.handoffSuspensions.has(id);
+          let admissionHold: string | undefined;
           const result = await this.deps.submitTurnIfIdle({
             ...request,
-            canAdmit: async () => !await this.deps.readStackHold?.(current),
+            canAdmit: async () => {
+              admissionHold = await this.deps.readStackHold?.(current);
+              return !admissionHold;
+            },
             ...(hasHandoff ? { reviewAutoFixHandoff: true } : {}),
           });
           if (result.status === "busy") {
@@ -535,7 +539,11 @@ export class ReviewAutoFixDispatcher {
               this.cancelReview(id, afterBusy ?? current);
               return;
             }
-            this.heldReviews.set(id, "Waiting for turn admission");
+            if (admissionHold) {
+              // The gate closed again at admission: say so, not the turn.
+              this.deps.recordRun(afterBusy, id, { kind: "stackHold", reason: admissionHold, at: this.now() });
+            }
+            this.heldReviews.set(id, admissionHold ?? "Waiting for turn admission");
             const handoff = this.handoffSuspensions.get(id);
             const reviewTurnStillActive = handoff !== undefined
               && !handoff.reviewTurnEnded

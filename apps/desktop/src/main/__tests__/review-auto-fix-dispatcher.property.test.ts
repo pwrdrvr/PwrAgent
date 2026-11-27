@@ -421,6 +421,31 @@ describe("review auto-fix dispatcher", () => {
     expect(runs.of(THREAD)[review.id]).toEqual({ phase: "running", at: 4 });
   });
 
+  it("reports a stack hold that closes again at admission", async () => {
+    // Counterexample: the gate cleared, then closed before admission; the
+    // busy result left an idle thread saying it waits on the current turn.
+    const review = makeReview("rev-admission-hold", true);
+    const runs = new ReviewAutoFixRuns();
+    let stackHold: string | undefined;
+
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => false,
+      readStackHold: async () => stackHold,
+      threadHasActiveTurn: () => false,
+      submitTurn: async () => ({ status: "started" }),
+      submitTurnIfIdle: async ({ canAdmit }) => {
+        stackHold = "Held by #12: CI running";
+        return (await canAdmit()) ? { status: "started" } : { status: "busy" };
+      },
+      recordRun: (thread, id, event) => runs.record(thread, id, event),
+      now: () => 1,
+    });
+
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #12: CI running" });
+  });
+
   it("cancels queued run state when a thread is archived while Auto-fix is held", async () => {
     const review = makeReview("rev-archive-held", true);
     const runs = new ReviewAutoFixRuns();
