@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -51,6 +52,7 @@ import {
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadResponse,
   type InterruptTurnRequest,
+  type StopThreadRequest,
   type InterruptTurnResponse,
   type DismissFailedSubAgentsRequest,
   type DismissFailedSubAgentsResponse,
@@ -149,6 +151,7 @@ import {
   CODEX_MCP_SERVER_LOGIN_CHANNEL,
   CODEX_MCP_SERVER_REMOVE_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_STOP_THREAD_CHANNEL,
   AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -1019,6 +1022,21 @@ export function registerAgentIpcHandlers(): void {
       await registry.removeCodexMcpServer(request),
   );
 
+  ipcMain.removeHandler(AGENT_STOP_THREAD_CHANNEL);
+  ipcMain.handle(AGENT_STOP_THREAD_CHANNEL, async (event, request: StopThreadRequest): Promise<void> => {
+    const target = request.federationTarget ?? federationTargetForChannelSubscriber(event.sender);
+    const owner = target && isRemoteFederationTarget(target)
+      ? getDesktopFederationRuntime().remoteBackend(target)
+      : registry;
+    const result = await owner.controlActiveTurn({
+      backend: request.backend,
+      threadId: request.threadId,
+      operation: "stop",
+      requestId: randomUUID(),
+    });
+    if (!result.ok) throw new Error(result.error.message);
+  });
+
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_INTERRUPT_TURN_CHANNEL,
@@ -1668,6 +1686,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(CODEX_MCP_SERVER_REMOVE_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_THREAD_REPLY_CHANNEL);
+  ipcMain.removeHandler(AGENT_STOP_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);

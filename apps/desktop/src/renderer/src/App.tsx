@@ -1792,6 +1792,21 @@ function DesktopAppShell(props: {
   // Handed to the sidebar, which hands them to memoized thread rows. Inline
   // arrows here were a new function on every render of this component, and a
   // row's `memo` cannot bail out past one.
+  const stopThread = useEventCallback(async (thread: NavigationThreadSummary) => {
+    try {
+      await desktopApi?.stopThread?.({
+        backend: thread.source,
+        threadId: thread.id,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+      });
+    } catch (error) {
+      showAppNotice({
+        id: `stop-thread:${threadSummaryIdentityKey(thread)}`,
+        title: "Couldn't stop the turn",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
   const detachThreadPullRequest = useEventCallback(
     async (thread: NavigationThreadSummary, pr: PrSummary) => {
       if (!desktopApi?.detachThreadPullRequest) return;
@@ -4928,6 +4943,7 @@ function DesktopAppShell(props: {
               }
               await navigation.refresh("action/remote-pin-remove");
             }}
+            onStopThread={desktopApi?.stopThread ? stopThread : undefined}
             onArchiveThread={navigation.archiveThread}
             onArchiveThreads={navigation.archiveThreads}
             onArchiveDirectories={desktopApi?.removeNavigationDirectory ? navigation.archiveDirectories : undefined}

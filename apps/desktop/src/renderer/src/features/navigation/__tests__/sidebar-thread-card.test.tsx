@@ -106,6 +106,7 @@ function mockSidebarLayout(): void {
 
 type SidebarParams = {
   threads: NavigationThreadSummary[];
+  onStopThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onSetThreadPin?: (thread: NavigationThreadSummary, pinned: boolean) => Promise<void>;
@@ -134,6 +135,7 @@ function sidebarElement(params: SidebarParams) {
       localMachineLabel="Studio-Mac"
       platform="darwin"
       onBrowseModeChange={() => undefined}
+      onStopThread={params.onStopThread}
       onArchiveThread={params.onArchiveThread}
       onCreateThread={async () => undefined}
       onMarkThreadsSeen={params.onMarkThreadsSeen}
@@ -474,16 +476,51 @@ describe("sidebar thread card", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
-  it("swaps Mark read and Archive out while the thread runs", () => {
-    renderSidebar({
-      threads: [thread("a", { threadStatus: "active", inbox: { inInbox: true, reason: "new-thread" } })],
+  it("swaps Mark read and Archive for Stop while the thread runs", () => {
+    const idle = thread("a", { inbox: { inInbox: true, reason: "new-thread" } });
+    const active = thread("a", { ...idle, threadStatus: "active" });
+    const onStopThread = vi.fn(async () => undefined);
+    const params = {
+      threads: [idle],
       onMarkThreadsSeen: async () => undefined,
       onArchiveThread: async () => undefined,
-    });
+      onStopThread,
+    };
+    const view = renderSidebar(params);
     const shown = hoverOpen("a");
+    expect(within(shown).queryByRole("button", { name: "Stop", hidden: true })).toBeNull();
+    view.rerender(sidebarElement({ ...params, threads: [active] }));
     expect(shown).toHaveTextContent("Running · Codex");
     expect(within(shown).queryByRole("button", { name: "Mark read", hidden: true })).toBeNull();
     expect(within(shown).queryByRole("button", { name: /Archive/, hidden: true })).toBeNull();
+    fireEvent.click(within(shown).getByRole("button", { name: "Stop", hidden: true }));
+    expect(onStopThread).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "a", source: "codex" }));
+    expect(card()).toBeNull();
+  });
+
+  it.each([false, true])("offers Stop on a running peer exactly when it grants turn_control (%s)", (allowed) => {
+    const onStopThread = vi.fn(async () => undefined);
+    const peer = thread("a", {
+      threadStatus: "active",
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "lab" }, backend: "codex", threadId: "a" },
+        instanceLabel: "lab-mini",
+        peerStatus: "connected",
+        capabilities: allowed ? ["turn_control"] : [],
+      },
+    });
+    renderSidebar({ threads: [peer], onStopThread });
+    move(document.querySelector(".sidebar")!, document.querySelector(".thread-row__title")!);
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    const shown = card()!;
+    expect(shown).toHaveTextContent("Running ·");
+    const button = { name: "Stop", hidden: true };
+    if (allowed) {
+      fireEvent.click(within(shown).getByRole("button", button));
+      expect(onStopThread).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ federation: peer.federation }));
+    } else {
+      expect(within(shown).queryByRole("button", button)).toBeNull();
+    }
   });
 
   const WORKTREE_THREAD: Partial<NavigationThreadSummary> = {

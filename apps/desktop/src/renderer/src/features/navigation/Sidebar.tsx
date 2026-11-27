@@ -550,6 +550,7 @@ type SidebarProps = {
   onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
   onArchiveDirectories?: (directoryKeys: string[]) => Promise<void>;
   onMarkThreadUnread?: (thread: NavigationThreadSummary) => Promise<void>;
+  onStopThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onArchiveThread?: (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
@@ -2967,15 +2968,17 @@ function SidebarContent(props: SidebarProps) {
 
   // Per-thread versions of the context menu's gates, for the keyboard
   // shortcuts, which act without a menu open.
+  const peerGrantsCapability = (
+    thread: NavigationThreadSummary,
+    capability: "thread_navigation" | "turn_control",
+  ): boolean => thread.federation?.peerStatus === "connected"
+    && thread.federation.capabilities?.includes(capability) === true;
   const threadCanRouteRemoteCapability = (
     thread: NavigationThreadSummary,
     capability: "thread_navigation" | "turn_control",
   ): boolean =>
     !(thread.federation && !federationTarget)
-    || Boolean(
-      thread.federation.peerStatus === "connected"
-      && thread.federation.capabilities?.includes(capability),
-    );
+    || peerGrantsCapability(thread, capability);
   const threadCanRename = (thread: NavigationThreadSummary): boolean =>
     Boolean(props.onRenameThread)
     && threadSupportsRename(thread, threadBackends(thread), Boolean(federationTarget));
@@ -3860,6 +3863,8 @@ function SidebarContent(props: SidebarProps) {
     row: HTMLElement,
   ): SidebarThreadCardActions {
     const live = navigationThreadByKey.get(threadSummaryIdentityKey(thread)) ?? thread;
+    const local = !thread.federation && !federationTarget;
+    const { onStopThread } = props;
     const branch = getThreadNamedBranch(thread);
     const facts = threadCardRowFacts(thread);
     const prUrl = facts.pr?.pr.url;
@@ -3902,6 +3907,10 @@ function SidebarContent(props: SidebarProps) {
         : {}),
       ...(!thread.parentThreadId && props.onSetThreadPin
         ? { pin: { pinned: Boolean(live.pinnedRank), toggle: () => togglePinFromContextMenu(live) } }
+        : {}),
+      // A background task can keep the card running after the parent turn has ended.
+      ...(thread.threadStatus === "active" && onStopThread && (local || peerGrantsCapability(thread, "turn_control"))
+        ? { stop: () => onStopThread(thread) }
         : {}),
       ...(threadCanMarkRead(thread) ? { markRead: () => markReadFromContextMenu([thread]) } : {}),
       ...(!hasChildThreads && canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control")

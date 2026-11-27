@@ -68,6 +68,7 @@ export type SidebarThreadCardActions = {
   pin?: { pinned: boolean; toggle: () => void };
   /** Mark read: the thread leaves Attention. */
   markRead?: () => void;
+  stop?: () => void;
   /** Archives the thread, or opens the menu's two archives for a parent. */
   archive?: (anchor: HTMLElement) => void;
   /** The row's own context menu, anchored to the card's ⋯. */
@@ -464,8 +465,19 @@ function ThreadCardActions(props: {
           <PinIcon size={14} aria-hidden="true" />
         </CardIconButton>
       ) : null}
-      {/* A running thread has no Stop here yet; Mark read and Archive wait
-          until it is idle, as the design swaps them out while it runs. */}
+      {props.running && actions.stop ? (
+        <CardIconButton
+          label="Stop"
+          onClick={() => {
+            onDone();
+            actions.stop?.();
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <rect x="2" y="2" width="8" height="8" rx="1" />
+          </svg>
+        </CardIconButton>
+      ) : null}
       {!props.running && actions.markRead ? (
         <CardIconButton
           label="Mark read"

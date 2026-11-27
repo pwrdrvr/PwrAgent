@@ -504,6 +504,8 @@ export type InterruptTurnRequest = {
   turnId: string;
 };
 
+export type StopThreadRequest = Omit<InterruptTurnRequest, "turnId">;
+
 export type InterruptTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
