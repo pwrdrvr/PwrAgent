@@ -34,6 +34,57 @@ async function until(predicate: () => boolean, steps = 500) {
 }
 const idle = (queries: NavigationWindowQueries) => [...queries.getSnapshot().resources.values()].every((resource) => !resource.loading);
 
+async function assertRefreshBurst(duplicates: number, changesInFlight: boolean) {
+  let revision = 0;
+  const replies: Array<() => void> = [];
+  const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["group-0", request(0)]]));
+    await until(() => idle(queries));
+    read.mockClear();
+    read.mockImplementation((sent) => {
+      const snapshot = page(sent, String(revision));
+      return new Promise((resolve) => replies.push(() => resolve(snapshot)));
+    });
+    const first = queries.refresh();
+    await until(() => replies.length === 1);
+    const waiters = [first];
+    for (let count = 0; count < duplicates; count++) {
+      if (changesInFlight) {
+        revision += 1;
+        queries.invalidate(undefined, undefined, event(0));
+      }
+      waiters.push(queries.refresh());
+    }
+    let finished = false;
+    void Promise.all(waiters).then(() => { finished = true; });
+    const expectedReads = changesInFlight ? 2 : 1;
+    for (let count = 0; count < expectedReads; count++) {
+      await until(() => replies.length === 1);
+      expect(finished).toBe(false);
+      replies.shift()!();
+    }
+    await until(() => finished || read.mock.calls.length > expectedReads);
+    expect(read).toHaveBeenCalledTimes(expectedReads);
+    expect(finished).toBe(true);
+    expect(queries.getSnapshot().resources.get("group-0")?.state.page?.countsRevision).toBe(String(revision));
+  } finally {
+    queries.dispose();
+    replies.splice(0).forEach((resolve) => resolve());
+  }
+}
+
+it("joins a second refresh to the in-flight read when the owner has not changed", async () => {
+  await assertRefreshBurst(1, false);
+});
+
+it("shares at most one replacement among refresh callers when the owner changes in flight", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 64 }), fc.boolean(), assertRefreshBurst), {
+    numRuns: 20, examples: [[4, false], [8, false], [16, false], [4, true], [8, true], [16, true]],
+  });
+});
+
 it("row-only bursts obey complete child membership even while metadata is stale or refreshing", async () => {
   // Specification: without a membership change, the owner's complete child
   // set remains the exclusion oracle throughout any ordering of row events.

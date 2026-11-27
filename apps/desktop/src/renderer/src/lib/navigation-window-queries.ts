@@ -503,7 +503,8 @@ export class NavigationWindowQueries {
     this.publish();
   }
 
-  refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause, trigger?: string, includeDirectoryIndex = false): Promise<void> {
+  refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause,
+    trigger?: string, includeDirectoryIndex = false, requireNewObservation = false): Promise<void> {
     if (!this.visible || this.disposed) return Promise.resolve();
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
     // Keep the caller separate from the event that fenced each page: a queued
@@ -519,7 +520,11 @@ export class NavigationWindowQueries {
     const refreshed = Promise.all(selected.map(async (resource) => {
       const pending = resource.pending;
       let retryJoinedPinRead = Boolean(pending && owesPinRead(resource));
-      if (forceRead(resource) || resource.invalidated || (!pending && owesPinRead(resource))) {
+      // Passing through here while a read is pending is only necessary for
+      // a mutation receipt that needs a newer observation. Owner events
+      // already fence affected reads and collapse into one replacement.
+      const replacePending = requireNewObservation && forceRead(resource);
+      if ((!pending || replacePending) && (forceRead(resource) || resource.invalidated || owesPinRead(resource))) {
         resource.diagnosticRefreshBatch = batch;
         if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
         resource.diagnosticTrigger ??= trigger;
@@ -528,7 +533,7 @@ export class NavigationWindowQueries {
         // between provider observations. A scoped row refresh already knows
         // exactly why its baseline is stale.
         if (!resource.invalidated) resource.membershipUncertain = true;
-        if (resource.pending) resource.refreshAfterPending = true;
+        if (pending) resource.refreshAfterPending = true;
         const read = this.read(resource, false, undefined, false, "refresh", false);
         startedReads ||= !pending && Boolean(resource.pending);
         await read;

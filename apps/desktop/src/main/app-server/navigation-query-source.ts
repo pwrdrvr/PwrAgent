@@ -41,6 +41,9 @@ import { readNavigationCheckouts } from "../git-info/directory-store";
 // Keep a bounded comparison candidate across nearby refreshes. The serving
 // window and the provider/filesystem validation on its expiry still apply.
 const indexReads = new NavigationIndexReadPool(1_000, 15_000);
+// Sidebar pages share the compact display inventory between switches.
+// Registry events and the durable source version revoke it immediately.
+const SIDEBAR_INDEX_REUSE_MS = 15_000;
 const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = getDesktopStackReader();
 const navigationQueryLog = getMainLogger("pwragent:navigation-query");
@@ -362,6 +365,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   refreshProviders?: boolean;
   /** Display and coverage checks can use saved membership while discovery runs. */
   useSavedStartupInventory?: boolean;
+  sidebarDisplay?: boolean;
   /** Actions that use checkout membership as authority need live Git verification. */
   requireVerifiedDirectories?: boolean;
   /** This caller renders thread stack membership. */
@@ -538,7 +542,8 @@ export async function loadLocalNavigationQueryIndex(params: {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
     return createNavigationQuerySnapshot(index, undefined, undefined, previous());
-  }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source");
+  }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source",
+  params.sidebarDisplay ? SIDEBAR_INDEX_REUSE_MS : undefined);
 }
 
 type SidebarStackFields = Pick<NavigationThreadSummary, "stackMemberships" | "stackLeadPrKey">;
@@ -569,7 +574,7 @@ export async function loadSidebarNavigationQueryIndex(
   params: Parameters<typeof loadLocalNavigationQueryIndex>[0],
 ): Promise<NavigationQueryIndex> {
   const { includeStacks, ...source } = params;
-  const local = await loadLocalNavigationQueryIndex({ ...source, useSavedStartupInventory: true });
+  const local = await loadLocalNavigationQueryIndex({ ...source, useSavedStartupInventory: true, sidebarDisplay: true });
   params.signal?.throwIfAborted();
   // Discovery publishes a replacement inventory. Let it settle before
   // starting an inventory-wide scan on the checkouts it may replace.

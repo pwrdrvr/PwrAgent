@@ -98,6 +98,33 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
   };
 }
 
+it("serves a warm Attention filter from the existing sidebar index until the owner changes", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const source = createSource();
+  const store = new NavigationQueryStore();
+  const project = vi.fn(() => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query" }));
+  const read = (query: NavigationQueryRequest["query"]) => store.readPage({
+    scopeKey: "warm-sidebar", request: { protocol: 2, consumer: "main-sidebar", query }, loadIndex: project,
+  });
+  try {
+    source.finish();
+    await read({ kind: "lens", lens: "attention" });
+    const projected = await project.mock.results[0]!.value;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await read({ kind: "lens", lens: "attention", attention: "active" });
+    expect(await project.mock.results[1]!.value).toBe(projected);
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+
+    source.emit("thread/status/changed");
+    await read({ kind: "lens", lens: "attention", attention: "active" });
+    expect(source.listThreads).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(15_001);
+    await read({ kind: "lens", lens: "attention" });
+    expect(source.listThreads).toHaveBeenCalledTimes(3);
+  } finally { vi.useRealTimers(); }
+});
+
 it("stores only serviceable stacks and pages past the compact membership preview", () => {
   fc.assert(fc.property(fc.integer({ min: 9, max: 36 }), fc.integer({ min: 1, max: 24 }), (selected, unrelated) => {
     const thread: NavigationThreadSummary = {
