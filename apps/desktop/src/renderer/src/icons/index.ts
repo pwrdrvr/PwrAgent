@@ -1,3 +1,4 @@
+export { AccessShieldIcon } from "./AccessShieldIcon";
 export { ArchiveIcon } from "./ArchiveIcon";
 export { ArrowLeftToLineIcon } from "./ArrowLeftToLineIcon";
 export { ArrowRightToLineIcon } from "./ArrowRightToLineIcon";

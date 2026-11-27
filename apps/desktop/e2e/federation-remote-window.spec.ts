@@ -16,6 +16,7 @@ import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { StateDb } from "../src/main/state/state-db";
 import { launchElectronApp, rightClickThreadRow } from "./fixtures/electron-app";
+import { accessTrigger, allowFullAccess } from "./fixtures/access-picker";
 import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 import {
   buildFakeAgentConfigToml,
@@ -2645,14 +2646,10 @@ test.describe("federation remote window", () => {
       await expect(childProvider).toContainText("OpenAI");
       await expect(childProvider).toHaveAttribute("data-model", "gpt-5.5");
 
-      const childAccessMode = childSettings.getByLabel(/^Access mode(?::|$)/);
+      const childAccessMode = accessTrigger(childSettings);
       if (await childAccessMode.getAttribute("data-value") !== "full-access") {
-        await childAccessMode.click();
-        await remote.getByRole("option", { name: "Full Access" }).click();
-        await remote
-          .getByRole("dialog", { name: "Enable Full Access?" })
-          .getByRole("button", { name: "I Understand and Accept the Risks" })
-          .click();
+        await allowFullAccess(childSettings);
+        await remote.keyboard.press("Escape");
       }
       await expect(childAccessMode).toHaveAttribute("data-value", "full-access");
 

@@ -5095,7 +5095,7 @@ describe("App", () => {
       });
 
       const { container } = await renderApp();
-      await waitFor(() => expect(screen.getByRole("button", { name: /^Access mode(?::|$)/ })).toHaveTextContent("Full Access"));
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Access: / })).toHaveAccessibleName("Access: Full Access"));
       if (entryPoint === "Cmd+N") {
         expect(openNewThreadListener).toBeDefined();
         await act(async () => { openNewThreadListener!(); });
@@ -5123,7 +5123,7 @@ describe("App", () => {
       expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
         directoryKey: entryPoint.includes("workspace") ? "workspace:new-thread" : project.key,
       }));
-      expect(screen.getByRole("button", { name: /^Access mode(?::|$)/ })).toHaveTextContent("Auto");
+      expect(screen.getByRole("button", { name: /^Access: / })).toHaveAccessibleName("Access: Auto");
       expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
     },
   );
@@ -7964,7 +7964,7 @@ describe("App", () => {
     expect(
       getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
     ).toHaveAttribute("data-value", draft);
-    expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /^Access: / })).toHaveAccessibleName("Access: Full Access");
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
 
     await waitFor(() => {

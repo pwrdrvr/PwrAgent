@@ -24,6 +24,7 @@ import { type BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { ModelDropdown } from "./ModelDropdown";
 import { ModelSettingsPicker, ModelSettingsQuickList, type ModelSettingsPickerProps } from "./ModelSettingsPicker";
+import { AccessPicker } from "./AccessPicker";
 import { useNewThreadRecents } from "./useNewThreadRecents";
 import { newThreadRecents, type NewThreadRecent } from "../../lib/model-settings-recents";
 import { MODEL_DEFAULT_EFFORT, splitEffortChoices } from "./model-settings-picker-model";
@@ -252,7 +253,6 @@ import {
 import { threadJobMonitorControl } from "../../lib/job-monitor-control";
 import {
   formatExecutionModeLabel,
-  describeExecutionModeForBackend,
   getProviderAccessControl,
 } from "../../lib/execution-mode";
 import {
@@ -11988,7 +11988,12 @@ function useComposerController(props: ComposerProps) {
   // surface that can escalate a thread honors it; `App` owns this
   // window's settings snapshot, so the composer hands the preference and
   // its write down rather than letting the gate read them again.
-  const { fullAccessRiskDialog, requestExecutionModeSelection } =
+  const {
+    confirmExecutionModeSelection,
+    fullAccessRiskDialog,
+    requestExecutionModeSelection,
+    requiresConfirmation: requiresExecutionModeConfirmation,
+  } =
     useExecutionModeSelection({
       applyExecutionMode: applyExecutionModeSelection,
       currentExecutionMode:
@@ -15945,10 +15950,9 @@ function useComposerController(props: ComposerProps) {
               && (providerAccessControl.kind === "acp"
                 ? Boolean(props.onSetAcpRuntimeOption)
                 : Boolean(props.onSetExecutionMode)))) ? (
-            <ComposerDropdown
-              ariaLabel={providerAccessControl.ariaLabel}
-              compact
-              tone={providerAccessControl.selectedOption?.tone}
+            <AccessPicker
+              backend={backend?.kind}
+              control={providerAccessControl}
               disabled={
                 launchpadSubmitting
                 || Boolean(props.updatingExecutionMode)
@@ -15957,27 +15961,15 @@ function useComposerController(props: ComposerProps) {
                     ? !props.onSetAcpRuntimeOption
                     : !props.onSetExecutionMode))
               }
-              value={providerAccessControl.value}
-              options={providerAccessControl.options.map((option) => ({
-                label: option.label,
-                value: option.value,
-                disabled: !option.available,
-                tooltip:
-                  option.kind === "execution"
-                    ? option.unavailableReason
-                      ?? (backend?.kind === "codex" || backend?.kind === "claude"
-                        ? describeExecutionModeForBackend(backend.kind, option.executionMode)
-                        : undefined)
-                    : undefined,
-              }))}
-              onChange={(value) => {
-                const option = providerAccessControl.options.find(
-                  (candidate) => candidate.value === value,
-                );
-                if (!option) return;
+              needsConfirmation={(option) =>
+                option.requiresFullAccessConfirmation
+                && requiresExecutionModeConfirmation(option.executionMode)}
+              scope={props.launchpad ? "new thread" : "this thread"}
+              onCommit={(option, confirmed) => {
                 if (option.requiresFullAccessConfirmation) {
                   pendingAccessOptionRef.current = option;
-                  requestExecutionModeSelection(option.executionMode);
+                  if (confirmed) confirmExecutionModeSelection(option.executionMode);
+                  else requestExecutionModeSelection(option.executionMode);
                   return;
                 }
                 if (props.launchpad) {

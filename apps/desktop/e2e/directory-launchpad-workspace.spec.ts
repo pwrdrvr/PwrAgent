@@ -6,6 +6,7 @@ import { expect, test, type Locator, type Page } from "./fixtures/electron-test"
 import Database from "better-sqlite3";
 import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { accessTrigger, chooseAccessStop } from "./fixtures/access-picker";
 import { mastheadAction } from "./fixtures/window-chrome";
 
 // Navigation keys and stored directory paths are forward-slash canonical on
@@ -1052,29 +1053,20 @@ test("directory launchpad keeps full access as the sticky default after user cha
       .click();
 
     const settings = app.window.getByLabel("New thread settings");
-    const accessMode = settings.getByLabel(/^Access mode(?::|$)/);
+    const accessMode = accessTrigger(settings);
     // A Codex launchpad with no saved access starts on Auto.
     await expect(accessMode).toHaveAttribute("data-value", "auto");
-    await selectComposerOption({
-      select: accessMode,
-      window: app.window,
-      option: "Full Access",
-    });
-    const fullAccessWarning = app.window.getByRole("dialog", {
-      name: "Enable Full Access?",
-    });
-    await expect(fullAccessWarning).toContainText("network access");
-    await expect(fullAccessWarning).toContainText("read/write access");
-    await fullAccessWarning
-      .getByRole("button", { name: "I Understand and Accept the Risks" })
-      .click();
+    const picker = await chooseAccessStop(settings, "full-access");
+    await expect(picker).toContainText("network and almost every file");
+    await expect(accessMode).toHaveAttribute("data-value", "auto");
+    await picker.getByRole("button", { name: "Allow Full Access" }).click();
     await expect(accessMode).toHaveAttribute("data-value", "full-access");
 
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for OtherRepo" })
       .click();
     await expectDirectoryLaunchpadHeader(app, "OtherRepo");
-    await expect(settings.getByLabel(/^Access mode(?::|$)/)).toHaveAttribute(
+    await expect(accessTrigger(settings)).toHaveAttribute(
       "data-value",
       "full-access",
     );
