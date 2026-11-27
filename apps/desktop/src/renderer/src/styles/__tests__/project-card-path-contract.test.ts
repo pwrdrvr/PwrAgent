@@ -1,22 +1,8 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-
-const testDir = path.dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
+import { cssRuleBody } from "./css-rule-body";
 
 function ruleBody(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const bodies = [
-    ...css.matchAll(
-      new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`, "g"),
-    ),
-  ].map((match) => match.groups?.body ?? "");
-  if (bodies.length === 0) {
-    throw new Error(`Expected app.css to define ${selector}`);
-  }
-  return bodies.join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
+  return cssRuleBody(selector).replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
 /**
