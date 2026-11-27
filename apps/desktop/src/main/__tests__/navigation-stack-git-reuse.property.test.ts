@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } fro
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import {
@@ -27,6 +27,7 @@ import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
 const mocks = vi.hoisted(() => ({
+  windowsJobLauncher: undefined as string | undefined,
   profileStore: undefined as SqliteOverlayStore | undefined,
   messaging: {
     findActiveBindings: vi.fn(async () => []),
@@ -43,6 +44,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
+vi.mock("../windows-job-launcher-path", () => ({ windowsJobLauncherPath: () => mocks.windowsJobLauncher }));
 
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
@@ -55,6 +57,7 @@ type GitLaunchRecord = {
   cwd: string;
   args: string[];
   purpose: GitSubprocessPurpose;
+  failed?: boolean;
 };
 
 const git = (cwd: string, ...args: string[]) => runIsolatedGitSync(cwd, args).trim();
@@ -335,8 +338,13 @@ async function createRealGitSidebarFixture(catalogCount: number) {
   const launches: GitLaunchRecord[] = [];
   const originalStartGit = gitSubprocessDiagnostics.startGit;
   const startGitSpy = vi.spyOn(gitSubprocessDiagnostics, "startGit").mockImplementation((cwd, args, purpose) => {
-    launches.push({ cwd, args: [...args], purpose: purpose ?? "unspecified" });
-    return originalStartGit.call(gitSubprocessDiagnostics, cwd, args, purpose);
+    const launch: GitLaunchRecord = { cwd, args: [...args], purpose: purpose ?? "unspecified" };
+    launches.push(launch);
+    const finish = originalStartGit.call(gitSubprocessDiagnostics, cwd, args, purpose);
+    return (failed) => {
+      launch.failed = failed;
+      finish(failed);
+    };
   });
   const userRefreshSpy = vi.spyOn(GitUserRefreshBudget.prototype, "tryTake");
 
@@ -387,6 +395,14 @@ async function createRealGitSidebarFixture(catalogCount: number) {
 }
 
 describe("desktop sidebar background stack Git reuse", () => {
+  beforeAll(() => {
+    if (process.platform !== "win32") return;
+    // Keep the real Windows Job boundary without starting a PowerShell
+    // compiler host for every Git command during the cold observation.
+    mocks.windowsJobLauncher = inject("nativeHelperFixtures").windowsGitJobLauncher;
+    if (!mocks.windowsJobLauncher) throw new Error("The compiled Windows Git Job launcher fixture was not prepared");
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -412,7 +428,13 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(warmViewer.exact.entries.find((e) => e.row.id === "bound-parent")?.row.stackMemberships).toHaveLength(1);
       expect(warmOwner.children.entries.map((e) => e.row.id)).toContain("bound-child");
       expect(warmOwner.directory.entries.map((e) => e.row.id)).toContain("bound-parent");
-      expect(countLaunches(fixture.launches).stackStatus).toBeGreaterThanOrEqual(catalogCount * 2);
+      const coldStatus = fixture.launches.filter(({ purpose, args }) =>
+        purpose === "stack-status" && (args[0] === "worktree" || args[0] === "for-each-ref"));
+      expect(coldStatus.filter(({ failed }) => failed !== false)).toEqual([]);
+      for (const command of ["worktree", "for-each-ref"]) {
+        expect(new Set(coldStatus.filter(({ args }) => args[0] === command).map(({ cwd }) => cwd)).size)
+          .toBeGreaterThanOrEqual(catalogCount);
+      }
 
       // 1. Mark row seen (updates SQLite threads -> advances owner navigation source version + event).
       elapsed += 1_500;

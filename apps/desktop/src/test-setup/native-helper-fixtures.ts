@@ -11,7 +11,7 @@ const consumers = {
   mcpIpc: "mcp-ipc-http.test.ts",
   markerProbe: "thread-dependency-marker-probe.property.test.ts",
   stackEngine: ["stack-engine-ports.test.ts", "stack-provisioning.property.test.ts", "stack-recovery.property.test.ts"],
-  windowsGitJobLauncher: "windows-git-job-launcher.test.ts",
+  windowsGitJobLauncher: ["windows-git-job-launcher.test.ts", "navigation-stack-git-reuse.property.test.ts"],
 } as const;
 const pipeProbeTest = path.join(desktop, "scripts/windows-pipe-observation.test.mjs");
 type Consumer = keyof typeof consumers | "windowsPipeProbe";

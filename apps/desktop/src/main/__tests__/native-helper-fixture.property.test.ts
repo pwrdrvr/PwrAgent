@@ -40,6 +40,12 @@ describe("native helper fixture ownership", () => {
     expect(nativeHelperConsumers([], "win32", "x64")).toEqual([]);
   });
 
+  it("prepares the compiled Job launcher for a standalone Windows navigation Git reuse rerun", () => {
+    const navigation = path.resolve("apps/desktop/src/main/__tests__/navigation-stack-git-reuse.property.test.ts");
+    expect(nativeHelperConsumers([navigation], "win32")).toEqual(["windowsGitJobLauncher"]);
+    expect(nativeHelperConsumers([navigation], "darwin")).toEqual([]);
+  });
+
   it.each([
     ["windowsGitJobLauncher", "src/main/__tests__/windows-git-job-launcher.test.ts"],
     ["windowsPipeProbe", "scripts/windows-pipe-observation.test.mjs"],
