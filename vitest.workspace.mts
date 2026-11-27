@@ -101,8 +101,8 @@ const BUDGET_THREAD_ENV = LOCAL_CPU_BUDGET
   ? buildBudgetThreadEnv(LOCAL_CPU_BUDGET.units, process.env)
   : {};
 if (LOCAL_CPU_BUDGET && !process.env.GOMAXPROCS) {
-  // Keep globalSetup tools (such as desktop-main's esbuild Outpost bundle)
-  // within the thread's CPU checkout even when Vitest is invoked directly.
+  // Keep globalSetup tools within the thread's CPU checkout even when Vitest
+  // is invoked directly.
   process.env.GOMAXPROCS = String(LOCAL_CPU_BUDGET.units);
 }
 const DEFAULT_MAX_WORKERS =
@@ -265,12 +265,8 @@ export default defineConfig({
             "apps/desktop/src/preload/__tests__/**/*.test.ts",
             "apps/desktop/src/shared/__tests__/**/*.test.ts"
           ],
-          // Machine-level cold starts, paid once per run so neither is billed
-          // to whichever test file happens to reach it first.
+          // Cold starts and fixtures that need to be ready before workers run.
           globalSetup: [
-            // Outpost consumers import its published JavaScript, whose bundle
-            // must exist before workers start, regardless of test selection.
-            "apps/desktop/src/test-setup/outpost-build.ts",
             // The conformance shard needs both real owner bundles before its
             // workers start, outside the suite's test and hook deadlines.
             "apps/desktop/src/test-setup/owner-conformance-fixtures.ts",

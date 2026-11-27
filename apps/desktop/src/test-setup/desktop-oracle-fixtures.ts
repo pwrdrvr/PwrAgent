@@ -71,7 +71,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
           return buildHeadlessDriverFixture(root, (await loadBuilder()).buildHeadless);
         }));
       }
-      if (files.has("headless-portable-chunks.oracle.test.ts")) {
+      if (files.has("headless-portable-chunks.oracle.test.ts") || files.has("claude-session-reader.test.ts")) {
         project.provide("portableOutpost", await prepareOwned("portable Outpost", async (root) =>
           buildPortableOutpostFixture(root, (await loadBuilder()).buildHeadless)));
       }
