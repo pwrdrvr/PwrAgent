@@ -51,7 +51,7 @@ function oracleRepositoryFolderLabel(skillPath: string): string | undefined {
   const segments = oracleNormalizePath(skillPath).split("/");
   const markerIndex = segments.findIndex(
     (segment, index) =>
-      (segment === ".agents" || segment === ".codex")
+      (segment === ".agents" || segment === ".codex" || segment === ".claude")
       && segments[index + 1] === "skills",
   );
   return markerIndex > 0 ? segments[markerIndex - 1] || undefined : undefined;
@@ -89,9 +89,13 @@ function oracleClassifySkillOrigin(
     case "system":
       return { kind: "built-in", label: "Built-in" };
     case "admin":
+    case "claude-managed":
       return { kind: "admin", label: "Admin" };
     case "antigravity-user":
+    case "claude-user":
       return { kind: "personal", label: "Personal" };
+    case "claude-synced":
+      return { kind: "other", label: "claude.ai" };
     case "user":
       if (
         options.bundledSkillRoots?.some(
@@ -180,6 +184,7 @@ const segmentArb = fc.constantFrom(
   "wt",
   ".agents",
   ".codex",
+  ".claude",
   "skills",
 );
 
@@ -250,6 +255,9 @@ const scopeArb = fc.constantFrom(
   "system",
   "admin",
   "antigravity-user",
+  "claude-user",
+  "claude-synced",
+  "claude-managed",
   "local",
 );
 
@@ -346,6 +354,18 @@ describe("withSkillOrigins differential oracle", () => {
       { name: "personal", path: "/home/operator/.gemini/skills/personal/SKILL.md", scope: "antigravity-user" },
     ], home);
     expect(skills.map(({ origin }) => origin?.kind)).toEqual(["project", "personal"]);
+  });
+
+  it("names Claude's personal, synced, and outside-project skills by where Claude keeps them", () => {
+    const home = [{ label: "Home", path: "/home/operator" }];
+    const skills = withSkillOrigins<AppServerSkillSummary>([
+      { name: "personal", path: "/home/operator/.claude/skills/personal/SKILL.md", scope: "claude-user" },
+      { name: "docx", path: "/home/operator/.claude/skills/synced/0c1d_2e3f/docx/SKILL.md", scope: "claude-synced" },
+      { name: "outside", path: "/srv/team-repo/.claude/skills/outside/SKILL.md", scope: "repo" },
+    ], home);
+    expect(skills.map(({ origin }) => origin && [origin.kind, origin.label])).toEqual([
+      ["personal", "Personal"], ["other", "claude.ai"], ["repository", "team-repo"],
+    ]);
   });
 
   it("preserves worktree precedence, early-directory ties, UNC casing ties in both orderings, and slash-root matching on the indexed path", () => {

@@ -66,12 +66,20 @@ import {
   threadExecutionModeForClaudePermission,
 } from "./claude-permissions";
 import { createClaudeElicitationHandler } from "./claude-elicitation";
-import { claudeHarnessOptions, discoverClaudeModels, readClaudeMcpServerStatus, readClaudeMetadata } from "./claude-models";
+import { claudeHarnessOptions, discoverClaudeModels, readClaudeCatalog, readClaudeMcpServerStatus } from "./claude-models";
 import {
   CLAUDE_TERMINAL_COMMANDS_SEED,
-  claudeCommandSummaries,
   isClaudeCompactCommandAvailable,
 } from "./claude-commands";
+import {
+  claudeCommandCatalog,
+  claudeSkillFileCandidates,
+  claudeSkillPrompt,
+  findClaudeSkillFiles,
+  type ClaudeCommandCatalog,
+  type ClaudeSkillEvidence,
+  type ClaudeSkillFile,
+} from "./claude-skills";
 import {
   CLAUDE_RESET_TOLERANCE_MS, canonicalClaudeRateLimit, claudeCreditsRenewTogether, claudeRateLimits,
   claudeStreamRateLimits, claudeTelemetry,
@@ -124,6 +132,16 @@ export type ClaudeBackendOptions = {
   claudeSettingsPath?: (env: NodeJS.ProcessEnv) => string;
   discoverModels?: typeof discoverClaudeModels;
   readCommands?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<SlashCommand[]>;
+  /**
+   * A folder's commands and Claude's skill listing, read through one session
+   * that receives no prompt. Takes precedence over `readCommands`.
+   */
+  readCatalog?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<{
+    commands: SlashCommand[];
+    skills: ClaudeSkillEvidence[];
+  }>;
+  /** Finds skill folders Claude's context listing leaves out; defaults to the disk. */
+  findSkillFiles?: (params: { cwd: string; env: NodeJS.ProcessEnv; names: readonly string[] }) => Promise<Map<string, ClaudeSkillFile>>;
   readMcpServers?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<McpServerStatus[]>;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   emit: (event: AgentEvent) => Promise<void>;
@@ -733,10 +751,13 @@ export class ClaudeBackend {
   private readonly unsubscribePlanLimits: () => void;
   private rateLimitsLoad?: Promise<void>;
   private rateLimitWrites = Promise.resolve();
-  // Last command list Claude reported per working directory. Project
-  // commands and skills differ by folder, so the folder is the key.
-  private readonly commandsByCwd = new Map<string, AppServerAvailableCommandSummary[]>();
-  private readonly commandProbes = new Map<string, Promise<AppServerAvailableCommandSummary[]>>();
+  // The skill listing Claude last reported per working directory, and the
+  // catalog split from it and the command list. Project commands and skills
+  // differ by folder, so the folder is the key.
+  private readonly skillEvidenceByCwd = new Map<string, readonly ClaudeSkillEvidence[]>();
+  private readonly catalogByCwd = new Map<string, ClaudeCommandCatalog>();
+  private readonly catalogVersions = new Map<string, number>();
+  private readonly commandProbes = new Map<string, Promise<ClaudeCommandCatalog>>();
   private readonly mcpServerProbes = new Map<string, Promise<McpServerStatus[]>>();
   private readonly commandProbeRetryAt = new Map<string, number>();
   private terminalCommands = new Set(CLAUDE_TERMINAL_COMMANDS_SEED);
@@ -1403,7 +1424,7 @@ export class ClaudeBackend {
       const startQuery = this.options.query ?? (await loadClaudeAgentSdk()).query;
       const session = await this.store.read(threadId);
       if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
-      const prompted = await claudeInput(params.input);
+      const prompted = await claudeInput(this.claudePrompt(session.cwd, params.input));
       // After a deleted session, the new one opens with the thread's own
       // record of the conversation. Read before this turn's message joins it.
       const primer = session.primerPending && !session.ephemeral && !session.sdkSessionId && !session.forkFromSdkSessionId
@@ -1601,7 +1622,7 @@ export class ClaudeBackend {
     const { threadId } = params;
     const session = await this.store.read(threadId);
     if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
-    const content = await claudeInput(params.input);
+    const content = await claudeInput(this.claudePrompt(session.cwd, params.input));
     // A message that cannot be sent must not change the session's settings.
     if (live.turn) throw new ClaudeTurnActiveError("A Claude turn is already active for this thread.");
     if (!live.closing && !await this.reconfigure(live, claudeSessionConfig(params, session))) {
@@ -1964,12 +1985,16 @@ export class ClaudeBackend {
             // A probe that finds no windows keeps the last reading, so the
             // account must be confirmed first.
             this.checkAccount(live).finally(() => live.accountChecked.resolve()).then(() => this.refreshUsage(live)),
-            this.refreshContext(live),
-            claudeTelemetry(() => live.query!.supportedCommands())
+            // The context listing says which commands are skills, so it is
+            // read before the command list is published.
+            this.refreshContext(live)
+              .then(() => claudeTelemetry(() => live.query!.supportedCommands()))
               .then((commands) => commands && this.publishCommands(session, commands)),
           ]);
         }
         if (message.type === "system" && message.subtype === "commands_changed") {
+          // A skill found in a subfolder joins the context listing too.
+          await this.refreshContext(live);
           await this.publishCommands(session, message.commands);
         }
         if (message.type === "system" && message.subtype === "session_state_changed") {
@@ -2915,6 +2940,8 @@ export class ClaudeBackend {
   private async refreshContext(live: LiveSession): Promise<void> {
     const { session } = live;
     const context = await claudeTelemetry(() => live.query!.getContextUsage({ detail: "summary" }));
+    // Claude omits the listing when no skill takes context.
+    if (context) this.skillEvidenceByCwd.set(session.cwd, context.skills?.skillFrontmatter ?? []);
     if (!context || !Number.isFinite(context.totalTokens) || !(context.totalTokens >= 0)
       || !Number.isFinite(context.maxTokens) || !(context.maxTokens > 0)) return;
     session.contextWindow = { usedTokens: context.totalTokens, modelContextWindow: context.maxTokens };
@@ -2925,10 +2952,57 @@ export class ClaudeBackend {
   }
 
   private async publishCommands(session: ClaudeSession, commands: readonly SlashCommand[]): Promise<void> {
-    const summaries = claudeCommandSummaries(commands, this.terminalCommands);
-    if (summaries.length === 0) return;
-    this.commandsByCwd.set(session.cwd, summaries);
-    await this.emit({ method: "thread/availableCommands/updated", params: { threadId: session.thread.id, commands: summaries } });
+    const previous = this.catalogByCwd.get(session.cwd);
+    const catalog = await this.updateCatalog(session.cwd, commands);
+    if (!catalog) return;
+    await this.emit({ method: "thread/availableCommands/updated", params: { threadId: session.thread.id, commands: catalog.commands } });
+    // A composer that already holds this folder's skills asks again.
+    if (JSON.stringify(previous?.skills ?? []) !== JSON.stringify(catalog.skills)) {
+      await this.emit({ method: "skills/changed", params: { cwd: session.cwd, reason: "claude-commands" } });
+    }
+  }
+
+  /**
+   * Split the folder's command rows into `/` commands and `$` skills, from the
+   * rows and skill listing Claude last reported. Rows that list nothing are
+   * ignored, so an empty answer never replaces a known list. A probe's rows
+   * were read before any live report that overlaps them, so a probe fills an
+   * empty folder only and never makes a live report look stale.
+   */
+  private async updateCatalog(
+    cwd: string,
+    commands: readonly SlashCommand[],
+    options: { probe?: boolean } = {},
+  ): Promise<ClaudeCommandCatalog | undefined> {
+    const evidence = this.skillEvidenceByCwd.get(cwd) ?? [];
+    const names = claudeSkillFileCandidates(commands, this.terminalCommands, evidence);
+    const version = (this.catalogVersions.get(cwd) ?? 0) + (options.probe ? 0 : 1);
+    this.catalogVersions.set(cwd, version);
+    const skillFiles = names.length > 0 ? await this.findSkillFiles(cwd, names) : undefined;
+    const catalog = claudeCommandCatalog({ commands, terminalCommands: this.terminalCommands, skillEvidence: evidence, skillFiles });
+    if (catalog.commands.length === 0 && catalog.skills.length === 0) return undefined;
+    // A live report that arrived during the lookup is fresher; keep its catalog.
+    if (this.catalogVersions.get(cwd) === version && !(options.probe && this.catalogByCwd.has(cwd))) {
+      this.catalogByCwd.set(cwd, catalog);
+    }
+    return catalog;
+  }
+
+  private async findSkillFiles(cwd: string, names: readonly string[]): Promise<Map<string, ClaudeSkillFile>> {
+    try {
+      const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+      if (this.options.findSkillFiles) return await this.options.findSkillFiles({ cwd, env, names });
+      const configDir = path.dirname((this.options.claudeSettingsPath ?? claudeUserSettingsPath)(env));
+      return await findClaudeSkillFiles({ cwd, configDir, names });
+    } catch {
+      return new Map();
+    }
+  }
+
+  /** The prompt with its `$skill` mentions in the form Claude starts skills from. */
+  private claudePrompt(cwd: string, input: AppServerTurnInputItem[]): AppServerTurnInputItem[] {
+    const skills = this.catalogByCwd.get(cwd)?.skills;
+    return claudeSkillPrompt(input, skills && new Set(skills.map((skill) => skill.name)));
   }
 
   /**
@@ -2937,42 +3011,51 @@ export class ClaudeBackend {
    */
   async supportsCompactCommand(threadId: string): Promise<boolean> {
     const cwd = await this.store.read(threadId).then((session) => session.cwd, () => undefined);
-    const known = cwd ? this.commandsByCwd.get(cwd) : undefined;
+    const known = cwd ? this.catalogByCwd.get(cwd)?.commands : undefined;
     return isClaudeCompactCommandAvailable(known, this.terminalCommands);
   }
 
-  /**
-   * Slash commands for a thread or a launchpad folder. A folder Claude has not
-   * reported for yet is asked once, through a session that receives no prompt.
-   * A failed probe waits a minute before the next try, so a `/` typed while the
-   * CLI is broken cannot spawn a process per keystroke.
-   */
+  /** Slash commands for a thread or a launchpad folder, without its skills. */
   async listCommands(params: { threadId?: string; cwd?: string }): Promise<AppServerAvailableCommandSummary[]> {
+    return (await this.listCatalog(params)).commands;
+  }
+
+  /**
+   * Slash commands and skills for a thread or a launchpad folder. A folder
+   * Claude has not reported for yet is asked once, through a session that
+   * receives no prompt. A failed probe waits a minute before the next try, so
+   * a `/` typed while the CLI is broken cannot spawn a process per keystroke.
+   */
+  async listCatalog(params: { threadId?: string; cwd?: string }): Promise<ClaudeCommandCatalog> {
     const cwd = (params.threadId ? await this.store.read(params.threadId).then((session) => session.cwd, () => undefined) : undefined)
       ?? params.cwd;
-    if (!cwd) return [];
-    const known = this.commandsByCwd.get(cwd);
+    const empty: ClaudeCommandCatalog = { commands: [], skills: [] };
+    if (!cwd) return empty;
+    const known = this.catalogByCwd.get(cwd);
     if (known) return known;
     const inFlight = this.commandProbes.get(cwd);
     if (inFlight) return await inFlight;
-    if (Date.now() < (this.commandProbeRetryAt.get(cwd) ?? 0)) return [];
+    if (Date.now() < (this.commandProbeRetryAt.get(cwd) ?? 0)) return empty;
     const probe = (async () => {
       try {
         const { executable } = await this.requireInstallation();
         const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-        const commands = await (this.options.readCommands ?? ((probeParams) => readClaudeMetadata({
-          ...probeParams,
-          read: (session) => session.supportedCommands(),
-          timeoutMessage: "Claude command discovery timed out.",
-        })))({ executable, env, cwd });
-        const summaries = claudeCommandSummaries(commands, this.terminalCommands);
+        const { readCommands } = this.options;
+        const { commands, skills } = this.options.readCatalog
+          ? await this.options.readCatalog({ executable, env, cwd })
+          : readCommands
+            ? { commands: await readCommands({ executable, env, cwd }), skills: [] }
+            : await readClaudeCatalog({ executable, env, cwd });
         // A live turn may have reported while the probe ran; it is fresher.
-        if (summaries.length > 0 && !this.commandsByCwd.has(cwd)) this.commandsByCwd.set(cwd, summaries);
-        if (summaries.length === 0) this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
-        return this.commandsByCwd.get(cwd) ?? summaries;
+        const fresher = this.catalogByCwd.get(cwd);
+        if (fresher) return fresher;
+        if (!this.skillEvidenceByCwd.has(cwd)) this.skillEvidenceByCwd.set(cwd, skills);
+        const catalog = await this.updateCatalog(cwd, commands, { probe: true });
+        if (!catalog) this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
+        return this.catalogByCwd.get(cwd) ?? catalog ?? empty;
       } catch {
         this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
-        return [];
+        return empty;
       } finally {
         this.commandProbes.delete(cwd);
       }
@@ -3814,7 +3897,7 @@ export class ClaudeBackend {
       // prompt generator sends it right after the first prompt.
     };
     assertActive();
-    const content = await claudeInput(params.input);
+    const content = await claudeInput(this.claudePrompt(live.session.cwd, params.input));
     const uuid = randomUUID();
     const messageId = `user:${uuid}`;
     const operation = live.inputWrites.then(async () => {
