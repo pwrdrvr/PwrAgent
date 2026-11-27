@@ -164,6 +164,64 @@ describe("DetailsFoldersSection", () => {
     );
   });
 
+  describe("Attach folder", () => {
+    const tracked = [
+      { key: "widgets", kind: "directory" as const, label: "Widgets", path: "/fixture/Widgets" },
+      // Already the thread's source checkout: not offered again.
+      { key: "project", kind: "directory" as const, label: "Project", path: sharedCheckout.path },
+      // Already the thread's worktree: not offered again.
+      { key: "child", kind: "directory" as const, label: "Child", path: attachedCheckout.worktreePath },
+    ];
+    const attachApi = () => ({
+      attachDirectoryToThread: vi.fn(async () => ({
+        ok: true as const, backend: "codex" as const, threadId: childThread.id, directories: [],
+      })),
+      detachDirectoryFromThread: vi.fn(),
+      pickDirectoryFromDisk: vi.fn(async () => ({ canceled: false as const, path: "/fixture/Picked" })),
+    });
+    const view = (desktopApi: ReturnType<typeof attachApi>) => <DetailsFoldersSection
+      desktopApi={desktopApi} thread={childThread} trackedDirectories={tracked}
+      onRefreshNavigation={async () => undefined}
+      hideTooltip={() => undefined} showTooltip={() => undefined}
+    />;
+
+    it("opens the project picker, offering only tracked projects the thread has not linked", () => {
+      const api = attachApi();
+      render(view(api));
+      fireEvent.click(screen.getByRole("button", { name: "Attach folder" }));
+      const picker = screen.getByRole("dialog", { name: "Project picker" });
+      const options = within(picker).getAllByRole("option").map((option) => option.textContent);
+      expect(options).toEqual([expect.stringContaining("Widgets")]);
+      // Opening the picker is not picking from disk.
+      expect(api.pickDirectoryFromDisk).not.toHaveBeenCalled();
+    });
+
+    it("attaches a tracked project without the disk picker", async () => {
+      const api = attachApi();
+      render(view(api));
+      fireEvent.click(screen.getByRole("button", { name: "Attach folder" }));
+      fireEvent.click(within(screen.getByRole("dialog", { name: "Project picker" }))
+        .getByRole("option", { name: /Widgets/ }));
+      await waitFor(() => expect(api.attachDirectoryToThread).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ threadId: childThread.id, path: "/fixture/Widgets" }),
+      ));
+      expect(api.pickDirectoryFromDisk).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog", { name: "Project picker" })).toBeNull();
+    });
+
+    it("picks an untracked folder from disk through Add directory", async () => {
+      const api = attachApi();
+      render(view(api));
+      fireEvent.click(screen.getByRole("button", { name: "Attach folder" }));
+      fireEvent.click(within(screen.getByRole("dialog", { name: "Project picker" }))
+        .getByRole("button", { name: /Add directory/ }));
+      await waitFor(() => expect(api.attachDirectoryToThread).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ threadId: childThread.id, path: "/fixture/Picked" }),
+      ));
+      expect(api.pickDirectoryFromDisk).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("Share storage", () => {
     const worktree = sharedCheckout;
     const mainCheckout = { id: "/fixture/Project", kind: "local" as const, label: "Project main", path: "/fixture/Project" };

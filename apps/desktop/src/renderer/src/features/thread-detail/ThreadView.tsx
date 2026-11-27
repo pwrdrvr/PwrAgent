@@ -3767,6 +3767,7 @@ export function ThreadView(props: ThreadViewProps) {
             onEditEnvironments: props.onEditEnvironments,
             environmentSetupRunning: selectedThreadEnvironmentSetup?.phase === "setup"
               && selectedThreadEnvironmentSetup.status === "running",
+            directories: props.directories,
             autoFix: {
               backgroundPrPollingEnabled: props.backgroundPrPollingEnabled,
               prAutoDispatchAllowed: props.prAutoDispatchAllowed,

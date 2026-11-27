@@ -9,6 +9,7 @@ import type {
 import { Select } from "../../../components/Select";
 import { EditorIcon, PlayIcon, ServerIcon, SettingsIcon, TerminalIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { ipcErrorMessage } from "../../../lib/open-path-failure";
 import {
@@ -54,6 +55,8 @@ export type DetailsThreadControls = {
   /** An environment setup is streaming for this thread. */
   environmentSetupRunning?: boolean;
   autoFix?: DetailsAutoFixSettings;
+  /** Tracked projects, offered by Attach folder before the disk picker. */
+  directories?: readonly NavigationDirectoryView[];
 };
 
 export type DetailsThreadViewProps = {
@@ -111,6 +114,7 @@ export function DetailsThreadView(props: DetailsThreadViewProps) {
         onShowChanges={props.onShowChanges}
         onShowPullRequests={props.onShowPullRequests}
         onPortaledInteractionChange={props.onPortaledInteractionChange}
+        trackedDirectories={controls?.directories}
         handoff={requestHandoff && handoffDirections.length > 0 ? {
           directions: handoffDirections,
           disabled: Boolean(props.activeTurnId || controls?.workspaceHandoffBlocked || controls?.workspaceActionsBlocked),

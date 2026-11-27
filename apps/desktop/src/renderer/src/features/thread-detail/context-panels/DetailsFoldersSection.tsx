@@ -18,8 +18,10 @@ import {
 } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { copyText } from "../../../lib/copy-text";
+import type { NavigationDirectoryView } from "../../../lib/navigation-loaded-rows";
 import { PrChip } from "../../pr-status/PrChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../../composer/native-picker-boundary";
+import { ProjectPicker } from "../../composer/ProjectPicker";
 import {
   formatWorkspaceHandoffDirection,
   primaryWorkspacePullRequests,
@@ -75,6 +77,8 @@ type DetailsFoldersSectionProps = {
   /** The primary folder's Auto-fix control, beside its PR. */
   autoFix?: ReactNode;
   onPortaledInteractionChange?: (open: boolean) => void;
+  /** Tracked projects, which Attach folder offers before the disk picker. */
+  trackedDirectories?: readonly NavigationDirectoryView[];
 };
 
 /**
@@ -136,7 +140,13 @@ export const DetailsFoldersSection = memo(function DetailsFoldersSection(props: 
     : undefined;
   const restorableSnapshots = (props.thread.worktreeSnapshots ?? []).filter(isRestorableSnapshot);
 
-  const attachDirectory = async (): Promise<void> => {
+  // The projects Attach folder offers: tracked ones this thread has not linked.
+  const attachableDirectories = useMemo(
+    () => listAttachableDirectories(props.trackedDirectories ?? [], directories),
+    [directories, props.trackedDirectories],
+  );
+  // `path` names a tracked project; without it the operator picks from disk.
+  const attachDirectory = async (path?: string): Promise<void> => {
     if (nativePickingDisabled) {
       return;
     }
@@ -147,14 +157,18 @@ export const DetailsFoldersSection = memo(function DetailsFoldersSection(props: 
     setDetachError(undefined);
     setAttaching(true);
     try {
-      const picked = await props.desktopApi.pickDirectoryFromDisk();
-      if (picked.canceled) {
-        return;
+      let attachPath = path;
+      if (attachPath === undefined) {
+        const picked = await props.desktopApi.pickDirectoryFromDisk();
+        if (picked.canceled) {
+          return;
+        }
+        attachPath = picked.path;
       }
       const attached = await props.desktopApi.attachDirectoryToThread({
         backend: props.thread.source,
         threadId: props.thread.id,
-        path: picked.path,
+        path: attachPath,
         preferredBackend: props.thread.source,
       });
       if (!attached.ok) {
@@ -416,18 +430,41 @@ export const DetailsFoldersSection = memo(function DetailsFoldersSection(props: 
           </ul>
         </>
       ) : null}
-      {canAttachDirectory ? (
+      {canAttachDirectory && nativePickingDisabled ? (
         <button
-          className="details-row details-row__action details-row--add"
-          data-tooltip={nativePickingDisabled ? REMOTE_NATIVE_PICKER_TOOLTIP : undefined}
-          disabled={attaching || nativePickingDisabled}
-          title={nativePickingDisabled ? REMOTE_NATIVE_PICKER_TOOLTIP : undefined}
+          className="details-row details-row--add"
+          data-tooltip={REMOTE_NATIVE_PICKER_TOOLTIP}
+          disabled
+          title={REMOTE_NATIVE_PICKER_TOOLTIP}
           type="button"
-          onClick={() => { void attachDirectory(); }}
         >
           <FolderPlusIcon size={14} aria-hidden="true" className="details-row__icon" />
-          <span className="details-row__title">{attaching ? "Attaching" : "Attach folder"}</span>
+          <span className="details-row__title">Attach folder</span>
         </button>
+      ) : canAttachDirectory ? (
+        // The composer's project picker: tracked projects first, then
+        // "Add directory…" for a folder PwrAgent does not track yet.
+        <ProjectPicker
+          directories={attachableDirectories}
+          disabled={attaching}
+          picking={attaching}
+          portal
+          trigger={{
+            className: "details-row details-row--add",
+            ariaLabel: "Attach folder",
+            content: (
+              <>
+                <FolderPlusIcon size={14} aria-hidden="true" className="details-row__icon" />
+                <span className="details-row__title">{attaching ? "Attaching" : "Attach folder"}</span>
+              </>
+            ),
+          }}
+          onOpenChange={props.onPortaledInteractionChange}
+          onSelect={(directory) => {
+            if (directory.path) void attachDirectory(directory.path);
+          }}
+          onPickFromDisk={() => { void attachDirectory(); }}
+        />
       ) : null}
       {storageApi && storageDirectory ? (
         <WorktreeStorageDialog
@@ -516,4 +553,23 @@ export function dedupeLinkedProjectDirectories(
 
 function normalizeLinkedProjectPath(value: string): string {
   return value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/**
+ * Tracked projects a thread can still attach: each has a local path (a peer's
+ * placeholder project has none here), and none is already one of the
+ * thread's folders, as a source checkout or a worktree. Order is kept.
+ */
+export function listAttachableDirectories(
+  tracked: readonly NavigationDirectoryView[],
+  linked: readonly LinkedDirectory[],
+): NavigationDirectoryView[] {
+  const linkedPaths = new Set<string>();
+  for (const directory of linked) {
+    linkedPaths.add(directory.path);
+    if (directory.worktreePath) linkedPaths.add(directory.worktreePath);
+  }
+  return tracked.filter((directory) => directory.path !== undefined
+    && directory.localAvailability !== "unconfigured"
+    && !linkedPaths.has(directory.path));
 }

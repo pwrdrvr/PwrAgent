@@ -46628,6 +46628,12 @@ button.details-row {
   opacity: 0.55;
 }
 
+/* Attach folder opens the composer's project picker; its wrapper is an
+   inline pill in the composer, so let the row span the section here. */
+.project-picker:has(> .details-row--add) {
+  display: flex;
+}
+
 .details-row__badge {
   flex: 0 0 auto;
   padding: 0 6px;
@@ -51125,6 +51131,15 @@ button.composer__subthread-source-parent:hover {
   max-height: calc(100dvh - 128px);
   gap: 4px;
   overflow: hidden;
+}
+
+/* Portalled for a host that would clip it (the context rail): placed
+   against the trigger in viewport coordinates by the picker itself. */
+.project-picker__pop--portal {
+  position: fixed;
+  bottom: auto;
+  z-index: 150;
+  max-width: calc(100vw - 16px);
 }
 
 .project-picker__list {
