@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo } from "react";
-import type { NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "./desktop-api";
-import { navigationIdentityKey, type NavigationSelectionState } from "./navigation-query-state";
+import type { NavigationSelectionState } from "./navigation-query-state";
 
 // Each entry references only fields from the owner's byte-bounded configuration.
 // History pages, queue payloads and transcript data have their own lifetimes.
@@ -11,7 +11,7 @@ type ComposerPreview = Pick<NavigationThreadSummary,
 
 export function useComposerConfigurationPreview(
   desktopApi: DesktopApi | undefined,
-  selectedIdentity: NavigationIdentity | undefined,
+  selectionKey: string | undefined,
   selection: NavigationSelectionState | undefined,
   selectedRow: NavigationThreadSummary | undefined,
 ): ComposerPreview | undefined {
@@ -19,7 +19,6 @@ export function useComposerConfigurationPreview(
   const thread = selection?.detail?.thread;
   const identity = selection?.detail?.identity;
   const readiness = selection?.readiness;
-  const selectionKey = selection && navigationIdentityKey(selection.ref);
   const { codexEnvironmentOptions, codexEnvironmentRuntime, codexSkillProfile, primaryGitRepository } = thread ?? {};
   useLayoutEffect(() => {
     if (!previews || !selectionKey) return;
@@ -33,7 +32,7 @@ export function useComposerConfigurationPreview(
       if (previews.size > MAX_COMPOSER_PREVIEWS) previews.delete(previews.keys().next().value!);
     }
   }, [codexEnvironmentOptions, codexEnvironmentRuntime, codexSkillProfile, identity, previews, primaryGitRepository, readiness, selectionKey]);
-  if (!selectedIdentity || !selectedRow || selection?.detail || readiness === "failed"
+  if (!selectionKey || !selectedRow || selection?.detail || readiness === "failed"
     || (selectedRow.federation?.peerStatus && selectedRow.federation.peerStatus !== "connected")) return undefined;
-  return previews?.get(navigationIdentityKey(selectedIdentity));
+  return previews?.get(selectionKey);
 }

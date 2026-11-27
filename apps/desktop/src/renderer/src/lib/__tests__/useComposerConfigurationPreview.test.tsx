@@ -2,7 +2,7 @@ import { renderHook } from "@testing-library/react";
 import { expect, it } from "vitest";
 import type { NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
-import type { NavigationSelectionState } from "../navigation-query-state";
+import { navigationIdentityKey, type NavigationSelectionState } from "../navigation-query-state";
 import { useComposerConfigurationPreview } from "../useComposerConfigurationPreview";
 
 it("revokes the owning thread's preview even when its sidebar row has left the page", () => {
@@ -29,7 +29,7 @@ it("revokes the owning thread's preview even when its sidebar row has left the p
   type Props = { ref: NavigationIdentity; selection?: NavigationSelectionState; selectedRow?: NavigationThreadSummary };
   const initialProps: Props = { ref: local, selection: confirmed(local, row), selectedRow: row };
   const { result, rerender } = renderHook(({ ref, selection, selectedRow }: Props) =>
-    useComposerConfigurationPreview(api, ref, selection, selectedRow), { initialProps });
+    useComposerConfigurationPreview(api, navigationIdentityKey(ref), selection, selectedRow), { initialProps });
   rerender({ ref: peer, selectedRow: peerRow });
   expect(result.current).toBeUndefined();
   rerender({ ref: peer, selection: confirmed(peer, peerRow), selectedRow: peerRow });

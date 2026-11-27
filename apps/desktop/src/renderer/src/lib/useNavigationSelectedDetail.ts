@@ -41,6 +41,7 @@ export function useNavigationSelectedDetail(params: {
   enabled?: boolean;
   collections?: readonly NavigationDetailCollectionName[];
 }): {
+  identityKey?: string;
   state?: NavigationSelectionState;
   refresh: () => Promise<void>;
 } {
@@ -330,5 +331,5 @@ export function useNavigationSelectedDetail(params: {
   }, [desktopApi, identityKey, refresh, targetKey]);
   // A render for a new owner must never expose the previous owner's ready configuration.
   const visibleState = state && ref && navigationIdentitiesEqual(state.ref, ref) ? state : undefined;
-  return { state: visibleState, refresh };
+  return { identityKey, state: visibleState, refresh };
 }

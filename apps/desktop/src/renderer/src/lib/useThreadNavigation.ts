@@ -6149,7 +6149,7 @@ export function useThreadNavigation(
       setPendingWorkspaceHandoff(undefined);
     }
   }, [pendingWorkspaceHandoff, selectedThreadKey, selectedWorkspaceHandoffPending]);
-  const composerPreview = useComposerConfigurationPreview(desktopApi, selectedIdentity, selectedDetail.state, selectedRow);
+  const composerPreview = useComposerConfigurationPreview(desktopApi, selectedDetail.identityKey, selectedDetail.state, selectedRow);
   const composerAuthorized = navigationSelectionAuthorizesComposer(selectedDetail.state);
   const selectedThreadDetailReady = composerAuthorized || Boolean(composerPreview);
   const selectedThreadConfigurationReady =
