@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
-import { buildThreadIdentityKey, type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey, type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { parseGhStackCatalog, type GhStack, type GhStackBranch, type GhStackCatalogRead } from "@pwragent/shared/stacks/catalog";
 import {
   inferPullRequestStacks, STACK_DETAIL_REUSE_MS, stackLayerBinding, stackLayerHealth,
@@ -17,6 +17,12 @@ import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-inf
 import { githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } from "./github-forge-stacks";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
+
+export type StackThreadActivity = {
+  held?: boolean;
+  repair?: boolean;
+  pendingRepairPrKey?: string;
+};
 
 const CATALOG_BYTES = 1024 * 1024;
 const MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS = 16;
@@ -1413,7 +1419,7 @@ export class StackReader {
   }
 
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
-    activity?: (threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>,
+    activity?: (threadKey: string) => Promise<StackThreadActivity>,
     observation = new StackReadObservation(), validateAttachments?: ValidateStackAttachments,
     trackedPublishingRepositories?: ReadonlySet<string>,
   ) {
@@ -1421,7 +1427,7 @@ export class StackReader {
   }
 
   private async readProjection(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[],
-    directories: readonly string[] | undefined, activity: ((threadKey: string) => Promise<{ held?: boolean; repair?: boolean }>) | undefined,
+    directories: readonly string[] | undefined, activity: ((threadKey: string) => Promise<StackThreadActivity>) | undefined,
     observation: StackReadObservation, retried: boolean, validateAttachments?: ValidateStackAttachments,
     trackedPublishingRepositories?: ReadonlySet<string>,
   ): Promise<{ stacks: StackSummary[]; catalogs: CatalogRead[] }> {
@@ -1767,13 +1773,14 @@ export class StackReader {
       const gates = stackAutomationGates(layers.map((layer) => {
         const pr = layer.pullRequest && observed.get(`${stack.repository}#${layer.pullRequest.number}`);
         const state = layer.thread && activityByThread.get(layer.thread.key);
+        const prKey = pr && buildPullRequestStatusKey(pr);
         return {
           branch: layer.branch, health: layer.health, number: layer.pullRequest?.number,
           merged: layer.pullRequest?.lifecycleState === "merged",
           closed: layer.pullRequest?.lifecycleState === "closed",
           merging: pr?.mergeQueue?.state === "merging" || pr?.mergeQueue?.state === "queued",
           conflict: pr?.mergeState === "mergeable" ? false : pr?.mergeState === "conflicting" ? true : undefined,
-          repair: Boolean(state && state.repair),
+          repair: state?.repair || (prKey !== undefined && state?.pendingRepairPrKey === prKey),
           checks: pr?.headSha ? resolveCheckState(pr) : undefined,
           checksRunning: pr?.checksStillRunning,
         };

@@ -5,7 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AppServerBackendScope, AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationDirectorySummary, NavigationIdentity, NavigationQueryRequest, NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
-import { buildPullRequestStatusKey, buildThreadIdentityKey, NAVIGATION_INDEX_MAX_INPUT_BYTES, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey, NAVIGATION_INDEX_MAX_INPUT_BYTES } from "@pwragent/shared/contracts/navigation";
 import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
@@ -987,13 +987,8 @@ async function projectNavigationStacks(
     buildThreadIdentityKey(row.source, row.id), row.prs,
   ]));
   const { stacks, catalogs } = await stackReader.read(rows, [], undefined,
-    async (key) => {
-      const thread = parseThreadIdentityKey(key);
-      if (!thread) return {};
-      const held = registry.stackThreadHeld?.(thread) ?? false;
-      return { held, repair: !held && (Boolean(await getDesktopOverlayStore().getThreadPrAutoDispatchPending(thread))
-        || await registry.stackRepairActive?.(thread) === true) };
-    }, new StackReadObservation(demand), async (row, attachmentDemand) => {
+    (key) => registry.readStackThreadActivity?.(key) ?? Promise.resolve({}),
+    new StackReadObservation(demand), async (row, attachmentDemand) => {
       const prs = await registry.canonicalizeNavigationPullRequests(row.prs, attachmentDemand);
       validated.set(buildThreadIdentityKey(row.source, row.id), prs);
       return prs;
