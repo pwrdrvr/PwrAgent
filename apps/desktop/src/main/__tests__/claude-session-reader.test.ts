@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, inject, it, vi } from "vitest";
@@ -33,9 +33,22 @@ const WORKER = "/app/out/main/claude-session-reader-worker.js";
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("Claude session reader", () => {
-  it("lists only interactive project directories from the portable worker's Claude config", async ({ signal }) => {
+  it("lists only interactive project directories from the portable worker's Claude config", async ({ signal, onTestFinished }) => {
     const { directory } = requireOracleFixture(inject("portableOutpost"));
-    const fixture = await mkdtemp(path.join(await realpath(os.tmpdir()), "claude-recent-projects-"));
+    signal.throwIfAborted();
+    const fixture = mkdtempSync(path.join(realpathSync(os.tmpdir()), "claude-recent-projects-"));
+    let reader: ReturnType<typeof openClaudeSessionReader> | undefined;
+    let workerExited: Promise<void> | undefined;
+    onTestFinished(async () => {
+      // Timeouts can leave the test body waiting for an IPC reply. Join its
+      // worker here before Vitest can tear down the shared bundle.
+      try {
+        reader?.close();
+        await workerExited;
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
+      }
+    });
     const configDir = path.join(fixture, "account");
     const checkout = path.join(fixture, "checkout");
     const headlessCheckout = path.join(fixture, "headless");
@@ -45,13 +58,13 @@ describe("Claude session reader", () => {
 
     // Minimal SDK-owned on-disk format for a user message. The test is the
     // only writer, and the worker receives the fixture's config directory.
-    async function writeSession(cwd: string, index: number, entrypoint: string, modifiedAt: number) {
+    function writeSession(cwd: string, index: number, entrypoint: string, modifiedAt: number) {
       const sessionId = `11111111-1111-4111-8111-11111111111${index}`;
       const projectDir = path.join(configDir, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
-      await mkdir(cwd, { recursive: true });
-      await mkdir(projectDir, { recursive: true });
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(projectDir, { recursive: true });
       const transcript = path.join(projectDir, `${sessionId}.jsonl`);
-      await writeFile(transcript, JSON.stringify({
+      writeFileSync(transcript, JSON.stringify({
         type: "user",
         uuid: sessionId,
         sessionId,
@@ -62,38 +75,27 @@ describe("Claude session reader", () => {
         timestamp: "2023-11-14T00:00:00.000Z",
         message: { role: "user", content: "Contrived user prompt" },
       }) + "\n");
-      await utimes(transcript, modifiedAt, modifiedAt);
+      utimesSync(transcript, modifiedAt, modifiedAt);
     }
 
-    try {
-      await writeSession(checkout, 1, "cli", old);
-      await writeSession(checkout, 2, "cli", recent);
-      await writeSession(headlessCheckout, 3, "sdk-ts", recent + 100);
-      signal.throwIfAborted();
-      let workerExited: Promise<void> | undefined;
-      const reader = openClaudeSessionReader({ ...process.env, CLAUDE_CONFIG_DIR: configDir }, {
-        workerPath,
-        fork: async (env) => {
-          const worker = forkOwnerWorker<ClaudeSessionReadRequest, ClaudeSessionReadReply>(workerPath, env);
-          workerExited = new Promise<void>((resolve) => { worker.once("exit", () => resolve()); });
-          return worker;
-        },
-      });
-      try {
-        await expect(reader.listRecentDirectories()).resolves.toEqual({
-          complete: true,
-          directories: [
-            { cwd: checkout, updatedAt: recent * 1_000 },
-            { cwd: checkout, updatedAt: old * 1_000 },
-          ],
-        });
-      } finally {
-        reader.close();
-        await workerExited;
-      }
-    } finally {
-      await rm(fixture, { recursive: true, force: true });
-    }
+    writeSession(checkout, 1, "cli", old);
+    writeSession(checkout, 2, "cli", recent);
+    writeSession(headlessCheckout, 3, "sdk-ts", recent + 100);
+    reader = openClaudeSessionReader({ ...process.env, CLAUDE_CONFIG_DIR: configDir }, {
+      workerPath,
+      fork: async (env) => {
+        const worker = forkOwnerWorker<ClaudeSessionReadRequest, ClaudeSessionReadReply>(workerPath, env);
+        workerExited = new Promise<void>((resolve) => { worker.once("exit", () => resolve()); });
+        return worker;
+      },
+    });
+    await expect(reader.listRecentDirectories()).resolves.toEqual({
+      complete: true,
+      directories: [
+        { cwd: checkout, updatedAt: recent * 1_000 },
+        { cwd: checkout, updatedAt: old * 1_000 },
+      ],
+    });
   });
 
   it("starts with the given environment and answers each read by its id", async () => {
