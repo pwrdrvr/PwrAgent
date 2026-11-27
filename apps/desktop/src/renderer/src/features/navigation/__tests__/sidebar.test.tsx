@@ -2112,9 +2112,10 @@ describe("Sidebar", () => {
         },
       },
     });
-    const publish = (activities: { monitorId: string; activity: string }[]) => act(() => {
+    const publish = (activities: { monitorId: string; activity: string }[], cleared?: string[]) => act(() => {
       deliver?.({ backend: "claude", notification: {
-        method: "thread/subAgentActivity/updated", params: { threadId: "thread-claude-parent", activities },
+        method: "thread/subAgentActivity/updated",
+        params: { threadId: "thread-claude-parent", activities, ...(cleared ? { cleared } : {}) },
       } });
     });
     const parentThread: NavigationThreadSummary = {
@@ -2158,10 +2159,58 @@ describe("Sidebar", () => {
     expect(idle).not.toHaveAttribute("aria-describedby");
     expect(screen.queryByText("Running npm test")).not.toBeInTheDocument();
 
-    // An empty set is the sub-agents doing nothing now.
-    publish([]);
+    // A cleared line is the sub-agent doing nothing now.
+    publish([], ["claude-native:agent-1", "claude-native:agent-2"]);
     expect(container.querySelector(".native-subagents__agent-activity")).toBeNull();
     expect(working).not.toHaveAttribute("aria-describedby");
+
+    resetSubAgentActivityStore();
+    delete (window as Window & { pwragent?: unknown }).pwragent;
+  });
+
+  it("shows a working Codex worker's line, published under its card id", () => {
+    resetSubAgentActivityStore();
+    let deliver: ((event: AgentEvent) => void) | undefined;
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        openSubAgentTranscriptWindow: vi.fn(async () => ({ opened: true })),
+        onAgentEvent: (callback: (event: AgentEvent) => void) => {
+          deliver = callback;
+          return () => undefined;
+        },
+      },
+    });
+    // A Codex row names the worker thread; its card is `codex-native:<thread>`.
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      source: "codex",
+      id: "thread-codex-parent",
+      title: "Inspect the folder",
+      codexNativeSubAgents: [{ threadId: "worker-inspect", title: "folder_inspector", agentNickname: "folder_inspector", threadStatus: "active" }],
+    };
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[parentThread]}
+        loading={false}
+        selectedItemKey="codex:thread-codex-parent"
+        threads={[parentThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Expand 1 native Codex sub-agents for Inspect the folder" }));
+    act(() => {
+      deliver?.({ backend: "codex", notification: { method: "thread/subAgentActivity/updated",
+        params: { threadId: "thread-codex-parent", activities: [{ monitorId: "codex-native:worker-inspect", activity: "Reading notes.txt" }] } } });
+    });
+    expect(screen.getByRole("button", { name: "Open transcript for folder_inspector" }))
+      .toHaveAccessibleDescription("Reading notes.txt");
 
     resetSubAgentActivityStore();
     delete (window as Window & { pwragent?: unknown }).pwragent;

@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import { applySubAgentActivityChanges } from "@pwragent/shared/sub-agent-activity-lines";
 import { splitGraphemes } from "@pwragent/shared/text-graphemes";
 import type { DesktopApi } from "./desktop-api";
 import { agentEventThreadIdentityKey } from "./federated-thread-events";
@@ -14,9 +15,10 @@ type ActivityParams = Extract<AppServerNotification, { method: "thread/subAgentA
 const EMPTY: SubAgentActivities = new Map();
 
 /**
- * What each running sub-agent is doing now, by thread identity key. Live only,
- * the same as the event it comes from: a window that opens mid-run shows the
- * line from the sub-agent's next tool call on.
+ * What each running sub-agent is doing now, by thread identity key, merged
+ * from the events' changes. Live only, the same as the event it comes from: a
+ * window that opens mid-run shows the line from the sub-agent's next tool
+ * call on, and a row shows a line only while its card runs.
  */
 const activitiesByThread = new Map<string, SubAgentActivities>();
 const listeners = new Set<() => void>();
@@ -33,17 +35,11 @@ export function applySubAgentActivityEvent(event: AgentEvent): boolean {
     ...event,
     federationTarget: event.federationTarget ?? readRendererFederationTarget(),
   }, params.threadId);
-  const next = new Map(params.activities.map((entry) => [entry.monitorId, entry.activity]));
-  const previous = activitiesByThread.get(key);
-  if (previous && previous.size === next.size && [...next].every(([id, line]) => previous.get(id) === line)) {
-    return false;
-  }
-  if (next.size === 0) {
-    if (!previous) return false;
-    activitiesByThread.delete(key);
-  } else {
-    activitiesByThread.set(key, next);
-  }
+  const previous = activitiesByThread.get(key) ?? EMPTY;
+  const next = applySubAgentActivityChanges(previous, params);
+  if (next === previous) return false;
+  if (next.size === 0) activitiesByThread.delete(key);
+  else activitiesByThread.set(key, next);
   return true;
 }
 

@@ -2,7 +2,10 @@ import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
 import { memo, useId, useState } from "react";
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
-import { claudeSubAgentTranscriptThreadIdForMonitor } from "@pwragent/shared/subagent-kind";
+import {
+  CODEX_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+  claudeSubAgentTranscriptThreadIdForMonitor,
+} from "@pwragent/shared/subagent-kind";
 import { SubAgentsIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
@@ -169,9 +172,13 @@ export const NativeSubAgentsDisclosure = memo(function NativeSubAgentsDisclosure
             const transcriptThreadId = claude
               ? claudeSubAgentTranscriptThreadIdForMonitor(subAgent.threadId, props.thread.id)
               : props.thread.source === "codex" ? subAgent.threadId : undefined;
-            // What a working sub-agent is doing now, when its harness reports
-            // it (Claude does, per tool call). Keyed like the row: by card id.
-            const activity = subAgent.threadStatus === "active" ? activities.get(subAgent.threadId) : undefined;
+            // What a working sub-agent is doing now, keyed by its card. A
+            // Claude or ACP row is its card; a Codex row names the worker
+            // thread its card is named for.
+            const monitorId = props.thread.source === "codex"
+              ? `${CODEX_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${subAgent.threadId}`
+              : subAgent.threadId;
+            const activity = subAgent.threadStatus === "active" ? activities.get(monitorId) : undefined;
             const activityId = activity ? `${activityIdPrefix}-activity-${index}` : undefined;
             const content = (
               <>

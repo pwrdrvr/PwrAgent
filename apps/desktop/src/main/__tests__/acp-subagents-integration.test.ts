@@ -302,6 +302,84 @@ describe("ACP sub-agent cards persistence & navigation projection", () => {
     }
   });
 
+  it("publishes an Antigravity worker's steps live without recording them", async () => {
+    const backendId: AcpBackendId = "acp:antigravity";
+    const agent = buildInstalledAgent(backendId, "antigravity");
+    let resolvePrompt!: (value: { stopReason: string }) => void;
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "agy-activity-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        return await new Promise((resolve) => {
+          resolvePrompt = resolve as (value: { stopReason: string }) => void;
+        });
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+    const recordSubAgents = vi.fn(async (_params: { backend: AcpBackendId; threadId: string; subAgents: AcpSubAgentCard[] }) => {});
+    const events: AgentEvent[] = [];
+    const sessions = new Map<string, AcpSessionMetadata>();
+    const adapter = new AcpBackendAdapter({
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      acpAgentStore: {
+        getInstalledAgent: (id) => (id === backendId ? agent : undefined),
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: () => {},
+      },
+      acpSessionStore: {
+        getSession: (_backendId, sessionId) => sessions.get(sessionId),
+        listSessions: () => [...sessions.values()],
+        upsertSession: (metadata) => { sessions.set(metadata.sessionId, metadata); },
+      },
+      createAcpTransport: () => transport,
+      emit: async (event) => { events.push(event); },
+      handleServerRequest: async () => ({}),
+      recordSubAgents,
+    });
+    const activity = () => events
+      .filter((event) => event.notification.method === "thread/subAgentActivity/updated")
+      .map((event) => event.notification.params);
+
+    try {
+      const client = await adapter.getClient(backendId);
+      const session = await client.startSession({ cwd: "/tmp/pwragent-ag-activity-test", executionMode: "default" });
+      await client.startPrompt({ sessionId: session.sessionId, prompt: "Inspect the folder", turnId: "turn-ag-activity" });
+      // The captured order: the launch, then the worker's own tool calls.
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "tool_call", toolCallId: "call_2077", name: "invoke_subagent", title: "Run invoke_subagent",
+        kind: "other", status: "in_progress", rawInput: { Prompt: "Run ls -la, then pwd.", Role: "Folder Inspector", TypeName: "self" },
+      });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "tool_call_update", toolCallId: "call_2077", status: "completed",
+      });
+      await vi.waitFor(() => expect(recordSubAgents).toHaveBeenCalledTimes(1));
+      for (const [call, title] of [["call_7264", "ls -la"], ["call_7832", "pwd"]]) {
+        transport.emitSessionUpdate(session.sessionId, {
+          sessionUpdate: "tool_call", toolCallId: `32e00c43-8734-4a37-be08-6f79fda02d23:${call}`, title, kind: "execute",
+          status: "pending", rawInput: { CommandLine: title },
+        });
+      }
+      await vi.waitFor(() => expect(activity()).toEqual([
+        { threadId: session.sessionId, activities: [{ monitorId: "acp-native:call_2077", activity: "Running ls -la" }] },
+        { threadId: session.sessionId, activities: [{ monitorId: "acp-native:call_2077", activity: "Running pwd" }] },
+      ]));
+      // Steps are live only: the card was recorded once, at launch.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(recordSubAgents).toHaveBeenCalledTimes(1);
+
+      resolvePrompt({ stopReason: "end_turn" });
+      await vi.waitFor(() => expect(activity().at(-1)).toEqual({
+        threadId: session.sessionId, activities: [], cleared: ["acp-native:call_2077"],
+      }));
+    } finally {
+      await adapter.close();
+    }
+  });
+
   it("records Grok protocol subagent_spawned/subagent_finished once each without writing on subagent_progress ticks", async () => {
     const backendId: AcpBackendId = "acp:grok";
     const agent = buildInstalledAgent(backendId, "grok");

@@ -3808,13 +3808,48 @@ describe("Claude SDK backend", () => {
       monitorId: "claude-native:agent-1", status: "cancelled", lastMessage: "Stopped",
     });
     // An ended sub-agent is doing nothing now.
-    expect(activityEvents().at(-1)).toEqual({ threadId, activities: [] });
+    expect(activityEvents().at(-1)).toEqual({ threadId, activities: [], cleared: ["claude-native:agent-1"] });
     expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
     expect(f.backend.listWaitingTasks(threadId)).toEqual([]);
     expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
     expect(f.events.find((event) => event.notification.method === "item/completed"
       && (event.notification.params.item as { id?: string }).id === "tool-agent")?.notification.params)
       .toMatchObject({ turnId: started.turnId, item: { status: "cancelled" } });
+  });
+
+  it("sends only the line of the sub-agent that moved on, however many run", async () => {
+    const agentsDone = Promise.withResolvers<void>();
+    const progress = (taskId: string, description: string) => ({ type: "system", subtype: "task_progress", task_id: taskId,
+      tool_use_id: `tool-${taskId}`, description, usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 }, last_tool_name: "Bash" }) as SDKMessage;
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13de" } as SDKMessage;
+      for (const taskId of ["agent-1", "agent-2", "agent-3"]) {
+        yield { type: "system", subtype: "task_started", task_id: taskId, tool_use_id: `tool-${taskId}`, description: `Audit ${taskId}`,
+          task_type: "local_agent", subagent_type: "general-purpose", is_backgrounded: true } as SDKMessage;
+        yield progress(taskId, `Reading ${taskId}.ts`);
+      }
+      yield progress("agent-2", "Running ls src");
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      await agentsDone.promise;
+    });
+    onTestFinished(() => agentsDone.resolve());
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
+    const activityEvents = () => f.events
+      .filter((event) => event.notification.method === "thread/subAgentActivity/updated")
+      .map((event) => event.notification.params);
+    // One event per line change, each naming that one line.
+    await vi.waitFor(() => expect(activityEvents()).toEqual([
+      { threadId, activities: [{ monitorId: "claude-native:agent-1", activity: "Reading agent-1.ts" }] },
+      { threadId, activities: [{ monitorId: "claude-native:agent-2", activity: "Reading agent-2.ts" }] },
+      { threadId, activities: [{ monitorId: "claude-native:agent-3", activity: "Reading agent-3.ts" }] },
+      { threadId, activities: [{ monitorId: "claude-native:agent-2", activity: "Running ls src" }] },
+    ]));
+    agentsDone.resolve();
+    await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+    expect(activityEvents().at(-1)).toEqual({ threadId, activities: [],
+      cleared: ["claude-native:agent-1", "claude-native:agent-2", "claude-native:agent-3"] });
   });
 
   it("retries a sub-agent card whose write failed", async () => {

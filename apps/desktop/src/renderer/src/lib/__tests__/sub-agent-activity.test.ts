@@ -20,21 +20,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const event = (threadId: string, activities: { monitorId: string; activity: string }[], instanceId?: string): AgentEvent => ({
+const event = (
+  threadId: string,
+  activities: { monitorId: string; activity: string }[],
+  instanceId?: string,
+  cleared?: string[],
+): AgentEvent => ({
   backend: "claude",
   ...(instanceId ? { federationTarget: { scope: "remote" as const, instanceId } } : {}),
-  notification: { method: "thread/subAgentActivity/updated", params: { threadId, activities } },
+  notification: { method: "thread/subAgentActivity/updated", params: { threadId, activities, ...(cleared ? { cleared } : {}) } },
 });
 
 describe("sub-agent activity store", () => {
-  it("replaces a thread's set, reports only real changes, and forgets an empty set", () => {
+  it("merges a thread's changes, reports only real changes, and drops cleared lines", () => {
     const line = [{ monitorId: "claude-native:a", activity: "Reading app.css" }];
     expect(applySubAgentActivityEvent(event("t1", line))).toBe(true);
     expect(applySubAgentActivityEvent(event("t1", line))).toBe(false);
     // The same thread id on another machine is another thread.
     expect(applySubAgentActivityEvent(event("t1", line, "peer"))).toBe(true);
-    expect(applySubAgentActivityEvent(event("t1", []))).toBe(true);
-    expect(applySubAgentActivityEvent(event("t1", []))).toBe(false);
+    // Another sub-agent's line joins the first; it does not replace it.
+    expect(applySubAgentActivityEvent(event("t1", [{ monitorId: "claude-native:b", activity: "Running ls" }]))).toBe(true);
+    expect(applySubAgentActivityEvent(event("t1", [], undefined, ["claude-native:a"]))).toBe(true);
+    expect(applySubAgentActivityEvent(event("t1", [], undefined, ["claude-native:a"]))).toBe(false);
+    expect(applySubAgentActivityEvent(event("t1", [], undefined, ["claude-native:b"]))).toBe(true);
+    expect(applySubAgentActivityEvent(event("t1", [], undefined, ["claude-native:b"]))).toBe(false);
     expect(applySubAgentActivityEvent({ backend: "claude", notification: {
       method: "thread/backgroundTasks/updated", params: { threadId: "t1", tasks: [] },
     } })).toBe(false);

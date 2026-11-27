@@ -1,6 +1,7 @@
 import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadSubAgentStatus } from "@pwragent/shared/contracts/navigation";
 import { ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX } from "@pwragent/shared/subagent-kind";
+import type { SubAgentActivityLine } from "@pwragent/shared/sub-agent-activity-lines";
 import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import { truncateSubAgentText } from "../app-server/codex-native-subagents.js";
 
@@ -164,6 +165,26 @@ function readContentText(value: unknown): string | undefined {
   return readContentText(record.content) ?? readContentText(record.text) ?? readContentText(record.output);
 }
 
+const ACP_STEP_VERBS: Record<string, string> = {
+  execute: "Running", read: "Reading", edit: "Editing", delete: "Deleting",
+  move: "Moving", search: "Searching", fetch: "Fetching",
+};
+const ACP_STEP_MAX_LENGTH = 240;
+
+/**
+ * A worker's tool call as one line, in the words Claude's progress frames use
+ * ("Running ls -la"). Antigravity titles an execute call with the command
+ * itself (captured from Antigravity 1.5.18).
+ */
+function acpStepLine(update: Record<string, unknown>): string | undefined {
+  const title = readTrimmedString(update, "title")?.replace(/\s+/g, " ");
+  if (!title) return undefined;
+  const verb = ACP_STEP_VERBS[readTrimmedString(update, "kind") ?? ""];
+  const line = verb && !title.toLowerCase().startsWith(verb.toLowerCase()) ? `${verb} ${title}` : title;
+  const points = Array.from(line);
+  return points.length > ACP_STEP_MAX_LENGTH ? `${points.slice(0, ACP_STEP_MAX_LENGTH - 1).join("")}…` : line;
+}
+
 function isTerminalStatus(status: ThreadSubAgentStatus): boolean {
   return status === "success" || status === "failure" || status === "cancelled";
 }
@@ -315,6 +336,10 @@ export class AcpSubAgentTracker {
     string,
     { action: "kill" | "kill_all"; conversationIds?: string[] }
   >();
+  /** Each running sub-agent's latest step, by agent id. Never part of a card. */
+  private readonly stepLines = new Map<string, string>();
+  /** The agent whose steps a child conversation reports, for step lines only. */
+  private readonly stepConversations = new Map<string, string>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -737,12 +762,52 @@ export class AcpSubAgentTracker {
     return false;
   }
 
+  /**
+   * Notes the step a sub-agent started, when the update is one of its own
+   * tool calls. Antigravity 1.5.18 relays a worker's tool calls on the parent
+   * session with ids `<child conversation>:<call>` and names no conversation
+   * on the launch, so a new conversation is tied to the launch only while
+   * exactly one running launch is untied; otherwise its steps show no line
+   * rather than another worker's. Returns true when a line changed.
+   */
+  observeStep(update: Record<string, unknown>): boolean {
+    if (readUpdateKind(update) !== "tool_call") return false;
+    const toolCallId = readToolCallId(update);
+    const separator = toolCallId?.lastIndexOf(":") ?? -1;
+    if (!toolCallId || separator < 8) return false;
+    const conversationId = toolCallId.slice(0, separator);
+    let agentId = this.byConversationId.get(conversationId) ?? this.stepConversations.get(conversationId);
+    if (!agentId) {
+      const tied = new Set([...this.byConversationId.values(), ...this.stepConversations.values()]);
+      const untied = [...this.runningIds].filter((id) => {
+        const agent = this.agents.get(id);
+        return agent?.toolCallId && !agent.conversationId && !tied.has(id);
+      });
+      if (untied.length !== 1) return false;
+      agentId = untied[0]!;
+      this.stepConversations.set(conversationId, agentId);
+    }
+    const line = acpStepLine(update);
+    if (!line || !this.runningIds.has(agentId) || this.stepLines.get(agentId) === line) return false;
+    this.stepLines.set(agentId, line);
+    return true;
+  }
+
+  /** What each running sub-agent is doing now, by card, in start order. */
+  subAgentActivities(): SubAgentActivityLine[] {
+    return [...this.agents.values()].flatMap((agent) => {
+      const line = this.runningIds.has(agent.id) ? this.stepLines.get(agent.id) : undefined;
+      return line ? [{ monitorId: `${ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${agent.id}`, activity: line }] : [];
+    });
+  }
+
   private settleAgent(
     agent: AcpTrackedSubAgent,
     status: ThreadSubAgentStatus,
     lastMessage: string | undefined,
     timestamp: number,
   ): void {
+    this.stepLines.delete(agent.id);
     agent.status = status;
     agent.completedAt = Math.max(timestamp, agent.startedAt);
     if (lastMessage) {

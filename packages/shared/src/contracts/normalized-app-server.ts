@@ -3198,17 +3198,17 @@ export type AppServerNotification =
     }
   | {
       /**
-       * What each running sub-agent of the thread is doing now, keyed by its
+       * What the thread's running sub-agents are doing now, keyed by their
        * Sub-agents card (`monitorId`): one line such as "Reading app.css".
-       * Replaces the previous set; a sub-agent that is absent shows no line.
-       * Live only: never persisted, and it changes with every tool call a
-       * sub-agent makes, so it never invalidates navigation.
+       * Carries only changes (`SubAgentActivityChanges`): lines that started
+       * or changed, and the cards whose line ended. A window that missed an
+       * event shows a line from the sub-agent's next tool call on, and shows
+       * none once its card stops running. Live only: never persisted, and it
+       * changes with every tool call a sub-agent makes, so it never
+       * invalidates navigation.
        */
       method: "thread/subAgentActivity/updated";
-      params: {
-        threadId: string;
-        activities: { monitorId: string; activity: string }[];
-      };
+      params: { threadId: string } & import("../sub-agent-activity-lines").SubAgentActivityChanges;
     }
   | {
       /**

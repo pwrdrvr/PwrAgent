@@ -42,6 +42,7 @@ import {
   usageLimitProviderForBackend,
 } from "@pwragent/shared/contracts/usage-activity";
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
+import { subAgentActivityChanges } from "@pwragent/shared/sub-agent-activity-lines";
 import type { AcpAgentStorage } from "@pwragent/owner-core/acp-storage";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import {
@@ -1443,6 +1444,8 @@ export class AcpBackendAdapter {
       client?: AcpRuntimeClient;
       tracker: AcpSubAgentTracker;
       recordedKeys: Map<string, string>;
+      /** Each running sub-agent's step line as last published, by monitor id. */
+      publishedActivities: ReadonlyMap<string, string>;
       lastTurnId?: string;
       flushTimer?: ReturnType<typeof setTimeout>;
       flushChain: Promise<void>;
@@ -4356,6 +4359,7 @@ export class AcpBackendAdapter {
         ...(client ? { client } : {}),
         tracker: new AcpSubAgentTracker(),
         recordedKeys: new Map(),
+        publishedActivities: new Map(),
         flushChain: Promise.resolve(),
         consecutiveFlushFailures: 0,
       };
@@ -4387,6 +4391,7 @@ export class AcpBackendAdapter {
     if (dirty) {
       this.scheduleAcpSessionSubAgentFlush(state);
     }
+    this.publishAcpSubAgentActivity(state);
   }
 
   private observeAcpSubAgentUpdate(params: {
@@ -4436,6 +4441,10 @@ export class AcpBackendAdapter {
         outcome: params.turnSettledOutcome,
       }) || dirty;
     }
+    // A worker's own tool call names what it is doing; that line is live
+    // only and never dirties a card.
+    if (kind === "tool_call") state.tracker.observeStep(params.update);
+    this.publishAcpSubAgentActivity(state);
     if (!dirty && !(params.turnSettledOutcome && state.flushTimer !== undefined)) {
       return;
     }
@@ -4461,13 +4470,35 @@ export class AcpBackendAdapter {
     if (!state) {
       return;
     }
-    if (
-      !state.tracker.settleTurn({ turnId: params.turnId, outcome: params.outcome })
-      && state.flushTimer === undefined
-    ) {
+    const settled = state.tracker.settleTurn({ turnId: params.turnId, outcome: params.outcome });
+    this.publishAcpSubAgentActivity(state);
+    if (!settled && state.flushTimer === undefined) {
       return;
     }
     this.drainAcpSessionSubAgentFlush(state);
+  }
+
+  /**
+   * Publishes the sub-agent step lines that changed. Only an event: a line is
+   * command text that changes with every tool call, so it is never recorded.
+   */
+  private publishAcpSubAgentActivity(state: {
+    backend: AcpBackendId;
+    sessionId: string;
+    tracker: AcpSubAgentTracker;
+    publishedActivities: ReadonlyMap<string, string>;
+  }): void {
+    const current = state.tracker.subAgentActivities();
+    const changes = subAgentActivityChanges(state.publishedActivities, current);
+    if (!changes) return;
+    state.publishedActivities = new Map(current.map((line) => [line.monitorId, line.activity]));
+    void this.emit({ backend: state.backend, notification: { method: "thread/subAgentActivity/updated",
+      params: { threadId: state.sessionId, ...changes } } }).catch((error: unknown) => {
+      acpBackendAdapterLog.warn("acp_subagent_activity_emit_failed", {
+        backendId: state.backend, sessionId: state.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   private async endAcpSubAgentsForClient(
@@ -4482,6 +4513,7 @@ export class AcpBackendAdapter {
       if (state.tracker.endRunningSubAgents(status) || state.flushTimer !== undefined) {
         this.drainAcpSessionSubAgentFlush(state);
       }
+      this.publishAcpSubAgentActivity(state);
       flushes.push(state.flushChain);
       this.subAgentSessions.delete(key);
     }
@@ -4496,6 +4528,7 @@ export class AcpBackendAdapter {
       if (state.tracker.endRunningSubAgents(status) || state.flushTimer !== undefined) {
         this.drainAcpSessionSubAgentFlush(state);
       }
+      this.publishAcpSubAgentActivity(state);
       flushes.push(state.flushChain);
       this.subAgentSessions.delete(key);
     }

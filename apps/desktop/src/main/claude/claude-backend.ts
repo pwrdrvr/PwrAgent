@@ -13,6 +13,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { loadClaudeAgentSdk } from "./claude-sdk";
 import { isClaudeAuthenticationFailure } from "@pwragent/shared/claude-authentication";
+import { subAgentActivityChanges } from "@pwragent/shared/sub-agent-activity-lines";
 import type {
   AgentEvent,
   AppServerCollaborationModeRequest,
@@ -533,8 +534,8 @@ type LiveSession = {
   publishedTaskKey: string;
   /** Each sub-agent card as last recorded, keyed by monitor id. */
   recordedSubAgentKeys: Map<string, string>;
-  /** The set last published through `thread/subAgentActivity/updated`. */
-  publishedActivityKey: string;
+  /** Each running sub-agent's line as last published, by monitor id. */
+  publishedActivities: ReadonlyMap<string, string>;
   /** Turns Claude scheduled in this process: /loop wake-ups and session crons. */
   sessionWakes: ClaudeSessionWakeTracker;
   /** The set last published through `thread/sessionWakes/updated`. */
@@ -1417,7 +1418,7 @@ export class ClaudeBackend {
       const current: LiveSession = live = {
         session, controller, input: new ClaudeInputStream(), inputWrites: Promise.resolve(),
         config: claudeSessionConfig(params, session), turn, lastTurnId: turn.turnId, onClosed: [],
-        tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", recordedSubAgentKeys: new Map(), publishedActivityKey: "[]", toolRows: new Map(), launchedToolUseIds: new Set(),
+        tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", recordedSubAgentKeys: new Map(), publishedActivities: new Map(), toolRows: new Map(), launchedToolUseIds: new Set(),
         sessionWakes: new ClaudeSessionWakeTracker(), publishedWakeKey: "[]",
         messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0, heldSelfStarts: 0,
         wake: claudeWakeSignal(), stderr: "",
@@ -2464,16 +2465,17 @@ export class ClaudeBackend {
   }
 
   /**
-   * Publishes what each running sub-agent is doing when that changes. Only an
-   * event: the line is command text that changes with every tool call, so it
-   * is never recorded on the card.
+   * Publishes the sub-agent lines that changed. Only an event: the line is
+   * command text that changes with every tool call, so it is never recorded
+   * on the card. Each event names only what changed, so one tool call sends
+   * one line however many sub-agents run.
    */
   private async publishSubAgentActivity(live: LiveSession): Promise<void> {
-    const activities = live.tasks.subAgentActivities();
-    const key = JSON.stringify(activities);
-    if (key === live.publishedActivityKey) return;
-    live.publishedActivityKey = key;
-    await this.emit({ method: "thread/subAgentActivity/updated", params: { threadId: live.session.thread.id, activities } });
+    const current = live.tasks.subAgentActivities();
+    const changes = subAgentActivityChanges(live.publishedActivities, current);
+    if (!changes) return;
+    live.publishedActivities = new Map(current.map((line) => [line.monitorId, line.activity]));
+    await this.emit({ method: "thread/subAgentActivity/updated", params: { threadId: live.session.thread.id, ...changes } });
   }
 
   /**
