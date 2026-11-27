@@ -47,6 +47,7 @@ export class RegistryTurnState {
   }>();
   // These entries genuinely belong to other providers, not to Codex's model.
   private readonly otherProviderRegistrations = new Map<string, { turn: TurnIdentity; order: number }>();
+  private readonly otherProviderTurnsByThread = new Map<string, Set<TurnIdentity>>();
   private readonly otherProviderOrigins = new Set<StartingTurnOrigin>();
   private readonly turnInputSources = new Map<string, TurnInputSourceRecord>();
   private readonly deletionListeners = new Set<(key: string) => void>();
@@ -137,7 +138,15 @@ export class RegistryTurnState {
     if (!turn) throw new Error(`Invalid registered turn identity: ${key}`);
     if (turn.backend === "codex") this.transition(turn.threadId, { type: "announced", turnId: turn.turnId, order: ++this.order, delivery: delivery?.owner });
     else if (!this.otherProviderRegistrations.has(key)) {
-      this.otherProviderRegistrations.set(key, { turn: { ...turn }, order: ++this.order });
+      const registered = { ...turn };
+      this.otherProviderRegistrations.set(key, { turn: registered, order: ++this.order });
+      const threadKey = buildThreadIdentityKey(turn.backend, turn.threadId);
+      let turns = this.otherProviderTurnsByThread.get(threadKey);
+      if (!turns) {
+        turns = new Set();
+        this.otherProviderTurnsByThread.set(threadKey, turns);
+      }
+      turns.add(registered);
     }
   }
 
@@ -146,12 +155,20 @@ export class RegistryTurnState {
     const key = typeof reference === "string" ? reference : buildActiveTurnKey(reference.backend, reference.threadId, reference.turnId);
     if (!turn) return false;
     this.turnInputSources.delete(turnInputSourceKey(turn));
-    const registered = this.hasRegisteredTurn(key);
-    if (turn.backend === "codex") this.transition(turn.threadId, { type: "unregistered", turnId: turn.turnId });
-    else if (this.otherProviderRegistrations.delete(key)) {
-      for (const listener of this.deletionListeners) listener(key);
+    if (turn.backend === "codex") {
+      const registered = this.hasRegisteredTurn(turn);
+      this.transition(turn.threadId, { type: "unregistered", turnId: turn.turnId });
+      return registered;
     }
-    return registered;
+    const registered = this.otherProviderRegistrations.get(key);
+    if (!registered) return false;
+    this.otherProviderRegistrations.delete(key);
+    const threadKey = buildThreadIdentityKey(registered.turn.backend, registered.turn.threadId);
+    const turns = this.otherProviderTurnsByThread.get(threadKey)!;
+    turns.delete(registered.turn);
+    if (!turns.size) this.otherProviderTurnsByThread.delete(threadKey);
+    for (const listener of this.deletionListeners) listener(key);
+    return true;
   }
 
   hasRegisteredTurn(reference: TurnReference): boolean {
@@ -163,9 +180,22 @@ export class RegistryTurnState {
   }
 
   registeredOtherProviderTurnsForThread(thread: Pick<TurnIdentity, "backend" | "threadId">): TurnIdentity[] {
-    return [...this.otherProviderRegistrations.values()]
-      .filter(({ turn }) => turn.backend === thread.backend && turn.threadId === thread.threadId)
-      .map(({ turn }) => turn);
+    return Array.from(this.otherProviderTurnsByThread.get(buildThreadIdentityKey(thread.backend, thread.threadId)) ?? []);
+  }
+
+  activeTurnIdForThread({ backend, threadId }: Pick<TurnIdentity, "backend" | "threadId">): string | undefined {
+    if (backend !== "codex") {
+      return this.otherProviderTurnsByThread.get(buildThreadIdentityKey(backend, threadId))?.values().next().value?.turnId;
+    }
+    let earliestOrder = Infinity;
+    let turnId: string | undefined;
+    for (const turn of this.codex(threadId).turns) {
+      if (turn.execution && turn.execution.order < earliestOrder && !turn.turnId.startsWith("pending:")) {
+        earliestOrder = turn.execution.order;
+        turnId = turn.turnId;
+      }
+    }
+    return turnId;
   }
 
   registeredTurnKeys(): string[] {
@@ -499,6 +529,12 @@ export class RegistryTurnState {
     return this.cachedReviewProjection;
   }
   liveReviewRecords(): ReadonlyMap<string, ReviewSubAgentRecord> { return this.reviewProjection().live; }
+  liveReviewForParent(backend: AppServerBackendKind, threadId: string, turnId?: string): ReviewSubAgentRecord | undefined {
+    const state = backend === "codex"
+      ? this.codex(threadId)
+      : this.otherProviderReviewActivities.get(buildThreadIdentityKey(backend, threadId))?.state;
+    return state?.liveReviews.find(({ record }) => !turnId || record.turnId === turnId)?.record;
+  }
   activateReview(record: ReviewSubAgentRecord): void {
     this.reviewTransition({ backend: record.parentBackend, threadId: record.parentThreadId }, { type: "reviewActivated", record, order: ++this.order });
   }

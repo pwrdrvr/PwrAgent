@@ -1789,25 +1789,7 @@ function DesktopAppShell(props: {
     threadViewVisible: mainView === "thread",
     localFederationInstanceId: liveFederationHealth?.instanceId,
   });
-  // Handed to the sidebar, which hands them to memoized thread rows. Inline
-  // arrows here were a new function on every render of this component, and a
-  // row's `memo` cannot bail out past one.
-  const detachThreadPullRequest = useEventCallback(
-    async (thread: NavigationThreadSummary, pr: PrSummary) => {
-      if (!desktopApi?.detachThreadPullRequest) return;
-      await desktopApi.detachThreadPullRequest({
-        backend: thread.source,
-        // Remote threads detach on their owning instance; without
-        // the target the write lands in the viewer's overlay store
-        // and reverts on the next remote snapshot.
-        federationTarget: thread.federation?.ref.target ??
-          readRendererFederationTarget(),
-        threadId: thread.id,
-        pr,
-      });
-      await navigation.refresh?.("action/pr-detach");
-    },
-  );
+  const sidebarThreadActions = useSidebarThreadActions(desktopApi, showAppNotice, navigation.refresh);
   const unbindMessagingBinding = useEventCallback(
     async (
       _thread: NavigationThreadSummary,
@@ -4928,6 +4910,7 @@ function DesktopAppShell(props: {
               }
               await navigation.refresh("action/remote-pin-remove");
             }}
+            onStopThread={sidebarThreadActions.stopThread}
             onArchiveThread={navigation.archiveThread}
             onArchiveThreads={navigation.archiveThreads}
             onArchiveDirectories={desktopApi?.removeNavigationDirectory ? navigation.archiveDirectories : undefined}
@@ -4976,7 +4959,7 @@ function DesktopAppShell(props: {
               : (repository) => openSettingsSection("git", encodeForgeRulesRoute(repository))}
             onPrefetchPullRequests={pullRequests.prefetch}
             onPrefetchGitWorkingState={gitWorkingState.prefetch}
-            onDetachPullRequest={detachThreadPullRequest}
+            onDetachPullRequest={sidebarThreadActions.detachPullRequest}
             onUnbindMessagingBinding={unbindMessagingBinding}
             onCopyThreadDiagnostics={
               desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
@@ -5379,6 +5362,49 @@ function DesktopAppShell(props: {
   }
 
   return renderAppLayout();
+}
+
+// Stable handlers let memoized thread rows keep their props across shell renders.
+function useSidebarThreadActions(
+  desktopApi: DesktopApi | undefined,
+  showAppNotice: (notice: AppNoticeToastNotice) => void,
+  refreshNavigation: ReturnType<typeof useThreadNavigation>["refresh"],
+) {
+  const stopThread = useEventCallback(async (thread: NavigationThreadSummary) => {
+    try {
+      await desktopApi?.stopThread?.({
+        backend: thread.source,
+        threadId: thread.id,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+      });
+    } catch (error) {
+      showAppNotice({
+        id: `stop-thread:${threadSummaryIdentityKey(thread)}`,
+        title: "Couldn't stop the turn",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+  const detachPullRequest = useEventCallback(
+    async (thread: NavigationThreadSummary, pr: PrSummary) => {
+      if (!desktopApi?.detachThreadPullRequest) return;
+      await desktopApi.detachThreadPullRequest({
+        backend: thread.source,
+        // Remote threads detach on their owning instance; without
+        // the target the write lands in the viewer's overlay store
+        // and reverts on the next remote snapshot.
+        federationTarget: thread.federation?.ref.target ??
+          readRendererFederationTarget(),
+        threadId: thread.id,
+        pr,
+      });
+      await refreshNavigation?.("action/pr-detach");
+    },
+  );
+  return {
+    stopThread: desktopApi?.stopThread ? stopThread : undefined,
+    detachPullRequest,
+  };
 }
 
 function isSettingsSection(

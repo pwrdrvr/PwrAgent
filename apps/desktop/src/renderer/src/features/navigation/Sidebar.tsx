@@ -550,6 +550,7 @@ type SidebarProps = {
   onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
   onArchiveDirectories?: (directoryKeys: string[]) => Promise<void>;
   onMarkThreadUnread?: (thread: NavigationThreadSummary) => Promise<void>;
+  onStopThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onArchiveThread?: (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
@@ -2668,9 +2669,12 @@ function SidebarContent(props: SidebarProps) {
     readThread: readThreadForCard,
     rowFacts: threadCardRowFacts,
     actionsFor: threadCardActions,
-    // A new row snapshot redraws an open card with the row's live facts.
+    // Refresh the open card when the row, its owner backend, or the Stop handler changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [presentedByKey, readThreadForCard, threadCardActions, threadCardRowFacts]);
+  }), [
+    presentedByKey, props.backends, props.remoteBackends, props.onStopThread,
+    readThreadForCard, threadCardActions, threadCardRowFacts,
+  ]);
 
   const togglePinDirectoryFromContextMenu = (
     directory: NavigationDirectorySummary,
@@ -2967,15 +2971,25 @@ function SidebarContent(props: SidebarProps) {
 
   // Per-thread versions of the context menu's gates, for the keyboard
   // shortcuts, which act without a menu open.
+  const peerGrantsCapability = (
+    thread: NavigationThreadSummary,
+    capability: "thread_navigation" | "turn_control",
+  ): boolean => thread.federation?.peerStatus === "connected"
+    && thread.federation.capabilities?.includes(capability) === true;
   const threadCanRouteRemoteCapability = (
     thread: NavigationThreadSummary,
     capability: "thread_navigation" | "turn_control",
   ): boolean =>
     !(thread.federation && !federationTarget)
-    || Boolean(
-      thread.federation.peerStatus === "connected"
-      && thread.federation.capabilities?.includes(capability),
-    );
+    || peerGrantsCapability(thread, capability);
+  const stopActionFor = (thread: NavigationThreadSummary): (() => Promise<void>) | undefined => {
+    const { onStopThread } = props;
+    // A background task can outlive the parent turn.
+    if (!onStopThread || thread.threadStatus !== "active") return undefined;
+    if ((thread.federation || federationTarget) && !peerGrantsCapability(thread, "turn_control")) return undefined;
+    const backend = threadBackends(thread).find((candidate) => candidate.kind === thread.source);
+    return backend?.available && backend.capabilities.interruptTurn ? () => onStopThread(thread) : undefined;
+  };
   const threadCanRename = (thread: NavigationThreadSummary): boolean =>
     Boolean(props.onRenameThread)
     && threadSupportsRename(thread, threadBackends(thread), Boolean(federationTarget));
@@ -3231,18 +3245,18 @@ function SidebarContent(props: SidebarProps) {
   const contextMenuDependencyCount = contextMenu && contextMenuCanContinueAfter
     ? readThreadDependencyIndicator(dependencyIndicators, contextMenu.thread)?.count ?? 0
     : 0;
-  // A collapsed parent's sub-threads are not loaded; its row still reports
-  // how many it has, so the menu offers the same two archives either way.
-  // Count from the current row: the menu's copy is frozen at open.
-  const contextMenuArchiveThread = contextMenu && !contextMenuIsBulk
+  // The menu holds the row from when it opened. Stop and Archive need its current state.
+  const contextMenuSingleThread = contextMenu && !contextMenuIsBulk
     ? navigationThreadByKey.get(threadSummaryIdentityKey(contextMenu.thread))
       ?? contextMenu.thread
     : undefined;
+  const contextMenuStop = contextMenuSingleThread && stopActionFor(contextMenuSingleThread);
+  // A collapsed parent's row still reports the count of unloaded sub-threads.
   const contextMenuArchiveGroup = useMemo(
-    () => contextMenuArchiveThread
-      ? countArchiveGroup(contextMenuArchiveThread, navigationThreads, navigationThreadByKey)
+    () => contextMenuSingleThread
+      ? countArchiveGroup(contextMenuSingleThread, navigationThreads, navigationThreadByKey)
       : undefined,
-    [contextMenuArchiveThread, navigationThreadByKey, navigationThreads],
+    [contextMenuSingleThread, navigationThreadByKey, navigationThreads],
   );
   const contextMenuChildThreadCount = contextMenuArchiveGroup?.childCount ?? 0;
   const contextMenuHasChildThreads = contextMenuChildThreadCount > 0;
@@ -3649,6 +3663,7 @@ function SidebarContent(props: SidebarProps) {
     contextMenuCanRename ||
     contextMenuCanLock ||
     contextMenuCanContinueAfter ||
+    Boolean(contextMenuStop) ||
     contextMenuCanMarkRead ||
     contextMenuCanMarkUnread ||
     contextMenuCanSendToMachine ||
@@ -3923,6 +3938,7 @@ function SidebarContent(props: SidebarProps) {
       ...(!thread.parentThreadId && props.onSetThreadPin
         ? { pin: { pinned: Boolean(live.pinnedRank), toggle: () => togglePinFromContextMenu(live) } }
         : {}),
+      stop: stopActionFor(thread),
       ...(threadCanMarkRead(thread) ? { markRead: () => markReadFromContextMenu([thread]) } : {}),
       ...(!hasChildThreads && canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control")
         ? {
@@ -4890,6 +4906,18 @@ function SidebarContent(props: SidebarProps) {
                                 {contextMenuDependencyCount} waiting
                               </span>
                             ) : null}
+                          </button>
+                        ) : null}
+                        {contextMenuStop ? (
+                          <button
+                            role="menuitem"
+                            type="button"
+                            onClick={() => {
+                              setContextMenu(undefined);
+                              void contextMenuStop();
+                            }}
+                          >
+                            Stop
                           </button>
                         ) : null}
                         {contextMenuCanMarkUnread ? (

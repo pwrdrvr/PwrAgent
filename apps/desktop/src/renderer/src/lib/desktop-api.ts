@@ -225,6 +225,7 @@ import type {
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   InterruptTurnRequest,
+  StopThreadRequest,
   InterruptTurnResponse,
   DismissFailedSubAgentsRequest,
   DismissFailedSubAgentsResponse,
@@ -1565,6 +1566,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   sendScheduledThreadActionNow?: (
     request: ScheduledThreadActionIdRequest,
   ) => Promise<ScheduledThreadActionMutationResponse>;
+  stopThread?: (request: StopThreadRequest) => Promise<void>;
   interruptTurn?: (
     request: InterruptTurnRequest
   ) => Promise<InterruptTurnResponse>;
