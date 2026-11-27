@@ -293,6 +293,13 @@ export function useThreadSkills(params: {
       const { cwd, commands: incoming } = event.notification.params;
       const commands = Array.isArray(incoming) ? incoming : [];
       const commandKey = backend === "acp:antigravity" ? `${key}:commands` : key;
+      // Claude lists its skills beside its commands. Before anything is
+      // loaded, a commands-only entry would pass for the whole list and keep
+      // the picker from asking; the next load reads the catalog this update
+      // came from. Leaving the version alone keeps a load in flight.
+      if (backend === "claude" && !stateByThreadKeyRef.current[commandKey]?.response) {
+        return;
+      }
       requestVersionsRef.current[commandKey] =
         (requestVersionsRef.current[commandKey] ?? 0) + 1;
       commitState((current) => ({

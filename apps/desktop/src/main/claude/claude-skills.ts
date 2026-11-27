@@ -185,14 +185,33 @@ export function claudeSkillLinks(text: string, work?: { chars: number }): Claude
   }
 }
 
-function replaceSkillLinks(text: string, replace: (link: ClaudeSkillLink) => string): string {
+/** Replace each link `replace` answers for; `undefined` keeps it as typed. */
+function replaceSkillLinks(text: string, replace: (link: ClaudeSkillLink) => string | undefined): string {
   let output = "";
   let cursor = 0;
   for (const link of claudeSkillLinks(text)) {
-    output += text.slice(cursor, link.start) + replace(link);
+    output += text.slice(cursor, link.start) + (replace(link) ?? text.slice(link.start, link.end));
     cursor = link.end;
   }
   return cursor === 0 ? text : output + text.slice(cursor);
+}
+
+/**
+ * Markdown code: a fenced block, to its closing fence or the end of the
+ * text, or an inline code span. Each start scans only to the next backtick
+ * or line break, so the matches cost one pass.
+ */
+const MARKDOWN_CODE = /```[\s\S]*?(?:```|$)|`[^`\r\n]*`/g;
+
+/** Rewrite the text outside Markdown code; `start` is each stretch's offset. */
+function rewriteOutsideCode(text: string, rewrite: (prose: string, start: number) => string): string {
+  let output = "";
+  let cursor = 0;
+  for (const code of text.matchAll(MARKDOWN_CODE)) {
+    output += rewrite(text.slice(cursor, code.index), cursor) + code[0];
+    cursor = code.index + code[0].length;
+  }
+  return output + rewrite(text.slice(cursor), cursor);
 }
 
 function escapeRegExp(value: string): string {
@@ -220,15 +239,19 @@ function escapeRegExp(value: string): string {
  * space instead, so every named skill goes through the Skill tool rather than
  * the first taking the rest as its arguments.
  *
- * A link from the picker is rewritten whenever it points at a `SKILL.md` or
- * names a known skill; a bare `$name` only when `name` is a known skill, so
- * `$HOME` and `$5` stay as typed.
+ * `skillNames` is the folder's skills, or `undefined` while Claude has not
+ * listed them. A link is rewritten when it names a listed skill, or, before
+ * the listing, when it points at a `SKILL.md`, as the picker's links do. Once
+ * the listing is known, a link to a skill Claude lacks stays as typed: `/name`
+ * would be an unknown command, and the link still points the model at the
+ * file. A bare `$name` is rewritten only for a listed skill, so `$HOME` and
+ * `$5` stay as typed. Markdown code is never rewritten.
  */
 export function claudeSkillPrompt(
   input: readonly AppServerTurnInputItem[],
-  skillNames: ReadonlySet<string>,
+  skillNames: ReadonlySet<string> | undefined,
 ): AppServerTurnInputItem[] {
-  const names = [...skillNames].filter((name) => SKILL_NAME.test(name))
+  const names = [...skillNames ?? []].filter((name) => SKILL_NAME.test(name))
     // Longest first, so `$release-notes` is not read as `$release`.
     .sort((left, right) => right.length - left.length);
   const bare = names.length > 0
@@ -240,21 +263,23 @@ export function claudeSkillPrompt(
   const opensWithSkill = new Set<number>();
   const output = input.map((item, index): AppServerTurnInputItem => {
     if (item.type !== "text") return item;
-    let text = replaceSkillLinks(item.text, ({ start, end, name, target }) => {
-      if (!SKILL_NAME.test(name) || (!skillNames.has(name) && !SKILL_FILE.test(target.trim()))) {
-        return item.text.slice(start, end);
-      }
-      mentioned.add(name);
-      if (start === 0) opensWithSkill.add(index);
-      return `/${name}`;
-    });
-    if (bare) {
-      text = text.replace(bare, (_token, lead: string, name: string, offset: number) => {
+    const text = rewriteOutsideCode(item.text, (prose, proseStart) => {
+      const linked = replaceSkillLinks(prose, ({ start, name, target }) => {
+        const named = skillNames ? skillNames.has(name) : SKILL_FILE.test(target.trim());
+        if (!SKILL_NAME.test(name) || !named) return undefined;
         mentioned.add(name);
-        if (offset === 0 && !lead) opensWithSkill.add(index);
+        if (proseStart + start === 0) opensWithSkill.add(index);
+        return `/${name}`;
+      });
+      if (!bare) return linked;
+      return linked.replace(bare, (token, lead: string, name: string, offset: number) => {
+        // Right after a code span, the stretch's start is no word boundary.
+        if (offset === 0 && !lead && proseStart > 0) return token;
+        mentioned.add(name);
+        if (proseStart + offset === 0 && !lead) opensWithSkill.add(index);
         return `${lead}/${name}`;
       });
-    }
+    });
     return text === item.text ? item : { ...item, text };
   });
   if (mentioned.size > 1) {

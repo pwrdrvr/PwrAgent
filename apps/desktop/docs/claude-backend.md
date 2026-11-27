@@ -82,7 +82,8 @@ the composer offers skills under `$` and every other command under `/`.
 
 - A command is a skill when `getContextUsage({ detail: "summary" })` lists it
   with a `SKILL.md` path. Summary detail answers locally; the default `full`
-  detail makes token-count requests.
+  detail makes token-count requests. The listing names skills only when the
+  session loads the Skill tool, so the folder probe loads that one tool.
 - That listing leaves out skills marked `disable-model-invocation`. For those,
   PwrAgent checks `<CLAUDE_CONFIG_DIR>/skills/<name>/SKILL.md`, then
   `<cwd>/.claude/skills/<name>/SKILL.md`. A skill found in neither stays
@@ -91,8 +92,11 @@ the composer offers skills under `$` and every other command under `/`.
   `/name` runs the built-in.
 
 Claude does not act on `$name` or the composer's `[$name](path)` link, so
-`claudeSkillPrompt` rewrites each skill mention to `/name` before sending.
-The transcript keeps what the operator typed. Observed with Claude Code
+`claudeSkillPrompt` rewrites each mention of a listed skill to `/name` before
+sending. Before Claude has listed the folder's skills, a link to a `SKILL.md`
+counts as one. Markdown code is sent as typed, and so is a link to a skill
+Claude does not list, which `/name` could not start. The transcript keeps
+what the operator typed. Observed with Claude Code
 2.1.305:
 
 | Prompt | Result |

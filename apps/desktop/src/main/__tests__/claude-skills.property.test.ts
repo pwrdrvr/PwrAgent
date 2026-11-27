@@ -31,18 +31,24 @@ function tokenArbitrary(known: readonly string[]): fc.Arbitrary<Token> {
     .map(([name, mark]): Token => ({ input: `$${name}${mark}`, output: `/${name}${mark}`, skill: name }));
   const pickedLink = fc.constantFrom(...known)
     .map((name): Token => ({ input: `[$${name}](/repo/.claude/skills/${name}/SKILL.md)`, output: `/${name}`, skill: name }));
-  // The picker's link always points at a SKILL.md, even for a skill this
-  // owner has not listed yet.
-  const unlistedLink = fc.constantFrom(...SKILL_POOL)
-    .map((name): Token => ({ input: `[$${name}](/elsewhere/${name}/SKILL.md)`, output: `/${name}`, skill: name }));
+  // Once Claude has listed the folder's skills, a link to one it lacks stays
+  // a link: `/name` would be an unknown command.
+  const elsewhereLink = fc.constantFrom(...SKILL_POOL).map((name): Token => {
+    const input = `[$${name}](/elsewhere/${name}/SKILL.md)`;
+    return known.includes(name) ? { input, output: `/${name}`, skill: name } : { input, output: input };
+  });
   const untouched = fc.constantFrom(
     "$HOME", "$5", "[$5](https://example.com/price)",
     ...known.map((name) => `$${name}x`),
     ...known.map((name) => `$${name}/`),
+    // Markdown code is sent as typed.
+    ...known.map((name) => `\`$${name}\``),
+    ...known.map((name) => `\`x\`$${name}`),
+    ...known.map((name) => `\`[$${name}](/r/${name}/SKILL.md)\``),
     ...unknown.map((name) => `$${name}`),
     ...unknown.map((name) => `[$${name}](https://example.com/${name})`),
   ).map((text): Token => ({ input: text, output: text }));
-  return fc.oneof(word, bare, pickedLink, unlistedLink, untouched);
+  return fc.oneof(word, bare, pickedLink, elsewhereLink, untouched);
 }
 
 type Item = { kind: "text"; tokens: Token[]; separators: string[] } | { kind: "image" };
@@ -116,9 +122,24 @@ describe("claudeSkillPrompt", () => {
     ["a picked link", "[$release](/r/.claude/skills/release/SKILL.md) v2", "/release v2"],
     ["a longer skill sharing a prefix", "$release-notes", "/release-notes"],
     ["shell variables", "echo $HOME $5", "echo $HOME $5"],
+    ["a fenced block", "```sh\necho $release\n```\nthen $loc", "```sh\necho $release\n```\nthen /loc"],
+    ["an unclosed fence", "$loc\n```\n$release", "/loc\n```\n$release"],
+    ["inline code", "run `$release` then $release", "run `$release` then /release"],
+    ["a mention touching inline code", "`x`$release", "`x`$release"],
+    ["a link to a skill Claude lacks", "[$foo](/u/.codex/skills/foo/SKILL.md) do X", "[$foo](/u/.codex/skills/foo/SKILL.md) do X"],
   ])("handles %s", (_name, text, expected) => {
     expect(claudeSkillPrompt([{ type: "text", text }], new Set(["release", "release-notes", "loc"])))
       .toEqual([{ type: "text", text: expected }]);
+  });
+
+  // Before Claude lists the folder's skills, the picker's link is the only
+  // evidence: it points at a SKILL.md.
+  it.each([
+    ["a picked link", "[$release](/r/.claude/skills/release/SKILL.md) v2", "/release v2"],
+    ["a link to another file", "[$release](/r/notes.md) v2", "[$release](/r/notes.md) v2"],
+    ["a bare mention", "$release v2", "$release v2"],
+  ])("before the skills are listed, handles %s", (_name, text, expected) => {
+    expect(claudeSkillPrompt([{ type: "text", text }], undefined)).toEqual([{ type: "text", text: expected }]);
   });
 });
 

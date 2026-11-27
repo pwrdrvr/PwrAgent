@@ -2965,18 +2965,26 @@ export class ClaudeBackend {
   /**
    * Split the folder's command rows into `/` commands and `$` skills, from the
    * rows and skill listing Claude last reported. Rows that list nothing are
-   * ignored, so an empty answer never replaces a known list.
+   * ignored, so an empty answer never replaces a known list. A probe's rows
+   * were read before any live report that overlaps them, so a probe fills an
+   * empty folder only and never makes a live report look stale.
    */
-  private async updateCatalog(cwd: string, commands: readonly SlashCommand[]): Promise<ClaudeCommandCatalog | undefined> {
+  private async updateCatalog(
+    cwd: string,
+    commands: readonly SlashCommand[],
+    options: { probe?: boolean } = {},
+  ): Promise<ClaudeCommandCatalog | undefined> {
     const evidence = this.skillEvidenceByCwd.get(cwd) ?? [];
     const names = claudeSkillFileCandidates(commands, this.terminalCommands, evidence);
-    const version = (this.catalogVersions.get(cwd) ?? 0) + 1;
+    const version = (this.catalogVersions.get(cwd) ?? 0) + (options.probe ? 0 : 1);
     this.catalogVersions.set(cwd, version);
     const skillFiles = names.length > 0 ? await this.findSkillFiles(cwd, names) : undefined;
     const catalog = claudeCommandCatalog({ commands, terminalCommands: this.terminalCommands, skillEvidence: evidence, skillFiles });
     if (catalog.commands.length === 0 && catalog.skills.length === 0) return undefined;
-    // A report that arrived during the lookup is fresher; keep its catalog.
-    if (this.catalogVersions.get(cwd) === version) this.catalogByCwd.set(cwd, catalog);
+    // A live report that arrived during the lookup is fresher; keep its catalog.
+    if (this.catalogVersions.get(cwd) === version && !(options.probe && this.catalogByCwd.has(cwd))) {
+      this.catalogByCwd.set(cwd, catalog);
+    }
     return catalog;
   }
 
@@ -2993,8 +3001,8 @@ export class ClaudeBackend {
 
   /** The prompt with its `$skill` mentions in the form Claude starts skills from. */
   private claudePrompt(cwd: string, input: AppServerTurnInputItem[]): AppServerTurnInputItem[] {
-    const skills = this.catalogByCwd.get(cwd)?.skills ?? [];
-    return claudeSkillPrompt(input, new Set(skills.map((skill) => skill.name)));
+    const skills = this.catalogByCwd.get(cwd)?.skills;
+    return claudeSkillPrompt(input, skills && new Set(skills.map((skill) => skill.name)));
   }
 
   /**
@@ -3042,7 +3050,7 @@ export class ClaudeBackend {
         const fresher = this.catalogByCwd.get(cwd);
         if (fresher) return fresher;
         if (!this.skillEvidenceByCwd.has(cwd)) this.skillEvidenceByCwd.set(cwd, skills);
-        const catalog = await this.updateCatalog(cwd, commands);
+        const catalog = await this.updateCatalog(cwd, commands, { probe: true });
         if (!catalog) this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
         return this.catalogByCwd.get(cwd) ?? catalog ?? empty;
       } catch {

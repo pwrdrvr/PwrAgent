@@ -61,9 +61,12 @@ export async function readClaudeCatalog(params: {
   executable: string;
   env: NodeJS.ProcessEnv;
   cwd: string;
+  query?: typeof query;
 }): Promise<{ commands: SlashCommand[]; skills: ClaudeSkillEvidence[] }> {
   return await readClaudeMetadata({
     ...params,
+    // Without the Skill tool, Claude's context listing names no skills.
+    tools: ["Skill"],
     read: async (session) => {
       const [commands, context] = await Promise.all([
         session.supportedCommands(),
@@ -118,6 +121,8 @@ export async function readClaudeMetadata<T>(params: {
   settingSources?: Options["settingSources"];
   /** Connect the MCP servers Claude Code's own config names. */
   loadMcpServers?: boolean;
+  /** Tools to load; none by default. The session gets no prompt, so none runs. */
+  tools?: string[];
   query?: typeof query;
   read: (session: Query) => Promise<T>;
   timeoutMessage: string;
@@ -164,7 +169,7 @@ export async function readClaudeMetadata<T>(params: {
         persistSession: false,
         // Metadata reads need no tools, and MCP connections only when the
         // read is about them.
-        tools: [],
+        tools: params.tools ?? [],
         ...(params.loadMcpServers ? {} : { strictMcpConfig: true, mcpServers: {} }),
       },
     });

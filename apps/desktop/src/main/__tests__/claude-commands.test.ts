@@ -11,7 +11,7 @@ import {
   claudeCommandSummaries,
   isClaudeCompactCommandAvailable,
 } from "../claude/claude-commands";
-import { readClaudeMcpServerStatus } from "../claude/claude-models";
+import { readClaudeCatalog, readClaudeMcpServerStatus } from "../claude/claude-models";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 
 // Record a missing fixture seam without launching the SDK's real Git probes.
@@ -281,6 +281,38 @@ describe("Claude slash commands", () => {
     expect(readCatalog).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a live turn's commands over a probe that finishes while they are being sorted", async () => {
+    const probeAnswer = Promise.withResolvers<{ commands: SlashCommand[]; skills: [] }>();
+    const readCatalog = vi.fn(() => probeAnswer.promise);
+    const liveLookup = Promise.withResolvers<void>();
+    const findSkillFiles = vi.fn(async ({ names }: { names: readonly string[] }) => {
+      if (names.includes("live-only")) await liveLookup.promise;
+      return new Map();
+    });
+    const f = await fixture({
+      readCatalog,
+      findSkillFiles,
+      supportedCommands: async () => [command("release"), command("live-only")],
+      getContextUsage: async () => skillListing(f.root, "release"),
+      async *messages() {
+        yield { type: "system", subtype: "init", session_id: "3b7f1d2e-9c4a-4e6b-8d1f-5a2c7e9b0d34" } as unknown as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "" } as unknown as SDKMessage;
+      },
+    });
+    const probe = f.backend.listCatalog({ cwd: f.root });
+    await vi.waitFor(() => expect(readCatalog).toHaveBeenCalledTimes(1));
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "hello" }] });
+    // The live report is sorting its rows when the older probe answer lands.
+    await vi.waitFor(() => expect(findSkillFiles).toHaveBeenCalledTimes(1));
+    probeAnswer.resolve({ commands: [command("release"), command("probe-only")], skills: [] });
+    await probe;
+    liveLookup.resolve();
+    await vi.waitFor(() => expect(turnsEnded(f.events)).toBe(1));
+
+    expect((await f.backend.listCatalog({ cwd: f.root })).commands.map((entry) => entry.name)).toEqual(["live-only"]);
+  });
+
   it("backs off after a failed probe instead of spawning per keystroke", async () => {
     const readCommands = vi.fn(async (): Promise<SlashCommand[]> => { throw new Error("timed out"); });
     const f = await fixture({ readCommands });
@@ -305,6 +337,25 @@ describe("Claude MCP inventory", () => {
       { name: "weather-lab", authStatus: "notLoggedIn", startupStatus: "failed", startupError: undefined, tools: [] },
     ]);
     expect(readMcpServers).toHaveBeenCalledWith(expect.objectContaining({ executable: "/fixture/claude", cwd: f.root }));
+  });
+});
+
+describe("readClaudeCatalog", () => {
+  it("loads the Skill tool, without which Claude's context listing names no skills", async () => {
+    const supportedCommands = vi.fn(async () => [command("release")]);
+    const getContextUsage = vi.fn(async () => skillListing("/fixture/project", "release"));
+    const run = vi.fn((_args: Parameters<typeof query>[0]) => ({
+      supportedCommands, getContextUsage, close: vi.fn(),
+    }) as unknown as Query);
+
+    const catalog = await readClaudeCatalog({
+      executable: "/fixture/claude", env: {}, cwd: "/fixture/project", query: run as unknown as typeof query,
+    });
+
+    expect(catalog.skills.map((skill) => skill.name)).toEqual(["release"]);
+    expect(getContextUsage).toHaveBeenCalledWith({ detail: "summary" });
+    // Claude Code 2.1.305 listed 0 skills with `tools: []` and 49 with the Skill tool.
+    expect(run.mock.calls[0][0].options).toMatchObject({ cwd: "/fixture/project", tools: ["Skill"], strictMcpConfig: true });
   });
 });
 
