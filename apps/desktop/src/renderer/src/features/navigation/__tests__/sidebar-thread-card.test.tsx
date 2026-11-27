@@ -626,6 +626,40 @@ describe("sidebar thread card", () => {
     });
   });
 
+  it("shares a pending folder check for the same peer and path, then checks again on the next visit", async () => {
+    let confirm!: (exists: boolean) => void;
+    const pending = new Promise<boolean>((resolve) => { confirm = resolve; });
+    const applicationWorkspaceExists = vi.fn()
+      .mockReturnValueOnce(pending)
+      .mockResolvedValue(false);
+    (window as { pwragent?: unknown }).pwragent = {
+      openApplication: vi.fn(), readApplications: async () => ({ applications: APPLICATIONS }), applicationWorkspaceExists,
+    };
+    const otherFolder = peerThread("d");
+    otherFolder.linkedDirectories = [{ ...otherFolder.linkedDirectories![0]!, worktreePath: "/wt/other" }];
+    renderSidebar({ threads: [peerThread("a"), peerThread("b"), peerThread("c", "build"), otherFolder] });
+    const a = screen.getByText("Thread a");
+    const b = screen.getByText("Thread b");
+    const c = screen.getByText("Thread c");
+    const d = screen.getByText("Thread d");
+    move(document.querySelector(".sidebar")!, a);
+    await act(async () => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    await act(async () => move(a, c));
+    expect(card()).not.toHaveTextContent("Open terminal");
+    await act(async () => move(c, d));
+    expect(card()).not.toHaveTextContent("Open terminal");
+    await act(async () => move(d, b));
+    await act(async () => confirm(true));
+    expect(card()).toHaveTextContent("Open terminal on lab-mini");
+    const check = (instanceId: string, targetPath: string) => [{ federationTarget: { scope: "remote", instanceId }, targetPath }];
+    expect(applicationWorkspaceExists.mock.calls).toEqual([
+      check("lab", "/wt/mathathon"), check("build", "/wt/mathathon"), check("lab", "/wt/other"),
+    ]);
+    await act(async () => move(b, a));
+    expect(card()).not.toHaveTextContent("Open terminal");
+    expect(applicationWorkspaceExists).toHaveBeenCalledTimes(4);
+  });
+
   it("requires the owner to confirm the projected row's primary folder still exists", async () => {
     const applicationWorkspaceExists = vi.fn(async () => false);
     (window as { pwragent?: unknown }).pwragent = {

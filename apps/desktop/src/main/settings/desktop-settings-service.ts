@@ -711,6 +711,7 @@ export class DesktopSettingsService {
     promise: Promise<DesktopGitDiscoverySnapshot>;
     result?: DesktopGitDiscoverySnapshot;
   };
+  private peerApplicationsInFlight?: Promise<DesktopApplicationsSnapshot>;
   private applicationsDiscoveryPromise?: Promise<DesktopApplicationsSnapshot>;
   private applicationsDiscovery?: DesktopApplicationsSnapshot;
   // Icons for the discovered snapshot, added on the first projection read.
@@ -2173,7 +2174,10 @@ export class DesktopSettingsService {
 
   /** A peer reads only this owner's application inventory and current selections. */
   async readApplications(): Promise<DesktopApplicationsSnapshot> {
-    const applications = await withApplicationIcons(await discoverDesktopApplications({ env: this.env }));
+    this.peerApplicationsInFlight ??= discoverDesktopApplications({ env: this.env })
+      .then(withApplicationIcons)
+      .finally(() => { this.peerApplicationsInFlight = undefined; });
+    const applications = await this.peerApplicationsInFlight;
     return { ...applications, ...this.applicationPreferences(this.configStore.read("applications")) };
   }
 

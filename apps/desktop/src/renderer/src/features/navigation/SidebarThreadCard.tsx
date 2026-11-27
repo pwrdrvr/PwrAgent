@@ -26,7 +26,7 @@ import {
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
-import { readPeerApplications } from "../../lib/useDesktopApplications";
+import { checkPeerApplicationWorkspace, readPeerApplications } from "../../lib/useDesktopApplications";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { getDesktopApi } from "../../lib/desktop-api";
 import {
@@ -426,10 +426,7 @@ function SidebarThreadCardContent(props: {
     let current = true;
     void Promise.all([
       readPeerApplications(api.readApplications, peerId),
-      api.applicationWorkspaceExists({
-        federationTarget: { scope: "remote", instanceId: peerId },
-        targetPath: folderPath,
-      }),
+      checkPeerApplicationWorkspace(api.applicationWorkspaceExists, peerId, folderPath),
     ]).then(([applications, exists]) => {
       if (current && exists === true) {
         setVerified({ peerId, folderPath, applications });

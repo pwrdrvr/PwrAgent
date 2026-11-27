@@ -89,7 +89,7 @@ const APPLICATIONS_DISCOVERY: DesktopApplicationsSnapshot = {
 };
 
 describe("DesktopSettingsService startup discovery", () => {
-  it("reports the owner's configured terminal from the federation applications read", async () => {
+  it("shares overlapping federation inventory reads and reports the owner's configured terminal", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-peer-apps-"));
     tempRoots.push(root);
     const configPath = path.join(root, "config.toml");
@@ -102,10 +102,20 @@ describe("DesktopSettingsService startup discovery", () => {
       const terminals = ["terminal", "ghostty"].map((id) => ({
         id, name: id, kind: "terminal" as const, source: "application" as const, canOpenWorkspace: true,
       }));
-      vi.mocked(discoverDesktopApplications).mockResolvedValue({ ...APPLICATIONS_DISCOVERY, editors: [], terminals });
-      const applications = await new DesktopFederationRuntime().localBackend().readApplications();
-      expect(applications.terminals).toEqual(terminals);
-      expect(applications.preferredTerminalId).toEqual({ value: "ghostty", source: "config" });
+      const inventory = gate<DesktopApplicationsSnapshot>();
+      vi.mocked(discoverDesktopApplications).mockReturnValueOnce(inventory.promise)
+        .mockResolvedValueOnce({ ...APPLICATIONS_DISCOVERY, editors: [] });
+      const backend = new DesktopFederationRuntime().localBackend();
+      const first = backend.readApplications();
+      const second = backend.readApplications();
+      inventory.release({ ...APPLICATIONS_DISCOVERY, editors: [], terminals });
+      for (const applications of await Promise.all([first, second])) {
+        expect(applications.terminals).toEqual(terminals);
+        expect(applications.preferredTerminalId).toEqual({ value: "ghostty", source: "config" });
+      }
+      expect(discoverDesktopApplications).toHaveBeenCalledTimes(1);
+      expect((await backend.readApplications()).terminals).toEqual([]);
+      expect(discoverDesktopApplications).toHaveBeenCalledTimes(2);
     } finally {
       owner.mockRestore();
       registry.mockRestore();

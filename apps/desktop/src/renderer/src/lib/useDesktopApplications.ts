@@ -50,6 +50,25 @@ export function readPeerApplications(read: ReadApplications, instanceId: string)
   return request;
 }
 
+type CheckWorkspace = NonNullable<DesktopApi["applicationWorkspaceExists"]>;
+const pendingWorkspaces = new WeakMap<CheckWorkspace, Map<string, Promise<boolean>>>();
+
+/** Several rows can share a checkout. Each visit after the owner's check settles needs a fresh stat. */
+export function checkPeerApplicationWorkspace(check: CheckWorkspace, instanceId: string, targetPath: string): Promise<boolean> {
+  let pending = pendingWorkspaces.get(check);
+  if (!pending) {
+    pending = new Map();
+    pendingWorkspaces.set(check, pending);
+  }
+  const key = JSON.stringify([instanceId, targetPath]);
+  const existing = pending.get(key);
+  if (existing) return existing;
+  const request = check({ federationTarget: { scope: "remote", instanceId }, targetPath })
+    .finally(() => { pending.delete(key); });
+  pending.set(key, request);
+  return request;
+}
+
 export function useDesktopApplications(params: {
   desktopApi?: DesktopApi;
   localApplications?: DesktopApplicationsSnapshot;
