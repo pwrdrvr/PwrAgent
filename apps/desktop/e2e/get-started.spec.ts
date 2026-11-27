@@ -276,11 +276,15 @@ function expectProfilesPersisted(app: GetStartedApp, profiles: string[]): void {
 }
 
 async function observeBootstrap(app: GetStartedApp) {
+  const child = app.electronApp.process();
+  let launcherClosed = false;
+  child.once("close", () => { launcherClosed = true; });
   return {
     // On Windows the Playwright child can be a launcher. Capture Electron's
     // own PID before the finish action can dispose its inspector connection.
     pid: await app.electronApp.evaluate(() => process.pid),
-    child: app.electronApp.process(),
+    child,
+    launcherClosed: () => launcherClosed,
   };
 }
 
@@ -299,8 +303,16 @@ async function expectGraduationHandoff(
     { message: `Bootstrap should exit cleanly after handing off to "${profile}"`, timeout },
   ).toEqual({ bootstrapAlive: false, launcherExitCode: 0, launcherSignal: null });
 
+  if (process.platform === "win32") {
+    // The OS closes the launcher pipes only after every writer releases them.
+    // Check before fixture teardown can kill the replacement and hide a leak.
+    await expect.poll(bootstrap.launcherClosed, {
+      message: "Bootstrap launcher pipes should close before sweeping the live replacement",
+    }).toBe(true);
+  }
+
   // The marker belongs to the isolated home. A detached runtime must still
-  // be alive after bootstrap exits, with its own PID and chosen profile.
+  // be alive after the launcher check, with its own PID and chosen profile.
   const markers = findLiveProfileRuntimeMarkers(profile, {
     env: { PWRAGENT_HOME: path.join(app.homeRoot, ".pwragent") },
   });

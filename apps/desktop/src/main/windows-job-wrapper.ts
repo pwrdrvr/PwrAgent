@@ -279,6 +279,17 @@ public static partial class PwrAgentWindowsJobRunner
         return quoted.ToString();
     }
 
+    private static StringBuilder BuildCommandLine(string application, string[] arguments)
+    {
+        StringBuilder commandLine = new StringBuilder(QuoteArgument(application));
+        foreach (string argument in arguments)
+        {
+            commandLine.Append(' ');
+            commandLine.Append(QuoteArgument(argument));
+        }
+        return commandLine;
+    }
+
     private static uint ReadActiveProcessCount(IntPtr job)
     {
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
@@ -379,15 +390,9 @@ public static partial class PwrAgentWindowsJobRunner
             MakeInheritable(startupInfo.StartupInfo.hStdOutput);
             MakeInheritable(startupInfo.StartupInfo.hStdError);
 
-            StringBuilder commandLine = new StringBuilder(QuoteArgument(application));
-            foreach (string argument in arguments)
-            {
-                commandLine.Append(' ');
-                commandLine.Append(QuoteArgument(argument));
-            }
             if (!CreateProcess(
                 application,
-                commandLine,
+                BuildCommandLine(application, arguments),
                 IntPtr.Zero,
                 IntPtr.Zero,
                 true,

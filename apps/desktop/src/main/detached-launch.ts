@@ -1,5 +1,9 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
+import { promisify } from "node:util";
+import { windowsJobLauncherPath } from "./windows-job-launcher-path.ts";
+
+const runLauncher = promisify(execFile);
 
 /**
  * Start a process that outlives this one, without handing it this process's
@@ -29,10 +33,11 @@ import fs from "node:fs";
  *
  * macOS needs no trampoline: libuv spawns there with
  * `POSIX_SPAWN_CLOEXEC_DEFAULT`, which closes every descriptor it does not
- * map. Windows handles are not inheritable unless created so, and Chromium
- * does not create them so.
+ * map. On Windows, Electron's libuv can pass inheritable handles outside the
+ * new stdio mapping. The native launcher creates the replacement with handle
+ * inheritance disabled, so the old instance's launcher pipes close on exit.
  */
-export function spawnDetachedProcess(
+export async function spawnDetachedProcess(
   file: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv,
@@ -41,8 +46,16 @@ export function spawnDetachedProcess(
     platform?: NodeJS.Platform;
     trampolineExecPath?: string;
   } = {},
-): void {
+): Promise<void> {
   const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    const launcher = windowsJobLauncherPath();
+    if (!launcher) {
+      throw new Error("The Windows profile launcher is missing. Rebuild or reinstall PwrAgent.");
+    }
+    await runLauncher(launcher, ["--detached-profile", file, ...args], { env, windowsHide: true });
+    return;
+  }
   if (platform !== "linux") {
     spawn(file, [...args], { detached: true, env, stdio: "ignore" }).unref();
     return;
