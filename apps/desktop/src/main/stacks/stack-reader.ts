@@ -14,7 +14,7 @@ import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
 import { PR_METADATA_PRIORITY, runPrMetadataFileProbe, runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { createStoredAttachmentObservation, type PrAttachmentDemand } from "../pr-status/pr-detection";
 import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-info/stack-checkout-store";
-import { advertisedGithubStackPullRequests, githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } from "./github-forge-stacks";
+import { confirmedGithubStackPullRequests, githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } from "./github-forge-stacks";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 
@@ -1478,7 +1478,7 @@ export class StackReader {
       return catalog;
     }));
     const publicationTargets = publishingPrs && publicationTargetsByRepository(publishingPrs);
-    let advertised = publishingPrs ? advertisedGithubStackPullRequests(publishingPrs) : [];
+    let confirmed = publishingPrs ? confirmedGithubStackPullRequests(publishingPrs) : [];
     // Only a tracked layer in this observation can publish. An unrelated
     // catalog in the same clone does not need the fleet's checkout inventory.
     if (directories && publishingPrs && publicationTargets && !unavailable.length
@@ -1487,13 +1487,15 @@ export class StackReader {
       const changed = await scopedCatalogsChanged();
       demand.signal?.throwIfAborted();
       if (changed) return await retryProjection();
-      advertised = advertisedGithubStackPullRequests(publishingPrs);
-      if (!advertised.length) {
+      // A poll can name a stack before GitHub supplies its member list.
+      // Check again after the catalog reads, then let the next poll retry.
+      confirmed = confirmedGithubStackPullRequests(publishingPrs);
+      if (!confirmed.length) {
         return { stacks: [], catalogs: scopedCatalogs };
       }
     }
     const eligible = possibleInferredLayers(local, knownPrs);
-    for (const pr of advertised) eligible.add(prIdentity(pr));
+    for (const pr of confirmed) eligible.add(prIdentity(pr));
     const inferredRows = local.filter((row) => row.prs?.some((pr) => eligible.has(prIdentity(pr))));
     const inferredPaths = new Set(inferredRows.flatMap(threadDirectories));
     const paths = !directories || wanted.size || eligible.size

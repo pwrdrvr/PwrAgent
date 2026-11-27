@@ -71,6 +71,8 @@ it("evaluates a stack child once per poll even when the same poll observes its m
     advanceObservedStacks(prs: readonly PrSummary[]): Promise<void>;
     applyPolledPrStatuses(prs: PrSummary[], fetchedAt: number): Promise<string[]>;
     getThreadDependencyCoordinator(): { handlePrEvent(): Promise<void> };
+    handlePrAutoDispatchSnapshots(prs: PrSummary[], observedAt: number): Promise<void>;
+    rememberPrStatuses(prs: PrSummary[], fetchedAt: number, source: string): { changed: PrSummary[] };
     seedPrStatusRegistryFromThreads(threads: NavigationThreadSummary[]): void;
     setThreadPrAttachment(key: string, attachment: { backend: "claude"; primaryRepoKey: string; prs: PrSummary[] } | undefined): void;
   };
@@ -108,6 +110,31 @@ it("evaluates a stack child once per poll even when the same poll observes its m
     await service.applyPolledPrStatuses([merged], now + 31_000);
     await dependencies.handlePrEvent();
     expect(passedLayers).toEqual([[2], [2]]);
+
+    const laterParent = pr(3, "second-parent", "main");
+    const laterChild = pr(4, "second-child", "second-parent");
+    const laterMerge: PrSummary = { ...laterParent, lifecycleState: "merged", mergedAt: now + 40_000 };
+    service.setThreadPrAttachment(key, { backend: "claude", primaryRepoKey: "github.com/fixture/stack-poll", prs: [laterChild] });
+    service.rememberPrStatuses([laterParent, laterChild], now + 40_000, "fixture");
+    const watching = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const dispatch = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockImplementationOnce(async () => {
+      watching.resolve();
+      await resume.promise;
+    });
+    const poll = service.applyPolledPrStatuses([laterMerge], now + 41_000);
+    try {
+      await watching.promise;
+      // Refreshing the same status can advance its timestamp without emitting
+      // a new transition. The in-flight poll still owns the merge signal.
+      expect(service.rememberPrStatuses([laterMerge], now + 42_000, "selected-lookup").changed).toEqual([]);
+    } finally {
+      resume.resolve();
+      await poll;
+      dispatch.mockRestore();
+    }
+    await dependencies.handlePrEvent();
+    expect(passedLayers).toEqual([[2], [2], [4]]);
   } finally {
     service.backgroundPrPollingEnabled = previousPolling;
     service.setThreadPrAttachment(key, undefined);

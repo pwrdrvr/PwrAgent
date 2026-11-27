@@ -204,6 +204,14 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     expect(busy.stacks[0]?.layers.map((entry) => entry.health)).toEqual(["held", "held"]);
 
     await rm(catalog);
+    const advertised = { ...publishing[0]!, githubStack: { number: 3, position: 2, size: 2 } };
+    const advertisedRows = [{ ...upperRow, prs: [advertised] }, row(lower, "unbound")];
+    const advertisedReader = new StackReader();
+    const readAdvertised = () => advertisedReader.read(advertisedRows, [], [upper], undefined, undefined, undefined, [advertised]);
+    starts.mockClear();
+    expect((await readAdvertised()).stacks).toEqual([]);
+    expect(checkoutStarts()).toEqual([upper]);
+
     recordGithubForgeStack({
       repository, number: 3, trunk: "main",
       layers: [
@@ -211,6 +219,9 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
         { number: 2, branch: "upper", head, open: true, merged: false },
       ],
     });
+    starts.mockClear();
+    expect((await readAdvertised()).stacks.map((stack) => stack.githubStack)).toEqual([3]);
+    expect(checkoutStarts()).toContain(lower);
     const forge = await readForPublication(reader, rows);
     expect(forge.stacks.map((stack) => stack.githubStack)).toEqual([3]);
 
