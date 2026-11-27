@@ -1,6 +1,5 @@
 import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
 import type { RegistryContext } from "./registry-context";
-import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
 import type { ThreadWorkspaceService } from "./thread-workspace-service";
 import { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
@@ -39,7 +38,6 @@ import {
   type CodexAppServerRecycleStatus,
 } from "../codex-app-server/app-server-recycle-policy";
 import { isCodexInvalidResponseMessageIdError } from "../codex-app-server/invalid-response-message-id-recovery";
-import type { TokenMiserStore } from "../token-miser/token-miser-store";
 import { getMainLogger } from "../log";
 import {
   ThreadTurnQueue,
@@ -78,7 +76,6 @@ import type { RegistryHostPorts } from "./registry-host-ports";
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
 export interface CodexRuntimeSupervisorDependencies {
-  readonly threadUsageLedger: ThreadUsageLedger;
   readonly threadArchiveCoordinator: ThreadArchiveCoordinator;
   readonly threadWorkspaceService: ThreadWorkspaceService;
   readonly resolveCodexAppServerRecycleSettingsFn: () => CodexAppServerRecycleSettings;
@@ -135,14 +132,12 @@ export interface CodexRuntimeSupervisorHost extends Pick<RegistryHostPorts,
   tokenMiserReducerCapabilityState?: "supported" | "unsupported";
   tokenMiserRuntimePreparationFailure?: string;
   readonly tokenMiserServerCapabilities: WeakMap<BackendClient, Promise<CodexServerCapabilities | undefined>>;
-  readonly tokenMiserStore?: TokenMiserStore;
 }
 
 /** Codex process restarts, invalid-ID recovery and background process lifecycle. */
 export class CodexRuntimeSupervisor {
   private readonly context: RegistryContext;
   private readonly host: RegistryHost<CodexRuntimeSupervisorHost>;
-  private readonly threadUsageLedger: ThreadUsageLedger;
   private readonly threadArchiveCoordinator: ThreadArchiveCoordinator;
   private readonly threadWorkspaceService: ThreadWorkspaceService;
 
@@ -153,7 +148,6 @@ export class CodexRuntimeSupervisor {
   ) {
     this.context = context;
     this.host = host;
-    this.threadUsageLedger = dependencies.threadUsageLedger;
     this.threadArchiveCoordinator = dependencies.threadArchiveCoordinator;
     this.threadWorkspaceService = dependencies.threadWorkspaceService;
     this.resolveCodexAppServerRecycleSettingsFn = dependencies.resolveCodexAppServerRecycleSettingsFn;
@@ -1185,7 +1179,6 @@ export class CodexRuntimeSupervisor {
       this.host().tokenMiserCodeModeGroupingVersion = undefined;
       this.host().tokenMiserPostToolUseExactOutputVersion = undefined;
       this.host().tokenMiserRuntimePreparationFailure = undefined;
-      if (this.host().tokenMiserStore) await this.threadUsageLedger.initializeTokenMiserLedger();
       if (this.host().resolveTokenMiserEnabledFn()) {
         await this.host().prepareTokenMiserRuntime();
       }

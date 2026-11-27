@@ -806,6 +806,13 @@ export class DesktopSettingsService {
       path.join(path.dirname(this.configPath), "state", "token-miser", "objects"),
       {},
     );
+    try {
+      await this.tokenMiserUsageStore.prune();
+    } catch (error) {
+      settingsLog.warn("Token Miser legacy usage import failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return await this.tokenMiserUsageStore.summarizeUsage();
   }
 

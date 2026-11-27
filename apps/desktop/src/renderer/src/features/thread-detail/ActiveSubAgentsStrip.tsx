@@ -1,6 +1,7 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import {
   hasStoppableSubAgentRun,
+  isAcpNativeSubAgent,
   isCodexNativeSubAgent,
   isDecisionBatchSubAgent,
 } from "@pwragent/shared/subagent-kind";
@@ -78,16 +79,32 @@ export function ActiveSubAgentsStrip(props: {
 
   // The owner's projection already drops cards an earlier build wrote for
   // decision batches (they have their own strip); the raw history does not.
-  const subAgents = (props.thread?.activeSubAgents ?? props.thread?.subAgents ?? [])
-    .filter((subAgent) => !isDecisionBatchSubAgent(subAgent));
-  const running = subAgents.filter(isRunningSubAgent);
-  const blocked = subAgents.filter(isBlockedSubAgent);
-  // Successful and cancelled sub-agents leave immediately — the sidebar and the
-  // rail panel already hold them. Failures linger until dismissed: the strip
-  // vanishing is how an operator misses one, and neither of those surfaces is
-  // in their eyeline while they are typing.
-  const failed = subAgents.filter(isFailedSubAgent);
-  const visible = [...running, ...blocked, ...failed];
+  // Partition in one memoized pass so the 1-second elapsed timer does not
+  // re-filter and re-allocate arrays on every tick.
+  const rawSubAgents = props.thread?.activeSubAgents ?? props.thread?.subAgents;
+  const { running, blocked, failed, visible } = useMemo(() => {
+    const nextRunning: ThreadSubAgentSummary[] = [];
+    const nextBlocked: ThreadSubAgentSummary[] = [];
+    const nextFailed: ThreadSubAgentSummary[] = [];
+    for (const subAgent of rawSubAgents ?? []) {
+      if (isDecisionBatchSubAgent(subAgent)) {
+        continue;
+      }
+      if (isFailedSubAgent(subAgent)) {
+        nextFailed.push(subAgent);
+      } else if (isBlockedSubAgent(subAgent)) {
+        nextBlocked.push(subAgent);
+      } else if (isRunningSubAgent(subAgent)) {
+        nextRunning.push(subAgent);
+      }
+    }
+    return {
+      running: nextRunning,
+      blocked: nextBlocked,
+      failed: nextFailed,
+      visible: [...nextRunning, ...nextBlocked, ...nextFailed],
+    };
+  }, [rawSubAgents]);
   const previewIncomplete = props.thread?.activeSubAgentsIncomplete;
   const moreInPanel = props.thread?.activeSubAgentsMoreInPanel
     ? <span className="live-strip__note">More in Sub-agents</span>
@@ -263,7 +280,9 @@ export function ActiveSubAgentsStrip(props: {
             const monitorTitle = taskMonitorDisplayTitle(subAgent);
             const label = (isCodexNativeSubAgent(subAgent)
               ? subAgent.agentName ?? subAgent.task
-              : monitorTitle ?? subAgent.task) || subAgent.monitorId;
+              : isAcpNativeSubAgent(subAgent)
+                ? subAgent.displayTitle ?? subAgent.agentName ?? subAgent.task
+                : monitorTitle ?? subAgent.task) || subAgent.monitorId;
             const taskPreview = monitorTitle ? subAgent.task.trim() : "";
             const taskContext = taskPreview && taskPreview !== label ? taskPreview : undefined;
             const descriptionId = taskContext ? `${descriptionPrefix}-${index}` : undefined;

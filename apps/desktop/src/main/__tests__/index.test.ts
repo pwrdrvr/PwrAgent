@@ -204,6 +204,7 @@ const refreshProvidersAtStartupMock = vi.fn<() => Promise<void>>(
   async () => undefined,
 );
 const startThreadArchiveSweeperMock = vi.fn();
+const scheduleTokenMiserLegacyCleanupMock = vi.fn();
 const startupBackgroundMocks = {
   startCodexIdleThreadUnsubscriber: vi.fn(),
   startCodexAppServerRecycler: vi.fn(),
@@ -803,7 +804,9 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     onEvent: vi.fn(() => () => {}),
     synchronizeProviderRuntimeSelections: synchronizeProviderRuntimeSelectionsMock,
     listThreads: listThreadsMock,
+    markStartupProviderRefreshPending: vi.fn(),
     refreshProvidersAtStartup: refreshProvidersAtStartupMock,
+    scheduleTokenMiserLegacyCleanup: scheduleTokenMiserLegacyCleanupMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
     setMessagingWorkingUpdatesSettings: setMessagingWorkingUpdatesSettingsMock,
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
@@ -1251,6 +1254,7 @@ describe("bootstrapApp", () => {
     refreshProvidersAtStartupMock.mockResolvedValue(undefined);
     for (const mock of Object.values(startupBackgroundMocks)) mock.mockClear();
     startThreadArchiveSweeperMock.mockReset();
+    scheduleTokenMiserLegacyCleanupMock.mockReset();
     resolveCodexCommandMock.mockReset();
     resolveCodexCommandMock.mockResolvedValue({ command: "/cached/codex", source: "config" });
     refreshStartupDiscoveryMock.mockReset();
@@ -2244,11 +2248,13 @@ describe("bootstrapApp", () => {
       skipArchivedMetadataRefresh: true,
     });
     expect(refreshProvidersAtStartupMock).not.toHaveBeenCalled();
+    expect(scheduleTokenMiserLegacyCleanupMock).toHaveBeenCalledOnce();
 
     finishDiscovery?.();
     await flushMicrotasks();
 
     expect(refreshProvidersAtStartupMock).toHaveBeenCalledOnce();
+    expect(scheduleTokenMiserLegacyCleanupMock).toHaveBeenCalledOnce();
     expect(refreshProvidersAtStartupMock).toHaveBeenCalledWith(
       expect.objectContaining({ intent: "startup" }),
     );

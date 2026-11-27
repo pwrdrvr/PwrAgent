@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { mapTokenMiserFiles, withTokenMiserFileOperation } from "./token-miser-file-io";
 import { TokenMiserOutputCache } from "./token-miser-output-cache";
-import type { TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
+import type { TokenMiserObjectRecord, TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
 import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   estimateTokenCount,
@@ -213,7 +213,7 @@ export type TokenMiserMetadataUpdateReason =
   | "replay"
   | "retrieval"
   | "stopped"
-  | "startup-stop"
+  | "restore-stop"
   | "stored"
   | "flushed";
 
@@ -271,6 +271,7 @@ const HANDLE_BLOCK_SIZE = 256;
 
 export class TokenMiserStore {
   private readonly archivedThreads = new Set<string>();
+  private legacyImportKey?: string;
   private readonly outputs = new TokenMiserOutputCache();
   private nextHandle = 0;
   private handlesRemaining = 0;
@@ -480,11 +481,11 @@ export class TokenMiserStore {
   }
 
   async readMetadata(objectId: string, threadId?: string): Promise<TokenMiserObjectMetadata | undefined> {
-    const metadata = this.readMetadataRow(objectId, threadId);
+    const metadata = this.readPersistedMetadata(objectId, threadId);
     return metadata ? mergeReplayUpdate(metadata, this.replayUpdates.get(objectId)) : undefined;
   }
 
-  private readMetadataRow(objectId: string, threadId?: string): TokenMiserObjectMetadata | undefined {
+  readPersistedMetadata(objectId: string, threadId?: string): TokenMiserObjectMetadata | undefined {
     if (!isSafeObjectId(objectId)) return undefined;
     return this.storage.readMetadata(objectId, threadId);
   }
@@ -860,14 +861,14 @@ export class TokenMiserStore {
       mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
   }
 
-  *listMetadataPages(limit: number): Iterable<TokenMiserObjectMetadata[]> {
-    let afterObjectId: string | undefined;
+  *listMetadataPages(limit: number, threadId?: string, persistedOnly = false): Iterable<TokenMiserObjectMetadata[]> {
+    let after: TokenMiserObjectRecord | undefined;
     for (;;) {
-      const page = this.storage.readMetadataPage(afterObjectId, limit);
-      if (page.length === 0) return;
-      afterObjectId = page.at(-1)!.objectId;
-      yield page.map((entry) => mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
-      if (page.length < limit) return;
+      const { entries, next } = this.storage.readMetadataPage(after, limit, threadId);
+      if (entries.length === 0) return;
+      yield persistedOnly ? entries : entries.map((entry) => mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
+      if (!next) return;
+      after = next;
     }
   }
 
@@ -1071,7 +1072,7 @@ export class TokenMiserStore {
     const committed: TokenMiserObjectMetadata[] = [];
     this.storage.runExclusive(() => {
       for (const id of ids) {
-        const current = this.readMetadataRow(id);
+        const current = this.readPersistedMetadata(id);
         const pending = this.replayUpdates.get(id);
         if (!current || !pending) continue;
         const merged = mergeReplayUpdate(current, pending);
@@ -1124,9 +1125,26 @@ export class TokenMiserStore {
     await this.flushThread(threadId);
   }
 
-  async prune(_params: { maxAgeMs: number; maxBytes: number; now?: number }): Promise<void> {
-    const migrationKey = `token_miser_files_migrated:${createHash("sha256").update(this.rootDir).digest("hex")}`;
-    if (this.storage.hasLegacyMigration(migrationKey)) return;
+  private get legacyMigrationKey(): string {
+    return this.legacyImportKey ??= `token_miser_files_migrated:${createHash("sha256").update(this.rootDir).digest("hex")}`;
+  }
+
+  hasCompletedLegacyImport(): boolean {
+    return this.storage.hasLegacyMigration(this.legacyMigrationKey);
+  }
+
+  async hasLegacyFiles(): Promise<boolean> {
+    return await withTokenMiserFileOperation(() => fs.stat(this.rootDir)).then(
+      (stat) => stat.isDirectory(),
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      },
+    );
+  }
+
+  async prune(_params?: { maxAgeMs: number; maxBytes: number; now?: number }): Promise<void> {
+    if (this.hasCompletedLegacyImport()) return;
     const metadata: TokenMiserObjectMetadata[] = [];
     const observations: TokenMiserCodeModeObservation[] = [];
     const retention: Array<{ key: string; generation: string; archived: number }> = [];
@@ -1221,7 +1239,7 @@ export class TokenMiserStore {
         throw error;
       });
     }
-    this.storage.completeLegacyMigration(migrationKey);
+    this.storage.completeLegacyMigration(this.legacyMigrationKey);
   }
 
   private async readAuthorizedObject(
@@ -1335,7 +1353,6 @@ export class TokenMiserStore {
   async stopReplayTracking(params: {
     objectId: string;
     stoppedAt?: number;
-    restoring?: boolean;
   }): Promise<TokenMiserObjectMetadata | undefined> {
     return await this.updateMetadata(params.objectId, (metadata) => {
       if (
@@ -1346,7 +1363,45 @@ export class TokenMiserStore {
       }
       metadata.replayTrackingStoppedAt = params.stoppedAt ?? Date.now();
       return true;
-    }, params.restoring ? "startup-stop" : "stopped");
+    }, "stopped");
+  }
+
+  /** Restore one page under the same locks as ordinary replay updates. */
+  async restoreReplayTracking(params: {
+    objectIds: readonly string[];
+    stoppedAt: number;
+    threadId: string;
+  }): Promise<TokenMiserObjectMetadata[]> {
+    const entries: TokenMiserObjectMetadata[] = [];
+    const previous = params.objectIds.flatMap((id) => this.updateLocks.get(id) ?? []);
+    const restore = Promise.allSettled(previous).then(async () => {
+      const changed: TokenMiserObjectMetadata[] = [];
+      this.storage.runExclusive(() => {
+        for (const id of params.objectIds) {
+          const row = this.readPersistedMetadata(id, params.threadId);
+          if (!row) continue;
+          const current = mergeReplayUpdate(row, this.replayUpdates.get(id));
+          if (row.replayTrackingVersion === 2 && row.replayTrackingStoppedAt === undefined
+            && row.createdAt < params.stoppedAt) {
+            current.replayTrackingStoppedAt = params.stoppedAt;
+            this.writeMetadata(current);
+            changed.push(current);
+          }
+          entries.push(current);
+        }
+      });
+      for (const entry of changed) this.replayUpdates.delete(entry.objectId);
+      for (const entry of changed) await this.options.onMetadataUpdated?.(entry, "restore-stop");
+    });
+    for (const id of params.objectIds) this.updateLocks.set(id, restore);
+    try {
+      await restore;
+      return entries;
+    } finally {
+      for (const id of params.objectIds) {
+        if (this.updateLocks.get(id) === restore) this.updateLocks.delete(id);
+      }
+    }
   }
 
   private async updateMetadata(
@@ -1364,7 +1419,7 @@ export class TokenMiserStore {
       const apply = () => {
         const pending = this.replayUpdates.get(objectId);
         if (reason === "flushed" && !pending) return;
-        const row = reason === "replay" && pending ? pending.view : this.readMetadataRow(objectId);
+        const row = reason === "replay" && pending ? pending.view : this.readPersistedMetadata(objectId);
         if (!row) { this.replayUpdates.delete(objectId); return; }
         const current = reason === "replay" ? row : mergeReplayUpdate(row, pending);
         const metadata = { ...current };

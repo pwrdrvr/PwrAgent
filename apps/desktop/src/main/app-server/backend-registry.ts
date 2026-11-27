@@ -426,7 +426,7 @@ import { classifyDirectory, navigationPathIdentity, orderByHomePreference } from
 import { mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
 import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
-import { parseClaudeSubAgentTranscriptThreadId } from "@pwragent/shared/subagent-kind";
+import { isTokenMiserSubAgent, parseClaudeSubAgentTranscriptThreadId } from "@pwragent/shared/subagent-kind";
 import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import { type FederationInstanceId, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import {
@@ -1355,6 +1355,8 @@ export class DesktopBackendRegistry {
   private readonly providerThreadSnapshotStore?: ProviderThreadSnapshotStorage;
   private readonly retainedOwnerThreadStorage?: RetainedOwnerThreadStorage;
   private durableStartupThreadHydrationAttempted = false;
+  private savedStartupThreadRead?: Promise<AppServerThreadSummary[]>;
+  private savedStartupThreadMetadataHydrated = false;
   private startupProviderRefreshAttempted = false;
   private startupCodexRefreshFailed = false;
   private startupProviderRefreshPromise?: Promise<void>;
@@ -2301,7 +2303,6 @@ export class DesktopBackendRegistry {
       handoffThreadWorkspace: (...args: Parameters<ThreadWorkspaceService["handoffThreadWorkspace"]>) => this.threadWorkspaceService.handoffThreadWorkspace(...args),
       hasActiveCodexWork: (...args: Parameters<typeof this.hasActiveCodexWork>) => this.hasActiveCodexWork(...args),
       holdBackendSelfStartedTurn: (...args: Parameters<typeof this.holdBackendSelfStartedTurn>) => this.holdBackendSelfStartedTurn(...args),
-      initializeTokenMiserLedger: (...args: Parameters<ThreadUsageLedger["initializeTokenMiserLedger"]>) => this.threadUsageLedger.initializeTokenMiserLedger(...args),
       interruptTurn: (...args: Parameters<typeof this.interruptTurn>) => this.interruptTurn(...args),
       invalidateProviderRuntimeSelections: (...args: Parameters<typeof this.invalidateProviderRuntimeSelections>) => this.invalidateProviderRuntimeSelections(...args),
       invalidateThreadListCache: (...args: Parameters<typeof this.invalidateThreadListCache>) => this.invalidateThreadListCache(...args),
@@ -2366,6 +2367,7 @@ export class DesktopBackendRegistry {
       readThreadLock: (...args: Parameters<typeof this.readThreadLock>) => this.readThreadLock(...args),
       readThreadUsageActivities: (...args: Parameters<ThreadUsageLedger["readThreadUsageActivities"]>) => this.threadUsageLedger.readThreadUsageActivities(...args),
       get recentlyCompletedThreadUsageTurns() { return current().threadUsageLedger.recentlyCompletedThreadUsageTurnRecords; },
+      recordAcpSubAgents: (...args: Parameters<SubAgentMonitorService["recordAcpSubAgents"]>) => this.subAgentMonitorService.recordAcpSubAgents(...args),
       recordClaudeSubAgents: (...args: Parameters<SubAgentMonitorService["recordClaudeSubAgents"]>) => this.subAgentMonitorService.recordClaudeSubAgents(...args),
       recordCodexWorktreeOwnerThread: (...args: Parameters<typeof this.recordCodexWorktreeOwnerThread>) => this.recordCodexWorktreeOwnerThread(...args),
       recordMissingCodexThread: (...args: Parameters<typeof this.recordMissingCodexThread>) => this.recordMissingCodexThread(...args),
@@ -5235,6 +5237,7 @@ export class DesktopBackendRegistry {
     if (
       this.durableStartupThreadHydrationAttempted
       || !this.providerThreadSnapshotStore
+      || (this.startupProviderRefreshStatus && this.startupProviderRefreshStatus.state !== "checking")
       || params.backend
       || params.archived === true
       || Boolean(params.filter?.trim())
@@ -5246,40 +5249,90 @@ export class DesktopBackendRegistry {
     }
 
     this.durableStartupThreadHydrationAttempted = true;
-    const snapshots = this.providerThreadSnapshotStore.list();
-    this.startupProviderRefreshStatus ??= { state: "checking" };
-    // ACP metadata is local and complete. A retained provider snapshot cannot
-    // resurrect a deleted session or hide one whose agent was uninstalled.
-    const nativeThreads = [...snapshots.filter(snapshot => !isAcpBackendId(snapshot.backend)).flatMap((snapshot) =>
-      snapshot.backend === "codex" && params.limit !== undefined
-        ? snapshot.threads.filter(thread => thread.archivedAt === undefined).slice(0, params.limit)
-        : snapshot.threads.filter(thread => thread.archivedAt === undefined),
-    ), ...await this.readAcpThreadsForCache()];
-    if (this.closed) return [];
-    this.confirmRetainedNativeOwners(snapshots.flatMap(snapshot => snapshot.backend === "codex" ? [...snapshot.threads] : []));
-    const codexIds = nativeThreads.filter(thread => thread.source === "codex").map(thread => thread.id);
-    const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
-    const overlays = codexIds.length ? await readOverlays.call(this.overlayStore, { backend: "codex", threadIds: codexIds }) : {};
-    // A retained inventory predates handover. It cannot contradict the latest
-    // canonical acknowledgement the way a fresh provider response can.
-    const titledThreads = nativeThreads.map(thread => thread.source === "codex"
-      ? { ...thread, ...projectOverlayThreadTitle(thread, {
-          title: overlays[thread.id]?.title, titleSource: overlays[thread.id]?.titleSource,
-        }) } : thread)
-      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-    const threads = this.mergeRetainedOwnerThreads(titledThreads, params, new Set(snapshots.flatMap(snapshot =>
-      snapshot.backend === "codex" ? snapshot.threads.filter(thread => thread.archivedAt !== undefined).map(thread => thread.id) : [])));
-    this.rememberThreadListContexts(
-      threads,
-      displayMetadataObservationSequence,
-      params.enrichDirectories,
-      false,
-    );
-    backendRegistryLog.info("startup thread list hydrated from durable providers", {
-      providerCount: snapshots.length,
-      threadCount: threads.length,
+    const rows = await this.hydrateSavedStartupThreads(displayMetadataObservationSequence);
+    const limit = params.limit;
+    let codexRows = 0;
+    const limited = limit === undefined ? rows : rows.filter((thread) => thread.source !== "codex" || codexRows++ < limit);
+    this.incompleteThreadLists.add(limited);
+    return limited;
+  }
+
+  /** Complete available local membership while the owner checks its providers. */
+  readStartupNavigationThreads(backend?: AppServerBackendKind): Promise<AppServerThreadSummary[]> | undefined {
+    if (!this.providerThreadSnapshotStore || this.closed || this.isBootstrapModeFn()
+      || this.isCodexBootstrapDeferredFn() || this.startupProviderRefreshStatus?.state !== "checking") return undefined;
+    return this.hydrateSavedStartupThreads().then((saved) => {
+      const reviewParents = new Set<string>();
+      for (const review of this.context.turnState.liveReviewRecords().values()) {
+        if (review.parentBackend === "codex") reviewParents.add(review.parentThreadId);
+      }
+      const rows = saved.map((thread) => {
+        if (thread.source !== "codex") return thread;
+        const status = this.context.turnState.statusObservation(thread.id)?.status;
+        const active = reviewParents.has(thread.id) || this.context.turnState.hasActiveTurn(thread.id);
+        const threadStatus = active ? "active" : status ?? thread.threadStatus;
+        return threadStatus === thread.threadStatus ? thread : { ...thread, threadStatus };
+      });
+      return backend ? rows.filter((thread) => thread.source === backend) : rows;
     });
+  }
+
+  private hydrateSavedStartupThreads(sequence?: number): Promise<AppServerThreadSummary[]> {
+    if (this.savedStartupThreadRead) return this.savedStartupThreadRead;
+    this.savedStartupThreadRead = this.readSavedStartupThreads(sequence ?? this.reserveThreadInfoObservation()).finally(() => {
+      this.savedStartupThreadRead = undefined;
+    });
+    return this.savedStartupThreadRead;
+  }
+
+  markStartupProviderRefreshPending(): void {
+    this.startupProviderRefreshStatus ??= { state: "checking" };
+  }
+
+  private async readSavedStartupThreads(displayMetadataObservationSequence: number): Promise<AppServerThreadSummary[]> {
+    const snapshots = this.providerThreadSnapshotStore!.list();
+    // Claude and ACP own their session metadata locally. Read it directly
+    // so a retained snapshot cannot resurrect a deleted session.
+    const [claudeThreads, acpThreads] = await Promise.all([this.claudeBackend.listThreads(), this.readAcpThreadsForCache(true)]);
+    const savedCodex = snapshots.flatMap((snapshot) => snapshot.backend === "codex" ? snapshot.threads : []);
+    if (this.closed) return [];
+    if (!this.savedStartupThreadMetadataHydrated) this.confirmRetainedNativeOwners(savedCodex);
+    // A completed live listing can contribute threads created by this owner
+    // during startup. Pending starts cover local creation before that listing.
+    const key = this.buildThreadListCacheKey({ backend: "codex", enrichDirectories: false });
+    const cached = this.threadListCache.get(key);
+    const liveCodex = cached?.threads && (cached.expiresAt ?? 0) > Date.now() && !this.isIncompleteThreadList(cached.threads)
+      ? cached.threads : undefined;
+    const nativeThreads = [...(liveCodex ?? savedCodex.filter((thread) => thread.archivedAt === undefined)), ...claudeThreads, ...acpThreads]
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    const archivedNativeIds = new Set(savedCodex.filter((thread) => thread.archivedAt !== undefined).map((thread) => thread.id));
+    const retained = this.mergeRetainedOwnerThreads(this.withPendingStartedThreads("codex", nativeThreads), {}, archivedNativeIds);
+    const threads = await this.applySavedCodexOverlays(retained);
+    if (this.closed) return [];
+    if (!this.savedStartupThreadMetadataHydrated) {
+      this.savedStartupThreadMetadataHydrated = true;
+      this.rememberThreadListContexts(threads, displayMetadataObservationSequence, false, false);
+      backendRegistryLog.info("startup thread list hydrated from durable providers", {
+        providerCount: snapshots.length,
+        threadCount: threads.length,
+      });
+    }
     return threads;
+  }
+
+  private async applySavedCodexOverlays(threads: AppServerThreadSummary[]): Promise<AppServerThreadSummary[]> {
+    const codexIds = threads.filter((thread) => thread.source === "codex").map((thread) => thread.id);
+    if (!codexIds.length) return threads;
+    const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+    const overlays = await readOverlays.call(this.overlayStore, { backend: "codex", threadIds: codexIds });
+    return threads.flatMap((thread) => {
+      if (thread.source !== "codex") return [thread];
+      const overlay = overlays[thread.id];
+      // An acknowledged archive can be newer than the saved provider row.
+      if (thread.archivedAt !== undefined || overlay?.archiveRetentionStartedAt !== undefined
+        || overlay?.archiveTombstonedAt !== undefined) return [];
+      return [{ ...thread, ...projectOverlayThreadTitle(thread, { title: overlay?.title, titleSource: overlay?.titleSource }) }];
+    });
   }
 
   /**
@@ -5304,10 +5357,20 @@ export class DesktopBackendRegistry {
     // could be followed by a fresh Codex child process and writes to a store
     // `close()` already finalized. `maybeRestartCodexForManagedRuntimeChange`
     // guards on `closed` for the same reason.
-    if (this.closed) return;
-    await this.threadUsageLedger.currentTokenMiserLedgerReconciliation;
     if (this.closed || !this.resolveTokenMiserEnabledFn()) return;
     await this.prepareTokenMiserRuntime();
+  }
+
+  scheduleTokenMiserLegacyCleanup(): void {
+    if (!this.closed) this.threadUsageLedger.scheduleTokenMiserLegacyCleanup();
+  }
+
+  async repairTokenMiserFamilyCharges(
+    members: ReadonlyArray<{ backend: AppServerBackendKind; threadId: string }>,
+  ): Promise<void> {
+    for (const { backend, threadId } of members) {
+      if (backend === "codex") await this.threadUsageLedger.repairTokenMiserHistory(threadId, { chargesOnly: true });
+    }
   }
 
   refreshProvidersAtStartup(permit: ProviderDiscoveryPermit): Promise<void> {
@@ -5320,7 +5383,7 @@ export class DesktopBackendRegistry {
       return Promise.resolve();
     }
     this.startupProviderRefreshAttempted = true;
-    this.startupProviderRefreshStatus = { state: "checking" };
+    this.markStartupProviderRefreshPending();
     const observationSequence = this.reserveThreadInfoObservation();
     const cacheRevision = this.threadListCacheRevision;
     this.startupProviderRefreshPromise = Promise.resolve().then(async () => {
@@ -5355,20 +5418,19 @@ export class DesktopBackendRegistry {
         durationMs: Date.now() - startedAt,
         failureCount: failures.length,
       });
-      this.startupProviderRefreshStatus = failures.length > 0
-        ? {
-            state: "degraded",
-            failedProviders: failures.length,
-          }
-        : { state: "ready" };
-      await this.publishRefreshedProviderThreadsToCache(
-        results.flatMap((result) =>
-          result.status === "fulfilled" ? [result.value] : [],
-        ),
-        observationSequence,
-        cacheRevision,
-      );
+      try {
+        await this.publishRefreshedProviderThreadsToCache(
+          results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []),
+          observationSequence,
+          cacheRevision,
+        );
+      } catch (error) {
+        backendRegistryLog.warn("startup provider inventory publication failed", { error: String(error) });
+      }
       if (this.closed) return;
+      this.startupProviderRefreshStatus = failures.length > 0
+        ? { state: "degraded", failedProviders: failures.length }
+        : { state: "ready" };
       await this.emit({
         backend: "codex",
         notification: {
@@ -5485,19 +5547,26 @@ export class DesktopBackendRegistry {
     const refreshedBackends = new Set(
       refreshes.flatMap((refresh) => refresh.backends),
     );
+    const codexFailed = this.startupCodexRefreshFailed && !refreshedBackends.has("codex");
     const acpObservationSequence = this.reserveThreadInfoObservation();
-    const acpThreads = await this.readAcpThreadsForCache();
+    const [acpThreads, localClaudeThreads, codexIncomplete] = await Promise.all([
+      this.readAcpThreadsForCache(),
+      refreshedBackends.has("claude") ? [] : this.claudeBackend.listThreads(),
+      codexFailed ? this.hasCodexExecutable() : false,
+    ]);
     if (this.closed) return;
+    const savedCodex = this.providerThreadSnapshotStore.list().flatMap((snapshot) =>
+      snapshot.backend === "codex" ? snapshot.threads : []);
     const providerThreads = [
-      ...refreshes.flatMap((refresh) => refresh.threads).filter(thread => !isAcpBackendId(thread.source)),
-      ...this.providerThreadSnapshotStore.list()
-        .filter((snapshot) => !refreshedBackends.has(snapshot.backend) && !isAcpBackendId(snapshot.backend))
-        .flatMap((snapshot) => snapshot.threads),
+      ...refreshes.flatMap((refresh) => refresh.threads).filter((thread) => !isAcpBackendId(thread.source)),
+      ...(!refreshedBackends.has("codex") && (!codexFailed || codexIncomplete) ? savedCodex : []),
+      ...localClaudeThreads,
       ...acpThreads,
-    ]
-      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-    const threads = this.mergeRetainedOwnerThreads(providerThreads, {}, new Set(this.providerThreadSnapshotStore.list()
-      .flatMap(snapshot => snapshot.backend === "codex" ? snapshot.threads.filter(thread => thread.archivedAt !== undefined).map(thread => thread.id) : [])));
+    ].sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    const archivedNativeIds = new Set(savedCodex.filter((thread) => thread.archivedAt !== undefined).map((thread) => thread.id));
+    const retained = this.mergeRetainedOwnerThreads(providerThreads, {}, archivedNativeIds);
+    const threads = refreshedBackends.has("codex") ? retained : await this.applySavedCodexOverlays(retained);
+    if (this.closed) return;
     // Model discovery can finish after a rename. Publishing its earlier
     // inventory is not a new provider observation; retain both its original
     // sequence and any newer acknowledged title in the cache we publish.
@@ -5520,13 +5589,15 @@ export class DesktopBackendRegistry {
     // already cached or in flight when discarding the earlier inventory.
     if (this.threadListCacheRevision !== cacheRevision) return;
     this.invalidateThreadListCache();
+    const incomplete = codexIncomplete || refreshes.some(({ threads }) => this.isIncompleteThreadList(threads));
+    if (incomplete) this.incompleteThreadLists.add(currentThreads);
     const cacheKey = this.buildThreadListCacheKey({
       callerReason: "navigation-snapshot",
       enrichDirectories: false,
     });
     this.threadListCache.set(cacheKey, {
       archived: false,
-      expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
+      expiresAt: Date.now() + (incomplete ? INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS : THREAD_LIST_REUSE_WINDOW_MS),
       threads: currentThreads,
     });
   }
@@ -6132,15 +6203,17 @@ export class DesktopBackendRegistry {
   private async listAllInstalledAcpThreads(
     filter?: string,
     archived?: boolean,
+    localOnly = false,
   ): Promise<AppServerThreadSummary[]> {
     const inventory = this.acpBackend.listInventorySessions({ archived });
     if (inventory) {
       const threadLists = await Promise.all(inventory.map(({ backendId, sessions }) =>
-        this.enrichAcpThreadList(backendId, sessions, filter),
+        this.enrichAcpThreadList(backendId, sessions, filter, archived),
       ));
       return threadLists.flat();
     }
     const sessions = this.acpBackend.listAllSessions();
+    if (localOnly && !sessions) return [];
     const backends = sessions
       ? [...new Set(sessions.map(session => session.backendId))]
       : (await this.acpBackend.listAvailableAgents()).map(agent => agent.backendId);
@@ -6152,8 +6225,8 @@ export class DesktopBackendRegistry {
     return threadLists.flat();
   }
 
-  private async readAcpThreadsForCache(): Promise<AppServerThreadSummary[]> {
-    const enriched = await this.withThreadEnvironmentOptions(await this.listAllInstalledAcpThreads());
+  private async readAcpThreadsForCache(localOnly = false): Promise<AppServerThreadSummary[]> {
+    const enriched = await this.withThreadEnvironmentOptions(await this.listAllInstalledAcpThreads(undefined, undefined, localOnly));
     if (this.closed) return [];
     const byIdentity = new Map(enriched.map(thread => [buildThreadIdentityKey(thread.source, thread.id), thread]));
     // Directory/environment IO may overlap deletion, hiding or a native rename.
@@ -6165,8 +6238,18 @@ export class DesktopBackendRegistry {
     return sessions.filter(session => !session.hidden && session.archivedAt === undefined).map(session => {
       const native = this.acpBackend.sessionToThreadSummary(session);
       const previous = byIdentity.get(buildThreadIdentityKey(session.backendId, session.sessionId));
-      return previous && previous.projectKey === native.projectKey ? { ...native,
-        linkedDirectories: previous.linkedDirectories, codexEnvironmentOptions: previous.codexEnvironmentOptions } : native;
+      return previous && previous.projectKey === native.projectKey
+        ? {
+            ...native,
+            linkedDirectories: previous.linkedDirectories,
+            codexEnvironmentOptions: previous.codexEnvironmentOptions,
+            ...(previous.codexNativeSubAgents
+              ? { codexNativeSubAgents: previous.codexNativeSubAgents }
+              : {}),
+          }
+        : previous?.codexNativeSubAgents
+          ? { ...native, codexNativeSubAgents: previous.codexNativeSubAgents }
+          : native;
     });
   }
 
@@ -6221,22 +6304,36 @@ export class DesktopBackendRegistry {
     if (!isAcpBackendId(backendId)) {
       return [];
     }
-    return this.enrichAcpThreadList(backendId, this.acpBackend.listSessions(backendId, { archived }), filter);
+    return await this.enrichAcpThreadList(
+      backendId,
+      this.acpBackend.listSessions(backendId, { archived }),
+      filter,
+      archived,
+    );
   }
 
   private async enrichAcpThreadList(
     backendId: AcpBackendId,
     sessions: AcpSessionMetadata[],
     filter?: string,
+    archived?: boolean,
   ): Promise<AppServerThreadSummary[]> {
     const normalizedFilter = filter?.trim().toLowerCase();
     const threads = sessions.map((session) => this.acpBackend.sessionToThreadSummary(session));
+    const overlaysByThreadId = threads.length > 0 && typeof this.overlayStore.getThreadOverlayStates === "function"
+      ? await this.overlayStore.getThreadOverlayStates({
+          backend: backendId,
+          threadIds: threads.map((thread) => thread.id),
+        })
+      : undefined;
     const enrichedThreads = await Promise.all(
       threads.map(async (thread) => {
-        const overlay = await this.overlayStore.getThreadOverlayState({
-          backend: backendId,
-          threadId: thread.id,
-        });
+        const overlay = overlaysByThreadId
+          ? overlaysByThreadId[thread.id]
+          : await this.overlayStore.getThreadOverlayState({
+              backend: backendId,
+              threadId: thread.id,
+            });
         const executionMode = backendId === "acp:antigravity"
           ? thread.executionMode
           : this.latestAppliedExecutionModeFromOverlay(overlay) ?? thread.executionMode;
@@ -6257,12 +6354,15 @@ export class DesktopBackendRegistry {
         };
       }),
     );
-    return enrichedThreads.filter(
+    const filtered = enrichedThreads.filter(
       (thread) =>
         !normalizedFilter ||
         thread.title.toLowerCase().includes(normalizedFilter) ||
         thread.id.toLowerCase().includes(normalizedFilter),
     );
+    return archived
+      ? filtered
+      : await this.subAgentMonitorService.withAcpNativeSubAgents(backendId, filtered);
   }
 
   /**
@@ -7897,6 +7997,13 @@ export class DesktopBackendRegistry {
         : display;
     }
     this.assertNotBootstrap("readThread");
+    const { resource, monitorId } = request.display;
+    if (backend === "codex" && (
+      resource === "pricing" || resource === "subagents"
+      || (resource === "subagent" && monitorId && isTokenMiserSubAgent({ monitorId }))
+    )) {
+      await this.threadUsageLedger.repairTokenMiserHistory(request.threadId);
+    }
     const pricing = await this.threadUsageLedger.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
     if (backend === "codex" && request.display.resource === "pricing"
       && pricing.summaries.length === 0 && !pricing.lines.some((line) => line.status !== "superseded")) {
@@ -7916,7 +8023,6 @@ export class DesktopBackendRegistry {
       ...(request.display.resource === "tools" || request.display.resource === "incident" ? { includeAllInvocations: true } : {}),
     });
     const toolAccounting = stored ? await this.threadUsageLedger.withTokenMiserAccounting({ accounting: stored, backend, threadId: request.threadId }) : undefined;
-    const monitorId = request.display.monitorId;
     // Pricing includes in-memory gates; their parent links and accounting
     // must come from the same live view before grouping and pagination.
     const pricingCards = await this.threadUsageLedger.readPricingSubAgents({ backend, threadId: request.threadId, pricing });
@@ -8311,7 +8417,12 @@ export class DesktopBackendRegistry {
         })
       : Promise.resolve(undefined);
     const [activity, codexAccountTokenUsage] = await Promise.all([
-      this.overlayStore.readUsageActivity(request),
+      (async () => {
+        // The sidebar pace probe reads committed usage only. A full activity
+        // view can recover historical charges from gates left by a crash.
+        if (includeAccountTokenUsage) await this.threadUsageLedger.repairTokenMiserHistory();
+        return await this.overlayStore.readUsageActivity!(request);
+      })(),
       accountTokenUsagePromise,
     ]);
     const codex = this.codexLimitObservation();
@@ -17141,7 +17252,7 @@ export class DesktopBackendRegistry {
     // in memory. `closed` prevents either drain from re-arming its timer; the
     // serialized flush chains ensure no write survives close().
     await liveThreadUsageEmitBarrier;
-    await this.threadUsageLedger.currentTokenMiserLedgerReconciliation;
+    await this.threadUsageLedger.drainTokenMiserLedgerWork();
     this.subAgentMonitorService.clearCompletedTaskMonitors();
     await this.threadUsageLedger.flushLiveThreadUsageLines();
     await this.subAgentMonitorService.persistLiveCodexNativeSubAgentUsage();
@@ -17878,7 +17989,6 @@ export class DesktopBackendRegistry {
     }
     this.assertThreadOwnership();
     try {
-      await this.threadUsageLedger.currentTokenMiserLedgerReconciliation;
       await this.tokenMiserHookBridge.start();
       const capabilities = await this.readTokenMiserServerCapabilities(
         this.codexClient,
@@ -18322,7 +18432,7 @@ export class DesktopBackendRegistry {
           ) {
             await this.recordObservedCodexSettings(notification);
           }
-          if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
+          if (this.shouldInvalidateThreadListCacheForNotification(notification)) {
             this.invalidateThreadListCache(backend);
           }
           if (notification.method === "thread/archived") {
@@ -18646,7 +18756,9 @@ export class DesktopBackendRegistry {
     return this.threadDirectoryService.refreshThreadDirectoryRelationship(params);
   }
 
-  private shouldInvalidateThreadListCacheForNotification(method: string): boolean {
+  private shouldInvalidateThreadListCacheForNotification(notification: AppServerNotification): boolean {
+    const { method } = notification;
+    if (method === "thread/subAgents/updated") return notification.params.navigationChanged !== false;
     return (
       method === "navigation/threadDirectories/updated" ||
       method === "thread/branch/updated" ||
@@ -18661,7 +18773,6 @@ export class DesktopBackendRegistry {
       method === "thread/rewound" ||
       method === "thread/started" ||
       method === "thread/status/changed" ||
-      method === "thread/subAgents/updated" ||
       method === "thread/subthreadOrder/updated" ||
       method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
@@ -23426,7 +23537,7 @@ export class DesktopBackendRegistry {
       }
     }
     this.rememberThreadTitleFromEvent(event);
-    if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
+    if (this.shouldInvalidateThreadListCacheForNotification(event.notification)) {
       // Reconciled turn status does not certify the provider's activity timestamp.
       this.invalidateThreadListCache(event.backend);
     }

@@ -21,8 +21,12 @@ export type PinnedNavigationReadState = Map<string, {
   threads: NavigationThreadSummary[];
 }>;
 
+export class PinnedNavigationCoveragePending extends Error {
+  constructor() { super("Pinned navigation owner coverage is checking."); }
+}
+
 export async function readFederationPinnedSnapshot(
-  backend: FederationBackendOperations,
+  backend: Pick<FederationBackendOperations, "getNavigationQueryPage">,
   threadKeys: string[],
   rpcOptions: FederationRpcRequestOptions = { deadlineAt: Date.now() + 10_000 },
   state?: PinnedNavigationReadState,
@@ -73,6 +77,7 @@ export async function readFederationPinnedSnapshot(
           rpcOptions.signal?.throwIfAborted();
           const pageBytes = Buffer.byteLength(JSON.stringify(page), "utf8");
           bytes += pageBytes;
+          if (page.coverage.state === "checking") throw new PinnedNavigationCoveragePending();
           if (page.coverage.state !== "complete") {
             throw new Error(`Pinned navigation owner coverage is ${page.coverage.state} (pending providers: ${page.coverage.pendingProviders ?? "unknown"}, failed providers: ${page.coverage.failedProviders ?? "unknown"}).`);
           }

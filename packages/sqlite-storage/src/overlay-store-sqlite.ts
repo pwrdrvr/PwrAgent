@@ -4516,7 +4516,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: ThreadOverlayState["backend"];
     threadId: string;
     subAgents: ThreadSubAgentSummary[];
-  }): Promise<void> {
+    expectedGateMetadata?: ReadonlyMap<string, { objectId: string; payload: string }>;
+  }): Promise<string[] | void> {
     if (params.subAgents.length === 0) return;
     const storageKey = encodeThreadIdentityKeyForStorage(
       buildThreadIdentityKey(params.backend, params.threadId),
@@ -4524,9 +4525,35 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // Immediate: the legacy-card check reads before it writes, and upgrading a
     // read snapshot fails at once (SQLITE_BUSY_SNAPSHOT) if another instance
     // committed in between.
-    this.stateDb.raw.transaction(() => {
+    return this.stateDb.raw.transaction(() => {
       this.subAgentTable.moveLegacyCards(storageKey);
-      this.subAgentTable.upsert(storageKey, params.subAgents);
+      const expected = params.expectedGateMetadata;
+      if (!expected) {
+        this.subAgentTable.upsert(storageKey, params.subAgents);
+        return;
+      }
+      // Check the exact source records under the same writer lock as the
+      // card upsert. A second connection can advance or remove a gate after
+      // its page was read, regardless of the card's display timestamp.
+      const rows = this.stateDb.raw.prepare(`SELECT gate.object_id, gate.payload
+        FROM json_each(?) AS requested
+        CROSS JOIN token_miser_objects AS gate ON gate.object_id = requested.value
+        WHERE gate.thread_id = ?`)
+        .all(JSON.stringify([...expected.values()].map(({ objectId }) => objectId)), params.threadId) as Array<{
+        object_id: string;
+        payload: string;
+      }>;
+      const current = new Map(rows.map((row) => [row.object_id, row.payload]));
+      const changedGates: string[] = [];
+      this.subAgentTable.upsert(storageKey, params.subAgents.filter(({ monitorId }) => {
+        const snapshot = expected.get(monitorId);
+        if (!snapshot) return false;
+        const payload = current.get(snapshot.objectId);
+        if (payload === snapshot.payload) return true;
+        if (payload !== undefined) changedGates.push(snapshot.objectId);
+        return false;
+      }));
+      return changedGates;
     }).immediate();
   }
 
@@ -4636,6 +4663,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: ThreadOverlayState["backend"];
     threadIds: readonly string[];
     monitorIdPrefix: string;
+    visibleSince?: number;
   }): Promise<Record<string, ThreadSubAgentSummary[]>> {
     const keys = [...new Set(params.threadIds)].map((threadId) => ({
       threadId,
@@ -4644,6 +4672,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const cards = this.subAgentTable.listByMonitorIdPrefix(
       keys.map((key) => key.storageKey),
       params.monitorIdPrefix,
+      params.visibleSince !== undefined ? { visibleSince: params.visibleSince } : undefined,
     );
     const result: Record<string, ThreadSubAgentSummary[]> = {};
     for (const { threadId, storageKey } of keys) {

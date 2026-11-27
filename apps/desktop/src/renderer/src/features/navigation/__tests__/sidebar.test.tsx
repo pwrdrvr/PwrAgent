@@ -2097,6 +2097,119 @@ describe("Sidebar", () => {
     delete (window as Window & { pwragent?: unknown }).pwragent;
   });
 
+  it("shows a nested Antigravity Sub-agents disclosure under a child thread from navigation counts alone", async () => {
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      source: "acp:antigravity",
+      id: "thread-ag-parent",
+      title: "Audit transcript & UX",
+    };
+    const childThread = {
+      ...sharedThread,
+      source: "acp:antigravity" as const,
+      id: "thread-ag-child",
+      title: "Audit: Transcript UX & Activity Cards",
+      parentThreadId: "thread-ag-parent",
+      parentThreadBackend: "acp:antigravity" as const,
+      // Paged navigation rows omit `codexNativeSubAgents` until the disclosure
+      // expands and lazy-loads detail, carrying only count + presence.
+      nativeSubAgentGroupPresent: true,
+      nativeSubAgentCount: 2,
+      codexNativeSubAgents: undefined,
+    };
+    const getNavigationSelectedDetail = vi.fn(async () => ({
+      protocol: 2 as const,
+      revision: "rev-ag-1",
+      ref: {
+        backend: "acp:antigravity" as const,
+        threadId: "thread-ag-child",
+      },
+      thread: {
+        ...childThread,
+        codexNativeSubAgents: [
+          {
+            threadId: "acp-native:call_1",
+            title: "PwrAgent Transcript Auditor",
+            agentNickname: "PwrAgent Transcript Auditor",
+            agentRole: "research",
+            threadStatus: "active" as const,
+          },
+          {
+            threadId: "acp-native:call_2",
+            title: "t3code Transcript Auditor",
+            agentNickname: "t3code Transcript Auditor",
+            agentRole: "research",
+            threadStatus: "idle" as const,
+          },
+        ],
+      },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: { getNavigationSelectedDetail },
+    });
+    try {
+      const directory: NavigationDirectorySummary = {
+        ...directories[0]!,
+        threadKeys: [
+          "acp:antigravity:thread-ag-parent",
+          "acp:antigravity:thread-ag-child",
+        ],
+      };
+      const { rerender } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          directories={[directory]}
+          inboxThreads={[parentThread, childThread]}
+          loading={false}
+          selectedItemKey="acp:antigravity:thread-ag-child"
+          threads={[parentThread, childThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      const toggle = screen.getByRole("button", {
+        name: "Expand 2 Antigravity sub-agents for Audit: Transcript UX & Activity Cards",
+      });
+      fireEvent.click(toggle);
+
+      const workerList = await screen.findByRole("list", {
+        name: "Antigravity sub-agents for Audit: Transcript UX & Activity Cards",
+      });
+      expect(within(workerList).getAllByRole("listitem")).toHaveLength(2);
+      expect(within(workerList).getByText("PwrAgent Transcript Auditor")).toBeInTheDocument();
+      expect(within(workerList).getByText("t3code Transcript Auditor")).toBeInTheDocument();
+      expect(within(workerList).getAllByText("research")).toHaveLength(2);
+      expect(within(workerList).queryByRole("button")).not.toBeInTheDocument();
+
+      // Also verify the Directories lens renders the same nested disclosure on child rows.
+      rerender(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          directories={[directory]}
+          inboxThreads={[parentThread, childThread]}
+          loading={false}
+          selectedItemKey="acp:antigravity:thread-ag-child"
+          threads={[parentThread, childThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+      expect(screen.getByRole("button", {
+        name: "Expand 2 Antigravity sub-agents for Audit: Transcript UX & Activity Cards",
+      })).toBeInTheDocument();
+    } finally {
+      delete (window as Window & { pwragent?: unknown }).pwragent;
+    }
+  });
+
   it("keeps native Codex workers out of directory thread rows", () => {
     const parentThread: NavigationThreadSummary = {
       ...sharedThread,

@@ -7,6 +7,8 @@ import type {
 import type { StateDb } from "./state-db";
 import { prepareSqliteRead } from "./sqlite-prepared-read";
 
+type MetadataPageRow = { thread_id: string; created_at: number; object_id: string; payload: string };
+
 export class SqliteTokenMiserStorage<
   Metadata extends TokenMiserObjectRecord,
   Observation extends TokenMiserObservationRecord,
@@ -46,12 +48,46 @@ export class SqliteTokenMiserStorage<
     return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
   }
 
-  readMetadataPage(afterObjectId: string | undefined, limit: number): Metadata[] {
-    const rows = (afterObjectId === undefined
-      ? prepareSqliteRead(this.db, "SELECT payload FROM token_miser_objects ORDER BY object_id LIMIT ?").all(limit)
-      : prepareSqliteRead(this.db, "SELECT payload FROM token_miser_objects WHERE object_id > ? ORDER BY object_id LIMIT ?")
-          .all(afterObjectId, limit)) as Array<{ payload: string }>;
-    return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
+  readMetadataPage(after: TokenMiserObjectRecord | undefined, limit: number, threadId?: string): {
+    entries: Metadata[];
+    next?: TokenMiserObjectRecord;
+  } {
+    // Keep a thread's gates together so pricing and card reads can share
+    // keys within a page. The existing index supplies the first two keys;
+    // SQLite only sorts rows that tie on both.
+    const rows = this.readMetadataPageRows(after, limit, threadId);
+    const last = rows.at(-1);
+    return {
+      entries: rows.map(({ payload }) => JSON.parse(payload) as Metadata),
+      // The indexed keys belong to the original insert. Use those keys even
+      // when a newer payload supplies different values.
+      next: last && rows.length === limit
+        ? { threadId: last.thread_id, createdAt: last.created_at, objectId: last.object_id }
+        : undefined,
+    };
+  }
+
+  private readMetadataPageRows(after: TokenMiserObjectRecord | undefined, limit: number, threadId?: string): MetadataPageRow[] {
+    const db = this.db;
+    if (threadId !== undefined) {
+      return (after === undefined
+        ? prepareSqliteRead(db, `SELECT thread_id, created_at, object_id, payload
+            FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+            WHERE thread_id = ? ORDER BY created_at, object_id LIMIT ?`).all(threadId, limit)
+        : prepareSqliteRead(db, `SELECT thread_id, created_at, object_id, payload
+            FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+            WHERE thread_id = ? AND (created_at, object_id) > (?, ?)
+            ORDER BY created_at, object_id LIMIT ?`).all(threadId, after.createdAt, after.objectId, limit)) as MetadataPageRow[];
+    }
+    return (after === undefined
+      ? prepareSqliteRead(db, `SELECT thread_id, created_at, object_id, payload
+          FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+          ORDER BY thread_id, created_at, object_id LIMIT ?`).all(limit)
+      : prepareSqliteRead(db, `SELECT thread_id, created_at, object_id, payload
+          FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+          WHERE (thread_id, created_at, object_id) > (?, ?, ?)
+          ORDER BY thread_id, created_at, object_id LIMIT ?`)
+          .all(after.threadId, after.createdAt, after.objectId, limit)) as MetadataPageRow[];
   }
 
   writeMetadata(metadata: Metadata): void {
@@ -93,8 +129,10 @@ export class SqliteTokenMiserStorage<
   }
 
   restoreThread(threadKey: string): void {
-    this.db.prepare("UPDATE token_miser_retention SET archived = 0 WHERE thread_key = ? AND archived = 1")
-      .run(threadKey);
+    // An explicit restore wins even if a peer has yet to import the legacy
+    // archive marker. Imports only insert retention keys that are missing.
+    this.db.prepare(`INSERT INTO token_miser_retention (thread_key, generation, archived) VALUES (?, '', 0)
+      ON CONFLICT(thread_key) DO UPDATE SET archived = 0 WHERE token_miser_retention.archived = 1`).run(threadKey);
   }
 
   archiveThread(threadKey: string, generation: string): void {
@@ -104,7 +142,7 @@ export class SqliteTokenMiserStorage<
   }
 
   hasLegacyMigration(migrationKey: string): boolean {
-    return Boolean(this.db.prepare("SELECT value FROM meta WHERE key = ?").get(migrationKey));
+    return Boolean(prepareSqliteRead(this.db, "SELECT value FROM meta WHERE key = ?").get(migrationKey));
   }
 
   importLegacyRecords({ metadata, observations, retention }: {

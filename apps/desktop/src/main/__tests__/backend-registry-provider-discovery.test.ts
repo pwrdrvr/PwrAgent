@@ -50,7 +50,7 @@ import { DesktopConfigStore } from "../settings/config-store/desktop-config-stor
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
-import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "@pwragent/owner-core/provider-thread-snapshot-storage";
 import { ProviderThreadSnapshotStore } from "@pwragent/sqlite-storage/provider-thread-snapshot-store";
 import type { AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
@@ -2583,6 +2583,110 @@ describe("DesktopBackendRegistry", () => {
     expect(codexClient.listThreadsCallCount).toBe(1);
     await registry.close();
   });
+
+  it("serves every retained navigation row after a bounded startup prewarm", async () => {
+    const provider = createDeferred<void>();
+    const acpDiscovery = createDeferred<void>();
+    const codexClient = new MockBackendClient({ listThreadsDelay: provider.promise });
+    const threads = Array.from({ length: 70 }, (_, index) => ({
+      id: `saved-${index}`, source: "codex" as const, title: `Saved ${index}`,
+      titleSource: "explicit" as const, linkedDirectories: [], updatedAt: 100 - index,
+    }));
+    const registry = createDesktopBackendRegistry({
+      codexClient, overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => {
+        await acpDiscovery.promise;
+        return [];
+      },
+      providerThreadSnapshotStore: {
+        list: () => [{ backend: "codex", observedAt: 100, threads }], replace: vi.fn(),
+      },
+    });
+    await registry.listThreads({ callerReason: "startup-prewarm", limit: 50, maxPages: 1 });
+    expect(registry.readStartupNavigationThreads()).toBeUndefined();
+    registry.markStartupProviderRefreshPending();
+    const refresh = registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const sidebar = registry.readStartupNavigationThreads();
+    try {
+      // A display read must finish with complete saved membership while a live
+      // provider read cannot make progress.
+      await vi.waitFor(() => expect(codexClient.listThreadsCallCount).toBe(1));
+      expect((await sidebar)?.map(({ id }) => id)).toEqual(threads.map(({ id }) => id));
+    } finally {
+      provider.resolve();
+      acpDiscovery.resolve();
+      await Promise.allSettled([refresh, sidebar]);
+      await registry.close();
+    }
+  });
+
+  it("excludes saved Codex rows archived after the provider observation", async () => {
+    const db = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(db);
+    const snapshots = new ProviderThreadSnapshotStore(db);
+    const rows = ["visible", "retention", "tombstone", "restored"].map((id): AppServerThreadSummary => ({
+      id, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [],
+    }));
+    snapshots.replace({ backend: "codex", observedAt: 100, threads: rows });
+    await overlayStore.observeArchivedThreads(["retention", "restored"].map((threadId) => ({ backend: "codex", threadId })), 200);
+    await overlayStore.setThreadArchiveTombstone({ backend: "codex", threadId: "tombstone", archivedAt: 300 });
+    await overlayStore.setThreadArchiveTombstone({ backend: "codex", threadId: "restored", restoredAt: 400 });
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({}), overlayStore, providerThreadSnapshotStore: snapshots,
+    });
+    try {
+      registry.markStartupProviderRefreshPending();
+      const saved = await registry.readStartupNavigationThreads();
+      expect(saved?.map(({ id }) => id)).toEqual(["visible", "restored"]);
+    } finally {
+      await registry.close();
+      db.close();
+    }
+  });
+
+  it.each([false, true])("reports startup listing completeness when Codex is installed: %s", async (installed) => {
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ listThreadsError: new Error("Codex did not list") }),
+      overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
+      providerThreadSnapshotStore: { list: () => [], replace: vi.fn() },
+      resolveCodexRuntimeCommand: async () => {
+        if (!installed) throw new Error("Codex is absent");
+        return { command: "/fixture/codex" };
+      },
+    });
+    try {
+      await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+      const published = await registry.listThreads({ enrichDirectories: false });
+      expect(registry.isIncompleteThreadList(published)).toBe(installed);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([[16, 4], [32, 4], [64, 4], [16, 8], [16, 16], [64, 16]])(
+    "reads live review records once for %i saved rows and %i active reviews", async (rowCount, reviewCount) => {
+      const threads = Array.from({ length: rowCount }, (_, index): AppServerThreadSummary => ({
+        id: `row-${index}`, source: "codex", title: "Saved thread", titleSource: "explicit",
+        threadStatus: "idle", linkedDirectories: [],
+      }));
+      const registry = createDesktopBackendRegistry({
+        codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(),
+        providerThreadSnapshotStore: { list: () => [{ backend: "codex", observedAt: 100, threads }], replace: vi.fn() },
+      });
+      try {
+        registry.markStartupProviderRefreshPending();
+        const turnState = registry.context.turnState;
+        const active = threads.slice(0, reviewCount).map(({ id }) => id);
+        for (const parentThreadId of active) turnState.activateReview({
+          backend: "codex", parentBackend: "codex", parentThreadId, mode: "managed", reviewThreadId: `review-${parentThreadId}`,
+          turnId: "review-turn", task: "Review", displayText: "Review", createdAt: 101,
+        });
+        const reads = vi.spyOn(turnState, "liveReviewRecords");
+        const rows = await registry.readStartupNavigationThreads();
+        expect(rows?.filter(({ threadStatus }) => threadStatus === "active").map(({ id }) => id)).toEqual(active);
+        expect(reads).toHaveBeenCalledOnce();
+      } finally { await registry.close(); }
+    },
+  );
 
   it.each(["before", "after"] as const)("keeps the live inventory when startup publishes %s the first live read", async (publication) => {
     const listed = createDeferred<void>();

@@ -798,16 +798,18 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       {
         onMetadataUpdated: async (metadata, reason) => {
           if (reason === "retrieval") ports.tokenMiserDiagnostics?.recordRetrieval(metadata);
-          ports.rememberPendingTokenMiserInterception(metadata);
           ports.rememberActiveTokenMiserReplayEntry(metadata);
+          // Restoring a past compaction only closes replay tracking. The
+          // historical view owns any accounting backfill for that gate.
+          if (reason === "restore-stop") return;
+          ports.rememberPendingTokenMiserInterception(metadata);
           // A replay-counter write changes nothing the gate card or its usage
           // line renders, and it fires once per active gate per model
           // request. Republishing the whole ledger for each one turned a
           // single usage event into N pricing reads and 2N notifications;
           // `recordTokenMiserParentModelRequest` already emits once for the
           // whole batch.
-          // Startup reconciles and publishes a page at a time.
-          if (reason === "replay" || reason === "flushed" || reason === "startup-stop") {
+          if (reason === "replay" || reason === "flushed") {
             return;
           }
           try {
@@ -948,11 +950,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       elicit: (request, invocation, context, signal) => ports.requestUpstreamMcpForm(request, invocation, context, signal),
     });
   }
-  initialize.push(() => {
-    if (ports.tokenMiserStore) {
-      void ports.initializeTokenMiserLedger();
-    }
-  });
   const gitDirectoryService =
     options?.gitDirectoryService ??
     new GitDirectoryService({
@@ -1124,6 +1121,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     acpAgentStore: options?.acpAgentStore,
     acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: options?.acpSessionStore,
+    recordSubAgents: async (params) => await ports.recordAcpSubAgents(params),
     agentToolMcpServer,
     onTurnTerminalIngress: (turn) => managedReviewCandidateLedger.retireToolTurn(turn),
     readJobMonitorCreationPreference: (backend, threadId) => ports.isJobMonitorCreationEnabled({ backend, threadId }),
@@ -1664,7 +1662,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   }, () => ports);
 
   const codexRuntimeSupervisor = new CodexRuntimeSupervisor(context, {
-    threadUsageLedger,
     threadArchiveCoordinator,
     threadWorkspaceService,
     resolveCodexAppServerRecycleSettingsFn,

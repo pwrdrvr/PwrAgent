@@ -145,7 +145,8 @@ async function assertLifecycleBudget(root: string, signal: AbortSignal): Promise
     fs.cpSync(builtBundle, directory, bundleCopy);
     const owner = runtime = createRequire(import.meta.url)(path.join(directory, "dist/index.js")) as Runtime;
     // Schema creation is fixture setup; every owner lifecycle write is measured.
-    const db = owner.StateDb.open(path.join(root, "profiles/t/state/state.db"));
+    const dbPath = path.join(root, "profiles/t/state/state.db");
+    const db = owner.StateDb.open(dbPath);
     db.close();
     owner.resetSqliteWriteMetrics();
     const { writes } = await owner.measureSqliteWrites(async () => {
@@ -157,6 +158,7 @@ async function assertLifecycleBudget(root: string, signal: AbortSignal): Promise
         signal.throwIfAborted();
         await services.registry.refreshProvidersAtStartup(permit);
         signal.throwIfAborted();
+        expect(services.registry.getStartupProviderRefreshStatus()?.state).toBe("degraded");
         await services.service.startOwnerNavigation();
         signal.throwIfAborted();
         await services.registry.listThreads({ backend: "codex", forceRefresh: true, enrichDirectories: false });
@@ -186,6 +188,14 @@ async function assertLifecycleBudget(root: string, signal: AbortSignal): Promise
       ({ writes: shutdown } = await owner.measureSqliteWrites(() => owner.shutdownHeadlessHost("idle-budget")));
     });
     signal.throwIfAborted();
+    // The fixture's executable cannot list Codex threads. An incomplete
+    // inventory must leave baseline initialization to a later complete read.
+    const finalDb = owner.StateDb.open(dbPath);
+    try {
+      expect(finalDb.getMeta("navigation-unread-baseline-v2")).toBeUndefined();
+    } finally {
+      finalDb.close();
+    }
     // No first-use package loads during boot. Startup discovery finds the
     // fake home's editor bundle without decoding its icon, so canvas stays
     // unloaded on every host.
@@ -200,7 +210,7 @@ async function assertLifecycleBudget(root: string, signal: AbortSignal): Promise
     expect(idle!.tables.filter(table => table.rowsChanged > 0)).toMatchObject([{ table: "meta", rowsChanged: 2 }]);
     try {
       expectSqliteWriteBudget({ scenario: "headless-owner-lifecycle-idle-hour", writes,
-        note: "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. The To-do runtime initializes the review tracking boundary once per profile. Checkout ownership adds one Federation instance ID commit on the first boot. Wait for provider/navigation startup and join the archive sweep." });
+        note: "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. The To-do runtime initializes review tracking and checkout ownership writes the Federation instance ID. Failed Codex discovery leaves the unread baseline unset. Disabled Token Miser skips its legacy migration marker at boot. Wait for provider/navigation startup and join the archive sweep." });
     } catch (error) {
       throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify({ lifecycle: writes.tables, boot: boot!.tables, idle: idle!.tables, shutdown: shutdown!.tables }, null, 2)}`, { cause: error });
     }
