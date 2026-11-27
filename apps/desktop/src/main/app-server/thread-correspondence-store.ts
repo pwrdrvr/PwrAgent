@@ -55,6 +55,7 @@ export type CorrespondenceRecord = {
 };
 type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId" | "stackDelivered">>;
 type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status };
+type StoredCorrespondence = CorrespondenceRecord & { revision: number };
 
 type ReceiptPosition = { id: string; time: number; order: number };
 type ReplayIndex = {
@@ -65,7 +66,7 @@ type ReplayIndex = {
 type TurnTimings = {
   byId: Map<string, AppServerThreadTurnMetadata>;
   // Negate timestamps so descending history pages can append to the index.
-  newestFirst?: Array<{ id: string; time: number }>;
+  newestFirst?: Array<{ id: string; time: number; codexOrder: string }>;
 };
 
 function timeBoundary(sorted: readonly { time: number }[], time: number, afterEqual = false): number {
@@ -97,7 +98,7 @@ function byReceiptTime(a: ReceiptPosition, b: ReceiptPosition): number {
 
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
 export class ThreadCorrespondenceStore {
-  private readonly records = new Map<string, Map<string, CorrespondenceRecord>>();
+  private readonly records = new Map<string, Map<string, StoredCorrespondence>>();
   private readonly replayIndexes = new Map<string, ReplayIndex>();
   private readonly stackReads = new Map<string, Set<string>>();
   private readonly lastStackMove = new Map<string, string>();
@@ -111,11 +112,11 @@ export class ThreadCorrespondenceStore {
     return createHash("sha256").update(JSON.stringify([source.backend, source.instanceId ?? null, source.threadId])).digest("hex");
   }
 
-  private load(source: ThreadRef): Map<string, CorrespondenceRecord> {
+  private load(source: ThreadRef): Map<string, StoredCorrespondence> {
     const key = this.key(source);
     const cached = this.records.get(key);
     if (cached) return cached;
-    const records = new Map<string, CorrespondenceRecord>();
+    const records = new Map<string, StoredCorrespondence>();
     if (this.directory) {
       const file = path.join(this.directory, `${key}.jsonl`);
       let data: string;
@@ -130,7 +131,8 @@ export class ThreadCorrespondenceStore {
         try { event = JSON.parse(line) as typeof event; }
         catch { throw new Error(`Invalid PwrAgent correspondence record at ${file}:${index + 1}`); }
         if (event.type === "message") {
-          records.set(event.record.id, event.record);
+          const previous = records.get(event.record.id);
+          records.set(event.record.id, { ...event.record, revision: (previous?.revision ?? 0) + 1 });
           if (event.record.stackNotice && !event.record.stackNotice.completion) {
             this.lastStackMove.set(key, event.record.id);
             this.stackReads.delete(key);
@@ -140,7 +142,7 @@ export class ThreadCorrespondenceStore {
         }
         else if (event.type === "status") {
           const record = records.get(event.id);
-          if (record) records.set(event.id, { ...record, ...event.status });
+          if (record) records.set(event.id, { ...record, ...event.status, revision: record.revision + 1 });
         } else throw new Error(`Invalid PwrAgent correspondence event at ${file}:${index + 1}`);
       }
       try {
@@ -166,7 +168,8 @@ export class ThreadCorrespondenceStore {
 
   record(record: CorrespondenceRecord): boolean {
     const records = this.load(record.source);
-    const replacing = records.has(record.id);
+    const previous = records.get(record.id);
+    const replacing = previous !== undefined;
     if (record.stackNotice && replacing) return false;
     this.append(record.source, { type: "message", record }, Boolean(record.stackNotice));
     const saved = structuredClone(record);
@@ -180,7 +183,7 @@ export class ThreadCorrespondenceStore {
         || !bucket.length || bucket.at(-1)!.time <= position.time) bucket.push(position);
       else bucket.splice(timeBoundary(bucket, position.time, true), 0, position);
     }
-    records.set(record.id, saved);
+    records.set(record.id, { ...saved, revision: (previous?.revision ?? 0) + 1 });
     if (record.stackNotice && !record.stackNotice.completion) {
       this.lastStackMove.set(this.key(record.source), record.id);
       this.stackReads.delete(this.key(record.source));
@@ -251,7 +254,7 @@ export class ThreadCorrespondenceStore {
     // sender. Its lifecycle evidence is newer than that response's queue state.
     if (receipt && record.state !== "sending") status = { ...status, state: record.state };
     this.append(source, { type: "status", id, status });
-    records.set(id, { ...record, ...status });
+    records.set(id, { ...record, ...status, revision: record.revision + 1 });
   }
 
   cancelQueuedInput(
@@ -278,12 +281,12 @@ export class ThreadCorrespondenceStore {
 
   private pageRecords(
     key: string,
-    stored: Map<string, CorrespondenceRecord>,
+    stored: Map<string, StoredCorrespondence>,
     turnIds: Iterable<string>,
     since: number,
     before: number,
     stackBefore: number,
-  ): CorrespondenceRecord[] {
+  ): StoredCorrespondence[] {
     let index = this.replayIndexes.get(key);
     if (!index) {
       index = { byTurn: new Map(), unbound: [], stackCompletions: [] };
@@ -308,7 +311,7 @@ export class ThreadCorrespondenceStore {
     return positions.sort(byReceiptTime).map(({ id }) => stored.get(id)!);
   }
 
-  private replayMessage(source: ThreadRef, record: CorrespondenceRecord, turnId?: string): AppServerThreadMessageEntry {
+  private replayMessage(source: ThreadRef, record: StoredCorrespondence, turnId?: string): AppServerThreadMessageEntry {
     if (record.stackNotice) {
       const text = formatStackNotice(record.stackNotice);
       return {
@@ -329,7 +332,8 @@ export class ThreadCorrespondenceStore {
       role: "assistant",
       createdAt: record.createdAt,
       ...(turnId ? { turn: { id: turnId } } : {}),
-      origin: { kind: "pwragent", systemReason: "thread-correspondence", sourceThread: { ...record.source, ...(source.title ? { title: source.title } : {}) } },
+      origin: { kind: "pwragent", systemReason: "thread-correspondence", correspondenceRevision: record.revision,
+        sourceThread: { ...record.source, ...(source.title ? { title: source.title } : {}) } },
       text,
       parts: [
         { type: "text", text },
@@ -402,8 +406,14 @@ export class ThreadCorrespondenceStore {
       ?? (source.backend === "codex" ? readUuidV7Timestamp(turn.id) : undefined);
     const indexTurnStarts = (turns: AppServerThreadTurnMetadata[]) => turns.flatMap((turn) => {
       const start = startedAt(turn);
-      return start === undefined ? [] : [{ id: turn.id, time: -start }];
-    }).reverse().sort((left, right) => left.time - right.time);
+      if (start === undefined) return [];
+      // Codex reports start times in seconds. Its ordered UUIDv7 IDs retain
+      // provider chronology within a second, even across separate pages.
+      const codexOrder = source.backend === "codex" && readUuidV7Timestamp(turn.id) !== undefined
+        ? turn.id.toLowerCase() : "";
+      return [{ id: turn.id, time: -start, codexOrder }];
+    }).reverse().sort((left, right) => left.time - right.time
+      || (left.codexOrder < right.codexOrder ? 1 : left.codexOrder > right.codexOrder ? -1 : 0));
     // Ledger hints and page rows can report different precision. Invalidate
     // only when the combined observation changes a previously indexed start.
     for (const [id, previous] of previousStarts) {

@@ -111,6 +111,7 @@ import {
   type LoadedTranscriptHistory,
   type TranscriptHistoryIndex,
 } from "./segmented-transcript";
+import { applyCorrespondenceRevision, isCorrespondenceMessage } from "./transcript-correspondence";
 import { normalizeTranscriptText } from "./transcript-review-presentation";
 import { hasMatchingReplayReview, isReviewStartEntry, reviewEntriesMatch, reviewEntryLabels } from "./transcript-review-matching";
 
@@ -1175,15 +1176,41 @@ function adoptOlderPageIdentities(
   };
 }
 
+function reconcileCorrespondenceSnapshot(
+  response: AppServerReadThreadResponse,
+  retained: AppServerReadThreadResponse | undefined,
+): AppServerReadThreadResponse {
+  if (!retained) return response;
+  const latest = new Map<string, AppServerThreadMessage>();
+  for (const entry of retained.replay.entries) {
+    if (entry.type === "message" && isCorrespondenceMessage(entry)) latest.set(entry.id, entry);
+  }
+  if (!latest.size) return response;
+
+  let changed = false;
+  const revise = <Message extends AppServerThreadMessage>(message: Message): Message => {
+    const incoming = latest.get(message.id);
+    const revised = incoming ? applyCorrespondenceRevision(message, incoming) : message;
+    changed ||= revised !== message;
+    return revised;
+  };
+  const entries = response.replay.entries.map((entry) => entry.type === "message" ? revise(entry) : entry);
+  const messages = response.replay.messages.map(revise);
+  return changed ? {
+    ...response,
+    replay: { ...response.replay, entries, messages },
+  } : response;
+}
+
 function preserveRetainedTranscriptTail(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
   hasLoadedHistory: boolean,
-  liveChanges?: { versions: ReadonlyMap<string, number> | undefined; capture: number },
+  preservesLiveRows = false,
 ): AppServerReadThreadResponse {
   if (
     !retainedResponse
-    || (!liveChanges
+    || (!preservesLiveRows
       && (!hasLoadedHistory || !response.replay.pagination.supportsPagination))
   ) {
     return response;
@@ -1206,7 +1233,6 @@ function preserveRetainedTranscriptTail(
     return remaining ? [remaining] : [];
   });
   const matchedRetainedEntries = new Set<AppServerThreadEntry>();
-  const newerCorrespondence = new Map<string, string>();
   const retainedEntriesById = new Map<string, AppServerThreadEntry[]>();
   const retainedEntryIndexById = new Map<string, number>();
   for (const retainedEntry of retainedEntries) {
@@ -1244,38 +1270,20 @@ function preserveRetainedTranscriptTail(
     if (retainedMatch) {
       matchedRetainedEntries.add(retainedMatch);
       freshEntryByRetainedEntry.set(retainedMatch, freshEntry);
-      if (liveChanges && freshEntry.type === "message" && retainedMatch.type === "message"
-        && freshEntry.origin?.systemReason === "thread-correspondence"
-        && freshEntry.id === retainedMatch.id && freshEntry.text !== retainedMatch.text
-        && (liveChanges.versions?.get(freshEntry.id) ?? 0) > liveChanges.capture) {
-        newerCorrespondence.set(freshEntry.id, retainedMatch.text);
-      }
+
     }
   }
-  let entries = reconcileRetainedTranscriptTail(
+  const entries = reconcileRetainedTranscriptTail(
     response.replay.entries,
     retainedEntries,
     freshEntryByRetainedEntry,
   );
-  const withNewerCorrespondence = <Message extends AppServerThreadMessage>(message: Message): Message => {
-    const text = newerCorrespondence.get(message.id);
-    return text === undefined ? message : {
-      ...message, text, parts: message.parts?.map((part) => part.type === "text" ? { ...part, text } : part),
-    };
-  };
-  if (newerCorrespondence.size) {
-    // Live receipts update the delivery heading. Keep the replay placement
-    // and attachments, which are independent of the recipient's status.
-    entries = entries.map((entry) => entry.type === "message" ? withNewerCorrespondence(entry) : entry);
-  }
-  const messages = transcriptMessagesForEntries(entries, retainedResponse.replay.messages, response.replay.messages);
-
   return {
     ...response,
     replay: {
       ...response.replay,
       entries,
-      messages: newerCorrespondence.size ? messages.map(withNewerCorrespondence) : messages,
+      messages: transcriptMessagesForEntries(entries, retainedResponse.replay.messages, response.replay.messages),
     },
   };
 }
@@ -5136,6 +5144,10 @@ function threadMessageOriginFromUnknown(
     || record.systemReason === "auto-compaction"
       ? record.systemReason
       : undefined;
+  const correspondenceRevision = systemReason === "thread-correspondence"
+    && typeof record.correspondenceRevision === "number"
+    && Number.isSafeInteger(record.correspondenceRevision) && record.correspondenceRevision > 0
+    ? record.correspondenceRevision : undefined;
   const messaging = threadMessageMessagingOriginFromUnknown(record.messaging);
   const dependencyId =
     record.kind === "pwragent" && typeof record.dependencyId === "string"
@@ -5160,6 +5172,7 @@ function threadMessageOriginFromUnknown(
       kind: record.kind,
       ...(dependencyId ? { dependencyId } : {}),
       ...(systemReason ? { systemReason } : {}),
+      ...(correspondenceRevision !== undefined ? { correspondenceRevision } : {}),
       ...(messaging ? { messaging } : {}),
       ...(subAgent ? { subAgent } : {}),
       ...(prAutomation ? { prAutomation } : {}),
@@ -5176,6 +5189,7 @@ function threadMessageOriginFromUnknown(
       kind: record.kind,
       ...(dependencyId ? { dependencyId } : {}),
       ...(systemReason ? { systemReason } : {}),
+      ...(correspondenceRevision !== undefined ? { correspondenceRevision } : {}),
       ...(messaging ? { messaging } : {}),
       ...(prAutomation ? { prAutomation } : {}),
       ...(reviewAutoFix ? { reviewAutoFix } : {}),
@@ -5191,6 +5205,7 @@ function threadMessageOriginFromUnknown(
     kind: record.kind,
     ...(dependencyId ? { dependencyId } : {}),
     ...(systemReason ? { systemReason } : {}),
+    ...(correspondenceRevision !== undefined ? { correspondenceRevision } : {}),
     sourceThread: {
       backend: sourceRecord.backend as AppServerBackendKind,
       ...(typeof sourceRecord.messageId === "string"
@@ -5505,8 +5520,10 @@ function assistantMessageEntryFromCompletedItem(params: {
           }),
         }
       : {}),
-    createdAt: Date.now(),
-    ...(params.turn ? { turn: params.turn } : {}),
+    createdAt: origin?.systemReason === "thread-correspondence"
+      ? normalizeNotificationTimestamp(record.createdAt) ?? Date.now() : Date.now(),
+    ...(params.turn && (origin?.systemReason !== "thread-correspondence" || typeof itemParams.turnId === "string")
+      ? { turn: params.turn } : {}),
     ...(phase ? { phase } : {}),
     ...(origin ? { origin } : {}),
   };
@@ -6294,10 +6311,10 @@ export function useThreadSessionState(params: {
           }
           const preservesLiveRows = lifecycleChangedDuringRead || transcriptChangedDuringRead;
           const responseWithRetainedTail = preserveRetainedTranscriptTail(
-            orderedResponse,
+            reconcileCorrespondenceSnapshot(orderedResponse, current.response),
             retainedResponse,
             bridgesRetainedRows,
-            preservesLiveRows ? { versions: liveItemVersionsRef.current.get(targetThreadKey), capture: liveTranscriptVersion ?? 0 } : undefined,
+            preservesLiveRows,
           );
           const providerPageTurnIds =
             bridgesRetainedRows && !skipsProviderTurns && previousPageTurnIds
@@ -7163,11 +7180,7 @@ export function useThreadSessionState(params: {
             itemVersions = new Map();
             liveItemVersionsRef.current.set(targetThreadKey, itemVersions);
           }
-          // A correspondence ID is reused for each delivery status. The first
-          // observation still bounds provider tool rows, whose IDs are stable.
-          if (!itemVersions.has(itemId) || itemId.startsWith("correspondence:")) {
-            itemVersions.set(itemId, liveTranscriptVersion);
-          }
+          if (!itemVersions.has(itemId)) itemVersions.set(itemId, liveTranscriptVersion);
         }
       }
 
@@ -7813,8 +7826,14 @@ export function useThreadSessionState(params: {
               : browserDraft
                 ?? current.optimisticEntries.find((entry) => entry.id === assistantMessageEntry.id)
                 ?? current.response?.replay.entries.find((entry) => entry.id === assistantMessageEntry.id);
+            let deliveredEntry = assistantMessageEntry;
+            if (observedMessage?.type === "message" && isCorrespondenceMessage(assistantMessageEntry)
+              && isCorrespondenceMessage(observedMessage)) {
+              deliveredEntry = applyCorrespondenceRevision(observedMessage, assistantMessageEntry, true);
+              if (deliveredEntry === observedMessage) return current;
+            }
             const sequence = readRendererSequence(observedMessage) ?? current.nextLiveEntrySequence;
-            const completedEntry = withRendererSequence(assistantMessageEntry, sequence);
+            const completedEntry = withRendererSequence(deliveredEntry, sequence);
             const responseWithUsage = taskMonitorUsageEntry
               ? appendThreadEntries(
                   current.response,

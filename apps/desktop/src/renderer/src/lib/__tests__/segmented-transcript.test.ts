@@ -93,6 +93,33 @@ describe("segmented transcript history", () => {
     ));
   });
 
+  it.each([false, true])("keeps a paged receipt in its original slot when the live update arrived first is %s", (liveFirst) => {
+    const id = "correspondence:receipt";
+    const receipt: AppServerThreadMessageEntry = {
+      ...message(id, "Queued"), createdAt: 100,
+      origin: { kind: "pwragent", systemReason: "thread-correspondence", correspondenceRevision: 2 },
+      parts: [{ type: "text", text: "Queued" }, { type: "file", name: "fixture.txt" }],
+    };
+    const live: AppServerThreadMessageEntry = {
+      ...message(id, "Started"), createdAt: 200,
+      origin: { ...receipt.origin!, correspondenceRevision: 3 },
+    };
+    const index = createTranscriptHistoryIndex();
+    const page = response([message("first"), receipt]);
+    page.replay.messages = [message("first"), receipt];
+    const history = prependTranscriptHistoryPage({
+      history: undefined, index, page, tailEntries: liveFirst ? [message("later"), live] : [message("later")],
+    });
+    const entries = combineTranscriptEntries(history, index, [message("later"), live]);
+    const messages = combineTranscriptMessages(history, index, [message("later"), live]);
+    expect(entries.map((entry) => entry.id)).toEqual(["first", id, "later"]);
+    expect(messages.map((entry) => entry.id)).toEqual(["first", id, "later"]);
+    for (const row of [entries[1], messages[1]]) {
+      expect(row).toMatchObject({ text: "Started", createdAt: 100,
+        parts: [{ type: "text", text: "Started" }, { type: "file", name: "fixture.txt" }] });
+    }
+  });
+
   it("preserves retained slots and earlier views through successive warm revisions", () => {
     fc.assert(fc.property(fc.array(fc.string(), { minLength: 2, maxLength: 20 }), (revisions) => {
       const index = createTranscriptHistoryIndex();

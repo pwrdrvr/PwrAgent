@@ -175,6 +175,30 @@ describe("PwrAgent correspondence persistence", () => {
     expect(heading).toHaveBeenCalledTimes(1);
   });
 
+  it("assigns a receipt to the same Codex turn on split and full reads when start seconds tie", () => {
+    const store = new ThreadCorrespondenceStore();
+    const source = { backend: "codex" as const, threadId: "sender" };
+    const turnRow = (id: string, startedAt: number): AppServerThreadMessageEntry => ({
+      type: "message", id: id.slice(-1), role: "assistant", text: "Reply",
+      turn: { id, startedAt, completedAt: startedAt + 200 },
+    });
+    const older = turnRow("00000000-03e9-7000-8000-000000000001", 1_000);
+    const later = turnRow("00000000-03ea-7000-8000-000000000002", 1_000);
+    const newest = turnRow("00000000-07d0-7000-8000-000000000003", 2_000);
+    const receipt = { ...record(), source, createdAt: 1_500 };
+    store.record(receipt);
+    const page = (entries: AppServerThreadMessageEntry[], hasPreviousPage: boolean): AppServerThreadReplay => ({
+      ...emptyReplay, entries, messages: entries, pagination: { supportsPagination: true, hasPreviousPage },
+    });
+    store.appendToReplay(source, page([newest], true));
+    const middle = store.appendToReplay(source, page([later], true), undefined, [], { before: "newest" });
+    const oldest = store.appendToReplay(source, page([older], false), undefined, [], { before: "later" });
+    expect(middle.entries.map(({ id }) => id)).toEqual([later.id, receipt.id]);
+    expect(oldest.entries.map(({ id }) => id)).toEqual([older.id]);
+    expect(store.appendToReplay(source, page([older, later, newest], false)).entries.map(({ id }) => id))
+      .toEqual([older.id, later.id, receipt.id, newest.id]);
+  });
+
   it("returns to a warm page without scanning older receipts or discarding newer sends", () => {
     const store = new ThreadCorrespondenceStore();
     const message = record();
@@ -324,7 +348,10 @@ describe("PwrAgent correspondence persistence", () => {
     const lines = readFileSync(path.join(directory, files[0]!), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(lines.filter((event) => event.record?.input)).toHaveLength(1);
     const replay = new ThreadCorrespondenceStore(directory).appendToReplay(message.source, emptyReplay);
-    expect(replay.messages[0]?.origin).toEqual({ kind: "pwragent", systemReason: "thread-correspondence", sourceThread: message.source });
+    expect(replay.messages[0]?.origin).toEqual({
+      kind: "pwragent", systemReason: "thread-correspondence", sourceThread: message.source, correspondenceRevision: 4,
+    });
+    expect(store.message(message.source, message.id)?.origin).toEqual(replay.messages[0]?.origin);
     expect(replay.messages[0]?.text).toContain("**Message to [Recipient]");
     expect(replay.messages[0]?.text).toContain(" · Cancelled");
     expect(replay.messages[0]?.text).toContain("Tail.");
