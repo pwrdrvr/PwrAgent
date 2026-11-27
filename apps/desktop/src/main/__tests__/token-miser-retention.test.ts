@@ -234,6 +234,18 @@ it("never publishes a failed acceptance or exposes another thread's payload", as
   expect(await store.readAll({ objectId: accepted.objectId, threadId: "other" })).toBeUndefined();
   expect(await store.readAll({ objectId: accepted.objectId, threadId: "owner" })).toBeDefined();
 });
+it("inserts temporary receipts without checking the clock for each earlier receipt", async () => {
+  const { TokenMiserOutputCache } = await import("../token-miser/token-miser-output-cache");
+  const cache = new TokenMiserOutputCache();
+  const now = vi.spyOn(Date, "now");
+  try {
+    for (let index = 0; index < 8; index++) cache.put(String(index), "retained");
+    expect(now.mock.calls.length).toBeLessThanOrEqual(16);
+  } finally {
+    now.mockRestore();
+    for (let index = 0; index < 8; index++) cache.remove(String(index));
+  }
+});
 it("shares the payload byte budget across cache instances and bounds individual entries", async () => {
   const { TokenMiserOutputCache, TOKEN_MISER_OUTPUT_ENTRY_BYTES } = await import("../token-miser/token-miser-output-cache");
   const first = new TokenMiserOutputCache();
@@ -332,4 +344,64 @@ it("observes restoration by another instance after successful archive persistenc
   await store.archiveThread("owner");
   await new TokenMiserStore(root).restoreThread("owner");
   await expect(store.store(params)).resolves.toBeDefined();
+});
+
+it("allocates disjoint handle blocks across owners, including after restart and rollover", async () => {
+  const { store, root } = await fixture();
+  const peer = new TokenMiserStore(root);
+  const issued = new Set<string>();
+  for (let i = 0; i < 260; i++) {
+    for (const owner of [store, peer]) {
+      const handle = owner.issueOutputHandle();
+      expect(handle).toMatch(/^o[0-9]+$/u);
+      expect(issued.has(handle)).toBe(false);
+      issued.add(handle);
+    }
+  }
+  expect(issued.has(new TokenMiserStore(root).issueOutputHandle())).toBe(false);
+});
+
+it("resolves only live aliases of the requesting thread and keeps UUID callers working", async () => {
+  const { store, root } = await fixture();
+  const handle = store.issueOutputHandle();
+  const other = store.issueOutputHandle();
+  const [entry] = await Promise.all([
+    store.store({ ...params, handle }),
+    store.store({ ...params, handle: other, threadId: "peer" }),
+  ]);
+  for (const objectId of [handle, entry.objectId]) {
+    expect((await store.readAll({ objectId, threadId: "owner" }))?.text).toBe(params.output);
+    expect(await store.readAll({ objectId, threadId: "peer" })).toBeUndefined();
+    expect(await new TokenMiserStore(root).readAll({ objectId, threadId: "owner" })).toBeUndefined();
+  }
+  store.startTurn("owner", "next-turn");
+  const fresh = store.issueOutputHandle();
+  await store.store({ ...params, handle: fresh, turnId: "next-turn" });
+  for (const objectId of [handle, entry.objectId]) {
+    expect(await store.readAll({ objectId, threadId: "owner" })).toBeUndefined();
+  }
+  expect((await store.readAll({ objectId: other, threadId: "peer" }))?.text).toBe(params.output);
+  await store.archiveThread("owner");
+  expect(await store.readAll({ objectId: fresh, threadId: "owner" })).toBeUndefined();
+});
+
+it("never reinterprets an expired handle as a later native cell name", async () => {
+  const { store } = await fixture();
+  const stale = store.issueOutputHandle();
+  await store.store({ ...params, handle: stale });
+  store.startTurn("owner", "next");
+  const group = store.issueOutputHandle();
+  const memberId = "11111111-1111-4111-8111-111111111111";
+  const memberHandle = store.issueOutputHandle();
+  const member = { objectId: memberId, toolCallId: "nested", toolName: "Bash" };
+  await store.store({ ...params, handle: group, turnId: "next", groupId: stale,
+    groupMembers: [{ ...member, summary: "Fixture" }],
+    output: JSON.stringify({ version: 1, groupId: stale, members: [{ ...member, handle: memberHandle, output: "fresh" }] }),
+  });
+  const read = (groupId: string) => store.readGroupBatch({ threadId: "owner", groupId,
+    operations: [{ objectId: memberHandle, mode: "full" }] });
+  const history = vi.spyOn(store, "listMetadata");
+  expect(await read(stale)).toBeUndefined();
+  expect(history).not.toHaveBeenCalled();
+  expect((await read(group))?.results[0]?.text).toBe("fresh");
 });

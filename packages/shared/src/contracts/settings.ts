@@ -619,6 +619,8 @@ export type DesktopSettingsSource =
   | DesktopSettingsNonSecretSource
   | DesktopSettingsSecretSource;
 
+export type BoundedCommandHelperMode = "deterministic" | "codex" | "decision";
+
 export type DesktopSettingsValue<T> = {
   value: T;
   source: DesktopSettingsNonSecretSource;
@@ -1501,6 +1503,7 @@ export type DesktopSettingsSnapshot = {
   configError?: string;
   runtime: {
     tokenMiser?: {
+      boundedCommandsSupported?: boolean;
       managedCodex?: ManagedCodexTrackTags & {
         state: "pending-switch" | "ready" | "unavailable";
         reason?: string;
@@ -1592,6 +1595,8 @@ export type DesktopSettingsSnapshot = {
      * enabled.
      */
     tokenMiserEnabled: DesktopSettingsValue<boolean>;
+    tokenMiserBoundedCommands?: DesktopSettingsValue<boolean>;
+    tokenMiserBoundedHelper?: DesktopSettingsValue<BoundedCommandHelperMode>;
     /**
      * Inherited Token Miser state for Codex threads without a per-thread
      * override. This only has an effect while the experiment gate is enabled.
@@ -2002,6 +2007,8 @@ export type DesktopSettingsConfigPatch = {
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
     tokenMiserEnabled?: boolean;
+    tokenMiserBoundedCommands?: boolean;
+    tokenMiserBoundedHelper?: BoundedCommandHelperMode;
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
     researchEnabled?: boolean;

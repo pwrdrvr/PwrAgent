@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TokenMiserOutputCache } from "../token-miser/token-miser-output-cache";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 
 const temporaryDirectories: string[] = [];
@@ -19,7 +20,7 @@ describe("TokenMiserStore", () => {
     const store = await createStore();
     store.startTurn("thread-owner", "turn-1");
     const changes = store.stateDb.raw.prepare("SELECT total_changes() AS count").get();
-    const delivery = await store.prepareToolDefinitionDelivery({
+    const delivery = await store.prepareOwnerTextDelivery({
       threadId: "thread-owner", turnId: "turn-1", visibleText: '{"inputSchema":{"type":"object"}}',
     });
     expect(delivery).toBeDefined();
@@ -34,11 +35,34 @@ describe("TokenMiserStore", () => {
     expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: altered })).toEqual([{ text: altered, retrieval: false }]);
     expect(await store.confirmModelVisibleRetrievals({ threadId: "thread-owner", output: text })).toBe(0);
     expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: text })).toEqual([{ text, retrieval: false }]);
-    const stale = await store.prepareToolDefinitionDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "schema" });
+    const stale = await store.prepareOwnerTextDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "schema" });
     store.startTurn("thread-owner", "turn-2");
     expect(await store.partitionRetrievalOutput({ threadId: "thread-owner", output: stale!.text })).toEqual([{ text: stale!.text, retrieval: false }]);
-    expect(await store.prepareToolDefinitionDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "stale" })).toBeUndefined();
+    expect(await store.prepareOwnerTextDelivery({ threadId: "thread-owner", turnId: "turn-1", visibleText: "stale" })).toBeUndefined();
     expect(store.stateDb.raw.prepare("SELECT total_changes() AS count").get()).toEqual(changes);
+  });
+
+  it("opens only the receipt actually emitted by the cell, once for repeated copies", async () => {
+    const store = await createStore();
+    const issue = (visibleText: string) => store.prepareOwnerTextDelivery({
+      threadId: "owner", turnId: "turn", visibleText, allowJsonString: true,
+    });
+    await issue("left in a variable");
+    const actual = (await issue("emitted"))!.text;
+    const output = actual + JSON.stringify(actual);
+    const reads = vi.spyOn(TokenMiserOutputCache.prototype, "get");
+    try {
+      expect(await store.partitionRetrievalOutput({ threadId: "owner", output })).toEqual([
+        { text: actual, retrieval: true }, { text: JSON.stringify(actual), retrieval: true },
+      ]);
+      expect(reads).toHaveBeenCalledTimes(1);
+      reads.mockClear();
+      await store.confirmModelVisibleRetrievals({ threadId: "owner", output: "ordinary output" });
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+      store.startTurn("owner", "next");
+    }
   });
 
   it("inspects retained originals and summaries without charging agent retrieval", async () => {

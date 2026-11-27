@@ -19,6 +19,7 @@ import {
   type TokenMiserSummary,
 } from "./token-miser-types.js";
 
+const OUTPUT_HANDLE = /^o[1-9][0-9]*$/u;
 const OBSERVATION_DIRECTORY = "code-mode-observations";
 const MAX_SEARCH_RESULTS = 100;
 const MAX_READ_LINES = 2_000;
@@ -78,6 +79,7 @@ export type TokenMiserReadResult = {
 
 export type TokenMiserGroupStoredMember = {
   objectId: string;
+  handle?: string;
   toolCallId: string;
   toolName: string;
   output: string;
@@ -126,7 +128,16 @@ type PendingRetrievalDelivery = {
   visibleTextOffset: number;
   kind?: "summary" | "source";
   wrappedText: string;
+  allowJsonString?: boolean;
 };
+
+function deliveryTextForms(pending: PendingRetrievalDelivery): string[] {
+  // text({ objectId, summary }) encodes the entire summary as a JSON string.
+  // Only the exact issued value, including both receipts, is eligible.
+  return pending.allowJsonString
+    ? [pending.wrappedText, JSON.stringify(pending.wrappedText)]
+    : [pending.wrappedText];
+}
 
 export type TokenMiserUsageSummary = {
   interceptionCount: number;
@@ -219,6 +230,7 @@ export type TokenMiserStoreOptions = {
 };
 
 export type TokenMiserStoreParams = {
+  handle?: string;
   objectId?: string;
   threadId: string;
   turnId: string;
@@ -256,10 +268,14 @@ export type TokenMiserStagedObject = {
   discard(): Promise<void>;
 };
 
+const HANDLE_BLOCK_SIZE = 256;
+
 export class TokenMiserStore {
   private readonly archivedThreads = new Set<string>();
   private legacyImportKey?: string;
   private readonly outputs = new TokenMiserOutputCache();
+  private nextHandle = 0;
+  private handlesRemaining = 0;
   private readonly updateLocks = new Map<string, Promise<void>>();
   private readonly pendingRetrievalDeliveries =
     new Map<string, { createdAt: number; threadId: string; turnId: string }>();
@@ -310,6 +326,28 @@ export class TokenMiserStore {
   }
 
   private get storage() { return this.options.storage; }
+
+  issueOutputHandle(): string {
+    if (!this.handlesRemaining) {
+      this.nextHandle = this.storage.reserveOutputHandles(HANDLE_BLOCK_SIZE);
+      this.handlesRemaining = HANDLE_BLOCK_SIZE;
+    }
+    this.handlesRemaining--;
+    return `o${this.nextHandle++}`;
+  }
+
+  private async groupObjectId(threadId: string, groupId: string): Promise<string | undefined> {
+    const id = this.outputs.resolveId(groupId);
+    if (id !== groupId) return id;
+    if (!this.outputs.hasNativeGroup(JSON.stringify([threadId, groupId]))) return undefined;
+    // Historical groups used the native cell ID. Keep that lookup for old clients.
+    const legacy = (await this.listMetadata(threadId)).find((entry) => entry.groupId === groupId);
+    if (!legacy) return undefined;
+    // A native cell name may resemble an expired handle. Only older, unaliased
+    // groups could have issued that native name as their public reference.
+    if (OUTPUT_HANDLE.test(groupId) && this.outputs.publicReference(legacy.objectId) !== legacy.objectId) return undefined;
+    return legacy.objectId;
+  }
 
   async store(params: TokenMiserStoreParams): Promise<TokenMiserObjectMetadata> {
     const staged = await this.stage(params);
@@ -373,12 +411,15 @@ export class TokenMiserStore {
       throw new Error("Token Miser original output expired or unavailable.");
     }
     // Reserve before returning a replacement. The closure retains no raw text.
+    // An aliased group never issued a handle-shaped native cell name as its reference.
+    const nativeGroupKey = params.groupId && (!params.handle || !OUTPUT_HANDLE.test(params.groupId))
+      ? JSON.stringify([params.threadId, params.groupId]) : undefined;
     const retained = params.disposition === "passed_through"
       || this.outputs.put(objectId, params.output, "turn", [
         params.summary.summary,
         ...params.summary.usefulDetails,
         ...(params.summary.suggestedNextStep ? [params.summary.suggestedNextStep] : []),
-      ].join("\n"));
+      ].join("\n"), params.handle, nativeGroupKey);
     if (!retained) throw new Error("Token Miser temporary output capacity exceeded.");
     this.owners.set(objectId, this.threadKey(params.threadId));
     this.outputGenerations.set(objectId, generation);
@@ -462,7 +503,7 @@ export class TokenMiserStore {
     threadId: string;
   }): Promise<{ text: string; turnId: string; objectId: string; memberId?: string } | undefined> {
     const objectId = params.groupId
-      ? (await this.listMetadata(params.threadId)).find((entry) => entry.groupId === params.groupId)?.objectId
+      ? await this.groupObjectId(params.threadId, params.groupId)
       : params.objectId;
     if (!objectId) return undefined;
     const stored = await this.readAuthorizedObject(objectId, params.threadId);
@@ -471,11 +512,23 @@ export class TokenMiserStore {
     if (memberId) {
       if (!stored.metadata.groupId) return undefined;
       const group = parseGroupStoredOutput(stored.output, stored.metadata.groupId);
-      const member = group?.members.find((entry) => entry.objectId === memberId);
-      return member ? { text: member.output, turnId: stored.metadata.turnId, objectId, memberId } : undefined;
+      const member = group?.members.find((entry) => entry.objectId === memberId || entry.handle === memberId);
+      return member ? {
+        text: member.output,
+        turnId: stored.metadata.turnId,
+        objectId: this.outputs.publicReference(stored.metadata.objectId),
+        memberId: member.handle ?? member.objectId,
+      } : undefined;
     }
     if (stored.metadata.groupId) return undefined;
-    return { text: stored.output, turnId: stored.metadata.turnId, objectId };
+    return { text: stored.output, turnId: stored.metadata.turnId, objectId: this.outputs.publicReference(stored.metadata.objectId) };
+  }
+
+  async readBytes(params: { objectId: string; threadId: string; byteOffset: number }) {
+    if (!Number.isSafeInteger(params.byteOffset) || params.byteOffset < 0) throw new Error("Invalid byte offset.");
+    const stored = await this.readAuthorizedObject(params.objectId, params.threadId);
+    if (!stored || stored.metadata.groupId) return undefined;
+    return this.outputs.bytePage(stored.metadata.objectId, params.byteOffset);
   }
 
   async readLines(params: {
@@ -517,7 +570,7 @@ export class TokenMiserStore {
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid output offset.");
     const stored = await this.readAuthorizedObject(params.objectId, params.threadId);
     if (!stored) return { available: false };
-    const text = params.source === "original" ? stored.output : this.outputs.getDetail(params.objectId);
+    const text = params.source === "original" ? stored.output : this.outputs.getDetail(stored.metadata.objectId);
     if (text === undefined) return { available: false };
     // Character pages bound IPC and rendering even for a single enormous line.
     const start = Math.min(offset, text.length);
@@ -591,25 +644,20 @@ export class TokenMiserStore {
     operations: TokenMiserGroupBatchOperation[];
     maxOutputChars?: number;
   }): Promise<TokenMiserGroupBatchResult | undefined> {
-    const metadata = (await this.listMetadata(params.threadId)).find((entry) =>
-      entry.groupId === params.groupId
-    );
-    if (!metadata || !metadata.groupMembers?.length) {
+    const id = await this.groupObjectId(params.threadId, params.groupId);
+    const stored = id && await this.readAuthorizedObject(id, params.threadId);
+    if (!stored || !stored.metadata.groupId || !stored.metadata.groupMembers?.length) {
       return undefined;
     }
-    const stored = await this.readAuthorizedObject(
-      metadata.objectId,
-      params.threadId,
-    );
-    if (!stored) {
-      return undefined;
-    }
-    const group = parseGroupStoredOutput(stored.output, params.groupId);
+    const group = parseGroupStoredOutput(stored.output, stored.metadata.groupId);
     if (!group) {
       return undefined;
     }
     const operations = params.operations.slice(0, MAX_GROUP_BATCH_OPERATIONS);
     const members = new Map(group.members.map((member) => [member.objectId, member]));
+    for (const member of group.members) {
+      if (member.handle) members.set(member.handle, member);
+    }
     const results = operations.map((operation) =>
       readGroupMember(members.get(operation.objectId), operation)
     );
@@ -619,7 +667,7 @@ export class TokenMiserStore {
       MAX_GROUP_BATCH_OUTPUT_CHARACTERS,
     );
     const result = boundGroupBatchResult({
-      sourceObjectId: metadata.objectId,
+      sourceObjectId: this.outputs.publicReference(stored.metadata.objectId),
       groupId: params.groupId,
       results,
       truncated: params.operations.length > operations.length,
@@ -633,29 +681,31 @@ export class TokenMiserStore {
     visibleText: string;
     kind?: "summary" | "source";
   }): Promise<TokenMiserRetrievalDelivery | undefined> {
-    const generation = this.outputGenerations.get(params.objectId);
+    const objectId = this.outputs.resolveId(params.objectId);
+    const generation = this.outputGenerations.get(objectId);
     if (generation === undefined || !await this.isCurrentRetention(params.threadId, generation)) return undefined;
-    const metadata = await this.readMetadata(params.objectId, params.threadId);
+    const metadata = await this.readMetadata(objectId, params.threadId);
     if (
       !metadata
       || metadata.threadId !== params.threadId
       || metadata.disposition === "passed_through"
-      || this.outputs.get(params.objectId) === undefined
-      || this.outputGenerations.get(params.objectId) !== generation
+      || this.outputs.get(objectId) === undefined
+      || this.outputGenerations.get(objectId) !== generation
     ) {
       return undefined;
     }
-    return this.prepareExactDelivery({ ...params, generation, turnId: metadata.turnId });
+    return this.prepareExactDelivery({ ...params, objectId, generation, turnId: metadata.turnId });
   }
 
-  /** Host-owned tool schemas must survive reduction, without charging a retrieval.
-   * Callers supply generated catalog text, never arbitrary agent-provided output.
+  /** Host-issued schemas and bounded command excerpts can pass through Code Mode together.
+   * Issue only for an owner-produced result after its normal policy and identity checks.
    * The receipt is ephemeral; issuing or consuming it makes no SQLite writes.
    */
-  async prepareToolDefinitionDelivery(params: {
+  async prepareOwnerTextDelivery(params: {
     threadId: string;
     turnId: string;
     visibleText: string;
+    allowJsonString?: boolean;
   }): Promise<TokenMiserRetrievalDelivery | undefined> {
     if (!this.isCurrentTurn(params.threadId, params.turnId) || await this.isArchived(params.threadId)) return undefined;
     const generation = await this.readRetentionGeneration(params.threadId);
@@ -668,14 +718,14 @@ export class TokenMiserStore {
     threadId: string;
     turnId: string;
     visibleText: string;
+    allowJsonString?: boolean;
     kind?: "summary" | "source";
     generation: string;
   }): TokenMiserRetrievalDelivery | undefined {
     const now = Date.now();
     for (const [deliveryId, pending] of this.pendingRetrievalDeliveries) {
-      if (now - pending.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
-        this.pendingRetrievalDeliveries.delete(deliveryId);
-      }
+      if (now - pending.createdAt <= RETRIEVAL_DELIVERY_TTL_MS) break;
+      this.abandonRetrievalDelivery(deliveryId);
     }
     const deliveryId = randomUUID();
     const begin = `<pwragent_token_miser_retrieval id="${deliveryId}">`;
@@ -690,9 +740,43 @@ export class TokenMiserStore {
       visibleTextOffset: begin.length + 1,
       kind: params.kind,
       wrappedText,
+      allowJsonString: params.allowJsonString,
     }))) return undefined;
     this.pendingRetrievalDeliveries.set(deliveryId, { createdAt: now, threadId: params.threadId, turnId: params.turnId });
     return { deliveryId, text: wrappedText };
+  }
+
+  private matchRetrievalDeliveries(output: string, threadId: string, generation: string) {
+    const matches: Array<{ deliveryId: string; pending: PendingRetrievalDelivery; start: number; end: number }> = [];
+    if (!this.pendingRetrievalDeliveries.size) return matches;
+    const candidates = new Map<string, { pending: PendingRetrievalDelivery; forms: string[] }>();
+    // A marker locates a candidate only. Verify the complete owner-issued raw
+    // or JSON-quoted value at this offset before treating it as a delivery.
+    const openers = /<pwragent_token_miser_retrieval id=(\\?)"([a-f0-9-]{36})/gu;
+    for (const match of output.matchAll(openers)) {
+      const id = match[2]!;
+      const reference = this.pendingRetrievalDeliveries.get(id);
+      if (reference?.threadId !== threadId) continue;
+      let candidate = candidates.get(id);
+      if (!candidate) {
+        const text = this.outputs.get(id);
+        if (!text || Date.now() - reference.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
+          this.abandonRetrievalDelivery(id);
+          continue;
+        }
+        const pending = JSON.parse(text) as PendingRetrievalDelivery;
+        candidate = { pending, forms: deliveryTextForms(pending) };
+        candidates.set(id, candidate);
+      }
+      if (candidate.pending.generation !== generation) continue;
+      const quoted = !!match[1];
+      const start = match.index - (quoted ? 1 : 0);
+      const form = candidate.forms[quoted ? 1 : 0];
+      if (start >= 0 && form && output.startsWith(form, start)) {
+        matches.push({ deliveryId: id, pending: candidate.pending, start, end: start + form.length });
+      }
+    }
+    return matches;
   }
 
   /** Match only live, thread-owned deliveries, never script text or marker syntax. */
@@ -704,25 +788,7 @@ export class TokenMiserStore {
       return [{ text: params.output, retrieval: false }];
     }
     const generation = await this.readRetentionGeneration(params.threadId);
-    const matches = [...this.pendingRetrievalDeliveries.entries()]
-      .filter(([, reference]) => reference.threadId === params.threadId)
-      .flatMap(([deliveryId, reference]) => {
-        const text = this.outputs.get(deliveryId);
-        if (!text || Date.now() - reference.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
-          this.abandonRetrievalDelivery(deliveryId);
-          return [];
-        }
-        const pending = JSON.parse(text) as PendingRetrievalDelivery;
-        if (pending.generation !== generation) return [];
-        const matches: Array<{ start: number; end: number }> = [];
-        let start = params.output.indexOf(pending.wrappedText);
-        while (start >= 0) {
-          matches.push({ start, end: start + pending.wrappedText.length });
-          start = params.output.indexOf(pending.wrappedText, start + pending.wrappedText.length);
-        }
-        return matches;
-      })
-      .sort((left, right) => left.start - right.start);
+    const matches = this.matchRetrievalDeliveries(params.output, params.threadId, generation);
     const parts: Array<{ text: string; retrieval: boolean }> = [];
     let offset = 0;
     for (const match of matches) {
@@ -750,50 +816,32 @@ export class TokenMiserStore {
     // those exact UTF-8 byte-budgeted ranges.
     if (await this.isArchived(params.threadId)) return 0;
     const generation = await this.readRetentionGeneration(params.threadId);
-    const candidates = [...this.pendingRetrievalDeliveries.entries()]
-      .filter(([, pending]) => pending.threadId === params.threadId)
-      .flatMap(([deliveryId, reference]) => {
-        const text = this.outputs.get(deliveryId);
-        if (!text || Date.now() - reference.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
-          this.abandonRetrievalDelivery(deliveryId);
-          return [];
-        }
-        const pending = JSON.parse(text) as PendingRetrievalDelivery;
-        return [{ deliveryId, outputOffset: params.output.indexOf(pending.wrappedText), pending }];
-      })
-      .filter((candidate) => candidate.outputOffset >= 0)
-      .sort((left, right) => left.outputOffset - right.outputOffset);
+    const matches = this.matchRetrievalDeliveries(params.output, params.threadId, generation);
+    if (!matches.length) return 0;
     const visibleRanges = codexVisibleStringRanges(
       params.output,
       normalizePositiveInteger(params.maxVisibleBytes, Number.MAX_SAFE_INTEGER),
     );
-    let confirmedCharacters = 0;
-    for (const { deliveryId, outputOffset, pending } of candidates) {
-      this.abandonRetrievalDelivery(deliveryId);
-      if (pending.generation !== generation) continue;
-      // Catalog delivery is protected transport, not retrieval of a saved result.
+    const charges = new Map<string, { pending: PendingRetrievalDelivery; bytes: number }>();
+    for (const { deliveryId, start, pending } of matches) {
+      const charge = charges.get(deliveryId) ?? { pending, bytes: 0 };
+      charges.set(deliveryId, charge);
+      // Host-issued text has no managed-output ledger charge.
       if (!pending.objectId) continue;
-      let visibleCharacters = 0;
-      let occurrence = outputOffset;
-      // A cell can emit the same delivery more than once. Each visible copy
-      // enters context, but update its metadata only once per delivery.
-      while (occurrence >= 0) {
-        const visibleTextStart = occurrence + pending.visibleTextOffset;
-        const visibleTextEnd = visibleTextStart + pending.visibleText.length;
-        visibleCharacters += visibleRanges.reduce((total, range) => {
-          const start = Math.max(visibleTextStart, range.start);
-          const end = Math.min(visibleTextEnd, range.end);
-          return end > start
-            ? total + utf8ByteLength(params.output.slice(start, end))
-            : total;
-        }, 0);
-        occurrence = params.output.indexOf(
-          pending.wrappedText,
-          occurrence + pending.wrappedText.length,
-        );
+      const visibleStart = start + pending.visibleTextOffset;
+      for (const range of visibleRanges) {
+        const from = Math.max(visibleStart, range.start);
+        const to = Math.min(visibleStart + pending.visibleText.length, range.end);
+        if (to > from) charge.bytes += utf8ByteLength(params.output.slice(from, to));
       }
-      await this.recordRetrieval(pending.objectId, visibleCharacters, pending.kind);
-      confirmedCharacters += visibleCharacters;
+    }
+    let confirmedCharacters = 0;
+    for (const [deliveryId, { pending, bytes }] of charges) {
+      if (!this.pendingRetrievalDeliveries.has(deliveryId)) continue;
+      this.abandonRetrievalDelivery(deliveryId);
+      if (!pending.objectId) continue;
+      await this.recordRetrieval(pending.objectId, bytes, pending.kind);
+      confirmedCharacters += bytes;
     }
     return confirmedCharacters;
   }
@@ -1190,9 +1238,10 @@ export class TokenMiserStore {
   }
 
   private async readAuthorizedObject(
-    objectId: string,
+    reference: string,
     threadId: string,
   ): Promise<TokenMiserStoredObject | undefined> {
+    const objectId = this.outputs.resolveId(reference);
     if (!await this.isCurrentRetention(threadId, this.outputGenerations.get(objectId))) return undefined;
     const metadata = await this.readMetadata(objectId, threadId);
     if (
