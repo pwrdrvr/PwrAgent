@@ -393,6 +393,52 @@ describe("App", () => {
     expect(listOperatorRequests).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps visible transcript rows and reading anchors when a sibling changes environment", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const threads = ["reader", "sibling"].map((id, i) => ({
+      id, title: id, source: "codex" as const, titleSource: "explicit" as const,
+      linkedDirectories: [], inbox: { inInbox: true }, updatedAt: 2 - i,
+    }));
+    let entryTypeReads = 0;
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        listBackends: async () => ({ fetchedAt: 1, backends: [] }),
+        listThreadTodos: async () => ({ todos: [] }),
+        getNavigationSnapshot: async (): Promise<NavigationSnapshot> => ({
+          backend: "all", fetchedAt: 1, unchanged: false, threads, directories: [],
+          inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+          launchpadDefaults: { backend: "codex", executionMode: "default" },
+        }),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          listeners.add(listener);
+          return () => { listeners.delete(listener); };
+        },
+        readThread: async () => ({
+          backend: "codex", threadId: "reader", fetchedAt: 1, replay: {
+            entries: [{ id: "prompt", get type() { entryTypeReads++; return "message" as const; },
+              role: "user", text: "Visible prompt" }],
+            messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+        }),
+      }),
+    });
+    await renderThreadApp();
+    const anchor = screen.getByText("Visible prompt").closest("[data-entry-id]")!;
+    const anchorId = anchor.id;
+    expect(anchorId).toBeTruthy();
+    expect(entryTypeReads).toBeGreaterThan(0);
+    entryTypeReads = 0;
+    await act(async () => {
+      for (const listener of listeners) listener({ backend: "codex", notification: {
+        method: "thread/codexEnvironment/updated",
+        params: { threadId: "sibling", codexEnvironmentRuntime: { environmentId: "changed", executionTarget: "local" } },
+      } });
+    });
+    expect(entryTypeReads).toBe(0);
+    expect(document.getElementById(anchorId)).toBe(anchor);
+  });
+
   it("keeps a selected document intact while another thread queues and refunds a CI repair", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const reader = {

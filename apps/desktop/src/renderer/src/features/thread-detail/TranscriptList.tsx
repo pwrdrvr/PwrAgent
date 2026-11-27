@@ -62,6 +62,7 @@ import {
   launchedTodoIdFromEntry,
   prepareLaunchedThreadEntries,
 } from "./launched-todo-entries";
+import { useEventCallback } from "../../lib/useEventCallback";
 import { useThreadLinks } from "../../lib/thread-links";
 import { TranscriptLaunchedTodo } from "./TranscriptLaunchedTodo";
 import {
@@ -772,11 +773,6 @@ export function TranscriptList(props: TranscriptListProps) {
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const readingRowPrefix = useId();
   const [readingAnchor] = useState(createTranscriptReadingAnchor);
-  const readingRowIds: string[] = [];
-  const committedReadingRowIds = useRef<readonly string[]>([]);
-  useLayoutEffect(() => {
-    committedReadingRowIds.current = readingRowIds;
-  });
   const bottomFollowFrameRef = useRef<number | undefined>(undefined);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
   const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
@@ -1023,9 +1019,10 @@ export function TranscriptList(props: TranscriptListProps) {
     props.turnFailures,
     props.rewinds,
   ]);
+  const canUndoRewind = Boolean(props.rewindUndo);
   const undoableRewind = useMemo(
-    () => props.rewindUndo ? undoableRewindId(transcriptEntries, props.rewinds) : undefined,
-    [props.rewindUndo, props.rewinds, transcriptEntries],
+    () => canUndoRewind ? undoableRewindId(transcriptEntries, props.rewinds) : undefined,
+    [canUndoRewind, props.rewinds, transcriptEntries],
   );
   // Replies to Codex async questions, keyed by the question they name. The
   // window is a contiguous tail, so a reply to any visible question is here.
@@ -1226,6 +1223,194 @@ export function TranscriptList(props: TranscriptListProps) {
     }
     onExpandedActivityIdsChange?.([...next]);
   }, [controlledExpandedActivityIds, onExpandedActivityIdsChange]);
+
+  // The to-do view can supply a new opener on a sidebar update. Its availability
+  // affects the launch chip, while a click should call the latest opener.
+  const openLaunchedTodo = useEventCallback((todo: ThreadTodo) => props.onOpenLaunchedTodoThread?.(todo));
+  const onOpenStartedThread = props.onOpenLaunchedTodoThread ? openLaunchedTodo : undefined;
+  const rewindMessageIds = props.rewind?.messageIds;
+  const onOpenRewind = props.rewind?.onOpen;
+  const rewindDisabledReason = props.rewind?.disabledReason;
+  const openRewindMessageId = props.rewind?.openMessageId;
+  const rewindConfirmation = props.rewind?.confirmation;
+  const rewindUndo = undoableRewind ? props.rewindUndo : undefined;
+  // A sidebar update or a pending request can change the surrounding view while
+  // every history row stays the same. Keep its DOM anchor ids with the same rows.
+  const { rows: visibleRows, readingRowIds } = useMemo(() => {
+    const readingRowIds: string[] = [];
+    // A replay can repeat an entry id. React can strand the earlier row's DOM
+    // when it reconciles duplicate keys, including across a thread switch.
+    const rowOccurrences = new Map<string, number>();
+    const rows = transcriptRenderItems.map((item) => {
+      const entryKey =
+        item.type === "workPhaseGroup" ? item.id : item.entry.id;
+      const occurrence = rowOccurrences.get(entryKey) ?? 0;
+      rowOccurrences.set(entryKey, occurrence + 1);
+      const rowKey = JSON.stringify([props.threadId, entryKey, occurrence]);
+      const readingRowId = readingRowPrefix + rowKey;
+      readingRowIds.push(readingRowId);
+      // Anchor each item to its turn so external surfaces (the edited-file
+      // group timestamps) can scroll the transcript to a turn's position —
+      // by turn id, with the turn's end/start time as a fallback for turns
+      // whose id isn't directly on a rendered item (work-phase grouping).
+      const itemTurn =
+        item.type === "workPhaseGroup"
+          ? item.entries[0]?.turn
+          : item.entry.turn;
+      const turnId = itemTurn?.id;
+      const turnTime = itemTurn?.completedAt ?? itemTurn?.startedAt;
+      const body =
+        item.type === "workPhaseGroup" ? (
+          <TranscriptWorkPhaseGroup
+            activeStartedAt={item.activeStartedAt}
+            activeVerb={item.activeVerb}
+            applications={props.applications}
+            collapsible={item.collapsible}
+            directoryPaths={stableDirectoryPaths}
+            desktopApi={props.desktopApi}
+            entries={item.entries}
+            expanded={
+              expandedCommentaryGroupIds.has(workPhaseGroupToggleKey(item))
+              !== Boolean(item.defaultExpanded)
+            }
+            expandedActivityIds={controlledExpandedActivityIds}
+            fileViewerContext={props.fileViewerContext}
+            label={item.label}
+            parentThreadId={props.parentThreadId ?? ""}
+            parentThreadBackend={props.parentThreadBackend}
+            skills={skills}
+            subAgents={props.subAgents}
+            threadLinkSource={props.threadLinkSource}
+            toggleKey={workPhaseGroupToggleKey(item)}
+            onActivityExpandedChange={setActivityExpanded}
+            onOpenImage={props.onOpenImage}
+            onToggle={toggleCommentaryGroup}
+          />
+        ) : isRewindMarkerEntry(item.entry) && item.entry.type === "activity" ? (
+          <TranscriptRewindMarker
+            label={item.entry.summary}
+            undo={rewindUndo && undoableRewind
+              && item.entry.id === `${REWIND_MARKER_ENTRY_PREFIX}${undoableRewind}`
+              ? {
+                  busy: rewindUndo.busyId === undoableRewind,
+                  disabledReason: rewindUndo.disabledReason,
+                  onUndo: () => rewindUndo.onUndo(undoableRewind),
+                }
+              : undefined}
+          />
+        ) : isLaunchedTodoEntry(item.entry)
+          && launchedRecordById.has(launchedTodoIdFromEntry(item.entry) ?? "") ? (
+          <TranscriptLaunchedTodo
+            applications={props.applications}
+            desktopApi={props.desktopApi}
+            fileViewerContext={props.fileViewerContext}
+            record={launchedRecordById.get(launchedTodoIdFromEntry(item.entry)!)!}
+            skills={skills}
+            threadLinkSource={props.threadLinkSource}
+            onOpenStartedThread={onOpenStartedThread}
+          />
+        ) : item.entry.type === "activity" ? (
+          <TranscriptActivity
+            applications={props.applications}
+            directoryPaths={stableDirectoryPaths}
+            desktopApi={props.desktopApi}
+            entry={item.entry}
+            expanded={controlledExpandedActivityIds?.has(item.entry.id)}
+            fileViewerContext={props.fileViewerContext}
+            onExpandedChange={setActivityExpanded}
+            onOpenImage={props.onOpenImage}
+            skills={skills}
+            threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource, pendingLinkSource)}
+          />
+        ) : item.entry.type === "plan" ? (
+          <TranscriptPlan
+            applications={props.applications}
+            desktopApi={props.desktopApi}
+            entry={item.entry}
+            fileViewerContext={props.fileViewerContext}
+            threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource, pendingLinkSource)}
+          />
+        ) : item.entry.type === "review" ? (
+          <TranscriptReview
+            applications={props.applications}
+            directoryPaths={stableDirectoryPaths}
+            desktopApi={props.desktopApi}
+            entry={item.entry}
+            parentThreadId={props.parentThreadId}
+            parentThreadBackend={props.parentThreadBackend}
+            fileViewerContext={props.fileViewerContext}
+            threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource, pendingLinkSource)}
+          />
+        ) : (
+          <TranscriptMessage
+            applications={props.applications}
+            desktopApi={props.desktopApi}
+            message={item.entry}
+            parentThreadId={props.parentThreadId ?? ""}
+            parentThreadBackend={props.parentThreadBackend}
+            fileViewerContext={props.fileViewerContext}
+            skills={skills}
+            subAgents={props.subAgents}
+            threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource, pendingLinkSource)}
+            onOpenImage={props.onOpenImage}
+            asyncQuestionReplies={asyncQuestionReplies}
+            asyncQuestionSentAnswers={props.sentAsyncQuestionAnswers}
+            asyncQuestionsDismissed={props.dismissedAsyncQuestionMessageIds?.has(item.entry.id)}
+            onAnswerAsyncQuestions={props.onAnswerAsyncQuestions}
+            onAsyncQuestionsDismissedChange={props.onAsyncQuestionsDismissedChange}
+            onRewind={
+              rewindMessageIds?.has(item.entry.id)
+                ? onOpenRewind
+                : undefined
+            }
+            rewindDisabledReason={rewindDisabledReason}
+            rewindOpen={openRewindMessageId === item.entry.id}
+          />
+        );
+      return (
+        <div
+          key={rowKey}
+          id={readingRowId}
+          className="transcript-list__item"
+          role="listitem"
+          data-entry-id={
+            item.type === "workPhaseGroup" ? undefined : item.entry.id
+          }
+          data-linked-message={
+            item.type !== "workPhaseGroup"
+            && item.entry.id === highlightedMessageId
+              ? "true"
+              : undefined
+          }
+          data-turn-id={turnId || undefined}
+          data-turn-time={
+            typeof turnTime === "number" ? turnTime : undefined
+          }
+        >
+          {body}
+          {item.type !== "workPhaseGroup"
+          && item.entry.id === openRewindMessageId
+            ? rewindConfirmation
+            : null}
+        </div>
+      );
+    });
+    return { rows, readingRowIds };
+  }, [
+    transcriptRenderItems, props.threadId, readingRowPrefix, highlightedMessageId,
+    props.applications, stableDirectoryPaths, props.desktopApi, props.fileViewerContext,
+    props.parentThreadId, props.parentThreadBackend, skills, props.subAgents, props.threadLinkSource,
+    expandedCommentaryGroupIds, controlledExpandedActivityIds, setActivityExpanded, toggleCommentaryGroup,
+    props.onOpenImage, pendingLinkSource, launchedRecordById, onOpenStartedThread,
+    asyncQuestionReplies, props.sentAsyncQuestionAnswers, props.dismissedAsyncQuestionMessageIds,
+    props.onAnswerAsyncQuestions, props.onAsyncQuestionsDismissedChange,
+    undoableRewind, rewindUndo, rewindMessageIds, onOpenRewind, rewindDisabledReason,
+    openRewindMessageId, rewindConfirmation,
+  ]);
+  const committedReadingRowIds = useRef<readonly string[]>([]);
+  useLayoutEffect(() => {
+    committedReadingRowIds.current = readingRowIds;
+  }, [readingRowIds]);
 
   const captureSnapshot = useCallback((): ScrollSnapshot | undefined => {
     const container = scrollContainerRef.current;
@@ -1707,9 +1892,6 @@ export function TranscriptList(props: TranscriptListProps) {
     return <p className="transcript-empty">No thread history yet.</p>;
   }
 
-  // A replay can repeat an entry id. React can strand the earlier row's DOM
-  // when it reconciles duplicate keys, including across a thread switch.
-  const rowOccurrences = new Map<string, number>();
   const content = (
     <div
       className="transcript-list"
@@ -1783,160 +1965,7 @@ export function TranscriptList(props: TranscriptListProps) {
           the a11y tree and the rule fails.
         */}
         <div ref={scrollContentRef} className="transcript-list__content" role="presentation">
-          {transcriptRenderItems.map((item) => {
-            const entryKey =
-              item.type === "workPhaseGroup" ? item.id : item.entry.id;
-            const occurrence = rowOccurrences.get(entryKey) ?? 0;
-            rowOccurrences.set(entryKey, occurrence + 1);
-            const rowKey = JSON.stringify([props.threadId, entryKey, occurrence]);
-            const readingRowId = readingRowPrefix + rowKey;
-            readingRowIds.push(readingRowId);
-            // Anchor each item to its turn so external surfaces (the edited-file
-            // group timestamps) can scroll the transcript to a turn's position —
-            // by turn id, with the turn's end/start time as a fallback for turns
-            // whose id isn't directly on a rendered item (work-phase grouping).
-            const itemTurn =
-              item.type === "workPhaseGroup"
-                ? item.entries[0]?.turn
-                : item.entry.turn;
-            const turnId = itemTurn?.id;
-            const turnTime = itemTurn?.completedAt ?? itemTurn?.startedAt;
-            const body =
-              item.type === "workPhaseGroup" ? (
-                <TranscriptWorkPhaseGroup
-                  activeStartedAt={item.activeStartedAt}
-                  activeVerb={item.activeVerb}
-                  applications={props.applications}
-                  collapsible={item.collapsible}
-                  directoryPaths={stableDirectoryPaths}
-                  desktopApi={props.desktopApi}
-                  entries={item.entries}
-                  expanded={
-                    expandedCommentaryGroupIds.has(workPhaseGroupToggleKey(item))
-                    !== Boolean(item.defaultExpanded)
-                  }
-                  expandedActivityIds={controlledExpandedActivityIds}
-                  fileViewerContext={props.fileViewerContext}
-                  label={item.label}
-                  parentThreadId={props.parentThreadId ?? ""}
-                  parentThreadBackend={props.parentThreadBackend}
-                  skills={skills}
-                  subAgents={props.subAgents}
-                  threadLinkSource={props.threadLinkSource}
-                  toggleKey={workPhaseGroupToggleKey(item)}
-                  onActivityExpandedChange={setActivityExpanded}
-                  onOpenImage={props.onOpenImage}
-                  onToggle={toggleCommentaryGroup}
-                />
-              ) : isRewindMarkerEntry(item.entry) && item.entry.type === "activity" ? (
-                <TranscriptRewindMarker
-                  label={item.entry.summary}
-                  undo={props.rewindUndo
-                    && item.entry.id === `${REWIND_MARKER_ENTRY_PREFIX}${undoableRewind}`
-                    ? {
-                        busy: props.rewindUndo.busyId === undoableRewind,
-                        disabledReason: props.rewindUndo.disabledReason,
-                        onUndo: () => props.rewindUndo?.onUndo(undoableRewind!),
-                      }
-                    : undefined}
-                />
-              ) : isLaunchedTodoEntry(item.entry)
-                && launchedRecordById.has(launchedTodoIdFromEntry(item.entry) ?? "") ? (
-                <TranscriptLaunchedTodo
-                  applications={props.applications}
-                  desktopApi={props.desktopApi}
-                  fileViewerContext={props.fileViewerContext}
-                  record={launchedRecordById.get(launchedTodoIdFromEntry(item.entry)!)!}
-                  skills={skills}
-                  threadLinkSource={props.threadLinkSource}
-                  onOpenStartedThread={props.onOpenLaunchedTodoThread}
-                />
-              ) : item.entry.type === "activity" ? (
-                <TranscriptActivity
-                  applications={props.applications}
-                  directoryPaths={stableDirectoryPaths}
-                  desktopApi={props.desktopApi}
-                  entry={item.entry}
-                  expanded={controlledExpandedActivityIds?.has(item.entry.id)}
-                  fileViewerContext={props.fileViewerContext}
-                  onExpandedChange={setActivityExpanded}
-                  onOpenImage={props.onOpenImage}
-                  skills={skills}
-                  threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource, pendingLinkSource)}
-                />
-              ) : item.entry.type === "plan" ? (
-                <TranscriptPlan
-                  applications={props.applications}
-                  desktopApi={props.desktopApi}
-                  entry={item.entry}
-                  fileViewerContext={props.fileViewerContext}
-                  threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource, pendingLinkSource)}
-                />
-              ) : item.entry.type === "review" ? (
-                <TranscriptReview
-                  applications={props.applications}
-                  directoryPaths={stableDirectoryPaths}
-                  desktopApi={props.desktopApi}
-                  entry={item.entry}
-                  parentThreadId={props.parentThreadId}
-                  parentThreadBackend={props.parentThreadBackend}
-                  fileViewerContext={props.fileViewerContext}
-                  threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource, pendingLinkSource)}
-                />
-              ) : (
-                <TranscriptMessage
-                  applications={props.applications}
-                  desktopApi={props.desktopApi}
-                  message={item.entry}
-                  parentThreadId={props.parentThreadId ?? ""}
-                  parentThreadBackend={props.parentThreadBackend}
-                  fileViewerContext={props.fileViewerContext}
-                  skills={skills}
-                  subAgents={props.subAgents}
-                  threadLinkSource={transcriptEntryLinkSource(item.entry.id, props.threadLinkSource, pendingLinkSource)}
-                  onOpenImage={props.onOpenImage}
-                  asyncQuestionReplies={asyncQuestionReplies}
-                  asyncQuestionSentAnswers={props.sentAsyncQuestionAnswers}
-                  asyncQuestionsDismissed={props.dismissedAsyncQuestionMessageIds?.has(item.entry.id)}
-                  onAnswerAsyncQuestions={props.onAnswerAsyncQuestions}
-                  onAsyncQuestionsDismissedChange={props.onAsyncQuestionsDismissedChange}
-                  onRewind={
-                    props.rewind?.messageIds.has(item.entry.id)
-                      ? props.rewind.onOpen
-                      : undefined
-                  }
-                  rewindDisabledReason={props.rewind?.disabledReason}
-                  rewindOpen={props.rewind?.openMessageId === item.entry.id}
-                />
-              );
-            return (
-              <div
-                key={rowKey}
-                id={readingRowId}
-                className="transcript-list__item"
-                role="listitem"
-                data-entry-id={
-                  item.type === "workPhaseGroup" ? undefined : item.entry.id
-                }
-                data-linked-message={
-                  item.type !== "workPhaseGroup"
-                  && item.entry.id === highlightedMessageId
-                    ? "true"
-                    : undefined
-                }
-                data-turn-id={turnId || undefined}
-                data-turn-time={
-                  typeof turnTime === "number" ? turnTime : undefined
-                }
-              >
-                {body}
-                {item.type !== "workPhaseGroup"
-                && item.entry.id === props.rewind?.openMessageId
-                  ? props.rewind.confirmation
-                  : null}
-              </div>
-            );
-          })}
+          {visibleRows}
           {props.pendingStatusText || props.runningTurnUsageText ? (
             /*
               The thinking line is a live region (role="status"), and
