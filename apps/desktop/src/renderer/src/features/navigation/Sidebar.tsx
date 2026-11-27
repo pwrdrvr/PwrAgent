@@ -22,6 +22,22 @@ import {
   ProjectHeaderCardHost,
   type ProjectHeaderCardHandle,
 } from "./ProjectHeaderCard";
+import {
+  SidebarThreadCardHost,
+  useSidebarThreadCardTriggers,
+  type SidebarThreadCardActions,
+  type SidebarThreadCardHandle,
+  type SidebarThreadCardOptions,
+} from "./SidebarThreadCard";
+import { defaultOpenPullRequest } from "./ThreadRow";
+import { getDesktopApi } from "../../lib/desktop-api";
+import { formatBackendLabel } from "../../lib/backend-label";
+import { resolvePreferredEditor } from "../../lib/preferred-application";
+import {
+  threadInfoRowFacts,
+  type ThreadInfoContext,
+} from "../thread-detail/thread-info";
+import type { DesktopApplicationsSnapshot } from "@pwragent/shared/contracts/settings";
 import { useMousePress } from "../../lib/useMousePress";
 import { LENS_KEYBINDING_ACTIONS } from "./useLensHotkeys";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
@@ -439,6 +455,13 @@ type SidebarProps = {
   newThreadFederationTargets?: readonly FederationThreadTarget[];
   /** This machine's federation label, for the sub-thread machine list. */
   localMachineLabel?: string;
+  /** This machine's editors and terminals, for a local thread's card. */
+  localApplications?: DesktopApplicationsSnapshot;
+  /**
+   * The open thread's context reading, for its card. A getter, so a reading
+   * that changes every turn does not re-render the sidebar.
+   */
+  readOpenThreadContext?: () => (ThreadInfoContext & { threadKey: string }) | undefined;
   /** `process.platform`, for "Show in Finder" and "This Mac". */
   platform?: string;
   /** Shows a folder in the OS file manager. Absent where it cannot. */
@@ -2598,6 +2621,38 @@ function SidebarContent(props: SidebarProps) {
     hide: (): void => projectCardRef.current?.hide(),
   }), [directoryForProjectCard]);
 
+  // One card for every thread row, opened by delegation from the sidebar
+  // root. Its actions are the row's context-menu handlers, bound per thread.
+  const threadCardRef = useRef<SidebarThreadCardHandle | null>(null);
+  useSidebarThreadCardTriggers(sidebarRef, threadCardRef);
+  const readThreadForCard = useEventCallback((key: string) =>
+    presentedByKey.get(key) ?? navigationThreadByKey.get(key));
+  const threadCardRowFacts = useEventCallback((thread: NavigationThreadSummary) => {
+    const target = thread.federation?.ref.target;
+    const peerLabel = target?.scope === "remote"
+      ? thread.federation?.instanceLabel ?? target.instanceId
+      : federationTarget ? federationLabel ?? "another machine" : undefined;
+    const context = props.readOpenThreadContext?.();
+    return threadInfoRowFacts(thread, {
+      backendLabel: formatBackendLabel(thread.source, [...threadBackends(thread)]),
+      machine: peerLabel
+        ? { label: peerLabel, local: false }
+        : { label: props.localMachineLabel ?? thisMachineLabel(props.platform), local: true },
+      ...(context?.threadKey === threadSummaryIdentityKey(thread) ? { context } : {}),
+    });
+  });
+  const threadCardActions = useEventCallback((
+    thread: NavigationThreadSummary,
+    row: HTMLElement,
+  ): SidebarThreadCardActions => threadCardActionsFor(thread, row));
+  const threadCardOptions = useMemo((): SidebarThreadCardOptions => ({
+    readThread: readThreadForCard,
+    rowFacts: threadCardRowFacts,
+    actionsFor: threadCardActions,
+    // A new row snapshot redraws an open card with the row's live facts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [presentedByKey, readThreadForCard, threadCardActions, threadCardRowFacts]);
+
   const togglePinDirectoryFromContextMenu = (
     directory: NavigationDirectorySummary,
   ): void => {
@@ -3721,6 +3776,84 @@ function SidebarContent(props: SidebarProps) {
   );
   const directoryMenuHasForgeSection =
     directoryMenuCanForgeAutomation || directoryMenuForgeRepository !== undefined;
+
+  /**
+   * The thread card's actions: the context menu's handlers and gates for one
+   * thread, plus the composer's open-in-app request for a thread on this
+   * machine. A peer's thread gets only what works on that peer.
+   */
+  function threadCardActionsFor(
+    thread: NavigationThreadSummary,
+    row: HTMLElement,
+  ): SidebarThreadCardActions {
+    const live = navigationThreadByKey.get(threadSummaryIdentityKey(thread)) ?? thread;
+    const local = !thread.federation && !federationTarget;
+    const applications = props.localApplications;
+    const openApplication = getDesktopApi()?.openApplication;
+    const openable = (candidate: { canOpenWorkspace: boolean }) => candidate.canOpenWorkspace;
+    const branch = getThreadNamedBranch(thread);
+    const facts = threadCardRowFacts(thread);
+    const prUrl = facts.pr?.pr.url;
+    // The card's ⋯ holds both archives for a thread with sub-threads.
+    const hasChildThreads = countArchiveGroup(live, navigationThreads, navigationThreadByKey).childCount > 0;
+    return {
+      ...(local && applications && openApplication && !thread.workspaceMissing
+        ? {
+            open: {
+              editors: applications.editors.filter(openable),
+              preferredEditor: resolvePreferredEditor(applications),
+              terminal: applications.terminals.find((candidate) =>
+                candidate.canOpenWorkspace && candidate.id === applications.preferredTerminalId.value)
+                ?? applications.terminals.find(openable),
+              ...(canRevealPath
+                ? {
+                    reveal: {
+                      label: revealInFileManagerLabel(props.platform),
+                      run: (folder: { label: string; path: string }) => props.onRevealPath?.(folder.path, folder.label),
+                    },
+                  }
+                : {}),
+              run: (application, folder) => {
+                void openApplication({
+                  applicationId: application.id,
+                  kind: application.kind,
+                  targetPath: folder.path,
+                }).catch((error: unknown) => {
+                  console.warn("[sidebar] Could not open the thread's folder", error);
+                });
+              },
+            },
+          }
+        : {}),
+      ...(branch ? { copyBranch: () => copyFromContextMenu(branch) } : {}),
+      ...(prUrl
+        ? {
+            openPullRequest: () => defaultOpenPullRequest(prUrl),
+            showPullRequest: () => {
+              // The row's own chip shows the PR's card; a density that hides
+              // the chip opens the PR instead.
+              const chip = [...row.querySelectorAll<HTMLElement>("[data-pr-chip]")]
+                .find((element) => element.dataset.prUrl === prUrl && element.getClientRects().length > 0);
+              if (chip) chip.focus();
+              else defaultOpenPullRequest(prUrl);
+            },
+          }
+        : {}),
+      ...(!thread.parentThreadId && props.onSetThreadPin
+        ? { pin: { pinned: Boolean(live.pinnedRank), toggle: () => togglePinFromContextMenu(live) } }
+        : {}),
+      ...(threadCanMarkRead(thread) ? { settle: () => markReadFromContextMenu([thread]) } : {}),
+      ...(!hasChildThreads && canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control")
+        ? { archive: () => archiveFromContextMenu(thread) }
+        : {}),
+      openMenu: (anchor) => {
+        const rect = anchor.getBoundingClientRect();
+        openThreadContextMenu(thread, { x: rect.left, y: rect.bottom + 4, anchorTop: rect.top });
+        // The card closes with the menu open; focus goes back to the row.
+        contextMenuOpenerRef.current = row.querySelector<HTMLElement>(".thread-row__open");
+      },
+    };
+  }
 
   // Compile JSX separately from setup so both functions stay optimizable by V8.
   function renderSidebarLayout() {
@@ -4956,6 +5089,10 @@ function SidebarContent(props: SidebarProps) {
         <ProjectHeaderCardHost
           ref={projectCardRef}
           options={projectCardOptions}
+        />
+        <SidebarThreadCardHost
+          ref={threadCardRef}
+          options={threadCardOptions}
         />
 
         {directoryTargetMenu && listedFederationThreadTargets.length > 0 ? (

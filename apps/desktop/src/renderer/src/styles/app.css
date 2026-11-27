@@ -10412,6 +10412,289 @@ button.stack-display__thread,
   height: 16px;
 }
 
+.thread-info-card__skeleton--small {
+  width: 36px;
+  height: 9px;
+}
+
+/* A sidebar row's card (`SidebarThreadCard`): the thread chip card's frame
+   with the row's facts as icon rows and an action block under them, drawn
+   like the project card's targets so the sidebar's cards read as one family.
+   Wider than a chip's card: a branch name and a model with its effort are
+   the facts most worth reading whole. */
+.sidebar-thread-card {
+  width: 312px;
+  padding-bottom: 8px;
+}
+
+.thread-info-card__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.thread-info-card__eyebrow-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__facts {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  margin: 8px -6px 0;
+  font-size: 12px;
+}
+
+/* A fact row spans the grid as a subgrid, so a target row (a button) keeps
+   the icon, value and meta columns of the rows around it. */
+.thread-info-card__fact {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+}
+
+.thread-info-card__fact > svg {
+  color: var(--text-muted);
+}
+
+.thread-info-card__fact--target {
+  cursor: pointer;
+}
+
+.thread-info-card__fact--target:hover {
+  background: var(--accent-soft);
+}
+
+.thread-info-card__fact-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-info-card__fact-value--mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.thread-info-card__fact-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.thread-info-card__add {
+  color: var(--success-text);
+}
+
+.thread-info-card__del {
+  color: var(--danger-text);
+}
+
+.thread-info-card__pr-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  vertical-align: 1px;
+}
+
+.thread-info-card__context {
+  margin: 4px 0 2px;
+}
+
+.thread-info-card__context-used {
+  height: 100%;
+  background: var(--text-secondary);
+}
+
+.sidebar-thread-card__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 10px -8px 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sidebar-thread-card__split {
+  display: flex;
+  gap: 1px;
+}
+
+.sidebar-thread-card__split > .sidebar-thread-card__row:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sidebar-thread-card__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-thread-card__row > svg {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.sidebar-thread-card__row:hover {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.sidebar-thread-card__row:hover > svg {
+  color: var(--accent);
+}
+
+.sidebar-thread-card__row.is-current {
+  color: var(--accent-bright);
+}
+
+.sidebar-thread-card__row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-thread-card__chevron {
+  flex: 0 0 auto;
+  justify-content: center;
+  width: 28px;
+  padding: 4px;
+}
+
+.sidebar-thread-card__app-icon {
+  flex: 0 0 auto;
+}
+
+.sidebar-thread-card__sublist {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 0 2px 22px;
+}
+
+.sidebar-thread-card__buttons {
+  display: flex;
+  gap: 4px;
+  padding: 6px 2px 0;
+}
+
+.sidebar-thread-card__buttons-spacer {
+  flex: 1 1 auto;
+}
+
+.sidebar-thread-card__button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sidebar-thread-card__button--icon {
+  width: 30px;
+  padding: 0;
+}
+
+.sidebar-thread-card__button:hover {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.sidebar-thread-card__button.is-on {
+  color: var(--accent-bright);
+}
+
+/* The AI provider gauge's peek (`ProviderGaugePeek`): each provider's
+   tightest limit on the AI providers panel's limit rows, worst first. */
+.provider-peek {
+  width: 290px;
+  padding-bottom: 8px;
+}
+
+.provider-peek__activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: -4px -8px -4px 0;
+  font-size: 11px;
+}
+
+.provider-peek__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-peek__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.provider-peek__grid {
+  margin-top: 4px;
+  font-size: 11.5px;
+}
+
+.provider-peek__none {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .pr-detach-warning-modal {
   position: fixed;
   inset: 0;

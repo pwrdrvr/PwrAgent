@@ -162,6 +162,7 @@ import {
   type DesktopConfigBootstrapState,
 } from "./features/settings/useDesktopConfigBootstrap";
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
+import type { ThreadInfoContext } from "./features/thread-detail/thread-info";
 import {
   DEFAULT_CONTEXT_TAB,
   DEFAULT_ACTION_RUNS_DOCK,
@@ -3188,6 +3189,18 @@ function DesktopAppShell(props: {
     suspended: remoteReadsSuspended,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
+  // The open thread's context reading, read by its sidebar card when the
+  // card opens: a ref, so a reading per turn re-renders nothing.
+  const openThreadContextRef = useRef<(ThreadInfoContext & { threadKey: string }) | undefined>(undefined);
+  openThreadContextRef.current = navigation.selectedThread && session.contextWindow
+    ? {
+        threadKey: threadSummaryIdentityKey(navigation.selectedThread),
+        totalTokens: session.contextWindow.totalTokens,
+        modelContextWindow: session.contextWindow.modelContextWindow,
+        usedPercent: session.contextWindow.usedPercent,
+      }
+    : undefined;
+  const readOpenThreadContext = useCallback(() => openThreadContextRef.current, []);
   const skills = useThreadSkills({
     desktopApi,
     launchpad: navigation.selectedLaunchpad,
@@ -4803,6 +4816,8 @@ function DesktopAppShell(props: {
             }}
             newThreadFederationTargets={newThreadFederationTargets}
             localMachineLabel={federationLocalDisplayLabel(liveFederationHealth)}
+            localApplications={settings.snapshot?.applications}
+            readOpenThreadContext={readOpenThreadContext}
             platform={desktopApi?.platform}
             onRevealPath={revealProjectPath}
             checkFederationTargetProject={checkFederationTargetProject}
