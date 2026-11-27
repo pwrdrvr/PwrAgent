@@ -19,9 +19,9 @@ Return only valid JSON. Do not wrap the JSON in markdown fences. Use this exact 
 Requirements:
 
 - Write the title in the same language as the message.
-- Never exceed 48 characters.
-- Keep the title to 7 words or fewer.
-- Say what the message asks for or reports. Lead with the subject.
+- Aim for about 50 characters. Never exceed 100 characters.
+- Use complete words. Rephrase to fit if needed.
+- Capture the main task, question, result, or decision. Lead with the subject.
 - If the message reports progress, name the result.
 - The context's `from` lists who sent the message: another thread, a person on a messaging platform, or a sub-agent. When it names one sender, start the title with a short form of that name and a colon, such as `Image director:` for `Image director for the train game plan`. Skip the sender when `from` is missing or names several.
 - The context's `to` is the thread the message is queued for. The operator is already looking at it, so name it only when the message is just a check-in between the two threads with no other subject.
