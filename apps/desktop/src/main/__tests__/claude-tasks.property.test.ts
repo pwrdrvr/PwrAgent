@@ -15,6 +15,8 @@ import { ClaudeTaskTracker, claudeTaskRow } from "../claude/claude-tasks";
  * - Commands keep their Actions rows.
  * - Waiting For lists every running task, sub-agents included: Claude takes
  *   another turn when any of them ends.
+ * - A card keeps the name its Agent call gave it. Progress reports what the
+ *   worker is doing now, so it never renames the card.
  *
  * The model is the event stream itself: each task's lifecycle as Claude
  * reports it, with notifications that race task_updated, redelivered starts
@@ -143,8 +145,11 @@ function message(step: Step, plans: TaskPlan[]): SDKMessage {
       } as unknown as SDKMessage;
     case "progress":
       return {
-        ...base, subtype: "task_progress", description: `Task ${step.task}`,
-        usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 }, last_tool_name: "Read",
+        // Claude's progress description is the worker's latest activity,
+        // not its task: a bare command when the call named none (captured
+        // from claude-agent-sdk 0.3.330).
+        ...base, subtype: "task_progress", description: `Running cd /Users/operator/worktrees/${step.task} && ls`,
+        usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 }, last_tool_name: "Bash",
       } as unknown as SDKMessage;
     case "updated":
       return {
@@ -209,6 +214,8 @@ describe("Claude sub-agent projection", () => {
           const task = agents[index];
           const ended = settled.get(task);
           expect(card.status).toBe(ended ? CARD_STATUS[ended] : dropped(task) ? "success" : "running");
+          // The card keeps the name the Agent call gave it, whatever it is doing.
+          expect(card.task).toBe(`Task ${task}`);
           // Once a card ends it never runs again.
           if (card.status !== "running") terminalCards.add(card.monitorId);
           else expect(terminalCards.has(card.monitorId)).toBe(false);

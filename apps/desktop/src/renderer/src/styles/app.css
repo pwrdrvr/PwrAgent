@@ -6999,6 +6999,11 @@ a.button {
 
 .sidebar-list--dense {
   flex: 1;
+  /* The thread list never scrolls sideways. `overflow-y: auto` alone makes
+     the x axis `auto` too, so one row wider than the lane turned the whole
+     list into a horizontal scroller. Rows must fit (sidebar-lane-overflow
+     contract); this keeps a row that slips through from panning the list. */
+  overflow-x: hidden;
   overflow-y: auto;
   min-height: 0;
   /* This lane bleeds to the sidebar walls (see `.sidebar__scroll-region`),
@@ -7032,6 +7037,8 @@ a.button {
 .directory-groups {
   flex: 1;
   min-height: 0;
+  /* See `.sidebar-list--dense`: the lane never scrolls sideways. */
+  overflow-x: hidden;
   overflow-y: auto;
   padding-top: 0;
   /* Mirrors `.sidebar-list--dense` — see that block for the gutter
@@ -7495,6 +7502,12 @@ button.stack-display__thread,
 
 .native-subagents__list {
   display: grid;
+  /* An implicit grid column is `auto`, whose minimum is its widest row's
+     min-content. A sub-agent label is one nowrap line, so a long one (a
+     worktree path, a command) grew the column past the lane and the whole
+     thread list scrolled sideways. `minmax(0, 1fr)` holds the column to the
+     tray and lets each label ellipsize. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
   margin: 1px 0 2px 15px;
   padding-left: 8px;
@@ -7558,14 +7571,19 @@ button.stack-display__thread,
 
 .native-subagents__agent-label {
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The role is the row's secondary text; capped so a long one can't squeeze
+   the label the row is named by down to an ellipsis. */
 .native-subagents__agent-role {
   min-width: 0;
+  max-width: 45%;
+  flex: 0 0 auto;
   margin-left: auto;
   overflow: hidden;
   color: var(--text-muted);
@@ -9311,6 +9329,39 @@ button.stack-display__thread,
 
 .pr-chip--stacked {
   gap: 5px;
+}
+
+/* A chip never outgrows its line. Only the label gives way: a repo-prefixed
+   label (`org/repo#123`, shown when a row's PRs span repositories) is the one
+   part of unbounded length, and it pushed the chip, and with it the thread
+   list, past the sidebar's right edge. Its `org/repo` ellipsizes; the dot,
+   the number, and the badges keep their size. */
+.pr-chip {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pr-chip > *,
+.pr-chip__trigger > * {
+  flex-shrink: 0;
+}
+
+.pr-chip > .pr-chip__trigger,
+.pr-chip > .pr-chip__label,
+.pr-chip__trigger > .pr-chip__label {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.pr-chip__label {
+  display: inline-flex;
+  overflow: hidden;
+}
+
+.pr-chip__repo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pr-chip__trigger,

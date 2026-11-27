@@ -1159,8 +1159,10 @@ describe("ThreadRow chip flow", () => {
       },
     });
 
-    expect(screen.getByText("pwrdrvr/PwrAgent#1024")).toBeInTheDocument();
-    expect(screen.queryByText("#1024")).not.toBeInTheDocument();
+    // The `org/repo` prefix is its own span so it can ellipsize while the
+    // number stays, so the label's text spans two nodes.
+    const labels = [...document.querySelectorAll(".pr-chip__label")].map((label) => label.textContent);
+    expect(labels).toEqual(["pwrdrvr/PwrAgent#1024"]);
   });
 
   it("keeps primary-repository PR chips unqualified", () => {

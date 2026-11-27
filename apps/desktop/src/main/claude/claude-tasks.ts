@@ -95,7 +95,9 @@ export class ClaudeTaskTracker {
         const progress = message.summary
           ?? (message.last_tool_name ? `${message.usage.tool_uses} tool uses · last ${message.last_tool_name}` : undefined);
         if (progress) task.progress = progress;
-        if (message.description) task.description = message.description;
+        // A progress frame's description is the worker's latest activity
+        // ("Running cd /Users/…", "Reading app.css"), not its task. Copying it
+        // renamed every sub-agent row to whatever command it ran last.
       }
     } else if (message.subtype === "task_notification") {
       const task = this.tasks.get(message.task_id) ?? {
