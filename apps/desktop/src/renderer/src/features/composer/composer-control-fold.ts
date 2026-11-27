@@ -108,3 +108,63 @@ export function planComposerRowFold(input: {
     overflows: width - shrinkable > available + FIT_TOLERANCE_PX,
   };
 }
+
+/**
+ * How long after a thread opens the row keeps the fold it last settled on
+ * there. A thread's environment controls can arrive after it opens; without
+ * the hold, the row would draw unfolded and then fold them away a moment
+ * later.
+ */
+export const COMPOSER_FOLD_SETTLE_MS = 2000;
+
+/** A fold a thread's row settled on, and the row width it settled at. */
+export type ComposerFoldMemo = {
+  foldedTierCount: number;
+  /** The row's content width, in px. */
+  available: number;
+};
+
+/** A remembered fold, kept while the row settles again. */
+export type ComposerFoldHold = ComposerFoldMemo & {
+  /** When the hold ends, on the `now` clock passed to `heldComposerRowFold`. */
+  until: number;
+};
+
+/**
+ * The fold the row draws: what it measured, but never less than a hold still
+ * in force. A hold only ever keeps controls folded. It never folds one the
+ * measurement would not, so a late control can still fold more. It applies
+ * only at the width it was remembered at: in a wider or narrower pane the
+ * remembered fold says nothing.
+ */
+export function heldComposerRowFold(
+  measured: ComposerFoldMemo,
+  hold: ComposerFoldHold | undefined,
+  now: number,
+): number {
+  if (!hold || now >= hold.until) return measured.foldedTierCount;
+  if (Math.abs(measured.available - hold.available) > FIT_TOLERANCE_PX) return measured.foldedTierCount;
+  return Math.max(measured.foldedTierCount, hold.foldedTierCount);
+}
+
+/**
+ * The fold each thread's row last settled on, by thread. It lives only in
+ * this window and forgets the least recently used thread past `limit`.
+ */
+export function createComposerFoldMemory(limit = 200): {
+  recall: (scope: string) => ComposerFoldMemo | undefined;
+  remember: (scope: string, memo: ComposerFoldMemo) => void;
+} {
+  const folds = new Map<string, ComposerFoldMemo>();
+  return {
+    recall: (scope) => folds.get(scope),
+    remember: (scope, memo) => {
+      folds.delete(scope);
+      folds.set(scope, memo);
+      if (folds.size > limit) {
+        const oldest = folds.keys().next();
+        if (!oldest.done) folds.delete(oldest.value);
+      }
+    },
+  };
+}

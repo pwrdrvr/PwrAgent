@@ -3902,7 +3902,13 @@ function useComposerController(props: ComposerProps) {
     } = useComposerScheduleMenu();
     const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
     // Which control tiers the row has folded into ⋮; see `useComposerRowFold`.
-    const composerRowFold = useComposerRowFold();
+    const composerRowFold = useComposerRowFold(
+      props.thread
+        ? `thread:${props.thread.source}:${props.thread.id}`
+        : props.launchpad
+          ? `launchpad:${props.launchpad.directoryKey}`
+          : undefined,
+    );
     // Folded controls whose popovers open from ⋮ anchor to its trigger.
     const threadOptionsTriggerRef = useRef<HTMLButtonElement>(null);
     const [prMenuOpenRequest, setPrMenuOpenRequest] = useState(0);
