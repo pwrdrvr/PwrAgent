@@ -4,10 +4,18 @@ import { usageLimitProviderForBackend } from "@pwragent/shared/contracts/usage-a
 import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
+  describeRateLimitRow,
   formatBackendAccountText,
   formatBackendPlanType,
+  isCreditsRateLimit,
   selectVisibleRateLimits,
+  type BackendRateLimitSummary,
 } from "../../../lib/backend-status-format";
+import {
+  groupRateLimitsByScope,
+  UNSCOPED_RATE_LIMIT_LABEL,
+  type RateLimitScopeGroup,
+} from "../../../lib/rate-limit-scopes";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
 import { claudeProviderStatus } from "../../settings/claude-provider-status";
 import {
@@ -15,7 +23,8 @@ import {
   usagePaceAccountKey,
   usagePaceRefreshKey,
 } from "../../federation-activity/useLocalUsagePace";
-import { RateLimitRow } from "./RateLimitRow";
+import type { LimitAccount } from "../../federation-activity/usage-limits";
+import { ProviderLimitRow, ProviderLimitScopes } from "./ProviderLimitRow";
 
 type ProviderStatusPanelProps = {
   backends: BackendSummary[];
@@ -27,10 +36,11 @@ type ProviderStatusPanelProps = {
  * AI Provider Info tab — availability, runtime, authentication, account,
  * plan, and rate-limit lines for every configured agent backend.
  *
- * Every provider's rows share one label column: the list is one grid and each
- * provider a subgrid of it, so a long label in one provider (Authentication)
- * does not leave another's values starting somewhere else. Credits and limits
- * are rows in that grid, not prose under it.
+ * Every provider's rows share one narrow label column: the list is one grid
+ * and each provider a subgrid of it. Facts are label/value rows; limits are
+ * their own block under them, grouped by scope and labelled by window, so the
+ * label column fits "Version" rather than "Weekly Claude/GPT limit" and every
+ * limit's meter runs the same width to the panel's edge.
  */
 export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: ProviderStatusPanelProps) {
   useEffect(() => {
@@ -87,46 +97,11 @@ export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: Prov
               </div>
               {backend.available ? null : <UnavailableDetail backend={backend} />}
               {backend.available && hasProviderMetadata(backend) ? (
-                <dl className="backend-status-list__metadata-grid">
-                  {backendVersion(backend) ? (
-                    <div>
-                      <dt>Version</dt>
-                      <dd>{backendVersion(backend)}</dd>
-                    </div>
-                  ) : null}
-                  {backend.runtimeBuild ? (
-                    <div>
-                      <dt>Build</dt>
-                      <dd>{formatRuntimeBuild(backend.runtimeBuild)}</dd>
-                    </div>
-                  ) : null}
-                  {backend.acp ? (
-                    <div>
-                      <dt>Authentication</dt>
-                      <dd>{formatAcpAuthStatus(backend.acp.authStatus)}</dd>
-                    </div>
-                  ) : null}
-                  {backend.kind === "codex" || showsAccount(backend) ? (
-                    <div>
-                      <dt>Account</dt>
-                      <dd>{backend.account ? formatBackendAccountText(backend.account) : "Unavailable"}</dd>
-                    </div>
-                  ) : null}
-                  {backend.kind === "codex" || backend.account?.planType ? (
-                    <div>
-                      <dt>Plan</dt>
-                      <dd>{providerPlanText(backend)}</dd>
-                    </div>
-                  ) : null}
-                  {selectVisibleRateLimits(backend).map((limit) => (
-                    <RateLimitRow
-                      key={`${limit.limitId ?? "limit"}:${limit.name}`}
-                      limit={limit}
-                      now={now}
-                      account={pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "")}
-                    />
-                  ))}
-                </dl>
+                <ProviderFacts
+                  backend={backend}
+                  now={now}
+                  account={pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "")}
+                />
               ) : null}
             </li>
           ))}
@@ -137,6 +112,107 @@ export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: Prov
     </section>
   );
 });
+
+function ProviderFacts({ backend, now, account }: {
+  backend: BackendSummary;
+  now: number;
+  account?: LimitAccount;
+}) {
+  const visible = selectVisibleRateLimits(backend);
+  const credits = visible.find(isCreditsRateLimit);
+  const scopes = panelLimitScopes(visible);
+  const version = backendVersion(backend);
+  const showsPlan = backend.kind === "codex" || Boolean(backend.account?.planType);
+  return (
+    <>
+      <dl className="backend-status-list__metadata-grid">
+        {version || backend.runtimeBuild ? (
+          <div>
+            <dt>Version</dt>
+            <dd>
+              {[version, backend.runtimeBuild ? formatRuntimeBuild(backend.runtimeBuild) : undefined]
+                .filter(Boolean).join(" · ")}
+            </dd>
+          </div>
+        ) : null}
+        {backend.acp ? (
+          <div>
+            <dt>Auth</dt>
+            <dd>{formatAcpAuthStatus(backend.acp.authStatus)}</dd>
+          </div>
+        ) : null}
+        {backend.kind === "codex" || showsAccount(backend) ? (
+          <div>
+            <dt>Account</dt>
+            <dd>{backend.account ? formatBackendAccountText(backend.account) : "Unavailable"}</dd>
+          </div>
+        ) : null}
+        {showsPlan ? (
+          <div>
+            <dt>Plan</dt>
+            <dd>
+              {providerPlanText(backend)}
+              {credits ? <> · <CreditsText credits={credits} now={now} /></> : null}
+            </dd>
+          </div>
+        ) : credits ? (
+          <div>
+            <dt>Credits</dt>
+            <dd><CreditsText credits={credits} now={now} /></dd>
+          </div>
+        ) : null}
+      </dl>
+      {scopes.length ? (
+        <ProviderLimitScopes scopes={scopes}>
+          {(scope) => scope.windows.map((entry) => (
+            <ProviderLimitRow
+              key={`${entry.limit.limitId ?? "limit"}:${entry.limit.name}`}
+              entry={entry}
+              now={now}
+              account={account}
+            />
+          ))}
+        </ProviderLimitScopes>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The panel shows every limit a provider reports. The shared grouping leaves
+ * out a limit with no window ("Included credits", "Extra usage", an
+ * individual cap); those join the provider's unscoped allowance, named for
+ * themselves. Credits are a balance and ride on the Plan line instead.
+ */
+function panelLimitScopes(limits: readonly BackendRateLimitSummary[]): RateLimitScopeGroup[] {
+  const scopes = groupRateLimitsByScope(limits);
+  const grouped = new Set(scopes.flatMap((scope) => scope.windows.map((entry) => entry.limit)));
+  const rest = limits
+    .filter((limit) => !grouped.has(limit) && !isCreditsRateLimit(limit))
+    .map((limit) => ({ limit, window: { label: limitNameWithoutLimit(limit.name) } }));
+  if (!rest.length) return scopes;
+  const unscoped = scopes.find((scope) => scope.scope === null || scope.scope === UNSCOPED_RATE_LIMIT_LABEL);
+  if (unscoped) {
+    return scopes.map((scope) => (scope === unscoped ? { ...scope, windows: [...scope.windows, ...rest] } : scope));
+  }
+  return [...scopes, { scope: scopes.length ? UNSCOPED_RATE_LIMIT_LABEL : null, windows: rest }];
+}
+
+/** "Included credits" as is; "Individual limit" as "Individual". */
+function limitNameWithoutLimit(name: string): string {
+  const words = name.trim().split(/\s+/).filter((word) => word.toLowerCase() !== "limit");
+  const label = words.join(" ");
+  return label ? label.charAt(0).toUpperCase() + label.slice(1) : name.trim();
+}
+
+/** The credit balance, worded to follow the plan on its line. */
+function CreditsText({ credits, now }: { credits: BackendRateLimitSummary; now: number }) {
+  const row = describeRateLimitRow(credits, now);
+  if (row.figure) {
+    return <><b className="backend-status-list__figure">{row.figure}</b> credits</>;
+  }
+  return <>{row.text === "Unlimited" ? "Unlimited credits" : "Credits available"}</>;
+}
 
 /**
  * The status column is a short label. Why a provider is unavailable can be a
@@ -154,7 +230,7 @@ function UnavailableDetail({ backend }: { backend: BackendSummary }) {
 /**
  * An ACP agent that can only say "signed in to this provider" names its
  * account after the provider ("Grok account"), which the row above already
- * says. Authentication carries the sign-in state for those agents.
+ * says. Auth carries the sign-in state for those agents.
  */
 function showsAccount(backend: BackendSummary): boolean {
   if (!backend.account) return false;

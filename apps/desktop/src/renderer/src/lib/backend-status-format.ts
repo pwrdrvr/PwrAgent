@@ -259,7 +259,7 @@ export function isIndividualRateLimit(limit: BackendRateLimitSummary): boolean {
   return splitRateLimitName(limit.name).label === "Individual limit";
 }
 
-function isCreditsRateLimit(limit: BackendRateLimitSummary): boolean {
+export function isCreditsRateLimit(limit: BackendRateLimitSummary): boolean {
   return limit.windowKey === "credits"
     || limit.limitId?.toLowerCase() === "credits"
     || limit.name === "Credits";
