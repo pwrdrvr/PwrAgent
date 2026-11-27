@@ -15,7 +15,8 @@ import { LiveNavigationIndex } from "../app-server/live-navigation-index";
 import { NavigationWindowPageDeltas } from "../app-server/navigation-window-page-deltas";
 import { expandWindowNavigationPage, NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
 
-function fixture(observe?: (event: AgentEvent) => void, durable = false) {
+function fixture(observe?: (event: AgentEvent) => void, durable = false,
+  refresh?: ConstructorParameters<typeof LiveNavigationIndex>[0]["refresh"]) {
   const db = durable ? openInMemoryStateDb() : undefined;
   const storage = db && new SqliteOverlayStore(db);
   const providers = new Map<string, AppServerThreadSummary>(["a", "b", "c", "d"].map((id) =>
@@ -58,7 +59,7 @@ function fixture(observe?: (event: AgentEvent) => void, durable = false) {
       const threads = projectRows(rows);
       return { threads, coverage, ...directories(threads) };
     },
-    cached: (_, id) => providers.get(id),
+    cached: (_, id) => providers.get(id), refresh,
     projectRows: async (rows) => projectRows(rows), directories: async (threads) => { await gate; return directories(threads); },
     inputKeys: () => new Set(), notify: () => complete.resolve(), failed: (error) => { throw error; },
   });
@@ -225,6 +226,25 @@ it("keeps a viewer's mounted rows during a peer gap without listing its local ow
     expect((await f.live.viewer(owner, { source, prepare }, "1")).localInstanceId).toBe("after");
     expect(f.lists).toEqual(["all"]);
   } finally { gate.resolve(); f.close(); }
+});
+
+it("publishes a terminal provider watermark and title without blocking the mounted page or losing a later rename", async () => {
+  const gate = Promise.withResolvers<AppServerThreadSummary>();
+  const reads: string[] = [];
+  const f = fixture(undefined, false, (_backend, id) => { reads.push(id); return gate.promise; });
+  try {
+    const before = await f.live.read();
+    const done = f.completion();
+    f.emit({ method: "turn/completed", params: { threadId: "a", turn: { id: "finished", status: "completed" } } } as AgentEvent["notification"]);
+    expect(await f.live.read()).toBe(before);
+    f.emit({ method: "thread/name/updated", params: { threadId: "a", threadName: "Renamed during read" } });
+    gate.resolve({ ...f.providers.get("a")!, title: "Provider title", updatedAt: 4 });
+    await done;
+    const after = await f.live.read();
+    expect(after.threads.find((row) => row.id === "a")).toMatchObject({ title: "Renamed during read", updatedAt: 4 });
+    expect(reads).toEqual(["a"]);
+    expect(f.lists).toEqual(["all"]);
+  } finally { gate.resolve(f.providers.get("a")!); f.close(); }
 });
 
 it("serves the last observation while directory discovery is blocked", async () => {

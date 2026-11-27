@@ -236,7 +236,8 @@ export class LiveNavigationIndex {
     const epoch = this.viewerEpoch;
     if (!state || state.epoch !== epoch || state.version !== version) {
       const externalChange = state && state.version.split(":", 1)[0] !== version.split(":", 1)[0];
-      const serveStale = Boolean(state?.apply && (epoch === this.viewerGapEpoch || externalChange));
+      const previous = state;
+      const serveStale = Boolean(state?.apply && ((state.epoch !== epoch && epoch === this.viewerGapEpoch) || externalChange));
       state = { epoch, version, serveStale, apply: state?.apply, page: state?.page };
       this.viewers.set(viewer.source, state);
       const observation = state;
@@ -245,7 +246,10 @@ export class LiveNavigationIndex {
         observation.page = undefined;
         if (serveStale && this.viewers.get(viewer.source) === observation && !this.disposed) this.source.notify();
       }).catch((error: unknown) => {
-        if (this.viewers.get(viewer.source) === observation) this.viewers.delete(viewer.source);
+        if (this.viewers.get(viewer.source) === observation) {
+          if (previous?.apply) this.viewers.set(viewer.source, previous);
+          else this.viewers.delete(viewer.source);
+        }
         throw error;
       });
       if (serveStale) void observation.prepare.catch((error: unknown) => this.source.failed(error));
