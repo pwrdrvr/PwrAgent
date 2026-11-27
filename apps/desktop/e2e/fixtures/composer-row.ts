@@ -64,7 +64,7 @@ export async function openComposerThreadOptions(page: Page): Promise<Locator> {
   return menu;
 }
 
-async function closeComposerThreadOptions(page: Page): Promise<void> {
+export async function closeComposerThreadOptions(page: Page): Promise<void> {
   const menu = page.getByRole("menu", { name: "Thread options" });
   if (await menu.isVisible()) await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
