@@ -3,7 +3,7 @@
  * projections: every command and every turn or queue observation replays the
  * run's journal with `projectResearchRun`. The service is kept, unchanged
  * apart from its imports, the removed renderer snapshot and deliberate rule
- * changes (who may record on a run after its process is gone), as the reference
+ * changes (ownership after restart and redelivered worker-end observations), as the reference
  * for differential tests: the projection-based service must accept and refuse
  * the same commands and append the same events. Its in-memory storage answers
  * as it did, but replays a journal once per length. Nothing outside tests
@@ -826,7 +826,7 @@ export class ReplayResearchService {
       }
       const current = this.requireRun(run.id);
       const approach = current.approaches.find((a) => a.worker && sameResearchThread(a.worker, thread) && a.worker.turnId === turnId);
-      if (!approach || ["ended", "stopped", "failed"].includes(approach.state)) {
+      if (!approach || ["ended", "stopped", "failed"].includes(approach.state) || this.turnEnded(current, approach.id, turnId)) {
         if (current.status === "stopping") this.finishStopping(current);
         continue;
       }
