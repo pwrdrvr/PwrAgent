@@ -1458,7 +1458,7 @@ export class AcpBackendAdapter {
   // count on every streamed update, so this keeps one emit per change.
   private readonly liveContextWindows = new Map<
     string,
-    { usedTokens: unknown; modelContextWindow: unknown }
+    { usedTokens: unknown; modelContextWindow: unknown; turnId?: string; source?: "compaction" | "session" }
   >();
   private localAcpAgentsRevision = 0;
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
@@ -3272,6 +3272,7 @@ export class AcpBackendAdapter {
     agent: AcpInstalledAgentRecord;
     sessionId: string;
     turnId?: string;
+    source?: "compaction" | "session";
     update: Record<string, unknown>;
   }): AppServerNotification | undefined {
     const reported = readAcpContextTokens(params.update);
@@ -3282,6 +3283,8 @@ export class AcpBackendAdapter {
     const previous = this.liveContextWindows.get(key);
     if (
       previous !== undefined
+      && previous.source === params.source
+      && previous.turnId === params.turnId
       && previous.usedTokens === reported.usedTokens
       && (
         reported.modelContextWindow === undefined
@@ -3298,6 +3301,8 @@ export class AcpBackendAdapter {
     this.liveContextWindows.set(key, {
       usedTokens: reported.usedTokens,
       modelContextWindow,
+      turnId: params.turnId,
+      source: params.source,
     });
     const fill = acpContextWindowFill(reported.usedTokens, modelContextWindow);
     if (!fill) {
@@ -3306,6 +3311,7 @@ export class AcpBackendAdapter {
     return acpContextWindowNotification({
       threadId: params.sessionId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
+      source: params.source,
       fill,
     });
   }
@@ -3689,6 +3695,8 @@ export class AcpBackendAdapter {
       onSessionUpdate: async ({
         assistantMessageItemId,
         completedAssistantMessage,
+        completedAcpCompactionRequest,
+        contextUsageSource,
         fromSessionLoad,
         sessionId,
         replay,
@@ -3986,6 +3994,7 @@ export class AcpBackendAdapter {
           agent,
           sessionId,
           turnId,
+          source: fromSessionLoad ? "session" : contextUsageSource,
           update,
         });
         if (contextWindowNotification) {
@@ -4049,6 +4058,7 @@ export class AcpBackendAdapter {
                   params: {
                     threadId: sessionId,
                     turnId,
+                    ...(completedAcpCompactionRequest ? { completedAcpCompactionRequest } : {}),
                     turn: {
                       id: turnId,
                       status: "completed",

@@ -41,7 +41,7 @@ export function expectSqliteWriteBudget(params: {
   note: string;
   scenario: string;
   budgetFile?: string;
-  writes: SqliteWriteDelta;
+  writes: Omit<SqliteWriteDelta, "tables"> & Partial<Pick<SqliteWriteDelta, "tables">>;
 }): void {
   const budgetPath = params.budgetFile ? path.join(import.meta.dirname, params.budgetFile) : BUDGETS_PATH;
   const { budgets, source } = readBudgets(budgetPath);

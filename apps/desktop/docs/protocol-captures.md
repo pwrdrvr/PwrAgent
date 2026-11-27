@@ -368,6 +368,60 @@ shows usage as pending between the compaction turn and that report. Raw
 captures are under the ignored
 `apps/desktop/.local/protocol-captures/antigravity-post-compact/`.
 
+### Antigravity compaction accounting and transfer readiness
+
+On November 26, 2026, packaged PwrAgent v1.5.2 sent `/compact` at 22:25:11
+UTC with 470,149 observed tokens against a 409,600-token trigger. The
+reported native summary boundary separated a 478,856-token context estimate
+from 42,926 on the continuation's first ordinary generation. The PwrAgent
+ledger for that interval contained three main turn rows, zero populated
+peak, final, or window values, and zero compaction markers.
+
+Fresh ACP captures on Antigravity CLI `1.5.18` used
+`agy acp --process-per-session`, a disposable workspace and app-data directory,
+and 2,200 contrived gardening records. The idle and steered probes were
+bounded at 95 and 120 seconds respectively, with a 1.5-second drain around
+compaction and permission requests denied.
+
+| Capture | Ordinary fill before compaction | Summary call | First ordinary fill afterward |
+| --- | ---: | ---: | ---: |
+| Idle `/compact` | 35,264 | 36,606 | 13,236 |
+| Steered `/compact` | 37,205 | 38,745 | 13,383 |
+
+The steered capture began from 35,273 tokens. The detached original request
+returned `end_turn` without usage. The replacement request returned 75,950
+billed tokens, the sum of the 37,205-token in-flight generation and the
+38,745-token summary request. The last distinct fill report during a
+successful compact request represents the summary call. Prior distinct
+reports during a steered request still belong to ordinary generations.
+The raw traces are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-compaction-accounting/`.
+
+The ACP adapter distinguishes summary and cached session reports from
+ordinary `thread/contextWindow/updated` observations. The owner folds ordinary
+peak, final, and window values into each turn's existing ledger write. The
+first ordinary fill after a completed compact request settles the candidate.
+For idle compaction, the latest prior ordinary fill must match the compact
+turn's model and billing provider before it becomes the baseline. A smaller
+ordinary fill with the same model and billing provider records one boundary
+at settlement. If the prompt settles without billing, its fill retires the
+candidate without a boundary because the model and billing provider cannot
+be verified.
+Cached session replays cannot settle a candidate, and a fresh owner can
+settle a candidate saved before restart.
+Billing uses the original prompt result. The
+[SQLite write budgets](sqlite-write-volume.md#antigravity-compaction-accounting)
+cover the idle, steered, and restarted paths.
+
+On a separate v1.5.2 session at 22:29:01 UTC, the owner's transfer guard
+refused three idle starts because Antigravity had active work. The interval
+from the first start to the last refusal was 372 ms. The guard runs before
+sending a transfer request over ACP. The monitor oracle reproduces repeated
+inputs at that guard and checks that 100 re-emitted fills cause zero further
+start attempts. ACP tests check that readiness resolves after all native
+commands finish or when the worker disconnects. The monitor reevaluates
+the latest fill once, and a retry after disconnect can replace the stale owner.
+
 ### Antigravity sub-agent steps
 
 The November 26, 2026 capture of Antigravity 1.5.18 (`agy acp --process-per-session`,

@@ -220,7 +220,7 @@ import {
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { isGoalActivationEntry, ThreadGoalControl, type ThreadGoalGate } from "./thread-goal-control";
 import type { ThreadGoalRequest, ThreadGoalState } from "@pwragent/shared/contracts/thread-goal";
-import type { AcpMcpRegistrationSource, AcpMcpServerRegistration } from "../acp/acp-client";
+import { AcpSessionTransferBusyError, type AcpMcpRegistrationSource, type AcpMcpServerRegistration } from "../acp/acp-client";
 import {
   buildCodexAgentInstructionUpdate,
   providerDeliveredAgentInstructions,
@@ -13726,6 +13726,7 @@ export class DesktopBackendRegistry {
         params: {
           threadId: params.threadId,
           turnId: params.turnId,
+          acpPromptSettling: true,
           turn: {
             id: params.turnId,
             status: "cancelled",
@@ -14152,7 +14153,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     messageOrigin: AppServerThreadMessageOrigin;
-  }): Promise<{ status: "started"; turnId?: string } | { status: "busy" }> {
+  }): Promise<{ status: "started"; turnId?: string } | { status: "busy"; ready?: Promise<void> }> {
     if (params.backend === "codex") {
       // The holds `submitTurnIfIdle` answers busy for, plus a pending retry:
       // `compactThread` would wake an archived checkout or throw, and a throw
@@ -14164,29 +14165,30 @@ export class DesktopBackendRegistry {
       return { status: "started", turnId: result.turnId };
     }
     if (isAcpBackendId(params.backend)) {
-      if (await this.hasAutoCompactionHold(params)) {
-        return { status: "busy" };
+      try {
+        if (await this.hasAutoCompactionHold(params)) return { status: "busy" };
+        const prepared = await this.prepareAcpCompaction({
+          backend: params.backend,
+          threadId: params.threadId,
+          allowProbe: false,
+          wakeArchivedCheckout: false,
+        });
+        if (await this.hasAutoCompactionHold(params)) return { status: "busy" };
+        const result = await this.submitTurnIfIdle({
+          backend: params.backend,
+          threadId: params.threadId,
+          input: prepared.input,
+          isCompactCommand: prepared.isCompactCommand,
+          messageOrigin: params.messageOrigin,
+          canAdmit: async () => !(await this.hasAutoCompactionHold(params)),
+        });
+        return result.status === "started"
+          ? { status: "started", turnId: result.turnId }
+          : { status: "busy" };
+      } catch (error) {
+        if (error instanceof AcpSessionTransferBusyError) return { status: "busy", ready: error.ready };
+        throw error;
       }
-      const prepared = await this.prepareAcpCompaction({
-        backend: params.backend,
-        threadId: params.threadId,
-        allowProbe: false,
-        wakeArchivedCheckout: false,
-      });
-      if (await this.hasAutoCompactionHold(params)) {
-        return { status: "busy" };
-      }
-      const result = await this.submitTurnIfIdle({
-        backend: params.backend,
-        threadId: params.threadId,
-        input: prepared.input,
-        isCompactCommand: prepared.isCompactCommand,
-        messageOrigin: params.messageOrigin,
-        canAdmit: async () => !(await this.hasAutoCompactionHold(params)),
-      });
-      return result.status === "started"
-        ? { status: "started", turnId: result.turnId }
-        : { status: "busy" };
     }
     const result = await this.submitTurnIfIdle({
       backend: params.backend,

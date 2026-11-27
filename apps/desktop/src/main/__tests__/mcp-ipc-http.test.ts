@@ -5,7 +5,9 @@ import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, execFileSync, spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -13,6 +15,11 @@ import { createMcpIpcHttp, createMcpIpcTransport, MCP_IPC_NO_RECONNECT, validate
 import { McpInitializationTransport } from "../mcp-connections/mcp-initialization-transport";
 import { parseMcpIpcUrl } from "@pwragent/shared/mcp-ipc-url";
 import { probeMcpConnectionUrl } from "../mcp-connections/mcp-connection-probe";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 const { relay: executable, identity: identityExecutable } = inject("nativeHelperFixtures").mcpIpc!;
 const cleanups: (() => Promise<unknown> | void)[] = [];
@@ -283,6 +290,36 @@ describe("verified HTTP MCP over local IPC", () => {
     await expect.poll(() => f.requests.filter((r) => r.body.method === "notifications/cancelled").length).toBe(1);
     expect(f.requests.filter((r) => r.body.method === "tools/call")).toHaveLength(1);
     expect((await client.listTools()).tools[0]?.name).toBe("echo");
+  });
+
+  it("reports the native verification error when stderr arrives after process exit", async () => {
+    const f = await fixture();
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill: vi.fn(),
+    });
+    const started = Promise.withResolvers<void>();
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      started.resolve();
+      return child as unknown as ChildProcessWithoutNullStreams;
+    });
+    const outcome = f.ipc.fetch(f.ipc.url).catch((error: unknown) => error);
+    await started.promise;
+
+    // A child can exit before Node delivers its last stderr bytes.
+    child.exitCode = 1;
+    child.emit("exit", child.exitCode);
+    child.stderr.end("MCP IPC: fixture verification failed\n");
+    // A readiness byte already in the pipe cannot revive the exited child.
+    child.stdout.end(Buffer.from([1]));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    child.emit("close", child.exitCode);
+    expect(await outcome).toMatchObject({ message: "MCP IPC: fixture verification failed" });
+    expect(f.requests).toHaveLength(0);
   });
 
   it("fails missing endpoints and never retries a failed request", async () => {
