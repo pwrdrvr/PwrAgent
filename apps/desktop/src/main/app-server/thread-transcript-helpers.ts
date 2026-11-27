@@ -114,13 +114,223 @@ export function mergeManagedReviewEntries(params: {
     return params.replay;
   }
 
-  let entries = params.replay.entries;
-  for (const reviewEntry of params.entries) {
-    entries = insertTranscriptEntry(
-      entries.filter((entry) => entry.id !== reviewEntry.id),
-      reviewEntry,
-    );
+  const reviewIds = new Set<string>();
+  for (const review of params.entries) {
+    reviewIds.add(review.id);
   }
+
+  // Partition replay entries into immutable base entries (never removed during
+  // this merge) and gap buckets positioned immediately before each base entry
+  // (gap `baseEntries.length` is after the final base entry). Any existing
+  // replay entry whose id matches an incoming review is seeded into its exact
+  // gap so sequential remove-then-insert semantics are preserved in O(N + R log N + R^2)
+  // without O(N * R) scans or copies of baseEntries.
+  const baseEntries: AppServerThreadEntry[] = [];
+  const baseTurnIds: Array<string | undefined> = [];
+  const firstBaseByTurnId = new Map<string, number>();
+  const lastBaseByTurnId = new Map<string, number>();
+  const prefixMaxBaseCreatedAt: number[] = [];
+  const slotReviews = new Map<number, AppServerThreadEntry[]>();
+  const activeSlots: number[] = [];
+  const liveReviewIds = new Set<string>();
+
+  const ensureSlotBucket = (slot: number): AppServerThreadEntry[] => {
+    let bucket = slotReviews.get(slot);
+    if (!bucket) {
+      bucket = [];
+      slotReviews.set(slot, bucket);
+      let insertAt = activeSlots.length;
+      while (insertAt > 0 && activeSlots[insertAt - 1]! > slot) {
+        insertAt -= 1;
+      }
+      activeSlots.splice(insertAt, 0, slot);
+    }
+    return bucket;
+  };
+
+  let runningMax = -Infinity;
+  for (const entry of params.replay.entries) {
+    const entryId = entry.id;
+    if (reviewIds.has(entryId)) {
+      ensureSlotBucket(baseEntries.length).push(entry);
+      liveReviewIds.add(entryId);
+      continue;
+    }
+    const baseIndex = baseEntries.length;
+    baseEntries.push(entry);
+    const turnId = entry.turn?.id;
+    baseTurnIds.push(turnId);
+    if (turnId) {
+      if (!firstBaseByTurnId.has(turnId)) {
+        firstBaseByTurnId.set(turnId, baseIndex);
+      }
+      lastBaseByTurnId.set(turnId, baseIndex);
+    }
+    const createdAt = entry.createdAt;
+    if (typeof createdAt === "number" && createdAt > runningMax) {
+      runningMax = createdAt;
+    }
+    prefixMaxBaseCreatedAt.push(runningMax);
+  }
+
+  const removeReviewById = (id: string): void => {
+    if (!liveReviewIds.has(id)) {
+      return;
+    }
+    for (let slotIdx = activeSlots.length - 1; slotIdx >= 0; slotIdx -= 1) {
+      const slot = activeSlots[slotIdx]!;
+      const bucket = slotReviews.get(slot)!;
+      let writeIdx = 0;
+      for (let i = 0; i < bucket.length; i += 1) {
+        if (bucket[i]!.id !== id) {
+          bucket[writeIdx] = bucket[i]!;
+          writeIdx += 1;
+        }
+      }
+      if (writeIdx === 0) {
+        slotReviews.delete(slot);
+        activeSlots.splice(slotIdx, 1);
+      } else if (writeIdx < bucket.length) {
+        bucket.length = writeIdx;
+      }
+    }
+    liveReviewIds.delete(id);
+  };
+
+  const insertAt = (slot: number, index: number, entry: AppServerThreadEntry): void => {
+    ensureSlotBucket(slot).splice(index, 0, entry);
+    liveReviewIds.add(entry.id);
+  };
+
+  const findLastTurnPosition = (turnId: string): { slot: number; index: number } | undefined => {
+    const baseLast = lastBaseByTurnId.get(turnId);
+    for (let slotIdx = activeSlots.length - 1; slotIdx >= 0; slotIdx -= 1) {
+      const slot = activeSlots[slotIdx]!;
+      if (baseLast !== undefined && slot <= baseLast) {
+        break;
+      }
+      const bucket = slotReviews.get(slot)!;
+      for (let i = bucket.length - 1; i >= 0; i -= 1) {
+        if (bucket[i]!.turn?.id === turnId) {
+          return { slot, index: i + 1 };
+        }
+      }
+    }
+    if (baseLast !== undefined) {
+      return { slot: baseLast + 1, index: 0 };
+    }
+    return undefined;
+  };
+
+  const hasEarlierTurnEntry = (
+    turnId: string,
+    beforeSlot: number,
+    beforeIndex: number,
+  ): boolean => {
+    const firstBase = firstBaseByTurnId.get(turnId);
+    if (firstBase !== undefined && firstBase < beforeSlot) {
+      return true;
+    }
+    for (const slot of activeSlots) {
+      if (slot > beforeSlot) {
+        break;
+      }
+      const bucket = slotReviews.get(slot)!;
+      const limit = slot === beforeSlot ? Math.min(beforeIndex, bucket.length) : bucket.length;
+      for (let i = 0; i < limit; i += 1) {
+        if (bucket[i]!.turn?.id === turnId) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const findFirstBaseAfterCreatedAt = (createdAt: number): number => {
+    let low = 0;
+    let high = baseEntries.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (prefixMaxBaseCreatedAt[mid]! > createdAt) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return low;
+  };
+
+  for (const review of params.entries) {
+    removeReviewById(review.id);
+
+    const turnId = review.turn?.id;
+    if (turnId) {
+      const sameTurnPos = findLastTurnPosition(turnId);
+      if (sameTurnPos) {
+        insertAt(sameTurnPos.slot, sameTurnPos.index, review);
+        continue;
+      }
+    }
+
+    if (typeof review.createdAt === "number") {
+      const baseTimed = findFirstBaseAfterCreatedAt(review.createdAt);
+      let placed = false;
+      for (const slot of activeSlots) {
+        if (slot > baseTimed) {
+          break;
+        }
+        const bucket = slotReviews.get(slot)!;
+        for (let i = 0; i < bucket.length; i += 1) {
+          const candidate = bucket[i]!;
+          if (typeof candidate.createdAt === "number" && candidate.createdAt > review.createdAt) {
+            const splitTurnId = candidate.turn?.id;
+            if (splitTurnId && hasEarlierTurnEntry(splitTurnId, slot, i)) {
+              const afterTurn = findLastTurnPosition(splitTurnId)!;
+              insertAt(afterTurn.slot, afterTurn.index, review);
+            } else {
+              insertAt(slot, i, review);
+            }
+            placed = true;
+            break;
+          }
+        }
+        if (placed) {
+          break;
+        }
+      }
+      if (placed) {
+        continue;
+      }
+      if (baseTimed < baseEntries.length) {
+        const splitTurnId = baseTurnIds[baseTimed];
+        if (splitTurnId && hasEarlierTurnEntry(splitTurnId, baseTimed, Infinity)) {
+          const afterTurn = findLastTurnPosition(splitTurnId)!;
+          insertAt(afterTurn.slot, afterTurn.index, review);
+        } else {
+          const existingBucket = slotReviews.get(baseTimed);
+          insertAt(baseTimed, existingBucket?.length ?? 0, review);
+        }
+        continue;
+      }
+    }
+
+    const trailingBucket = slotReviews.get(baseEntries.length);
+    insertAt(baseEntries.length, trailingBucket?.length ?? 0, review);
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+  for (let index = 0; index < baseEntries.length; index += 1) {
+    const before = slotReviews.get(index);
+    if (before) {
+      entries.push(...before);
+    }
+    entries.push(baseEntries[index]!);
+  }
+  const trailing = slotReviews.get(baseEntries.length);
+  if (trailing) {
+    entries.push(...trailing);
+  }
+
   return {
     ...params.replay,
     entries,
@@ -319,18 +529,39 @@ export function inferLegacyTaskMonitorMessageOrigins(params: {
   }
 
   const origins = { ...params.origins };
-  const messages = [
-    ...params.replay.entries.filter(
-      (entry): entry is Extract<AppServerThreadEntry, { type: "message" }> =>
-        entry.type === "message" && entry.role === "user",
-    ),
-    ...params.replay.messages.filter((message) => message.role === "user"),
-  ]
-    .filter(
-      (message, index, all) =>
-        all.findIndex((candidate) => candidate.id === message.id) === index,
-    )
-    .map((message, index) => ({ message, index }))
+  const monitorPrefix =
+    "A lightweight PwrAgent monitor subagent finished a long-running task.";
+  const seenMessageIds = new Set<string>();
+  const indexedMessages: Array<{
+    message: { id: string; text: string; createdAt?: number };
+    index: number;
+  }> = [];
+  const collectCandidate = (
+    message: { id: string; text: string; createdAt?: number },
+  ): void => {
+    if (seenMessageIds.has(message.id)) {
+      return;
+    }
+    seenMessageIds.add(message.id);
+    if (origins[message.id] || !message.text.startsWith(monitorPrefix)) {
+      return;
+    }
+    indexedMessages.push({ message, index: indexedMessages.length });
+  };
+  for (const entry of params.replay.entries) {
+    if (entry.type === "message" && entry.role === "user") {
+      collectCandidate(entry);
+    }
+  }
+  for (const message of params.replay.messages) {
+    if (message.role === "user") {
+      collectCandidate(message);
+    }
+  }
+  if (indexedMessages.length === 0) {
+    return params.origins;
+  }
+  const messages = indexedMessages
     .sort((left, right) => {
       const leftTime = left.message.createdAt;
       const rightTime = right.message.createdAt;
@@ -345,12 +576,7 @@ export function inferLegacyTaskMonitorMessageOrigins(params: {
       taskMonitorCompletionTime(right) - taskMonitorCompletionTime(left),
   );
   for (const message of messages) {
-    if (
-      origins[message.id]
-      || !message.text.startsWith(
-        "A lightweight PwrAgent monitor subagent finished a long-running task.",
-      )
-    ) {
+    if (origins[message.id]) {
       continue;
     }
     const task = message.text.match(/(?:^|\n)Task: ([^\n]+)/)?.[1]?.trim();

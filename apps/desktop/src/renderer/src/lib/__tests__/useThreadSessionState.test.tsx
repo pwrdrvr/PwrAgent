@@ -1791,6 +1791,303 @@ describe("useThreadSessionState", () => {
     expect(liveEntryIdReads).toBeLessThanOrEqual(liveEntryCount * 12);
   });
 
+  it("keeps streaming command output deltas with retained turn usage rows linear in replay size", async () => {
+    async function measureReplayIdReads(turnUsageCount: number): Promise<number> {
+      let emitEvent: ((event: AgentEvent) => void) | null = null;
+      let replayIdReads = 0;
+      const historyEntries: AppServerThreadEntry[] = [];
+      for (let turn = 0; turn < 60; turn += 1) {
+        const turnId = `turn-${turn}`;
+        historyEntries.push(
+          {
+            type: "message",
+            id: `user-${turn}`,
+            role: "user",
+            text: `Prompt ${turn}`,
+            createdAt: 1_000 + turn * 10,
+            turn: { id: turnId, status: "completed" },
+          },
+          {
+            type: "message",
+            id: `assistant-${turn}`,
+            role: "assistant",
+            text: `Reply ${turn}`,
+            createdAt: 1_005 + turn * 10,
+            turn: { id: turnId, status: "completed" },
+          },
+        );
+      }
+      const proxiedHistory = historyEntries.map((entry) =>
+        new Proxy(entry, {
+          get(target, property, receiver) {
+            if (property === "id") {
+              replayIdReads += 1;
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        }),
+      );
+      const desktopApi: DesktopApi = {
+        onAgentEvent: (listener) => {
+          emitEvent = listener;
+          return () => {
+            emitEvent = null;
+          };
+        },
+        readThread: vi.fn(async () => readThreadResponse({
+          entries: proxiedHistory,
+          hasPreviousPage: false,
+          supportsPagination: false,
+        })),
+      };
+      const { result, unmount } = renderHook(() =>
+        useThreadSessionState({
+          desktopApi,
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        }),
+      );
+
+      await waitForThreadHydration(result);
+      act(() => {
+        for (let index = 0; index < turnUsageCount; index += 1) {
+          result.current.upsertLiveTranscriptEntry({
+            type: "activity",
+            id: `live-turn-usage-turn-${index}`,
+            summary: "Turn usage: 120 tokens · $0.001",
+            status: "completed",
+            createdAt: 1_006 + index * 10,
+            turn: { id: `turn-${index}`, status: "completed" },
+            details: [
+              {
+                id: `live-turn-usage-turn-${index}:detail`,
+                kind: "read",
+                label: "Turn usage",
+              },
+            ],
+          });
+        }
+      });
+
+      act(() => {
+        emitEvent?.({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-live",
+              item: {
+                id: "cmd-live",
+                type: "commandExecution",
+                command: "pnpm test",
+                status: "inProgress",
+              },
+            },
+          },
+        });
+      });
+
+      replayIdReads = 0;
+      for (let delta = 0; delta < 10; delta += 1) {
+        act(() => {
+          emitEvent?.({
+            backend: "codex",
+            notification: {
+              method: "item/commandExecution/outputDelta",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-live",
+                itemId: "cmd-live",
+                delta: `line ${delta}\n`,
+              },
+            },
+          });
+        });
+      }
+      unmount();
+      return replayIdReads;
+    }
+
+    const withTwoUsageRows = await measureReplayIdReads(2);
+    const withTwentyUsageRows = await measureReplayIdReads(20);
+    // An O(N * M) merge or optimistic-pruning scan grows ~10x between M=2 and M=20.
+    // Indexed pruning and deferred turn-usage anchoring keep it O(N + M).
+    expect(withTwentyUsageRows).toBeLessThanOrEqual(withTwoUsageRows * 2.5);
+  });
+
+  it("keeps refresh matching linear across repeated identical prompt texts", async () => {
+    async function measureRepeatedPromptReads(promptCount: number): Promise<number> {
+      let textReads = 0;
+      let readCount = 0;
+      const olderEntry = messageEntry({
+        id: "older-history",
+        role: "user",
+        text: "Earlier context",
+        createdAt: 500,
+      });
+      const initialTail = Array.from({ length: promptCount }, (_value, index) =>
+        new Proxy(
+          {
+            type: "message" as const,
+            id: `old-${index}`,
+            role: "user" as const,
+            text: "continue",
+            createdAt: 1_000 + index * 10,
+            turn: { id: `turn-${index}`, status: "completed" as const },
+          },
+          {
+            get(target, property, receiver) {
+              if (property === "text") {
+                textReads += 1;
+              }
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        ),
+      );
+      const refreshedTail = Array.from({ length: promptCount }, (_value, index) => ({
+        type: "message" as const,
+        id: `fresh-${index}`,
+        role: "user" as const,
+        text: "continue",
+        createdAt: 1_000 + index * 10,
+        turn: { id: `turn-${index}`, status: "completed" as const },
+      }));
+
+      const readThread = vi.fn(async (params: { before?: string }) => {
+        readCount += 1;
+        if (params.before) {
+          return readThreadResponse({
+            entries: [olderEntry],
+            hasPreviousPage: false,
+            supportsPagination: true,
+          });
+        }
+        return readThreadResponse({
+          entries: readCount === 1 ? initialTail : refreshedTail,
+          hasPreviousPage: true,
+          previousCursor: "cursor-older",
+          supportsPagination: true,
+        });
+      });
+
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        readThread,
+      };
+      const { result, rerender, unmount } = renderHook(
+        ({ updatedAt }: { updatedAt: number }) =>
+          useThreadSessionState({
+            desktopApi,
+            initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+            thread: buildThread({ id: "thread-1", updatedAt }),
+          }),
+        { initialProps: { updatedAt: 1_000 } },
+      );
+
+      await waitForThreadHydration(result);
+      await act(async () => {
+        await result.current.loadOlder();
+      });
+
+      textReads = 0;
+      rerender({ updatedAt: 2_000 });
+      await waitFor(() => {
+        expect(readThread).toHaveBeenCalledTimes(3);
+      });
+      await waitFor(() => {
+        expect(result.current.response?.replay.entries.at(-1)?.id).toBe(`fresh-${promptCount - 1}`);
+      });
+      unmount();
+      return textReads;
+    }
+
+    const smallReads = await measureRepeatedPromptReads(20);
+    const largeReads = await measureRepeatedPromptReads(60);
+    // An O(K^2) scan over shared logical buckets grows ~9x for 3x prompts.
+    expect(largeReads).toBeLessThanOrEqual(smallReads * 4);
+  });
+
+  it("does not serialize full file diffs into JSON keys on transcript refresh", async () => {
+    let readCount = 0;
+    const diffMarker = "LARGE_DIFF_PAYLOAD_MARKER";
+    const makeDiffEntry = (index: number): AppServerThreadActivityEntry => ({
+      type: "activity",
+      id: `edit-${index}`,
+      summary: `Edited file-${index}.ts`,
+      status: "completed",
+      createdAt: 1_000 + index * 10,
+      turn: { id: `turn-${index}`, status: "completed" },
+      details: [
+        {
+          id: `detail-${index}`,
+          kind: "write",
+          label: `Edited file-${index}.ts`,
+          path: `/repo/file-${index}.ts`,
+          fileDiff: {
+            kind: "update",
+            additions: 10,
+            removals: 2,
+            diff: `diff --git a/file-${index}.ts b/file-${index}.ts\n+${diffMarker}:${"x".repeat(4_096)}\n`,
+          },
+        },
+      ],
+    });
+
+    const initialEntries: AppServerThreadEntry[] = Array.from({ length: 12 }, (_v, i) => makeDiffEntry(i));
+    const readThread = vi.fn(async () => {
+      readCount += 1;
+      const entries: AppServerThreadEntry[] =
+        readCount === 1
+          ? initialEntries
+          : [
+              ...Array.from({ length: 12 }, (_v, i) => makeDiffEntry(i)),
+              messageEntry({
+                id: "latest-msg",
+                role: "assistant",
+                text: "Done",
+                createdAt: 2_000,
+              }),
+            ];
+      return readThreadResponse({
+        entries,
+        hasPreviousPage: false,
+        supportsPagination: false,
+      });
+    });
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    try {
+      rerender({ updatedAt: 2_000 });
+      await waitFor(() => {
+        expect(readThread).toHaveBeenCalledTimes(2);
+      });
+      await waitFor(() => {
+        expect(result.current.entries.at(-1)?.id).toBe("latest-msg");
+      });
+      const serializedDiffCalls = stringifySpy.mock.results.filter(
+        (entry) => entry.type === "return" && typeof entry.value === "string" && entry.value.includes(diffMarker),
+      );
+      expect(serializedDiffCalls).toHaveLength(0);
+    } finally {
+      stringifySpy.mockRestore();
+    }
+  });
+
   it("does not rescan split-hydrated launch messages for every live update", async () => {
     const historyMessageCount = 48;
     const liveUpdateCount = 12;

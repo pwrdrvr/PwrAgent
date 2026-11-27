@@ -545,9 +545,13 @@ function mergeTranscriptEntries(
       );
     }
   );
+  const mergedEntryIds = new Set<string>();
   let mergedEntryIndexById = new Map<string, number>();
   const retainedReviewIds = new Set<string>();
   let reviewIndexesByTurn = new Map<string | undefined, number[]>();
+  const deferredTurnUsageEntries: AppServerThreadEntry[] = [];
+  const deferredTurnUsageIndexById = new Map<string, number>();
+  let indexMapsDirty = false;
   let greatestCreatedAt: number | undefined;
   let greatestCreatedAtByTurn = new Map<string, number>();
   let greatestSequenceByTurn = new Map<string, number>();
@@ -557,83 +561,29 @@ function mergeTranscriptEntries(
   // user message is an ordering boundary too, even before its provider id lands.
   let mergedTurnIds = new Set<string>();
   let lastMergedTurnId: string | undefined;
-  const rebuildAppendIndexes = (): void => {
-    mergedEntryIndexById = new Map();
-    reviewIndexesByTurn = new Map();
-    greatestCreatedAt = undefined;
-    greatestCreatedAtByTurn = new Map();
-    greatestSequenceByTurn = new Map();
-    greatestSequence = undefined;
-    terminalTurnIds = new Set();
-    mergedTurnIds = new Set();
-    lastMergedTurnId = undefined;
-    merged.forEach((entry, index) => {
-      mergedEntryIndexById.set(entry.id, index);
-      if (entry.turn?.id) {
-        mergedTurnIds.add(entry.turn.id);
-      }
-      lastMergedTurnId = entry.turn?.id;
-      if (entry.type === "review") {
-        const indexes = reviewIndexesByTurn.get(entry.turn?.id) ?? [];
-        indexes.push(index);
-        reviewIndexesByTurn.set(entry.turn?.id, indexes);
-      }
-      const createdAt = typeof entry.createdAt === "number"
-        ? entry.createdAt
-        : undefined;
-      if (createdAt !== undefined) {
-        greatestCreatedAt = Math.max(greatestCreatedAt ?? createdAt, createdAt);
-        if (entry.turn?.id) {
-          greatestCreatedAtByTurn.set(
-            entry.turn.id,
-            Math.max(
-              greatestCreatedAtByTurn.get(entry.turn.id) ?? createdAt,
-              createdAt,
-            ),
-          );
-        }
-      }
-      if (entry.turn?.id && isTerminalTurnEntry(entry)) {
-        terminalTurnIds.add(entry.turn.id);
-      }
-      const sequence = readRendererSequence(entry);
-      if (typeof sequence === "number") {
-        greatestSequence = Math.max(greatestSequence ?? sequence, sequence);
-      }
-      if (entry.turn?.id && typeof sequence === "number") {
-        greatestSequenceByTurn.set(
-          entry.turn.id,
-          Math.max(
-            greatestSequenceByTurn.get(entry.turn.id) ?? sequence,
-            sequence,
-          ),
-        );
-      }
-    });
-  };
-  const appendIndexedEntry = (entry: AppServerThreadEntry): void => {
-    mergedEntryIndexById.set(entry.id, merged.length);
-    if (entry.type === "review") {
-      const indexes = reviewIndexesByTurn.get(entry.turn?.id) ?? [];
-      indexes.push(merged.length);
-      reviewIndexesByTurn.set(entry.turn?.id, indexes);
-    }
-    merged.push(entry);
+  const recordEntryMetadata = (
+    entry: AppServerThreadEntry,
+    entryId: string,
+    atEnd: boolean,
+  ): void => {
+    mergedEntryIds.add(entryId);
     if (entry.turn?.id) {
       mergedTurnIds.add(entry.turn.id);
     }
-    lastMergedTurnId = entry.turn?.id;
-    if (typeof entry.createdAt === "number") {
-      greatestCreatedAt = Math.max(
-        greatestCreatedAt ?? entry.createdAt,
-        entry.createdAt,
-      );
+    if (atEnd) {
+      lastMergedTurnId = entry.turn?.id;
+    }
+    const createdAt = typeof entry.createdAt === "number"
+      ? entry.createdAt
+      : undefined;
+    if (createdAt !== undefined) {
+      greatestCreatedAt = Math.max(greatestCreatedAt ?? createdAt, createdAt);
       if (entry.turn?.id) {
         greatestCreatedAtByTurn.set(
           entry.turn.id,
           Math.max(
-            greatestCreatedAtByTurn.get(entry.turn.id) ?? entry.createdAt,
-            entry.createdAt,
+            greatestCreatedAtByTurn.get(entry.turn.id) ?? createdAt,
+            createdAt,
           ),
         );
       }
@@ -648,59 +598,86 @@ function mergeTranscriptEntries(
     if (entry.turn?.id && typeof sequence === "number") {
       greatestSequenceByTurn.set(
         entry.turn.id,
-        Math.max(greatestSequenceByTurn.get(entry.turn.id) ?? sequence, sequence),
+        Math.max(
+          greatestSequenceByTurn.get(entry.turn.id) ?? sequence,
+          sequence,
+        ),
       );
     }
   };
-  rebuildAppendIndexes();
+  const ensureIndexMaps = (): void => {
+    if (!indexMapsDirty) {
+      return;
+    }
+    mergedEntryIndexById = new Map();
+    reviewIndexesByTurn = new Map();
+    for (let index = 0; index < merged.length; index += 1) {
+      const entry = merged[index]!;
+      mergedEntryIndexById.set(entry.id, index);
+      if (entry.type === "review") {
+        const indexes = reviewIndexesByTurn.get(entry.turn?.id) ?? [];
+        indexes.push(index);
+        reviewIndexesByTurn.set(entry.turn?.id, indexes);
+      }
+    }
+    indexMapsDirty = false;
+  };
+  const insertIndexedEntry = (index: number, entry: AppServerThreadEntry): void => {
+    merged.splice(index, 0, entry);
+    recordEntryMetadata(entry, entry.id, index === merged.length - 1);
+    indexMapsDirty = true;
+  };
+  const appendIndexedEntry = (entry: AppServerThreadEntry): void => {
+    const entryId = entry.id;
+    if (!indexMapsDirty) {
+      mergedEntryIndexById.set(entryId, merged.length);
+      if (entry.type === "review") {
+        const indexes = reviewIndexesByTurn.get(entry.turn?.id) ?? [];
+        indexes.push(merged.length);
+        reviewIndexesByTurn.set(entry.turn?.id, indexes);
+      }
+    }
+    merged.push(entry);
+    recordEntryMetadata(entry, entryId, true);
+  };
+  for (let index = 0; index < merged.length; index += 1) {
+    const entry = merged[index]!;
+    const entryId = entry.id;
+    mergedEntryIndexById.set(entryId, index);
+    if (entry.type === "review") {
+      const indexes = reviewIndexesByTurn.get(entry.turn?.id) ?? [];
+      indexes.push(index);
+      reviewIndexesByTurn.set(entry.turn?.id, indexes);
+    }
+    recordEntryMetadata(entry, entryId, true);
+  }
 
   for (const optimisticEntry of optimisticEntries) {
-    const existingIndex = mergedEntryIndexById.get(optimisticEntry.id) ?? -1;
-    if (existingIndex !== -1) {
-      merged[existingIndex] = preserveReviewMetadata(
-        merged[existingIndex],
+    const optimisticId = optimisticEntry.id;
+    const deferredUsageIndex = deferredTurnUsageIndexById.get(optimisticId);
+    if (deferredUsageIndex !== undefined) {
+      deferredTurnUsageEntries[deferredUsageIndex] = preserveReviewMetadata(
+        deferredTurnUsageEntries[deferredUsageIndex]!,
         optimisticEntry,
       );
-      if (typeof optimisticEntry.createdAt === "number") {
-        greatestCreatedAt = Math.max(
-          greatestCreatedAt ?? optimisticEntry.createdAt,
-          optimisticEntry.createdAt,
-        );
-        if (optimisticEntry.turn?.id) {
-          greatestCreatedAtByTurn.set(
-            optimisticEntry.turn.id,
-            Math.max(
-              greatestCreatedAtByTurn.get(optimisticEntry.turn.id)
-                ?? optimisticEntry.createdAt,
-              optimisticEntry.createdAt,
-            ),
-          );
-        }
-      }
-      if (optimisticEntry.turn?.id && isTerminalTurnEntry(optimisticEntry)) {
-        terminalTurnIds.add(optimisticEntry.turn.id);
-      }
-      const replacementSequence = readRendererSequence(optimisticEntry);
-      if (typeof replacementSequence === "number") {
-        greatestSequence = Math.max(greatestSequence ?? replacementSequence, replacementSequence);
-      }
-      if (
-        optimisticEntry.turn?.id
-        && typeof replacementSequence === "number"
-      ) {
-        greatestSequenceByTurn.set(
-          optimisticEntry.turn.id,
-          Math.max(
-            greatestSequenceByTurn.get(optimisticEntry.turn.id)
-              ?? replacementSequence,
-            replacementSequence,
-          ),
-        );
-      }
       continue;
+    }
+    if (mergedEntryIds.has(optimisticId)) {
+      ensureIndexMaps();
+      const existingIndex = mergedEntryIndexById.get(optimisticId) ?? -1;
+      if (existingIndex !== -1) {
+        const replaced = preserveReviewMetadata(
+          merged[existingIndex]!,
+          optimisticEntry,
+        );
+        merged[existingIndex] = replaced;
+        recordEntryMetadata(replaced, replaced.id, existingIndex === merged.length - 1);
+        continue;
+      }
     }
 
     if (optimisticEntry.type === "review") {
+      ensureIndexMaps();
       const candidateIndexes = optimisticEntry.turn?.id
         ? [...(reviewIndexesByTurn.get(optimisticEntry.turn.id) ?? []),
             ...(reviewIndexesByTurn.get(undefined) ?? [])]
@@ -710,20 +687,23 @@ function mergeTranscriptEntries(
         return entry.type === "review" && reviewEntriesMatch(entry, optimisticEntry);
       }) ?? -1;
       if (matchingReviewIndex !== -1) {
-        if (retainedReviewIds.delete(merged[matchingReviewIndex]!.id)) {
-          retainedReviewIds.add(optimisticEntry.id);
+        const previousId = merged[matchingReviewIndex]!.id;
+        if (retainedReviewIds.delete(previousId)) {
+          retainedReviewIds.add(optimisticId);
         }
-        merged[matchingReviewIndex] = preserveReviewMetadata(
-          merged[matchingReviewIndex],
+        const replaced = preserveReviewMetadata(
+          merged[matchingReviewIndex]!,
           optimisticEntry,
         );
-        rebuildAppendIndexes();
+        merged[matchingReviewIndex] = replaced;
+        recordEntryMetadata(replaced, replaced.id, matchingReviewIndex === merged.length - 1);
+        indexMapsDirty = true;
         continue;
       }
       // Keep live review receipt order in a separate stream. The final linear
       // merge places omitted cards alongside the authoritative history without
       // repeatedly splicing the transcript and rebuilding all its indexes.
-      retainedReviewIds.add(optimisticEntry.id);
+      retainedReviewIds.add(optimisticId);
       appendIndexedEntry(optimisticEntry);
       continue;
     }
@@ -751,8 +731,7 @@ function mergeTranscriptEntries(
             (readRendererSequence(entry) ?? -Infinity) > optimisticSequence)
         : -1;
     if (laterObservedIndex !== -1) {
-      merged.splice(laterObservedIndex, 0, optimisticEntry);
-      rebuildAppendIndexes();
+      insertIndexedEntry(laterObservedIndex, optimisticEntry);
       continue;
     }
     const canAppendInKnownOrder =
@@ -792,12 +771,25 @@ function mergeTranscriptEntries(
       continue;
     }
     if (isTokenUsageActivityEntry(optimisticEntry) && optimisticTurnId) {
-      const sameTurnIndex = merged.findLastIndex(
-        (entry) => entry.turn?.id === optimisticTurnId
-      );
+      // Turn-scoped usage totals are anchored at the end of their turn by
+      // anchorTurnUsageEntries() in one linear pass below. Deferring them
+      // avoids O(N * M) findLastIndex + splice + index rebuilds per delta.
+      if (
+        turnUsageEntryTurnId(optimisticEntry) !== undefined
+        && mergedTurnIds.has(optimisticTurnId)
+      ) {
+        deferredTurnUsageIndexById.set(
+          optimisticEntry.id,
+          deferredTurnUsageEntries.length,
+        );
+        deferredTurnUsageEntries.push(optimisticEntry);
+        continue;
+      }
+      const sameTurnIndex = mergedTurnIds.has(optimisticTurnId)
+        ? merged.findLastIndex((entry) => entry.turn?.id === optimisticTurnId)
+        : -1;
       if (sameTurnIndex !== -1) {
-        merged.splice(sameTurnIndex + 1, 0, optimisticEntry);
-        rebuildAppendIndexes();
+        insertIndexedEntry(sameTurnIndex + 1, optimisticEntry);
         continue;
       }
 
@@ -813,8 +805,7 @@ function mergeTranscriptEntries(
             })
           : -1;
       if (usageTimedIndex !== -1) {
-        merged.splice(usageTimedIndex, 0, optimisticEntry);
-        rebuildAppendIndexes();
+        insertIndexedEntry(usageTimedIndex, optimisticEntry);
         continue;
       }
     }
@@ -832,8 +823,7 @@ function mergeTranscriptEntries(
             })
           : -1;
       if (usageTimedIndex !== -1) {
-        merged.splice(usageTimedIndex, 0, optimisticEntry);
-        rebuildAppendIndexes();
+        insertIndexedEntry(usageTimedIndex, optimisticEntry);
         continue;
       }
     }
@@ -880,8 +870,7 @@ function mergeTranscriptEntries(
         : timedIndex;
 
     if (placedIndex !== -1) {
-      merged.splice(placedIndex, 0, optimisticEntry);
-      rebuildAppendIndexes();
+      insertIndexedEntry(placedIndex, optimisticEntry);
       continue;
     }
 
@@ -904,8 +893,7 @@ function mergeTranscriptEntries(
           })
         : -1;
     if (globalTimedIndex !== -1) {
-      merged.splice(globalTimedIndex, 0, optimisticEntry);
-      rebuildAppendIndexes();
+      insertIndexedEntry(globalTimedIndex, optimisticEntry);
       continue;
     }
 
@@ -936,8 +924,7 @@ function mergeTranscriptEntries(
         : -1;
 
     if (terminalIndex !== -1) {
-      merged.splice(terminalIndex, 0, optimisticEntry);
-      rebuildAppendIndexes();
+      insertIndexedEntry(terminalIndex, optimisticEntry);
       continue;
     }
 
@@ -949,7 +936,7 @@ function mergeTranscriptEntries(
     // row inside its turn: work before the turn's first terminal entry
     // (unless live sequence proves this work came after it, as in multi-final
     // ACP turns), anything else after the turn's last entry.
-    const lastTurnIndex = optimisticTurnId
+    const lastTurnIndex = optimisticTurnId && mergedTurnIds.has(optimisticTurnId)
       ? merged.findLastIndex((entry) => entry.turn?.id === optimisticTurnId)
       : -1;
     if (lastTurnIndex !== -1 && lastTurnIndex < merged.length - 1) {
@@ -970,16 +957,18 @@ function mergeTranscriptEntries(
               && optimisticSequence > entrySequence
             );
           });
-      merged.splice(
+      insertIndexedEntry(
         firstTerminalIndex !== -1 ? firstTerminalIndex : lastTurnIndex + 1,
-        0,
         optimisticEntry,
       );
-      rebuildAppendIndexes();
       continue;
     }
 
     appendIndexedEntry(optimisticEntry);
+  }
+
+  if (deferredTurnUsageEntries.length > 0) {
+    merged.push(...deferredTurnUsageEntries);
   }
 
   // The tiers above place rows by timestamp and arrival order, which put a
@@ -1073,27 +1062,15 @@ function transcriptTurnIds(entries: AppServerThreadEntry[]): Set<string> {
   return new Set(entries.flatMap((entry) => entry.turn?.id ? [entry.turn.id] : []));
 }
 
-function withoutTranscriptTurns(
-  response: AppServerReadThreadResponse,
-  turnIds: ReadonlySet<string>,
-): AppServerReadThreadResponse {
-  const entries = response.replay.entries.filter((entry) =>
-    !entry.turn?.id || !turnIds.has(entry.turn.id));
-  return {
-    ...response,
-    replay: {
-      ...response.replay,
-      entries,
-      messages: transcriptMessagesForEntries(entries, response.replay.messages),
-    },
-  };
-}
-
 // A tail row can outlive the newest pages as a row seen only on the live
-// stream, under its optimistic or live id: a sent message whose turn no newest
-// page held. When an older page returns that turn, the page row is the same
-// item under its provider id. Adopt that id in place, so the history page
-// drops its copy by id instead of rendering the item twice.
+// stream, under its optimistic/live id or its provider id (for example, a
+// prompt whose sibling tool row was pruned while a newer page settled). When
+// an older page returns that turn, keeping the row in `tail` while the older
+// page inserts the rest of the turn into `loadedHistory` splits and inverts
+// the turn across the history/tail boundary. Retire covered non-provider-page
+// prefix rows from `tail` so the older page keeps the whole turn intact in
+// `loadedHistory`; adopt ids in place only for matched rows after a provider
+// turn.
 function adoptOlderPageIdentities(
   tail: AppServerReadThreadResponse,
   page: AppServerReadThreadResponse,
@@ -1114,57 +1091,91 @@ function adoptOlderPageIdentities(
     const turnId = transcriptEntryTurnId(entry);
     return turnId !== undefined && providerPageTurnIds?.has(turnId) === true;
   });
+  const isBeforeProviderPage = (index: number) =>
+    firstProviderRow !== -1 && index < firstProviderRow;
   const newestPageTurnId = page.replay.entries.findLast((entry) => entry.turn?.id)?.turn?.id;
-  const candidates = tail.replay.entries.filter((entry, index) => {
-    if (pageIds.has(entry.id)) {
-      return false;
-    }
+  const retiredPrefixEntries = new Set<AppServerThreadEntry>();
+  const candidates: AppServerThreadEntry[] = [];
+  const candidatesBySentTurnId = new Map<string, AppServerThreadMessageEntry[]>();
+  tail.replay.entries.forEach((entry, index) => {
     const turnId = transcriptEntryTurnId(entry);
+    const isProviderPageRow =
+      turnId !== undefined && providerPageTurnIds?.has(turnId) === true;
+    if (pageIds.has(entry.id)) {
+      if (turnId !== undefined && !isProviderPageRow && isBeforeProviderPage(index)) {
+        retiredPrefixEntries.add(entry);
+      }
+      return;
+    }
     // A send not yet bound to its turn has no turn at all, but its
     // optimistic id already says no provider page delivered it.
-    return turnId === undefined
+    const isEligibleCandidate = turnId === undefined
       ? entry.id.startsWith("optimistic-") && !hasLoadedHistory && index < firstProviderRow
-      : !providerPageTurnIds?.has(turnId);
+      : !isProviderPageRow;
+    if (!isEligibleCandidate) {
+      return;
+    }
+    candidates.push(entry);
+    if (entry.type === "message") {
+      const sentTurnId = readSentTurnId(entry);
+      if (sentTurnId) {
+        const list = candidatesBySentTurnId.get(sentTurnId);
+        if (list) {
+          list.push(entry);
+        } else {
+          candidatesBySentTurnId.set(sentTurnId, [entry]);
+        }
+      }
+    }
   });
-  if (candidates.length === 0) {
-    return tail;
-  }
-  const matchIndex = createLogicalTranscriptMatchIndex(candidates);
   const matched = new Set<AppServerThreadEntry>();
   const pageEntryByTailEntry = new Map<AppServerThreadEntry, AppServerThreadEntry>();
-  for (const pageEntry of page.replay.entries) {
-    if (tailIds.has(pageEntry.id) || !pageEntry.turn?.id) {
-      continue;
-    }
-    // The send's turn, not its text, identifies a sent message: the send
-    // path may rewrite the text before the owner records it.
-    const sentEcho = pageEntry.type === "message"
-      ? candidates.find((candidate) =>
-          !matched.has(candidate)
-          && candidate.type === "message"
-          && messageEchoesSentTurn(pageEntry, candidate))
-      : undefined;
-    const tailEntry = sentEcho ?? findUniqueLogicalTranscriptRefreshMatch(pageEntry, matchIndex, matched);
-    if (
-      tailEntry
-      && (transcriptEntryTurnId(tailEntry) !== undefined || pageEntry.turn.id === newestPageTurnId)
-    ) {
-      matched.add(tailEntry);
-      pageEntryByTailEntry.set(tailEntry, pageEntry);
+  if (candidates.length > 0) {
+    const matchIndex = createLogicalTranscriptMatchIndex(candidates);
+    for (const pageEntry of page.replay.entries) {
+      if (tailIds.has(pageEntry.id) || !pageEntry.turn?.id) {
+        continue;
+      }
+      // The send's turn, not its text, identifies a sent message: the send
+      // path may rewrite the text before the owner records it.
+      const sentEcho = pageEntry.type === "message"
+        ? candidatesBySentTurnId.get(pageEntry.turn.id)?.find((candidate) =>
+            !matched.has(candidate)
+            && messageEchoesSentTurn(pageEntry, candidate))
+        : undefined;
+      const tailEntry = sentEcho ?? findUniqueLogicalTranscriptRefreshMatch(pageEntry, matchIndex, matched);
+      if (
+        tailEntry
+        && (transcriptEntryTurnId(tailEntry) !== undefined || pageEntry.turn.id === newestPageTurnId)
+      ) {
+        matched.add(tailEntry);
+        pageEntryByTailEntry.set(tailEntry, pageEntry);
+      }
     }
   }
-  if (pageEntryByTailEntry.size === 0) {
+  if (retiredPrefixEntries.size === 0 && pageEntryByTailEntry.size === 0) {
     return tail;
   }
-  // Keep the tail row's live order: a later newest read places a row it does
-  // not hold by its renderer sequence.
-  const entries = tail.replay.entries.map((entry) => {
+  // Retire covered non-provider prefix rows into the older page so turns on
+  // `page` stay contiguous in `loadedHistory`; keep live sequence only for
+  // matched rows that remain in `tail` after a provider turn.
+  const entries: AppServerThreadEntry[] = [];
+  tail.replay.entries.forEach((entry, index) => {
+    if (retiredPrefixEntries.has(entry)) {
+      return;
+    }
     const pageEntry = pageEntryByTailEntry.get(entry);
     if (!pageEntry) {
-      return entry;
+      entries.push(entry);
+      return;
+    }
+    if (isBeforeProviderPage(index)) {
+      return;
     }
     const sequence = readRendererSequence(entry);
-    return sequence === undefined ? pageEntry : withRendererSequence(pageEntry, sequence);
+    entries.push(
+      sequence === undefined ? pageEntry : withRendererSequence(pageEntry, sequence),
+    );
   });
   return {
     ...tail,
@@ -1244,9 +1255,7 @@ function preserveRetainedTranscriptTail(
       retainedEntriesById.set(retainedEntryId, [retainedEntry]);
     }
   }
-  const retainedLogicalMatchIndex = createLogicalTranscriptMatchIndex(
-    retainedEntries,
-  );
+  let retainedLogicalMatchIndex: LogicalTranscriptMatchIndex | undefined;
   const freshEntryByRetainedEntry = new Map<
     AppServerThreadEntry,
     AppServerThreadEntry
@@ -1262,15 +1271,17 @@ function preserveRetainedTranscriptTail(
     if (retainedMatch) {
       retainedEntryIndexById.set(freshEntry.id, exactCandidateIndex + 1);
     }
-    retainedMatch ??= findUniqueLogicalTranscriptRefreshMatch(
-      freshEntry,
-      retainedLogicalMatchIndex,
-      matchedRetainedEntries,
-    );
+    if (!retainedMatch) {
+      retainedLogicalMatchIndex ??= createLogicalTranscriptMatchIndex(retainedEntries);
+      retainedMatch = findUniqueLogicalTranscriptRefreshMatch(
+        freshEntry,
+        retainedLogicalMatchIndex,
+        matchedRetainedEntries,
+      );
+    }
     if (retainedMatch) {
       matchedRetainedEntries.add(retainedMatch);
       freshEntryByRetainedEntry.set(retainedMatch, freshEntry);
-
     }
   }
   const entries = reconcileRetainedTranscriptTail(
@@ -1574,7 +1585,11 @@ function findUniqueLogicalTranscriptRefreshMatch(
   matchedRetainedEntries: ReadonlySet<AppServerThreadEntry>,
 ): AppServerThreadEntry | undefined {
   const freshTurnId = transcriptEntryTurnId(freshEntry);
-  const candidates = logicalTranscriptMatchCandidates(freshEntry, retainedMatchIndex);
+  const candidates = logicalTranscriptMatchCandidates(
+    freshEntry,
+    retainedMatchIndex,
+    freshTurnId,
+  );
   const matches = (retainedEntry: AppServerThreadEntry) => {
     if (matchedRetainedEntries.has(retainedEntry)) {
       return false;
@@ -1904,6 +1919,86 @@ function getThreadHydrationVersion(
   ].join(":");
 }
 
+function hashReplayKeyString(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${value.length}:${(hash >>> 0).toString(36)}`;
+}
+
+type ReplayActivityIndex = {
+  entryIds: Set<string>;
+  activityIds: Set<string>;
+  tokenUsageByKey: Map<string, AppServerThreadActivityEntry[]>;
+  byDetailId: Map<string, AppServerThreadActivityEntry[]>;
+  byCommand: Map<string, AppServerThreadActivityEntry[]>;
+  byDiffHash: Map<string, AppServerThreadActivityEntry[]>;
+};
+
+const replayActivityIndexes = new WeakMap<
+  AppServerThreadEntry[],
+  ReplayActivityIndex
+>();
+
+function pushActivityBucket(
+  map: Map<string, AppServerThreadActivityEntry[]>,
+  key: string,
+  entry: AppServerThreadActivityEntry,
+): void {
+  const bucket = map.get(key);
+  if (bucket) {
+    if (bucket[bucket.length - 1] !== entry) {
+      bucket.push(entry);
+    }
+  } else {
+    map.set(key, [entry]);
+  }
+}
+
+function getReplayActivityIndex(entries: AppServerThreadEntry[]): ReplayActivityIndex {
+  const cached = replayActivityIndexes.get(entries);
+  if (cached) {
+    return cached;
+  }
+  const index: ReplayActivityIndex = {
+    entryIds: new Set(),
+    activityIds: new Set(),
+    tokenUsageByKey: new Map(),
+    byDetailId: new Map(),
+    byCommand: new Map(),
+    byDiffHash: new Map(),
+  };
+  for (const entry of entries) {
+    index.entryIds.add(entry.id);
+    if (entry.type !== "activity") {
+      continue;
+    }
+    index.activityIds.add(entry.id);
+    if (isTokenUsageActivityEntry(entry)) {
+      const scope = tokenUsageActivityScope(entry) ?? "";
+      pushActivityBucket(index.tokenUsageByKey, `${scope}\0${entry.summary}`, entry);
+      continue;
+    }
+    for (const detail of entry.details) {
+      pushActivityBucket(index.byDetailId, detail.id, entry);
+      if (detail.command?.displayCommand) {
+        pushActivityBucket(index.byCommand, detail.command.displayCommand, entry);
+      }
+      if (detail.fileDiff?.diff) {
+        pushActivityBucket(
+          index.byDiffHash,
+          hashReplayKeyString(detail.fileDiff.diff),
+          entry,
+        );
+      }
+    }
+  }
+  replayActivityIndexes.set(entries, index);
+  return index;
+}
+
 // Both replay and optimistic entries are immutable. Output chunks replace one
 // live entry, so retain reconciliation results for all the unchanged entries.
 // Weak keys release these results when a thread or replay snapshot is evicted.
@@ -1925,9 +2020,32 @@ function hasMatchingReplayActivity(
   if (cached !== undefined) {
     return cached;
   }
-  const matched = entries.some((candidate) =>
-    candidate.type === "activity" && activityEntriesMatch(candidate, optimistic),
-  );
+  const index = getReplayActivityIndex(entries);
+  let matched = false;
+  if (isTokenUsageActivityEntry(optimistic)) {
+    const scope = tokenUsageActivityScope(optimistic) ?? "";
+    const candidates = index.tokenUsageByKey.get(`${scope}\0${optimistic.summary}`);
+    matched = Boolean(
+      candidates?.some((candidate) => activityEntriesMatch(candidate, optimistic)),
+    );
+  } else if (index.activityIds.has(optimistic.id)) {
+    matched = true;
+  } else if (optimistic.details.length > 0) {
+    const firstDetail = optimistic.details[0]!;
+    const byId = index.byDetailId.get(firstDetail.id);
+    const byFallback = firstDetail.command?.displayCommand
+      ? index.byCommand.get(firstDetail.command.displayCommand)
+      : firstDetail.fileDiff?.diff
+        ? index.byDiffHash.get(hashReplayKeyString(firstDetail.fileDiff.diff))
+        : undefined;
+    if (byId?.some((candidate) => activityEntriesMatch(candidate, optimistic))) {
+      matched = true;
+    } else if (
+      byFallback?.some((candidate) => activityEntriesMatch(candidate, optimistic))
+    ) {
+      matched = true;
+    }
+  }
   matches.set(optimistic, matched);
   return matched;
 }
@@ -2052,7 +2170,7 @@ function pruneOptimisticEntries(
       return !hasMatchingReplayActivity(response.replay.entries, entry);
     }
 
-    return !response.replay.entries.some((candidate) => candidate.id === entry.id);
+    return !getReplayActivityIndex(response.replay.entries).entryIds.has(entry.id);
   });
 }
 
@@ -2245,10 +2363,11 @@ function transcriptEntriesMatch(
   return false;
 }
 
-type LogicalTranscriptMatchIndex = ReadonlyMap<
-  string,
-  AppServerThreadEntry[]
->;
+type LogicalTranscriptMatchIndex = {
+  byKey: Map<string, AppServerThreadEntry[]>;
+  byTurnAndKey: Map<string, AppServerThreadEntry[]>;
+  turnlessByKey: Map<string, AppServerThreadEntry[]>;
+};
 
 function logicalTranscriptMatchKeys(
   entry: AppServerThreadEntry,
@@ -2276,7 +2395,10 @@ function logicalTranscriptMatchKeys(
         ]));
       }
       if (detail.fileDiff?.diff) {
-        keys.add(JSON.stringify(["activity-diff", detail.fileDiff.diff]));
+        keys.add(JSON.stringify([
+          "activity-diff",
+          hashReplayKeyString(detail.fileDiff.diff),
+        ]));
       }
     }
     return [...keys];
@@ -2296,31 +2418,69 @@ function logicalTranscriptMatchKeys(
   return [];
 }
 
+function pushLogicalIndexBucket(
+  map: Map<string, AppServerThreadEntry[]>,
+  key: string,
+  entry: AppServerThreadEntry,
+): void {
+  const candidates = map.get(key);
+  if (candidates) {
+    candidates.push(entry);
+  } else {
+    map.set(key, [entry]);
+  }
+}
+
 function createLogicalTranscriptMatchIndex(
   entries: AppServerThreadEntry[],
 ): LogicalTranscriptMatchIndex {
-  const index = new Map<string, AppServerThreadEntry[]>();
+  const byKey = new Map<string, AppServerThreadEntry[]>();
+  const byTurnAndKey = new Map<string, AppServerThreadEntry[]>();
+  const turnlessByKey = new Map<string, AppServerThreadEntry[]>();
   for (const entry of entries) {
+    const turnId = transcriptEntryTurnId(entry);
     for (const key of logicalTranscriptMatchKeys(entry)) {
-      const candidates = index.get(key);
-      if (candidates) {
-        candidates.push(entry);
+      pushLogicalIndexBucket(byKey, key, entry);
+      if (turnId) {
+        pushLogicalIndexBucket(byTurnAndKey, `${turnId}\0${key}`, entry);
       } else {
-        index.set(key, [entry]);
+        pushLogicalIndexBucket(turnlessByKey, key, entry);
       }
     }
   }
-  return index;
+  return { byKey, byTurnAndKey, turnlessByKey };
 }
 
 function logicalTranscriptMatchCandidates(
   entry: AppServerThreadEntry,
   index: LogicalTranscriptMatchIndex,
+  turnId?: string,
 ): AppServerThreadEntry[] {
+  const keys = logicalTranscriptMatchKeys(entry);
+  if (keys.length === 1) {
+    const key = keys[0]!;
+    if (!turnId) {
+      return index.byKey.get(key) ?? [];
+    }
+    const sameTurn = index.byTurnAndKey.get(`${turnId}\0${key}`);
+    const turnless = index.turnlessByKey.get(key);
+    if (!sameTurn?.length) return turnless ?? [];
+    if (!turnless?.length) return sameTurn;
+    return [...sameTurn, ...turnless];
+  }
   const candidates = new Set<AppServerThreadEntry>();
-  for (const key of logicalTranscriptMatchKeys(entry)) {
-    for (const candidate of index.get(key) ?? []) {
-      candidates.add(candidate);
+  for (const key of keys) {
+    if (!turnId) {
+      for (const candidate of index.byKey.get(key) ?? []) {
+        candidates.add(candidate);
+      }
+    } else {
+      for (const candidate of index.byTurnAndKey.get(`${turnId}\0${key}`) ?? []) {
+        candidates.add(candidate);
+      }
+      for (const candidate of index.turnlessByKey.get(key) ?? []) {
+        candidates.add(candidate);
+      }
     }
   }
   return [...candidates];
@@ -2346,21 +2506,26 @@ function findOnlyTranscriptMatch(
 function findUniqueTranscriptOrderSource(
   entry: AppServerThreadEntry,
   exactSourcesById: ReadonlyMap<string, AppServerThreadEntry>,
-  logicalSourceIndex: LogicalTranscriptMatchIndex,
-  readDetailOwners: DetailOwners,
-  sourceDetailOwners: DetailOwners,
+  getLogicalContext: () => {
+    logicalSourceIndex: LogicalTranscriptMatchIndex;
+    readDetailOwners: DetailOwners;
+    sourceDetailOwners: DetailOwners;
+  },
 ): AppServerThreadEntry | undefined {
   const exactMatch = exactSourcesById.get(entry.id);
   if (exactMatch) {
     return exactMatch;
   }
 
+  const { logicalSourceIndex, readDetailOwners, sourceDetailOwners } =
+    getLogicalContext();
+  const entryTurnId = transcriptEntryTurnId(entry);
   // A row matched by content alone must come from the same turn. The same
   // command or reply in another turn is a different row, and taking its time
   // or place moves this row into that turn.
   return findOnlyTurnAwareMatch(
-    transcriptEntryTurnId(entry),
-    logicalTranscriptMatchCandidates(entry, logicalSourceIndex),
+    entryTurnId,
+    logicalTranscriptMatchCandidates(entry, logicalSourceIndex, entryTurnId),
     (source) =>
       (typeof source.createdAt === "number" || readRendererSequence(source) !== undefined) &&
       source.id !== entry.id &&
@@ -2564,9 +2729,25 @@ function carryForwardTranscriptEntryOrder(
       logicalSources.push(source);
     }
   }
-  const logicalSourceIndex = createLogicalTranscriptMatchIndex(logicalSources);
-  const readDetailOwners = indexDetailOwners(response.replay.entries);
-  const sourceDetailOwners = indexDetailOwners(logicalSources);
+  let logicalSourceIndex: LogicalTranscriptMatchIndex | undefined;
+  let readDetailOwners: DetailOwners | undefined;
+  let sourceDetailOwners: DetailOwners | undefined;
+  const getReadDetailOwners = (): DetailOwners => {
+    readDetailOwners ??= indexDetailOwners(response.replay.entries);
+    return readDetailOwners;
+  };
+  const getSourceDetailOwners = (): DetailOwners => {
+    sourceDetailOwners ??= indexDetailOwners(logicalSources);
+    return sourceDetailOwners;
+  };
+  const getLogicalContext = () => {
+    logicalSourceIndex ??= createLogicalTranscriptMatchIndex(logicalSources);
+    return {
+      logicalSourceIndex,
+      readDetailOwners: getReadDetailOwners(),
+      sourceDetailOwners: getSourceDetailOwners(),
+    };
+  };
   const sourceByHydratedEntry = new Map<
     AppServerThreadEntry,
     AppServerThreadEntry
@@ -2575,9 +2756,7 @@ function carryForwardTranscriptEntryOrder(
     findUniqueTranscriptOrderSource(
       entry,
       exactSourcesById,
-      logicalSourceIndex,
-      readDetailOwners,
-      sourceDetailOwners,
+      getLogicalContext,
     )
   );
   const claimsBySource = new Map<AppServerThreadEntry, number>();
@@ -2590,9 +2769,10 @@ function carryForwardTranscriptEntryOrder(
     if (entry.type !== "activity" || entry.details.length === 0) {
       return undefined;
     }
+    const ownersByDetailId = getSourceDetailOwners();
     let sequence: number | undefined;
     for (const detail of entry.details) {
-      const owners = sourceDetailOwners.get(detail.id);
+      const owners = ownersByDetailId.get(detail.id);
       if (!owners) {
         return undefined;
       }
@@ -2775,7 +2955,7 @@ function carryForwardTranscriptEntryOrder(
     }
 
     const pendingSource = source.id.startsWith("live-tools-")
-      ? retainUnreplayedLiveToolDetails(source, readDetailOwners)
+      ? retainUnreplayedLiveToolDetails(source, getReadDetailOwners())
       : source;
     if (!pendingSource) continue;
 
@@ -6289,25 +6469,42 @@ export function useThreadSessionState(params: {
           const skipsProviderTurns = bridgesRetainedRows
             && response.replay.pagination.supportsPagination
             && response.replay.pagination.hasPreviousPage
-            && (lostRetiredPageBridge || (previousPageTurnIds && previousPageTurnIds.size > 0
-              && ![...previousPageTurnIds].some((turnId) => pageTurnIds.has(turnId))));
+            && (lostRetiredPageBridge
+              || (!current.loadedHistory && !previousPageTurnIds?.size && pageTurnIds.size > 0)
+              || (previousPageTurnIds && previousPageTurnIds.size > 0
+                && ![...previousPageTurnIds].some((turnId) => pageTurnIds.has(turnId))));
           if (skipsProviderTurns) {
             delete loadedHistoryIndexesRef.current[targetThreadKey];
           }
           let retainedResponse = current.response;
           if (skipsProviderTurns && retainedResponse) {
-            if (lostRetiredPageBridge) {
-              const versions = liveItemVersionsRef.current.get(targetThreadKey);
-              const entries = retainedResponse.replay.entries.filter((entry) =>
-                (versions?.get(entry.id) ?? 0) > (liveTranscriptVersion ?? 0));
-              retainedResponse = {
-                ...retainedResponse, replay: {
-                  ...retainedResponse.replay, entries, messages: transcriptMessagesForEntries(entries, retainedResponse.replay.messages),
-                },
-              };
-            } else if (previousPageTurnIds) {
-              retainedResponse = withoutTranscriptTurns(retainedResponse, previousPageTurnIds);
-            }
+            const versions = liveItemVersionsRef.current.get(targetThreadKey);
+            const capture = liveTranscriptVersion ?? 0;
+            const entries = retainedResponse.replay.entries.filter((entry) => {
+              const seenAfterRead =
+                (versions?.get(entry.id) ?? 0) > capture
+                || (entry.type === "activity"
+                  && entry.details.some((detail) => (versions?.get(detail.id) ?? 0) > capture));
+              if (seenAfterRead) {
+                return true;
+              }
+              if (lostRetiredPageBridge) {
+                return false;
+              }
+              // History restarted from this page's previousCursor, so pre-read
+              // rows from skipped older turns (not on this page) belong behind
+              // that cursor rather than stranded above this page in `tail`.
+              const turnId = transcriptEntryTurnId(entry);
+              return turnId !== undefined && pageTurnIds.has(turnId);
+            });
+            retainedResponse = {
+              ...retainedResponse,
+              replay: {
+                ...retainedResponse.replay,
+                entries,
+                messages: transcriptMessagesForEntries(entries, retainedResponse.replay.messages),
+              },
+            };
           }
           const preservesLiveRows = lifecycleChangedDuringRead || transcriptChangedDuringRead;
           const responseWithRetainedTail = preserveRetainedTranscriptTail(
@@ -7171,17 +7368,36 @@ export function useThreadSessionState(params: {
         liveContextWindowVersionsRef.current.set(targetThreadKey, previous + 1);
       }
 
-      if (retainTranscript && isTranscriptUpdate) {
-        const liveTranscriptVersion = (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
-        liveTranscriptVersionsRef.current.set(targetThreadKey, liveTranscriptVersion);
-        const itemId = liveNotificationItemId(event.notification);
-        if (itemId) {
-          let itemVersions = liveItemVersionsRef.current.get(targetThreadKey);
-          if (!itemVersions) {
-            itemVersions = new Map();
-            liveItemVersionsRef.current.set(targetThreadKey, itemVersions);
+      let eventLiveTranscriptVersion: number | undefined;
+      const recordLiveItemVersion = (id: string) => {
+        if (!retainTranscript || eventLiveTranscriptVersion === undefined) {
+          return;
+        }
+        let itemVersions = liveItemVersionsRef.current.get(targetThreadKey);
+        if (!itemVersions) {
+          itemVersions = new Map();
+          liveItemVersionsRef.current.set(targetThreadKey, itemVersions);
+        }
+        if (!itemVersions.has(id)) {
+          itemVersions.set(id, eventLiveTranscriptVersion);
+        }
+      };
+
+      // Synchronously allocate the live version before queueing updateSession so
+      // deferred React state updaters (including turn/completed promotions) never
+      // lazily bump liveTranscriptVersionsRef past a subsequent read capture.
+      if (retainTranscript && (isTranscriptUpdate || event.notification.method === "turn/completed")) {
+        eventLiveTranscriptVersion =
+          (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
+        liveTranscriptVersionsRef.current.set(
+          targetThreadKey,
+          eventLiveTranscriptVersion,
+        );
+        if (isTranscriptUpdate) {
+          const itemId = liveNotificationItemId(event.notification);
+          if (itemId) {
+            recordLiveItemVersion(itemId);
           }
-          if (!itemVersions.has(itemId)) itemVersions.set(itemId, liveTranscriptVersion);
         }
       }
 
@@ -7576,17 +7792,25 @@ export function useThreadSessionState(params: {
             fallbackStatus: "in_progress",
           });
           const phase = event.notification.params.phase ?? previousMessage?.phase;
-          const flushedResponse = isSamePendingMessage
-            ? current.response
-              : appendPendingAssistantMessage(
+          const shouldFlushPendingAssistant =
+            !isSamePendingMessage && Boolean(current.pendingAssistantMessage);
+          const promotedOptimisticMessages = shouldFlushPendingAssistant
+            ? optimisticMessageEntries(current.optimisticEntries)
+            : [];
+          for (const entry of promotedOptimisticMessages) {
+            recordLiveItemVersion(entry.id);
+          }
+          const flushedResponse = shouldFlushPendingAssistant
+            ? appendPendingAssistantMessage(
                 current.response,
                 {
                   backend: event.backend,
                   threadId: notificationThreadId,
                 },
-                optimisticMessageEntries(current.optimisticEntries),
+                promotedOptimisticMessages,
                 current.pendingAssistantMessage
-              );
+              )
+            : current.response;
           const carriedSequence = readRendererSequence(previousMessage);
           const allocatedSequence =
             carriedSequence ?? current.nextLiveEntrySequence;
@@ -7845,6 +8069,15 @@ export function useThreadSessionState(params: {
                   [taskMonitorUsageEntry]
                 )
               : current.response;
+            const promotedAssistantOptimisticMessages = current.optimisticEntries.filter(
+              (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
+            );
+            for (const entry of promotedAssistantOptimisticMessages) {
+              recordLiveItemVersion(entry.id);
+            }
+            if (taskMonitorUsageEntry) {
+              recordLiveItemVersion(taskMonitorUsageEntry.id);
+            }
             const nextResponse = appendMessageEntries(
               responseWithUsage,
               {
@@ -7852,9 +8085,7 @@ export function useThreadSessionState(params: {
                 threadId: notificationThreadId,
               },
               [
-                ...current.optimisticEntries.filter(
-                  (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
-                ),
+                ...promotedAssistantOptimisticMessages,
                 completedEntry,
               ]
             );
@@ -7899,6 +8130,7 @@ export function useThreadSessionState(params: {
             };
           }
           if (taskMonitorUsageEntry) {
+            recordLiveItemVersion(taskMonitorUsageEntry.id);
             const nextResponse = appendThreadEntries(
               current.response,
               {
@@ -8198,6 +8430,9 @@ export function useThreadSessionState(params: {
                 syntheticFinalSequence
               )
             );
+          }
+          for (const entry of nextEntries) {
+            recordLiveItemVersion(entry.id);
           }
 
           const promotedFinalMessageId = findPromotableAcpPartialReplyId({
