@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
+  launchpadStorageKey,
   type NavigationLaunchpadDraft,
 } from "@pwragent/shared/contracts/navigation";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -41,6 +42,28 @@ function readDefaultValue(key: string): unknown {
 }
 
 describe("SqliteOverlayStore - launchpad defaults", () => {
+  it("applies viewer profile changes only to drafts the viewer owns", async () => {
+    const local: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo", directoryKind: "directory", directoryLabel: "Repo",
+      backend: "codex", model: "local-old", reasoningEffort: "low", executionMode: "default",
+      prompt: "unsent", workMode: "local", createdAt: 1, updatedAt: 1,
+    };
+    const owner = { scope: "remote", instanceId: "peer" } as const;
+    const remote = { ...local, directoryKey: launchpadStorageKey(local.directoryKey, owner),
+      model: "owner-only", settingsTouchedAt: 2,
+      pendingModelPreference: { provider: "codex", model: "owner-only", reasoningEffort: "low" } };
+    const child = { ...remote, directoryKey: "subthread:peer-parent", federationTarget: owner };
+    for (const draft of [local, remote, child]) await store.upsertDirectoryLaunchpad(draft);
+    const read = (draft: NavigationLaunchpadDraft) => store.getDirectoryLaunchpad({ directoryKey: draft.directoryKey });
+    const peerBefore = await Promise.all([read(remote), read(child)]);
+
+    expect(store.applyProviderModelDefaults({}, {
+      codex: { model: "local-new", reasoningEffortsByModel: { "local-new": "high" }, executionMode: "full-access" },
+    })).toBe(1);
+    expect(await read(local)).toMatchObject({ model: "local-new", reasoningEffort: "high", executionMode: "full-access" });
+    expect(await Promise.all([read(remote), read(child)])).toEqual(peerBefore);
+  });
+
   it("persists endpoint defaults without replacing another Codex provider's draft", async () => {
     const base: NavigationLaunchpadDraft = {
       directoryKey: "directory:/mathos", directoryKind: "directory", directoryLabel: "MathOS",

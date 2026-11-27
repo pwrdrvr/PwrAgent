@@ -1189,6 +1189,8 @@ export type UpdateDirectoryLaunchpadRequest = {
     >
   >;
   stickySettingsChanged?: boolean;
+  /** The operator picked a model or effort directly, including a Recent choice. */
+  explicitModelSelection?: boolean;
 };
 
 export type UpdateDirectoryLaunchpadResponse = {

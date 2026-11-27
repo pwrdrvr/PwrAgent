@@ -17209,6 +17209,8 @@ export class DesktopBackendRegistry {
     options?: {
       /** A remote viewer's draft takes no environment metadata from here. */
       skipFilesystemInspection?: boolean;
+      /** Owner-provided provider defaults for an untouched peer draft. */
+      ownerProviderSettings?: NavigationLaunchpadDefaults["providerSettings"];
       /** Leave the stored draft as it is unless this holds for it. */
       onlyIf?: (current: NavigationLaunchpadDraft) => boolean;
       /** The instance that owns `directoryKey`, as on an ensure. */

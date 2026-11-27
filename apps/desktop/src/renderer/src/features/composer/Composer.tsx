@@ -735,6 +735,7 @@ export type ComposerProps = {
     >,
     options?: {
       stickySettingsChanged?: boolean;
+      explicitModelSelection?: boolean;
       /** Whose draft this is, when the caller knows (see useThreadNavigation). */
       owner?: FederationTarget;
     }
@@ -11685,6 +11686,7 @@ function useComposerController(props: ComposerProps) {
        * the prompt moves focus out of the panel, which closes it.
        */
       keepFocus?: boolean;
+      explicitModelSelection?: boolean;
     },
   ): void => {
     if (!props.launchpad || !props.onUpdateLaunchpad) {
@@ -11704,6 +11706,8 @@ function useComposerController(props: ComposerProps) {
       },
       {
         stickySettingsChanged: true,
+        ...(options?.explicitModelSelection ? { explicitModelSelection: true } : {}),
+        ...(filesystemFederationTarget ? { owner: filesystemFederationTarget } : {}),
       },
     );
     if (options?.keepFocus) return;
@@ -15827,7 +15831,7 @@ function useComposerController(props: ComposerProps) {
               ? props.launchpad.serviceTier
               : undefined,
           } : {}),
-        }, { keepFocus: true });
+        }, { keepFocus: true, explicitModelSelection: true });
         return;
       }
       if (nextSupportsReasoning) {
@@ -15859,7 +15863,7 @@ function useComposerController(props: ComposerProps) {
       patch: Partial<Pick<NavigationThreadSummary, "reasoningEffort" | "serviceTier" | "fastMode">>,
     ): void => {
       if (props.launchpad) {
-        handleLaunchpadPatch(patch, { keepFocus: true });
+        handleLaunchpadPatch(patch, { keepFocus: true, explicitModelSelection: "reasoningEffort" in patch });
         return;
       }
       handleThreadModelSettingsPatch(patch);
@@ -15889,7 +15893,7 @@ function useComposerController(props: ComposerProps) {
         model: row.recent.model,
         reasoningEffort: row.recent.reasoningEffort,
         ...(codex ? codexSpeedSettings(row.speed) : {}),
-      }, { keepFocus: true });
+      }, { keepFocus: true, explicitModelSelection: true });
     };
     // A row is the launchpad's own values, unset ones included.
     const recentSelected = (row: NewThreadRecent): boolean =>

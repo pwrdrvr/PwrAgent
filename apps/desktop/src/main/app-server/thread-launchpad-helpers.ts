@@ -113,6 +113,7 @@ export async function resetLaunchpadAfterMaterialize(params: {
       ...(persisted ?? launchpad),
       registeredAt: launchpad.registeredAt,
       prompt: "",
+      pendingModelPreference: undefined,
       imageAttachments: [],
       fileAttachments: [],
       editorDocument: undefined,

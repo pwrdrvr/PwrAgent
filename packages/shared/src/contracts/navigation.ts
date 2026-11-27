@@ -1314,6 +1314,29 @@ export function applyNavigationLaunchpadProviderSettingsPatch<
   return projectNavigationLaunchpadProviderSettings(base as T);
 }
 
+/** Carry an explicit model choice from a viewer's draft to the instance that runs it. */
+export function applyLaunchpadDraftSettingsPatch(
+  draft: NavigationLaunchpadDraft,
+  patch: Partial<NavigationLaunchpadDraft>,
+  rememberModelSettings?: boolean,
+): NavigationLaunchpadDraft {
+  const next = applyNavigationLaunchpadProviderSettingsPatch(draft, patch);
+  if ("model" in patch || "reasoningEffort" in patch) {
+    return {
+      ...next,
+      pendingModelPreference: rememberModelSettings ? {
+        provider: navigationLaunchpadProviderKey(next),
+        model: next.model,
+        reasoningEffort: next.reasoningEffort,
+      } : undefined,
+    };
+  }
+  if (navigationLaunchpadProviderKey(next) !== navigationLaunchpadProviderKey(draft)) {
+    return { ...next, pendingModelPreference: undefined };
+  }
+  return next;
+}
+
 /**
  * Apply a defaults patch whose provider settings belong to `provider`. They
  * are filed under that provider while the defaults keep their own, unless
@@ -1518,6 +1541,8 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   /** A removed directory may retain its draft for recovery without advertising a project. */
   hiddenFromDirectoryList?: true;
   settingsTouchedAt?: number;
+  /** The viewer explicitly picked a model or effort to remember after an accepted peer launch. */
+  pendingModelPreference?: { provider: string; model?: string; reasoningEffort?: string };
   /** Explicit messaging `/new` override for this project. */
   messagingToolUpdateMode?: MessagingToolUpdateMode;
   /**

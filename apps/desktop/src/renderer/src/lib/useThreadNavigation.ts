@@ -94,6 +94,7 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
+  applyLaunchpadDraftSettingsPatch,
   applyNavigationLaunchpadProviderExecutionModeDefaults,
   applyNavigationLaunchpadProviderModelDefaults,
   changedProviderExecutionModeDefaultBackends,
@@ -2770,6 +2771,7 @@ function mergeLaunchpadUpdateResponse(
   }
 
   const merged: NavigationLaunchpadDraft = { ...next };
+  merged.pendingModelPreference = current.pendingModelPreference;
   const backendChanged = "backend" in patch;
   const environmentChanged = "codexEnvironmentId" in patch;
   const preserveSetting = <Key extends keyof NavigationLaunchpadDraft>(
@@ -3492,7 +3494,7 @@ export function useThreadNavigation(
   updateDirectoryLaunchpad: (
     directoryKey: string,
     patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
-    options?: { stickySettingsChanged?: boolean; owner?: FederationTarget }
+    options?: { stickySettingsChanged?: boolean; explicitModelSelection?: boolean; owner?: FederationTarget }
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   /** The kind of member Attention is narrowed to; undefined lists the whole queue. */
@@ -3715,6 +3717,8 @@ export function useThreadNavigation(
   const [localLaunchpads, setLocalLaunchpads] = useRecoverableState<
     Record<string, NavigationLaunchpadDraft>
   >("navigation.launchpads", {});
+  const localLaunchpadsRef = useRef(localLaunchpads);
+  localLaunchpadsRef.current = localLaunchpads;
   // Sub-thread launchpads the operator detached from their parent. Their
   // `subthread:` key still spells the parent, so materialization must not
   // fall back to reading the parent from it.
@@ -7251,6 +7255,7 @@ export function useThreadNavigation(
         };
         if (desktopApi.updateDirectoryLaunchpad) {
           const updated = await desktopApi.updateDirectoryLaunchpad({
+            federationTarget,
             directoryKey,
             patch,
           });
@@ -8208,6 +8213,7 @@ export function useThreadNavigation(
       patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
       options?: {
         stickySettingsChanged?: boolean;
+        explicitModelSelection?: boolean;
         /**
          * Whose draft this is. A pinned peer's draft and this window's own
          * draft can share a directory key, so the key alone picks whichever
@@ -8222,12 +8228,14 @@ export function useThreadNavigation(
       }
 
       setLaunchpadError(undefined);
-      const owner = options?.owner;
+      const draftOwner = localLaunchpadsRef.current[directoryKey]?.federationTarget;
+      const owner = options?.owner ?? (isSubthreadLaunchpadKey(directoryKey) ? draftOwner : undefined);
       // This window's own drafts: local in the main window, the peer's in a
       // remote window, where main fills the owner in.
       const ownsWindowDraft = owner !== undefined && (
         owner.scope === "local"
         || federationTargetsEqual(owner, rendererFederationTarget)
+        || Boolean(draftOwner && federationTargetsEqual(owner, draftOwner))
       );
       const federatedSelection =
         activeFederatedLaunchpad
@@ -8245,6 +8253,7 @@ export function useThreadNavigation(
             directoryKey,
             patch,
             stickySettingsChanged: options?.stickySettingsChanged,
+            explicitModelSelection: options?.explicitModelSelection,
           });
         } catch (error) {
           setLaunchpadError(error instanceof Error ? error.message : String(error));
@@ -8257,15 +8266,16 @@ export function useThreadNavigation(
       const revision =
         (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) ?? 0) + 1;
       launchpadUpdateRevisionRef.current.set(launchpadUpdateKey, revision);
+      const draftTarget = federatedSelection?.target ?? owner ?? rendererFederationTarget;
+      const rememberModelSettings = options?.explicitModelSelection && draftTarget?.scope === "remote";
+      const applyDraftPatch = (launchpad: NavigationLaunchpadDraft) =>
+        applyLaunchpadDraftSettingsPatch(launchpad, patch, rememberModelSettings);
 
       if (federatedSelection) {
         const applyFederatedPatch = (
           launchpad: NavigationLaunchpadDraft,
         ): NavigationLaunchpadDraft => ({
-          ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-            launchpad,
-            patch,
-          ),
+          ...applyDraftPatch(launchpad),
           directoryKey,
           federationTarget: federatedSelection.target,
           updatedAt: Date.now(),
@@ -8287,6 +8297,7 @@ export function useThreadNavigation(
             directoryKey,
             patch,
             stickySettingsChanged: options?.stickySettingsChanged,
+            explicitModelSelection: options?.explicitModelSelection,
           });
           if (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) !== revision) {
             return;
@@ -8334,10 +8345,7 @@ export function useThreadNavigation(
           rows: applyLaunchpadUpdate(
             currentResponse,
             {
-              ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-                currentLaunchpad,
-                patch,
-              ),
+              ...applyDraftPatch(currentLaunchpad),
               directoryKey,
               updatedAt: Date.now(),
             },
@@ -8353,10 +8361,7 @@ export function useThreadNavigation(
         return {
           ...current,
           [directoryKey]: {
-            ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-              currentLaunchpad,
-              patch,
-            ),
+            ...applyDraftPatch(currentLaunchpad),
             directoryKey,
             updatedAt: Date.now(),
           },
@@ -8365,10 +8370,7 @@ export function useThreadNavigation(
       const pendingPickedLaunchpad = pendingPickedLaunchpadRef.current.get(directoryKey);
       if (pendingPickedLaunchpad) {
         pendingPickedLaunchpadRef.current.set(directoryKey, {
-          ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-            pendingPickedLaunchpad,
-            patch,
-          ),
+          ...applyDraftPatch(pendingPickedLaunchpad),
           directoryKey,
           updatedAt: Date.now(),
         });
@@ -8376,9 +8378,11 @@ export function useThreadNavigation(
 
       try {
         const response = await desktopApi.updateDirectoryLaunchpad({
+          ...(draftTarget?.scope === "remote" ? { federationTarget: draftTarget } : {}),
           directoryKey,
           patch,
           stickySettingsChanged: options?.stickySettingsChanged,
+          explicitModelSelection: options?.explicitModelSelection,
         });
         if (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) !== revision) {
           return;
@@ -8392,8 +8396,7 @@ export function useThreadNavigation(
                   response.launchpad,
                   patch,
                   {
-                    preserveOwnerCodexEnvironmentMetadata:
-                      isRendererFederationWindow,
+                    preserveOwnerCodexEnvironmentMetadata: draftTarget?.scope === "remote",
                   },
                 ),
               }
@@ -8410,8 +8413,7 @@ export function useThreadNavigation(
               response.launchpad,
               patch,
               {
-                preserveOwnerCodexEnvironmentMetadata:
-                  isRendererFederationWindow,
+                preserveOwnerCodexEnvironmentMetadata: draftTarget?.scope === "remote",
               },
             ),
             response.defaults
@@ -8427,8 +8429,7 @@ export function useThreadNavigation(
               response.launchpad,
               patch,
               {
-                preserveOwnerCodexEnvironmentMetadata:
-                  isRendererFederationWindow,
+                preserveOwnerCodexEnvironmentMetadata: draftTarget?.scope === "remote",
               },
             ),
           );
@@ -8440,7 +8441,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [activeFederatedLaunchpad, desktopApi, isRendererFederationWindow, rendererFederationTarget, setFederatedLaunchpad, setLocalLaunchpads]
+    [activeFederatedLaunchpad, desktopApi, rendererFederationTarget, setFederatedLaunchpad, setLocalLaunchpads]
   );
 
   const resetDirectoryLaunchpad = useCallback(
@@ -9001,11 +9002,8 @@ export function useThreadNavigation(
         let remotePinFailure: string | undefined;
         if (federationTarget && desktopApi.resetDirectoryLaunchpad) {
           try {
-            // Remote launchpads are composed and persisted on the viewer, then
-            // sent in full to the owning instance for materialization. The owner
-            // clears its overlay row as part of that operation, but it cannot
-            // clear the viewer's local copy. Clear its submitted input after
-            // success while retaining the project's environment selection.
+            // The viewer owns this draft. Clear its submitted input after the
+            // owner creates the thread, retaining the project's environment.
             await desktopApi.resetDirectoryLaunchpad({
               federationTarget,
               directoryKey,
