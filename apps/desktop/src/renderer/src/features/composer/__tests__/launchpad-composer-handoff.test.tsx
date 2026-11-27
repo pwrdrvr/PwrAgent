@@ -73,6 +73,18 @@ describe("launchpad composer handoff", () => {
     await waitFor(() => expect(result.current.getQueuedTurns(target)[0]).toMatchObject({ steerDelivery: "accepted", backendQueuePending: true }));
   });
 
+  it("starts a Plan follow-up's fallback turn in Plan mode", async () => {
+    const { result } = renderHook(useComposerDraftStore);
+    const steerTurn = vi.fn<NonNullable<DesktopApi["steerTurn"]>>().mockResolvedValue({
+      backend: "codex", threadId: thread.id, turnId: "first-turn", disposition: "steered",
+    });
+    const collaborationMode = { mode: "plan", settings: { developerInstructions: null } } as const;
+    result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true, collaborationMode }]);
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", thread, { steerTurn }));
+    expect(steerTurn.mock.calls[0]![0].fallback?.turn.collaborationMode).toEqual(collaborationMode);
+    await waitFor(() => expect(result.current.getQueuedTurns(target)[0]).toMatchObject({ steerDelivery: "accepted" }));
+  });
+
   it("leaves a paused steer-when-ready follow-up waiting for Resume", async () => {
     const { result } = renderHook(useComposerDraftStore);
     const steerTurn = vi.fn<NonNullable<DesktopApi["steerTurn"]>>();
