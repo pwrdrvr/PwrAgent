@@ -153,7 +153,7 @@ test("discovers all project clouds and continues one project's cards in Electron
   // Hoisted so the `finally` can stop it on the failing path too.
   let focusTrajectory: DomTrajectoryRecorder | undefined;
   try {
-    const map = await openStarMapWindow(app);
+    const map = await openStarMapWindow(app, { viaPreload: true });
     // This spec paginates, and the map suspends every feed while it is not
     // foreground — a `Load more` press that lands then is dropped in
     // silence. That is intended behavior, so claim the foreground rather

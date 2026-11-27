@@ -165,6 +165,11 @@ test("an enrolled Federation peer reconnects to the same external authority", as
     const grant = await perform(client.window, action);
     if (grant.outcome !== "granted") throw new Error("Expected a grant from the enrolled owner.");
 
+    // Disconnect preserves the latest snapshot observed by the client.
+    await expect.poll(() => readExternal(client!.window)).toMatchObject({
+      condition: "busy",
+      allocations: [{ allocationId: grant.allocationId, generation: grant.generation, lastKnown: false }],
+    });
     await client.window.evaluate(async () =>
       await (window as unknown as { pwragent: DesktopApi }).pwragent.setFederationEnabled!(false));
     await expect.poll(() => readExternal(client!.window)).toMatchObject({ condition: "unreachable", allocations: [{ lastKnown: true, generation: grant.generation }] });
