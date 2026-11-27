@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor.js";
 import { AntigravitySignIn, type AntigravitySignInOptions } from "../acp/antigravity-sign-in.js";
 import { pruneAntigravityRuntime, withAntigravityRuntimeLock } from "../acp/antigravity-runtime-retention.js";
+import { applicationHost } from "../owner-host.js";
 
 type SignInSpawn = NonNullable<AntigravitySignInOptions["spawn"]>;
 
@@ -221,18 +222,17 @@ describe("Antigravity personal sign-in", () => {
   it("rejects a zero login exit when ACP still requires authentication", async () => {
     const { login, started, spawn, signIn } = fixture();
     const probe = new FixtureChild();
-    const methods: string[] = [];
+    const requests: Array<{ method: string; params: unknown }> = [];
     probe.stdin.on("data", (chunk) => {
       const { id, method, params } = JSON.parse(String(chunk));
-      methods.push(method);
-      if (method === "initialize") {
-        expect(params.clientInfo).toMatchObject({ name: "pwragent", title: "PwrAgent" });
-      }
+      requests.push({ method, params });
       const response = method === "initialize"
         ? { result: { protocolVersion: 1 } }
         : { error: { code: -32000, message: `Authentication required ${FIXTURE_CODE}` } };
       probe.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, ...response })}\n`);
     });
+    const packaged = vi.spyOn(applicationHost, "isPackaged", "get").mockReturnValue(true);
+    const version = vi.spyOn(applicationHost, "getVersion").mockReturnValue("1.86.4");
     const attempt = signIn.start(SELECTED);
     try {
       await started;
@@ -244,10 +244,15 @@ describe("Antigravity personal sign-in", () => {
       await expect(attempt.completed).rejects.toThrow(
         /^Antigravity could not verify sign-in by opening an ACP session\.$/u,
       );
-      expect(methods).toEqual(["initialize", "session/new"]);
+      expect(requests.map(({ method }) => method)).toEqual(["initialize", "session/new"]);
+      expect(requests[0]?.params).toMatchObject({
+        clientInfo: { name: "pwragent", title: "PwrAgent", version: "1.86.4" },
+      });
       expect(probe.signalCode).toBe("SIGTERM");
     } finally {
       await attempt.cancel();
+      packaged.mockRestore();
+      version.mockRestore();
     }
   });
 

@@ -17,6 +17,7 @@ import {
   type ManagedAntigravityRuntime,
 } from "../acp/antigravity-managed-runtime";
 import { pruneAntigravityRuntime, withAntigravityRuntimeLock } from "../acp/antigravity-runtime-retention";
+import { applicationHost } from "../owner-host";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 
 const appleSilicon = { platform: "darwin", arch: "arm64" } as const;
@@ -320,6 +321,8 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
     await withRuntimeRoot(async (directory) => {
       const archive = await makeArchive(directory);
       const version = "1.5.14";
+      const packaged = vi.spyOn(applicationHost, "isPackaged", "get").mockReturnValue(true);
+      const hostVersion = vi.spyOn(applicationHost, "getVersion").mockReturnValue("1.86.4");
       const request = vi.spyOn(AcpStdioJsonRpcTransport.prototype, "request").mockImplementation(async (method, params) => {
         expect(method).toBe("initialize");
         expect(params?.protocolVersion).toBe(1);
@@ -334,8 +337,13 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
         });
         expect(installed).toBe(version);
         expect(request).toHaveBeenCalledOnce();
+        expect(request).toHaveBeenCalledWith("initialize", expect.objectContaining({
+          clientInfo: { name: "pwragent", title: "PwrAgent", version: "1.86.4" },
+        }));
       } finally {
         request.mockRestore();
+        packaged.mockRestore();
+        hostVersion.mockRestore();
       }
     });
   });

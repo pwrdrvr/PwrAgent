@@ -13,7 +13,7 @@ import {
   type AntigravityReleaseStatus,
 } from "../../shared/antigravity-setup.js";
 import { ANTIGRAVITY_ACP_STRATEGY } from "./acp-local-strategies.js";
-import { ACP_CLIENT_INFO } from "./acp-client-info.js";
+import { readAcpClientInfo } from "./acp-client-info.js";
 import { AcpStdioJsonRpcTransport } from "./acp-stdio-transport.js";
 import {
   ANTIGRAVITY_ACTIVE_LINK,
@@ -332,7 +332,7 @@ async function verifyRuntime(
     const result = await transport.request("initialize", {
       protocolVersion: 1,
       clientCapabilities: {},
-      clientInfo: ACP_CLIENT_INFO,
+      clientInfo: readAcpClientInfo(),
     }) as { protocolVersion?: unknown; agentInfo?: { name?: unknown; version?: unknown } } | null;
     if (result?.protocolVersion !== 1
       || result.agentInfo?.name !== "Antigravity ACP Server"

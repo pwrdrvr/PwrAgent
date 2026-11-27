@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AcpJsonRpcTransport } from "../acp/acp-client";
 import {
   AcpEphemeralPromptError,
   runAcpEphemeralPrompt,
   type AcpEphemeralPromptRequest,
 } from "../acp/acp-ephemeral-prompt";
+import { applicationHost } from "../owner-host";
 
 type Handler = (params: Record<string, unknown>, agent: ScriptedAgent) => unknown;
 
@@ -103,6 +104,21 @@ const request: AcpEphemeralPromptRequest = {
 };
 
 describe("ACP ephemeral prompt", () => {
+  it("identifies the packaged host in a helper workspace", async () => {
+    const agent = new ScriptedAgent();
+    const packaged = vi.spyOn(applicationHost, "isPackaged", "get").mockReturnValue(true);
+    const version = vi.spyOn(applicationHost, "getVersion").mockReturnValue("1.86.4");
+    try {
+      await runAcpEphemeralPrompt(agent, request);
+      expect(agent.calls[0]?.params?.clientInfo).toEqual({
+        name: "pwragent", title: "PwrAgent", version: "1.86.4",
+      });
+    } finally {
+      packaged.mockRestore();
+      version.mockRestore();
+    }
+  });
+
   it("selects the model and effort, answers, and closes and deletes the session", async () => {
     const agent = new ScriptedAgent();
 

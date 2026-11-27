@@ -1,6 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,6 +15,9 @@ import { pwragentToolSkipsAgentApproval } from "../app-server/acp-host-tool-appr
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
+import { createHeadlessOwnerHostServices } from "../headless/owner-host-services";
+import { applicationHost, getOwnerHostServices, installOwnerHostServices } from "../owner-host";
+import { readNodeRuntimeMetadata } from "../runtime-resources";
 import { StateDb } from "../state/state-db";
 import { createAcpPromptSettlement } from "./fixtures/acp-prompt-settlement";
 import {
@@ -37,22 +41,65 @@ afterEach(() => {
   removeTempStateDbDir(tempDir);
 });
 
-it.each(["acp:antigravity", "acp:gemini", "acp:grok"] as const)(
-  "identifies PwrAgent when initializing %s",
-  async (backendId) => {
+it.each(["desktop release", "desktop development", "Outpost release"] as const)(
+  "identifies the running %s from an unrelated project directory",
+  async (host) => {
+    const release = "1.86.4-beta.7";
+    const project = mkdtempSync(path.join(tempDir, "project-"));
+    writeFileSync(path.join(project, "package.json"), JSON.stringify({ version: "9.9.9" }));
+    const previousHost = getOwnerHostServices();
+    const previousCwd = process.cwd();
+    if (host === "Outpost release") {
+      writeFileSync(path.join(tempDir, "runtime.json"), JSON.stringify({
+        version: 1, appVersion: release, appRoot: ".", resources: "resources",
+      }));
+      const runtime = readNodeRuntimeMetadata(pathToFileURL(path.join(tempDir, "index.js")).href);
+      if (!runtime) throw new Error("The test runtime manifest is missing");
+      installOwnerHostServices(createHeadlessOwnerHostServices({
+        runtime, profileDirectory: tempDir, onQuit: () => {},
+      }));
+    }
+    const packaged = vi.spyOn(applicationHost, "isPackaged", "get");
+    const version = vi.spyOn(applicationHost, "getVersion");
+    if (host !== "Outpost release") {
+      packaged.mockReturnValue(host === "desktop release");
+      version.mockReturnValue(release);
+    }
     const transport = new FakeAcpAgentTransport();
-    const client = new AcpAgentClient({ backendId, store, transport });
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport });
     try {
+      process.chdir(project);
       await client.initialize();
       expect(transport.requests[0]).toMatchObject({
         method: "initialize",
-        params: { clientInfo: { name: "pwragent", title: "PwrAgent" } },
+        params: { clientInfo: {
+          name: "pwragent", title: "PwrAgent", version: host === "desktop development" ? "0.0.0" : release,
+        } },
       });
     } finally {
+      process.chdir(previousCwd);
+      packaged.mockRestore();
+      version.mockRestore();
+      installOwnerHostServices(previousHost);
       await client.dispose();
     }
   },
 );
+
+it.each(["", "0.0.0"])("refuses an ACP handshake with the invalid packaged version %j", async (reported) => {
+  const packaged = vi.spyOn(applicationHost, "isPackaged", "get").mockReturnValue(true);
+  const version = vi.spyOn(applicationHost, "getVersion").mockReturnValue(reported);
+  const transport = new FakeAcpAgentTransport();
+  const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport });
+  try {
+    await expect(client.initialize()).rejects.toThrow("Packaged PwrAgent is missing its release version");
+    expect(transport.requests).toEqual([]);
+  } finally {
+    packaged.mockRestore();
+    version.mockRestore();
+    await client.dispose();
+  }
+});
 
 it("persists ordinary ACP activity but strips review ledger payloads across tool updates", async () => {
   await fc.assert(fc.asyncProperty(fc.constantFrom(

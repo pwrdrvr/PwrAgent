@@ -235,6 +235,7 @@ try {
       fs: { readTextFile: false, writeTextFile: false },
       terminal: false,
     },
+    // This source-tree diagnostic runs independently of a packaged PwrAgent.
     clientInfo: { name: "pwragent", title: "PwrAgent", version: "0.0.0" },
   });
   const session = await send("session/new", {

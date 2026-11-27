@@ -26,7 +26,7 @@ t3code separately removed a fallback that sent Zed's name as the ACP client iden
 
 Google's [CLI 1.5.1 release notes](https://antigravity.google/docs/changelog?tab=cli#v1-5-1) say ACP clients receive the models available to the signed-in account. The [ACP editor guide](https://antigravity.google/docs/ide/extensions/acp/#models-and-thinking-level) still lists specific clients for partner models. A model offered by the server describes what that session can select.
 
-Google documents [connecting ACP clients to `agy acp`](https://antigravity.google/docs/ide/extensions/acp/) and [excludes third-party application wrappers from consumer headless support](https://antigravity.google/docs/faq/#can-i-use-antigravity-cli-headless-mode-in-third-party-coding-agents-or-automate-account-switching). PwrAgent leaves Antigravity account quotas to the vendor. To check them, open the Antigravity CLI and run [`/usage` interactively](https://antigravity.google/docs/cli/commands/usage/).
+Google documents [connecting ACP clients to `agy acp`](https://antigravity.google/docs/ide/extensions/acp/). The [CLI 1.1.11 release notes](https://antigravity.google/docs/changelog?tab=cli#v1-1-11) describe print-mode `/usage` as a read-only quota lookup that runs without model inference. The [FAQ excludes third-party application wrappers from consumer headless support](https://antigravity.google/docs/faq/#can-i-use-antigravity-cli-headless-mode-in-third-party-coding-agents-or-automate-account-switching). To check account quotas, open the Antigravity CLI and run [`/usage` interactively](https://antigravity.google/docs/cli/commands/usage/).
 
 ## Every harness, not only Antigravity
 

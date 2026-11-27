@@ -6,7 +6,7 @@ import { createCommandInvocation } from "@pwrdrvr/agent-transport";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import { isSafeExternalOpenUrl } from "../external-url-policy.js";
 import { terminateOwnedProcessTree } from "../process-tree.js";
-import { ACP_CLIENT_INFO } from "./acp-client-info.js";
+import { readAcpClientInfo } from "./acp-client-info.js";
 import type { AcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import { AcpStdioJsonRpcTransport, type AcpStdioSpawn } from "./acp-stdio-transport.js";
 import { holdAntigravityExecutable, MANAGED_ANTIGRAVITY_ENV } from "./antigravity-runtime-retention.js";
@@ -283,7 +283,7 @@ export class AntigravitySignIn {
     try {
       signal.throwIfAborted();
       const initialized = await Promise.race([
-        transport.request("initialize", { protocolVersion: 1, clientInfo: ACP_CLIENT_INFO }),
+        transport.request("initialize", { protocolVersion: 1, clientInfo: readAcpClientInfo() }),
         pipeFailure.promise,
       ]);
       if ((initialized as { protocolVersion?: unknown } | null)?.protocolVersion !== 1) {
