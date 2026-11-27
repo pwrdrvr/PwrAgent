@@ -2831,6 +2831,10 @@ export type AppServerNotification =
       method: "thread/pricing/updated";
       params: {
         /** Owner listeners may receive changed turn lines. Viewers refetch their selected display. */
+        /** Transcript accounting turns to refresh. An absent list invalidates all loaded turns. */
+        changedTurnIds?: string[];
+        /** A change requires a full transcript accounting refresh, even when turn IDs are known. */
+        pricingHistoryRevision?: string;
         displayInvalidated?: true;
         threadId: string;
         pricing: {

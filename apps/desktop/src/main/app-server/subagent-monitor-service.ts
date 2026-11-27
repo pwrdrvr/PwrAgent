@@ -1,3 +1,4 @@
+import { LivePricingLines } from "./live-pricing-lines";
 import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
@@ -2102,7 +2103,7 @@ export class SubAgentMonitorService {
       // worker's turn end; see `liveCodexNativeSubAgentUsage`.
       const lives = this.liveCodexNativeSubAgentUsage.get(parentThreadId)
         ?? new Map<string, LiveCodexNativeSubAgentUsage>();
-      const lines = new Map(lives.get(monitorId)?.lines ?? []);
+      const lines = new LivePricingLines(lives.get(monitorId)?.lines);
       lines.set(line.usageLineId, line);
       lives.set(monitorId, {
         ...settingsForCard,

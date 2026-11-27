@@ -1,3 +1,4 @@
+import { LivePricingLines } from "../app-server/live-pricing-lines";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
@@ -117,6 +118,45 @@ describe("Token Miser savings scaling", () => {
       threadId: THREAD_ID,
     });
   }
+
+  it("reads a completed transcript turn without visiting live monitor prices", async () => {
+    const counter = new ReadCounter();
+    const gate = gateLine({ monitorId: "active-gate", index: 0, inputTokens: 1000, live: true });
+    internals.liveTokenMiserUsageLines.set(THREAD_ID, new LivePricingLines([[gate.usageLineId, counter.wrap("pricing", [gate])[0]!]]));
+    counter.reads.pricing = 0;
+    const turn = { id: "parent-turn", status: "completed" as const, completedAt: 1_800_000_100_000 };
+    await store.upsertThreadUsageLine({ line: parentLine({ id: turn.id, turnId: turn.id }) });
+    const display = await registry.readThread({
+      backend: "codex", threadId: THREAD_ID, includeTurns: false, viewOnly: true,
+      display: { resource: "accounting", turns: [turn] },
+    });
+    expect(display.replay.entries.map((entry) => entry.turn?.id)).toEqual([turn.id]);
+    expect(counter.reads.pricing).toBe(0);
+  });
+
+  it("reconciles live-only turns and replacements as a usage line changes scope", async () => {
+    const original = parentLine({ id: "usage", turnId: "first" });
+    await store.upsertThreadUsageLine({ line: original });
+    const live = new LivePricingLines();
+    internals.liveTokenMiserUsageLines.set(THREAD_ID, live);
+    const readTurns = async () => {
+      const turns = ["first", "second"].map((id) => ({ id, status: "completed" as const, completedAt: original.createdAt + 100 }));
+      const display = await registry.readThread({ backend: "codex", threadId: THREAD_ID, includeTurns: false,
+        viewOnly: true, display: { resource: "accounting", turns } });
+      return display.replay.entries.map((entry) => entry.turn?.id);
+    };
+    live.set(original.usageLineId, { ...original, turnId: "second" });
+    expect(await readTurns()).toEqual(["second"]);
+    live.set(original.usageLineId, { ...original, scope: "monitor" });
+    expect(await readTurns()).toEqual([]);
+    live.delete(original.usageLineId);
+    expect(await readTurns()).toEqual(["first"]);
+    const extra = parentLine({ id: "live-only", turnId: "second" });
+    live.set(extra.usageLineId, extra);
+    expect((await readTurns()).sort()).toEqual(["first", "second"]);
+    live.clear();
+    expect(await readTurns()).toEqual(["first"]);
+  });
 
   it("keeps thread-read savings totals and replay counts identical to the per-gate path", async () => {
     const result = (await readSavings(buildWorkload(2))).tokenMiser!;

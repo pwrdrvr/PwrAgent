@@ -6,6 +6,7 @@ import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind, AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import { estimateHistoricalThreadUsageGapLines } from "@pwragent/shared/thread-pricing-projection";
+import { FederationAccountingStream } from "../federation/federation-event-stream";
 import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import type { DesktopSpendAlertPolicy } from "@pwragent/shared/contracts/settings";
@@ -236,8 +237,10 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       }));
       await store.upsertThreadUsageLines({ lines });
       const original = await spend();
+      const revision = store.readPricingHistoryRevision();
       expect(original).toBeGreaterThan(6000);
       await new SqliteOverlayStore(peer).upsertThreadUsageLine({ line: { ...lines[0]!, totalCostMicros: 3000 } });
+      expect(store.readPricingHistoryRevision()).not.toBe(revision);
       expect(await spend()).toBe(original + 2000);
       let inside: Promise<number> | undefined;
       expect(() => stateDb.raw.transaction(() => {
@@ -259,9 +262,15 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     const backend = "acp:antigravity";
     const threadId = "thread-1";
     const events: PricingEvent[] = [];
+    const sender = new FederationAccountingStream();
+    const receiver = new FederationAccountingStream();
     registry.onEvent((event) => {
       if (event.notification.method === "thread/pricing/updated") {
-        events.push(projectThreadDisplayEvent(event).notification as PricingEvent);
+        const local = projectThreadDisplayEvent(event);
+        const wire = sender.encode(local, { epoch: "test-epoch", sequence: events.length + 1 });
+        const remote = receiver.decode(JSON.parse(JSON.stringify(wire)));
+        expect(remote?.notification).toEqual(local.notification);
+        events.push(local.notification as PricingEvent);
       }
     });
     for (const turnId of ["first", "second"]) {
@@ -285,6 +294,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     expect(first.rowCompactions).toHaveLength(1);
     expect(first.line.totalCostMicros).toBeGreaterThanOrEqual(1000);
     expect(events.map(({ params }) => params.pricing)).toEqual(Array(2).fill({ lines: [], summaries: [] }));
+    expect(events.map(({ params }) => params.changedTurnIds)).toEqual([["first"], ["second"]]);
     const [initial, pending] = events.map(({ params }) => params.triggeredSpendAlerts);
     expect(initial).toMatchObject([
       { kind: "active-turn-spend", turnId: "first", spendMicros: first.line.totalCostMicros },

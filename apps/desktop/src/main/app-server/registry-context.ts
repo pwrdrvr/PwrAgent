@@ -19,6 +19,7 @@ export type RegistryUsageStore = Pick<BackendRegistryOverlayStoreLike,
   "upsertThreadUsageLines" | "completeThreadUsageTurn"
   | "completeThreadUsageTurns" | "readThreadUsageActivities" | "readThreadUsageActivityForTurn"
   | "readThreadTurnUsageLines"
+  | "readPricingHistoryRevision"
   | "readThreadSpendMicros"
   | "listThreadCompactions" | "readLatestThreadCompactionAt" | "recordThreadCompaction" | "readLatestThreadUsageModel"
   | "readThreadTokenMiserGateTotals" | "readThreadUsageSettings" | "readThreadUsageTurnTimeRepairCandidates"

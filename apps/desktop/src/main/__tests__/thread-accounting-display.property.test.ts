@@ -1,3 +1,4 @@
+import { LivePricingLines } from "../app-server/live-pricing-lines";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import {
@@ -40,7 +41,7 @@ function makeRegistry(store: SqliteOverlayStore, options: {
   const subAgentMonitorService = {
     codexNativeSubAgentParentRecords: new Map([["child", "parent"]]),
     liveCodexNativeSubAgentUsageRecords: new Map(options.workerLines ? [["parent", new Map([
-      ["codex-native:child", { lines: new Map(options.workerLines.map((line) => [line.usageLineId, line])) }],
+      ["codex-native:child", { lines: new LivePricingLines(options.workerLines.map((line) => [line.usageLineId, line])) }],
     ])]] : []),
   };
   const registry: DesktopBackendRegistry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {

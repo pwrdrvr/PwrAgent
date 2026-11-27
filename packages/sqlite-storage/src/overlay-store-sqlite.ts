@@ -855,6 +855,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     state: { knownThreadKeys: string[]; lastSnapshotHash?: string } | undefined;
   };
 
+  // Local repairs can change historical turns outside the current delivery.
+  private pricingRepairGeneration = 0;
+
+  readPricingHistoryRevision(): string {
+    const dataVersion = this.stateDb.raw.pragma("data_version", { simple: true }) as number;
+    return `${dataVersion}:${this.pricingRepairGeneration}`;
+  }
+
   /** Recent whole-ledger reads, least recently used first. */
   private readonly threadPricingCache = new Map<string, {
     dataVersion: number;
@@ -3089,6 +3097,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }).changes, 0);
       const cleared = clearImplausible.run(now, span.from, span.before).changes;
       this.stateDb.setMeta(USAGE_TURN_TIME_REPAIR_META_KEY, String(now));
+      if (changed || cleared) this.pricingRepairGeneration++;
       return changed + cleared;
     })();
   }
@@ -3202,6 +3211,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       );
       return changed + complete.run(completedAt, now, row.usage_turn_id).changes;
     }, 0))();
+    if (repaired) this.pricingRepairGeneration++;
     return { repaired, remaining: candidates.length > params.limit, datedByFirstWrite };
   }
 
@@ -3858,6 +3868,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         this.readOrInitializeThreadPricingSummarySync(target);
       }
     })();
+    this.pricingRepairGeneration++;
   }
 
   /**

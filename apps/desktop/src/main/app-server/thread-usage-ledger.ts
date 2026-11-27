@@ -28,12 +28,13 @@ import {
   parseMonitorJobHeuristicDecision,
   type MonitorJobHeuristicEvidence,
 } from "./monitor-job-suggestion";
+import { LivePricingLines } from "./live-pricing-lines";
 import { codexNativeSubAgentId } from "./codex-native-subagents";
 import { isCodexPricingLine, priceLocalModelUsage } from "@pwragent/shared/local-model-pricing";
 import {
   type ThreadDisplayCards,
 } from "./thread-display";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   type AgentEvent,
@@ -566,7 +567,7 @@ export class ThreadUsageLedger {
 
   private readonly liveTokenMiserUsageLines = new Map<
     string,
-    Map<string, ThreadUsageLineRecord>
+    LivePricingLines
   >();
 
   private tokenMiserStoragePreparation?: Promise<void>;
@@ -943,14 +944,24 @@ export class ThreadUsageLedger {
       : pricing);
   }
 
-  async readThreadTurnUsageWithLiveTokenMiser(params: {
+  async readThreadTurnUsage(params: {
     backend: AppServerBackendKind;
     threadId: string;
     turnIds: readonly string[];
   }): Promise<ThreadPricingLedger> {
     if (params.turnIds.length === 0) return { lines: [], summaries: [] };
     const lines = await this.context.stores.usage.readThreadTurnUsageLines?.(params) ?? [];
-    return this.withLiveThreadPricing(params, { lines, summaries: [] });
+    if (params.backend !== "codex") return { lines, summaries: [] };
+    const turns = new Set(params.turnIds);
+    const selected = new Map(lines.map((line) => [line.usageLineId, line]));
+    let changed = false;
+    for (const live of this.livePricingCollections(params.threadId)) {
+      changed = live.appendForTurns(turns, selected) || changed;
+    }
+    // Use the full ledger's ordering for competing lines from storage and live sources.
+    return this.decorateThreadPricing(params.backend, changed
+      ? mergeThreadPricingLines({ lines: [], summaries: [] }, [...selected.values()])
+      : { lines, summaries: [] });
   }
 
   private withLiveThreadPricing(
@@ -983,17 +994,19 @@ export class ThreadUsageLedger {
     return changedPricing ? mergeThreadPricingLines(merged, lines) : { ...merged, lines };
   }
 
-  private livePricingLines(threadId: string): ThreadUsageLineRecord[] {
-    const workers = this.subAgentMonitorService.liveCodexNativeSubAgentUsageRecords;
+  private *livePricingCollections(threadId: string): Iterable<LivePricingLines> {
     const gates = this.liveTokenMiserUsageLines.get(threadId);
-    if (!workers.size) return [...gates?.values() ?? []];
+    if (gates) yield gates;
+    const workers = this.subAgentMonitorService.liveCodexNativeSubAgentUsageRecords;
+    if (!workers.size) return;
+    for (const worker of workers.get(threadId)?.values() ?? []) yield worker.lines;
     const parent = this.subAgentMonitorService.codexNativeSubAgentParentRecords.get(threadId);
     const own = parent ? workers.get(parent)?.get(codexNativeSubAgentId(threadId)) : undefined;
-    return [
-      ...(gates?.values() ?? []),
-      ...[...workers.get(threadId)?.values() ?? []].flatMap((worker) => [...worker.lines.values()]),
-      ...(own?.lines.values() ?? []),
-    ];
+    if (own) yield own.lines;
+  }
+
+  private livePricingLines(threadId: string): ThreadUsageLineRecord[] {
+    return [...this.livePricingCollections(threadId)].flatMap((live) => [...live.values()]);
   }
 
   async emitThreadPricingUpdated(params: {
@@ -1040,13 +1053,18 @@ export class ThreadUsageLedger {
       summaries: [],
     });
     const lines = turnPricing.lines.filter((line) => line.scope === "turn" && line.turnId && changedTurns.has(line.turnId));
+    const localModelIds = params.backend === "codex" ? this.host().resolveCodexLocalModelIdsFn() : [];
     const threadSpendMicros = !baseline && this.host().spendAlertPolicy.threadSpendEnabled && !threadSpendAlerted
       ? await usage.readThreadSpendMicros?.({
           backend: params.backend, threadId: params.threadId,
           liveLines: params.backend === "codex" ? this.livePricingLines(params.threadId) : [],
-          localModelIds: params.backend === "codex" ? this.host().resolveCodexLocalModelIdsFn() : [],
+          localModelIds,
         })
       : undefined;
+    const revision = usage.readPricingHistoryRevision?.();
+    const pricingHistoryRevision = revision && (localModelIds.length
+      ? createHash("sha256").update(JSON.stringify([revision, localModelIds])).digest("base64url")
+      : revision);
     const detectedSpendAlerts = detectUsageSpendAlerts({
       ...(params.activeTurnIds ? { activeTurnIds: params.activeTurnIds } : {}),
       backend: params.backend,
@@ -1088,6 +1106,7 @@ export class ThreadUsageLedger {
         params: {
           threadId: params.threadId,
           displayInvalidated: true,
+          ...(turnIds.length && pricingHistoryRevision ? { changedTurnIds: turnIds, pricingHistoryRevision } : {}),
           pricing: { lines, summaries: [] },
           ...(triggeredSpendAlerts.length > 0
             ? { triggeredSpendAlerts }
@@ -3918,7 +3937,7 @@ export class ThreadUsageLedger {
     this.liveTokenMiserSubAgents.set(entry.threadId, liveSubAgents);
     if (artifact.gateUsageLine) {
       const liveUsageLines = this.liveTokenMiserUsageLines.get(entry.threadId)
-        ?? new Map<string, ThreadUsageLineRecord>();
+        ?? new LivePricingLines();
       liveUsageLines.set(
         artifact.gateUsageLine.usageLineId,
         artifact.gateUsageLine,
@@ -3964,7 +3983,7 @@ export class ThreadUsageLedger {
     const liveSubAgents = this.liveTokenMiserSubAgents.get(threadId)
       ?? new Map<string, ThreadSubAgentSummary>();
     const liveUsageLines = this.liveTokenMiserUsageLines.get(threadId)
-      ?? new Map<string, ThreadUsageLineRecord>();
+      ?? new LivePricingLines();
     // A rebuilt gate line is keyed by its own monitor id, so adding it to the
     // live lines can change only that gate's lookup. Index the lines once and
     // record each addition rather than rescanning them per gate.

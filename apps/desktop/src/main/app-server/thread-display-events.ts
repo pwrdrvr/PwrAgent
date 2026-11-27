@@ -9,6 +9,8 @@ export function projectThreadDisplayEvent(event: AgentEvent): AgentEvent {
     const params = notification.params as Extract<AppServerNotification, { method: "thread/pricing/updated" }>["params"];
     return { ...event, notification: { method: "thread/pricing/updated", params: {
       threadId: params.threadId,
+      ...(params.pricingHistoryRevision ? { pricingHistoryRevision: params.pricingHistoryRevision } : {}),
+      ...(params.changedTurnIds ? { changedTurnIds: params.changedTurnIds } : {}),
       triggeredSpendAlerts: params.triggeredSpendAlerts,
       displayInvalidated: true,
       pricing: { lines: [], summaries: [] },

@@ -1503,6 +1503,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get readThreadUsageActivities() { return overlayStore.readThreadUsageActivities?.bind(overlayStore); },
         get readThreadUsageActivityForTurn() { return overlayStore.readThreadUsageActivityForTurn?.bind(overlayStore); },
         get readThreadTurnUsageLines() { return overlayStore.readThreadTurnUsageLines?.bind(overlayStore); },
+        get readPricingHistoryRevision() { return overlayStore.readPricingHistoryRevision?.bind(overlayStore); },
         get readThreadSpendMicros() { return overlayStore.readThreadSpendMicros?.bind(overlayStore); },
         get listThreadCompactions() { return overlayStore.listThreadCompactions?.bind(overlayStore); },
         get readLatestThreadCompactionAt() { return overlayStore.readLatestThreadCompactionAt?.bind(overlayStore); },
