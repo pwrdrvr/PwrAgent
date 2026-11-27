@@ -1,0 +1,4 @@
+interface:
+  display_name: "PwrAgent Profile Scaling"
+  short_description: "Replay the synthetic 1.5.x profile scaling audit"
+  default_prompt: "Use $pwragent-profile-scaling to compare this revision with its base on the matched profile workloads."
