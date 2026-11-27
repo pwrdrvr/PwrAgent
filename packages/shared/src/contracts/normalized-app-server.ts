@@ -756,6 +756,8 @@ export type ThreadGitWorkingState = {
 };
 
 export type AppServerThreadSummary = {
+  /** Latest owner-observed context fill, independent of cumulative token usage. */
+  contextWindow?: { totalTokens: number; modelContextWindow: number };
   id: ThreadIdentifier;
   title: string;
   titleSource: AppServerThreadTitleSource;
@@ -2830,6 +2832,11 @@ export type AppServerNotification =
   | {
       method: "thread/pricing/updated";
       params: {
+        /** Owner listeners may receive changed turn lines. Viewers refetch their selected display. */
+        /** Transcript accounting turns to refresh. An absent list invalidates all loaded turns. */
+        changedTurnIds?: string[];
+        /** A change requires a full transcript accounting refresh, even when turn IDs are known. */
+        pricingHistoryRevision?: string;
         displayInvalidated?: true;
         threadId: string;
         pricing: {
@@ -2899,6 +2906,7 @@ export type AppServerNotification =
   | {
       method: "navigation/providerThreads/refreshed";
       params: {
+        backend?: AppServerBackendKind;
         failedProviders: number;
       };
     }

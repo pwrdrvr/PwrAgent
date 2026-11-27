@@ -3,6 +3,7 @@ import type {
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
 } from "@pwragent/shared/contracts/normalized-app-server";
+import { graphemePrefix } from "@pwragent/shared/text-graphemes";
 import queuedMessageTitlePrompt from "./queued-message-title-prompt.md?raw";
 import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title-generation-service";
 
@@ -24,8 +25,7 @@ import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title
  * and never sent to the helper. Measured against the trimmed text.
  */
 export const QUEUED_MESSAGE_TITLE_SOURCE_THRESHOLD = 60;
-export const QUEUED_MESSAGE_TITLE_MAX_CHARACTERS = 48;
-const QUEUED_MESSAGE_TITLE_MAX_WORDS = 7;
+export const QUEUED_MESSAGE_TITLE_MAX_CHARACTERS = 100;
 /** Long enough to name any message; a pasted log needs no more context. */
 const QUEUED_MESSAGE_TITLE_SOURCE_LIMIT = 4_000;
 const QUEUED_MESSAGE_TITLE_TIMEOUT_MS = 20_000;
@@ -48,6 +48,7 @@ const QUEUED_MESSAGE_TITLE_CONTEXT_NAME_LIMIT = 80;
 /** Senders named in the context; a bigger batch ends with "and N more". */
 const QUEUED_MESSAGE_TITLE_CONTEXT_SENDER_LIMIT = 5;
 const PLACEHOLDER_PATTERN = /\{\{(MESSAGE|CONTEXT)\}\}/gu;
+const titleWords = new Intl.Segmenter("en", { granularity: "word" });
 
 export const QUEUED_MESSAGE_TITLE_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -170,11 +171,16 @@ export function normalizeQueuedMessageTitle(object: unknown): string | undefined
   if (typeof raw !== "string") return undefined;
   const cleaned = cleanTitle(raw);
   if (!cleaned) return undefined;
-  const words = cleaned.split(/\s+/u).slice(0, QUEUED_MESSAGE_TITLE_MAX_WORDS).join(" ");
-  const characters = Array.from(words);
-  if (characters.length <= QUEUED_MESSAGE_TITLE_MAX_CHARACTERS) return words;
-  return cleanTitle(characters.slice(0, QUEUED_MESSAGE_TITLE_MAX_CHARACTERS).join(""))
-    || undefined;
+  const codePoints = Array.from(cleaned);
+  if (codePoints.length <= QUEUED_MESSAGE_TITLE_MAX_CHARACTERS) return cleaned;
+  // Convert the code-point limit to the code-unit offset used by both segmenters.
+  const limit = codePoints.slice(0, QUEUED_MESSAGE_TITLE_MAX_CHARACTERS).join("").length;
+  const prefix = graphemePrefix(cleaned, limit);
+  const word = titleWords.segment(cleaned).containing(prefix.length);
+  if (word?.isWordLike && word.index > 0 && word.index < prefix.length) {
+    return cleanTitle(prefix.slice(0, word.index)) || undefined;
+  }
+  return cleanTitle(prefix) || undefined;
 }
 
 function cleanTitle(value: string): string {

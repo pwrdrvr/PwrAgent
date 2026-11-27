@@ -70,8 +70,7 @@ export function createProviderThreadSnapshotStorage(): ProviderThreadSnapshotSto
   return new ProviderThreadSnapshotStore(getAppStateDb());
 }
 export function createRetainedOwnerThreadStorage(): RetainedOwnerThreadStorage {
-  const store = new RetainedOwnerThreadStore(getAppStateDb(), resolveActiveProfilePath("state/headless"));
-  return { list: () => store.list(), confirmNativeThreads: ids => store.confirmNativeThreads(ids) };
+  return new RetainedOwnerThreadStore(getAppStateDb(), resolveActiveProfilePath("state/headless"));
 }
 export function createCodexEnvironmentHydrationStorage() {
   return new CodexEnvironmentHydrationStore(getAppStateDb());

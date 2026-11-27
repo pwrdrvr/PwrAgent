@@ -97,11 +97,33 @@ export function buildPricingSpendByModel(params: {
   lines: readonly PricingSpendUsageLine[];
   resolveModel?: PricingSpendModelResolver;
 }): PricingProviderSpend[] {
-  const groups = new Map<string, MutableProviderSpend>();
-  for (const line of params.lines) {
-    const model = params.resolveModel?.(line) ?? line.model;
+  const projection = new PricingModelSpendProjection();
+  for (const line of params.lines) projection.add(line, params.resolveModel?.(line) ?? line.model);
+  return projection.groups();
+}
+
+export class PricingModelSpendProjection {
+  private readonly providers = new Map<string, MutableProviderSpend>();
+
+  copy(): PricingModelSpendProjection {
+    const copy = new PricingModelSpendProjection();
+    for (const [key, group] of this.providers) {
+      const models = new Map<string, MutableModelSpend>();
+      for (const [id, bucket] of group.models) {
+        models.set(id, {
+          ...bucket,
+          subAgentIds: new Set(bucket.subAgentIds),
+          systemHelperIds: new Set(bucket.systemHelperIds),
+        });
+      }
+      copy.providers.set(key, { ...group, models });
+    }
+    return copy;
+  }
+
+  add(line: PricingSpendUsageLine, model: string | undefined, newest = false): void {
     const groupKey = `${line.provider}:${line.currency}`;
-    let group = groups.get(groupKey);
+    let group = this.providers.get(groupKey);
     if (!group) {
       group = {
         currency: line.currency,
@@ -109,7 +131,7 @@ export function buildPricingSpendByModel(params: {
         models: new Map(),
         provider: line.provider,
       };
-      groups.set(groupKey, group);
+      this.providers.set(groupKey, group);
     }
     const modelKey = `${groupKey}:${model ?? ""}`;
     let bucket = group.models.get(modelKey);
@@ -127,6 +149,13 @@ export function buildPricingSpendByModel(params: {
         threadUsageLineCount: 0,
       };
       group.models.set(modelKey, bucket);
+    }
+    if (newest) {
+      // The snapshot fold encounters the newest row first. An incremental
+      // fold encounters it last and must keep its label and summary identity.
+      bucket.modelLabel = line.modelLabel;
+      bucket.summary = { ...bucket.summary, threadId: line.parentThreadId ?? line.threadId, backend: line.backend };
+      bucket.threadSummary = { ...bucket.threadSummary, threadId: line.parentThreadId ?? line.threadId, backend: line.backend };
     }
     bucket.summary = addUsageLineToSummary(bucket.summary, line);
     if (line.estimatedUsageGap || line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID) {
@@ -147,46 +176,48 @@ export function buildPricingSpendByModel(params: {
     }
   }
 
-  return [...groups.values()]
-    .map((group) => {
-      const models = [...group.models.values()]
-        .map((bucket) => {
-          const helperCount = bucket.subAgentIds.size + bucket.systemHelperIds.size;
-          return {
-            hasEstimatedRows: bucket.hasEstimatedRows,
-            key: bucket.key,
-            ...(bucket.model === undefined ? {} : { model: bucket.model }),
-            ...(bucket.modelLabel ? { modelLabel: bucket.modelLabel } : {}),
-            provider: bucket.provider,
-            subAgentCount: bucket.subAgentIds.size,
-            summary: bucket.summary,
-            systemHelperCount: bucket.systemHelperIds.size,
-            // Only worth carrying when something else shares the bucket;
-            // otherwise it is the bucket, and a second identical figure on the
-            // row would read as a second measurement.
-            ...(helperCount > 0 && bucket.threadUsageLineCount > 0
-              ? { threadSummary: bucket.threadSummary }
-              : {}),
-            threadUsageLineCount: bucket.threadUsageLineCount,
-          } satisfies PricingModelSpend;
-        })
-        .sort(compareModelSpend);
-      return {
-        currency: group.currency,
-        key: group.key,
-        models,
-        provider: group.provider,
-        totalCostMicros: models.reduce(
-          (total, bucket) => total + bucket.summary.totalCostMicros,
-          0,
-        ),
-        usageLineCount: models.reduce(
-          (total, bucket) => total + bucket.summary.usageLineCount,
-          0,
-        ),
-      } satisfies PricingProviderSpend;
-    })
-    .sort(compareProviderSpend);
+  groups(): PricingProviderSpend[] {
+    return [...this.providers.values()]
+      .map((group) => {
+        const models = [...group.models.values()]
+          .map((bucket) => {
+            const helperCount = bucket.subAgentIds.size + bucket.systemHelperIds.size;
+            return {
+              hasEstimatedRows: bucket.hasEstimatedRows,
+              key: bucket.key,
+              ...(bucket.model === undefined ? {} : { model: bucket.model }),
+              ...(bucket.modelLabel ? { modelLabel: bucket.modelLabel } : {}),
+              provider: bucket.provider,
+              subAgentCount: bucket.subAgentIds.size,
+              summary: bucket.summary,
+              systemHelperCount: bucket.systemHelperIds.size,
+              // Only worth carrying when something else shares the bucket;
+              // otherwise it is the bucket, and a second identical figure on the
+              // row would read as a second measurement.
+              ...(helperCount > 0 && bucket.threadUsageLineCount > 0
+                ? { threadSummary: bucket.threadSummary }
+                : {}),
+              threadUsageLineCount: bucket.threadUsageLineCount,
+            } satisfies PricingModelSpend;
+          })
+          .sort(compareModelSpend);
+        return {
+          currency: group.currency,
+          key: group.key,
+          models,
+          provider: group.provider,
+          totalCostMicros: models.reduce(
+            (total, bucket) => total + bucket.summary.totalCostMicros,
+            0,
+          ),
+          usageLineCount: models.reduce(
+            (total, bucket) => total + bucket.summary.usageLineCount,
+            0,
+          ),
+        } satisfies PricingProviderSpend;
+      })
+      .sort(compareProviderSpend);
+  }
 }
 
 /**

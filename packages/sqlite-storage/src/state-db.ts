@@ -2380,6 +2380,9 @@ export class StateDb {
       // Only ordinary ACP root turns with a recorded fill enter the baseline
       // index. Idle compaction can seek by completion time without a sort.
       db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_navigation_context
+          ON thread_usage_turns(backend, thread_id, observed_at)
+          WHERE final_context_tokens >= 0 AND model_context_window > 0;
         CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_pending_acp_compaction
           ON thread_usage_turns(backend, thread_id, completed_at DESC, observed_at DESC)
           WHERE parent_thread_id IS NULL AND acp_compaction_before_tokens > 0;
@@ -3943,6 +3946,12 @@ function ensureThreadAccountingReadIndexes(db: BetterSqlite3.Database): void {
   // index specific to turn rows and the repair indexes specific to unpriced
   // rows so normal priced root writes do not maintain any of these indexes.
   db.exec(`
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_spend_thread
+  ON thread_usage_lines(backend, thread_id) WHERE status != 'superseded'
+    AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_spend_parent
+  ON thread_usage_lines(backend, parent_thread_id) WHERE parent_thread_id IS NOT NULL AND status != 'superseded'
+    AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_child_turn
   ON thread_usage_lines(backend, parent_thread_id, turn_id)
   WHERE scope = 'turn' AND status != 'superseded' AND parent_thread_id IS NOT NULL;

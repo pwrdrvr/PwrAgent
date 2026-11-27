@@ -1,0 +1,85 @@
+{
+  "federation-stream-recovery": {
+    "source": "apps/desktop/src/main/__tests__/federation-stream-recovery.property.test.ts",
+    "seed": 260583928,
+    "assertions": 1
+  },
+  "remote-summary-publication": {
+    "source": "apps/desktop/src/main/__tests__/remote-summary-publication.property.test.ts",
+    "seed": 41736921,
+    "assertions": 3
+  },
+  "remote-thread-summary-cache": {
+    "source": "apps/desktop/src/main/__tests__/remote-thread-summary-cache.property.test.ts",
+    "seed": 86018259,
+    "assertions": 1,
+    "corpus": "models/remote-thread-summary-cache.ts"
+  },
+  "review-auto-fix-runs": {
+    "source": "apps/desktop/src/main/__tests__/review-auto-fix-runs.property.test.ts",
+    "seed": 222232871,
+    "assertions": 2
+  },
+  "review-auto-fix": {
+    "source": "apps/desktop/src/main/__tests__/review-auto-fix.property.test.ts",
+    "seed": 23421434,
+    "assertions": 1,
+    "corpus": "models/review-auto-fix.ts"
+  },
+  "live-transcript-activity": {
+    "source": "apps/desktop/src/renderer/src/features/thread-detail/__tests__/live-transcript-activity.property.test.ts",
+    "seed": 186807122,
+    "assertions": 2
+  },
+  "navigation-refresh-fanout": {
+    "source": "apps/desktop/src/renderer/src/lib/__tests__/navigation-refresh-fanout.property.test.ts",
+    "seed": 235677451,
+    "assertions": 4,
+    "corpus": "models/navigation-refresh-fanout.ts"
+  },
+  "transcript-order": {
+    "source": "apps/desktop/src/renderer/src/lib/__tests__/transcript-order.property.test.ts",
+    "seed": 91110629,
+    "assertions": 3
+  },
+  "navigation-attention-order": {
+    "source": "packages/owner-core/src/__tests__/navigation-attention-order.property.test.ts",
+    "seed": 142524919,
+    "assertions": 8
+  },
+  "navigation-attention-scope": {
+    "source": "packages/owner-core/src/__tests__/navigation-attention-scope.property.test.ts",
+    "seed": 82607735,
+    "assertions": 1
+  },
+  "navigation-directory-children": {
+    "source": "packages/owner-core/src/__tests__/navigation-directory-children.property.test.ts",
+    "seed": 85755794,
+    "assertions": 2
+  },
+  "navigation-directory-counts": {
+    "source": "packages/owner-core/src/__tests__/navigation-directory-counts.property.test.ts",
+    "seed": 233100161,
+    "assertions": 1
+  },
+  "navigation-directory-scope": {
+    "source": "packages/owner-core/src/__tests__/navigation-directory-scope.property.test.ts",
+    "seed": 31928525,
+    "assertions": 3
+  },
+  "navigation-pr-attachments": {
+    "source": "packages/owner-core/src/__tests__/navigation-pr-attachments.property.test.ts",
+    "seed": 178936675,
+    "assertions": 3
+  },
+  "navigation-projection-reuse": {
+    "source": "packages/owner-core/src/__tests__/navigation-projection-reuse.property.test.ts",
+    "seed": 8688303,
+    "assertions": 1
+  },
+  "navigation-provider-identities": {
+    "source": "packages/owner-core/src/__tests__/navigation-provider-identities.property.test.ts",
+    "seed": 17676935,
+    "assertions": 1
+  }
+}

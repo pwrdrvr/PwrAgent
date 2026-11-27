@@ -251,19 +251,41 @@ describe("ManagedReviewService", () => {
   it("lets the registry read its review records only through read-only views", async () => {
     const { service } = createReviewHarness();
     expect(service.activeReviewSubAgentRecords.size).toBe(0);
-    expect(service.reviewSubAgentRecordsByReviewTurn.size).toBe(0);
+    const key = buildReviewSubAgentKey("codex", THREAD, REVIEW_TURN);
+    expect(service.historicalReviewForTurn(key)).toBeUndefined();
 
     await service.startReview(REVIEW_REQUEST);
 
     const live = [...service.activeReviewSubAgentRecords.values()];
     expect(live).toEqual([expect.objectContaining({ mode: "native", parentThreadId: THREAD, turnId: REVIEW_TURN })]);
-    expect([...service.reviewSubAgentRecordsByReviewTurn.values()]).toEqual(live);
+    expect(service.historicalReviewForTurn(key)).toBe(live[0]);
     expect(service.findReviewForParentTurn({ backend: "codex", parentThreadId: THREAD })).toBe(live[0]);
 
     await service.completeReviewSubAgent(reviewTerminal);
     // The live view drops a finished review; the by-turn view keeps it for usage reads.
     expect(service.activeReviewSubAgentRecords.size).toBe(0);
-    expect(service.reviewSubAgentRecordsByReviewTurn.size).toBe(1);
+    expect(service.historicalReviewForTurn(key)).toBe(live[0]);
+  });
+
+  it("correlates an inner inline terminal after its live card settles until the interrupt mapping clears", async () => {
+    const { service, activity } = createReviewHarness();
+    await service.startReview(REVIEW_REQUEST);
+    const outer = { threadId: THREAD, turnId: REVIEW_TURN };
+    activity.setReviewInterrupt(outer, "inner");
+    await service.completeReviewSubAgent(reviewTerminal);
+
+    const event: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: { threadId: THREAD, turnId: "inner", turn: { id: "inner", status: "completed", output: [] } },
+      },
+    };
+    expect(service.withReviewRuntimeMetadata(event)).toMatchObject({
+      notification: { params: { turn: { id: "inner", rootTurnId: REVIEW_TURN } } },
+    });
+    activity.forgetReviewInterrupt(outer);
+    expect(service.withReviewRuntimeMetadata(event)).toBe(event);
   });
 
   it("never leaves the thread idle mid-start and always releases its start reservation", async () => {

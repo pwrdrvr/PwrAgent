@@ -59,6 +59,56 @@ function expectTurnReadBudget(reads: ReturnType<typeof observeTurnReads>["reads"
   expect(read!.rows).toBe(rows);
 }
 
+it("projects the latest observed fill for the requested backend and thread, independent of ledger write order", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    const readings = [[3, undefined], [2, 0], [1, 700]] as const;
+    for (const [sequence, finalContextTokens] of readings) {
+      await store.upsertThreadUsageLine({ line: usageLine(`line-${sequence}`, {
+        turnId: `turn-${sequence}`, createdAt: createdAt + sequence,
+        finalContextTokens, modelContextWindow: finalContextTokens === undefined ? undefined : 1_000,
+      }) });
+    }
+    const threads = (["codex", "claude"] as const).map((source) => ({
+      id: parent.threadId, source, title: "Same ID", titleSource: "explicit" as const, linkedDirectories: [],
+    }));
+    const observation = observeTurnReads(db);
+    const measured = new Map<string, number>();
+    const index = store.readNavigationQueryIndex({ backend: "all", threads, measureRow: (key, bytes) => measured.set(key, bytes) });
+    observation.restore();
+    expect(observation.reads).toHaveLength(1);
+    expect(observation.reads[0]!.rows).toBe(1);
+    expect(observation.reads[0]!.plan.join("\n")).toContain("idx_thread_usage_turns_navigation_context");
+    expect(observation.reads[0]!.plan.join("\n")).not.toMatch(/SCAN (?:thread_usage_turns|turn)\b|TEMP B-TREE/);
+    expect(index.threads.find((row) => row.source === "codex")?.contextWindow).toEqual({
+      totalTokens: 0, modelContextWindow: 1_000,
+    });
+    expect(index.threads.find((row) => row.source === "claude")?.contextWindow).toBeUndefined();
+    // A keyed refresh must charge the same row bytes for a provider or ledger reading.
+    const contextWindow = { totalTokens: 0, modelContextWindow: 1_000 };
+    const fromProvider = store.readNavigationQueryThreads({ backend: "all", threads: [{ ...threads[0]!, contextWindow }],
+      measureRow: (key, bytes) => expect(bytes).toBe(measured.get(key)) });
+    expect(fromProvider.threads[0]?.contextWindow).toEqual(contextWindow);
+
+    const snapshot = () => store.reconcileNavigationSnapshot({ backend: "all", threads, fetchedAt: createdAt });
+    await snapshot();
+    expect((await snapshot()).unchanged).toBe(true);
+    const baseline = () => db.raw.prepare("SELECT payload FROM backends WHERE scope = 'all'").get();
+    const storedBaseline = baseline();
+    const version = store.readOwnerNavigationSourceVersion();
+    await store.upsertThreadUsageLine({ line: usageLine("next", {
+      turnId: "next", createdAt: createdAt + 4, finalContextTokens: 500, modelContextWindow: 1_000,
+    }) });
+    expect(store.readOwnerNavigationSourceVersion()).not.toBe(version);
+    const next = await snapshot();
+    expect(next.unchanged).toBe(false);
+    expect(next.threads.find((row) => row.source === "codex")?.contextWindow?.totalTokens).toBe(500);
+    expect((await snapshot()).unchanged).toBe(true);
+    expect(baseline()).toEqual(storedBaseline);
+  } finally { db.close(); }
+});
+
 it("preserves the displayed pricing model with a keyed read of only referenced turn metadata", async () => {
   await fc.assert(fc.asyncProperty(fc.nat({ max: 10_000 }), fc.boolean(), fc.boolean(), async (tokens, reverse, lineOwnsCompletion) => {
     const db = openInMemoryStateDb();

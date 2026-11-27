@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerBackendKind, AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import { buildTurnUsageActivityEntryFromLine } from "@pwragent/shared/thread-usage-display";
+import { PricingRunningTotals } from "@pwragent/shared/thread-pricing-display";
+import { estimateHistoricalThreadUsageGapLines } from "@pwragent/shared/thread-pricing-projection";
+import { FederationAccountingStream } from "../federation/federation-event-stream";
+import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
+import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
+import type { DesktopSpendAlertPolicy } from "@pwragent/shared/contracts/settings";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -45,6 +52,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
   const createRegistry = (
     liveRuntimeInstanceIds: string[] = [],
     options: {
+      spendAlertPolicy?: DesktopSpendAlertPolicy;
       claudeBackendOptions?: Partial<ClaudeBackendOptions>;
       codexClient?: Record<string, unknown>;
       runningTurnShutdownStopTimeoutMs?: number;
@@ -65,6 +73,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       resolveLiveProfileRuntimeInstanceIds: () => liveRuntimeInstanceIds,
       runningTurnShutdownStopTimeoutMs: options.runningTurnShutdownStopTimeoutMs,
       resolveUsageAccountGroups: options.resolveUsageAccountGroups,
+      resolveSpendAlertPolicy: options.spendAlertPolicy && (() => options.spendAlertPolicy!),
       claudeBackendOptions: options.claudeBackendOptions,
     });
     registries.push(registry);
@@ -130,6 +139,410 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     if (tempDir) {
       removeTempStateDbDir(tempDir);
     }
+  });
+
+  type PricingEvent = Extract<AppServerNotification, { method: "thread/pricing/updated" }>;
+  const complete = (registry: DesktopBackendRegistry, backend: AppServerBackendKind, turnId: string) =>
+    registry.publishLocalEvent({ backend, notification: { method: "turn/completed",
+      params: { threadId: "thread-1", turnId, turn: { id: turnId, status: "completed", output: [] } },
+    } });
+
+  it("refreshes an open historical Pricing page with bounded ledger reads", async () => {
+    const registry = createRegistry();
+    const backend = "acp:antigravity";
+    const request = { backend, threadId: "thread-1", display: { resource: "pricing", limit: 4, deferPricingGates: true },
+      includeTurns: false, viewOnly: true } as const;
+    let measuring = false;
+    let rows = 0;
+    const prepare = stateDb.raw.prepare.bind(stateDb.raw);
+    vi.spyOn(stateDb.raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (/SELECT/i.test(sql) && /thread_usage_lines/.test(sql)) {
+        for (const method of ["get", "all"] as const) {
+          const read = statement[method].bind(statement);
+          Object.assign(statement, { [method]: (...args: unknown[]) => {
+            const value = read(...args);
+            if (measuring) {
+              for (const row of Array.isArray(value) ? value : [value]) {
+                if (row && typeof row === "object" && "usage_line_id" in row) rows++;
+              }
+            }
+            return value;
+          } });
+        }
+      }
+      return statement;
+    });
+    const folds = vi.spyOn(PricingRunningTotals.prototype, "add");
+    const measurements: number[] = [];
+    for (let n = 1; n <= 6; n++) {
+      const id = `turn-${n}`;
+      await registry.publishLocalEvent(started(backend, id));
+      await registry.publishLocalEvent(usage(backend, id));
+      await complete(registry, backend, id);
+      folds.mockClear();
+      rows = 0;
+      measuring = true;
+      const { display } = await registry.readThread(request);
+      measuring = false;
+      measurements.push(rows);
+      expect(folds).toHaveBeenCalledTimes(1);
+      expect(display?.pricingPage?.rows.map(({ line }) => line.turnId))
+        .toEqual(Array.from({ length: Math.min(n, 4) }, (_, i) => `turn-${n - i}`));
+      expect(display?.pricingPage?.totalRows).toBe(n);
+      expect(display?.pricingPage?.summary?.usageLineCount).toBe(n);
+    }
+    expect(measurements).toEqual([1, 1, 1, 1, 1, 1]);
+    rows = 0;
+    folds.mockClear();
+    measuring = true;
+    await readThreadForPeer(registry, request);
+    measuring = false;
+    expect(rows).toBe(0);
+    expect(folds).not.toHaveBeenCalled();
+    // A freshly constructed owner must reconstruct the same page from SQLite.
+    store = new SqliteOverlayStore(stateDb);
+    const cold = createRegistry();
+    rows = 0;
+    folds.mockClear();
+    measuring = true;
+    const recovered = await cold.readThread(request);
+    measuring = false;
+    expect(rows).toBe(6);
+    expect(folds).toHaveBeenCalledTimes(6);
+    expect(recovered.display).toEqual((await registry.readThread(request)).display);
+    folds.mockRestore();
+  });
+
+  it("matches a full Pricing projection across pages, gap estimates, marker attribution and recovery", async () => {
+    const owner = createRegistry();
+    const backend = "acp:antigravity";
+    const threadId = "thread-1";
+    const request = { backend, threadId, display: { resource: "pricing", limit: 2, deferPricingGates: true },
+      includeTurns: false, viewOnly: true } as const;
+    const comparePages = async () => {
+      const readAll = async (peer: boolean) => {
+        const pages = [];
+        let cursor: string | undefined;
+        do {
+          const pageRequest = { ...request, display: { ...request.display, cursor } };
+          const result = peer ? await readThreadForPeer(owner, pageRequest) : await owner.readThread(pageRequest);
+          pages.push(result.display!.pricingPage!);
+          cursor = result.display!.nextCursor;
+        } while (cursor);
+        return pages;
+      };
+      const actual = await readAll(true);
+      const full = vi.spyOn(store, "readThreadPricingPage").mockResolvedValue(undefined);
+      try { expect(actual).toEqual(await readAll(false)); } finally { full.mockRestore(); }
+      return actual;
+    };
+    for (let i = 1; i <= 3; i++) {
+      const turnId = `priced-${i}`;
+      await owner.publishLocalEvent(started(backend, turnId));
+      await owner.publishLocalEvent({ backend, notification: { method: "thread/tokenUsage/updated", params: {
+        threadId, turnId, model: i === 2 ? "gpt-5.4" : "gpt-5.5", tokenUsage: {
+          last: { inputTokens: 1000, cachedInputTokens: 100, outputTokens: 20, totalTokens: 1020 },
+          total: { inputTokens: 10_000 + 1000 * i, cachedInputTokens: i * 100,
+            outputTokens: 20 * i, totalTokens: 10_000 + 1020 * i },
+        },
+      } } });
+      await complete(owner, backend, turnId);
+      await comparePages();
+    }
+    const first = await owner.readThread(request);
+    expect(first.display!.pricingPage!.totalRows).toBeGreaterThan(3);
+    const stale = first.display!.nextCursor!;
+    await store.recordThreadCompaction({ compaction: { backend, threadId, compactionId: "later", turnId: "priced-1",
+      observedAt: 20, updatedAt: 20 } });
+    await expect(readThreadForPeer(owner, { ...request, display: { ...request.display, cursor: stale } }))
+      .rejects.toThrow("Thread display history changed");
+    const marked = (await comparePages()).flatMap((page) => page.rows);
+    expect(marked.filter((row) => row.rowCompactions.length)).toHaveLength(1);
+    const target = marked.find((row) => row.line.turnId === "priced-2")!.line;
+    stateDb.raw.prepare("UPDATE thread_compactions SET cold_usage_line_id = ? WHERE compaction_id = ?").run(target.usageLineId, "later");
+    expect((await comparePages()).flatMap((page) => page.rows).find((row) => row.rowCompactions.length)?.line.usageLineId)
+      .toBe(target.usageLineId);
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET created_at = created_at - 100 WHERE usage_line_id = ?").run(target.usageLineId);
+    await comparePages();
+
+    // Gate grouping needs the helper's parent card, even when the parent is on
+    // an older page. Switch from the cached turn ledger to a ledger with a gate.
+    const monitorId = "system:token-miser:priced";
+    await store.upsertThreadUsageLine({ line: {
+      ...target, usageLineId: "priced-gate", sourceItemId: monitorId, scope: "monitor", source: "monitor",
+      usageTurnId: undefined, turnId: "helper", createdAt: target.createdAt + 1,
+    } });
+    await store.upsertThreadSubAgent({ backend, threadId, subAgent: {
+      backend, monitorId, parentTurnId: target.turnId, monitorTurnId: "helper",
+      task: "Gate", status: "success", createdAt: 1, updatedAt: 1,
+    } });
+    const parent = (await comparePages()).flatMap((page) => page.rows)
+      .find((row) => row.line.usageLineId === target.usageLineId)!;
+    expect(parent.gatesDeferred).toBe(true);
+    expect(parent.gateSummary?.gateCount).toBe(1);
+    const expanded = await readThreadForPeer(owner, { ...request, display: { ...request.display, deferPricingGates: false, limit: 20 } });
+    expect(expanded.display!.pricingPage!.rows.find((row) => row.line.usageLineId === target.usageLineId)?.gates[0]?.line.usageLineId)
+      .toBe("priced-gate");
+  });
+
+  it("recovers open pricing pages after a rollback and a second owner commit", async () => {
+    measureOnFileStateDb();
+    const owner = createRegistry();
+    const backend = "acp:antigravity";
+    const request = { backend, threadId: "thread-1", display: { resource: "pricing", limit: 1 }, includeTurns: false, viewOnly: true } as const;
+    for (const id of ["first", "second"]) {
+      await owner.publishLocalEvent(started(backend, id));
+      await owner.publishLocalEvent(usage(backend, id));
+      await complete(owner, backend, id);
+    }
+    const first = (await owner.readThread(request)).display!;
+    const next = { ...request, display: { ...request.display, cursor: first.nextCursor! } };
+    const expected = (await readThreadForPeer(owner, next)).display!;
+    const update = "UPDATE thread_usage_turns SET model_context_window = 123456 WHERE turn_id = 'first'";
+    expect(() => stateDb.raw.transaction(() => {
+      stateDb.raw.exec(update);
+      throw new Error("roll back");
+    })()).toThrow("roll back");
+    expect((await readThreadForPeer(owner, next)).display).toEqual(expected);
+    const other = StateDb.open(stateDb.raw.name);
+    try {
+      other.raw.exec(update);
+      await expect(readThreadForPeer(owner, next)).rejects.toThrow("Thread display history changed");
+      const fresh = (await owner.readThread(request)).display!;
+      const recovered = (await readThreadForPeer(owner, { ...next, display: { ...next.display, cursor: fresh.nextCursor! } })).display!;
+      expect(recovered.pricingPage!.rows[0]?.line.modelContextWindow).toBe(123456);
+    } finally {
+      other.close();
+    }
+  });
+
+  it("projects and publishes only the changed turn as owner history grows", async () => {
+    const registry = createRegistry();
+    const full = vi.spyOn(store, "readThreadPricing");
+    const baseline = vi.spyOn(store as unknown as {
+      readStoredThreadPricing: SqliteOverlayStore["readThreadPricing"];
+    }, "readStoredThreadPricing");
+    const markers = vi.spyOn(store, "listThreadCompactions");
+    const scoped = vi.spyOn(store, "readThreadTurnUsageLines");
+    const backend = "acp:antigravity";
+    const events: PricingEvent[] = [];
+    registry.onEvent(({ notification }) => {
+      if (notification.method === "thread/pricing/updated") events.push(notification as PricingEvent);
+    });
+    // Two turns suffice to distinguish a changed turn from a growing snapshot.
+    for (const turnId of ["turn-01", "turn-02", "turn-03"]) {
+      await registry.publishLocalEvent(started(backend, turnId));
+      await registry.publishLocalEvent(usage(backend, turnId));
+      await complete(registry, backend, turnId);
+      expect(events.at(-1)?.params.pricing.lines.map((line) => line.turnId)).toEqual([turnId]);
+    }
+    expect(events).toHaveLength(3);
+    expect(full).not.toHaveBeenCalled();
+    expect(baseline).not.toHaveBeenCalled();
+    expect(markers).not.toHaveBeenCalled();
+    expect((await Promise.all(scoped.mock.results.map(({ value }) => value))).map((lines) => lines.length)).toEqual([1, 1, 1]);
+    expect(scoped.mock.calls.map(([request]) => request.turnIds)).toEqual([["turn-01"], ["turn-02"], ["turn-03"]]);
+    for (const event of events) {
+      expect(event.params.displayInvalidated).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThan(1500);
+    }
+  });
+
+  it("invalidates a previously loaded turn after another viewer hydrates its accounting", async () => {
+    const registry = createRegistry();
+    const backend = "acp:antigravity";
+    const threadId = "thread-1";
+    const events: PricingEvent[] = [];
+    registry.onEvent(({ notification }) => {
+      if (notification.method === "thread/pricing/updated") events.push(notification as PricingEvent);
+    });
+    for (const id of ["A", "B"]) {
+      await registry.publishLocalEvent(started(backend, id));
+      await registry.publishLocalEvent(usage(backend, id));
+      await complete(registry, backend, id);
+      if (id === "A") {
+        const [original] = (await store.readThreadPricing({ backend, threadId })).lines;
+        const line = { ...original!, usageLineId: "replayed-A", source: "hydration" as const, totalTokens: 12345 };
+        const entry = buildTurnUsageActivityEntryFromLine({ line, turn: { id, status: "completed" } })!;
+        await registryModules(registry).threadUsageLedger.persistReplayUsageLines({
+          entries: [{ ...entry, usageLine: line }], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+        });
+      }
+    }
+    expect(events).toHaveLength(2);
+    expect(events[1]!.params.pricingHistoryRevision).not.toBe(events[0]!.params.pricingHistoryRevision);
+  });
+
+  it.each(["spend", "turn"] as const)("delivers historical repairs from a %s read to owner listeners", async (read) => {
+    const registry = createRegistry([], { spendAlertPolicy: {
+      threadSpendEnabled: read === "spend", threadSpendThresholdUsd: 1,
+      activeTurnSpendEnabled: false, activeTurnSpendThresholdUsd: 1,
+    } });
+    const backend = "acp:antigravity";
+    const threadId = "thread-1";
+    const events: PricingEvent[] = [];
+    registry.onEvent(({ notification }) => {
+      if (notification.method === "thread/pricing/updated") events.push(notification as PricingEvent);
+    });
+    for (const id of ["A", "B"]) {
+      await registry.publishLocalEvent(started(backend, id));
+      await registry.publishLocalEvent(usage(backend, id));
+      await complete(registry, backend, id);
+      if (read === "spend" && id === "A") stateDb.raw.prepare("UPDATE thread_usage_lines SET model = 'gpt-5.5' WHERE turn_id = ?").run(id);
+    }
+    if (read === "turn") {
+      // Repricing B must pass through the newer unpriced A in its retry batch.
+      stateDb.raw.exec(`UPDATE thread_usage_lines SET model = 'gpt-5.5',
+        created_at = CASE turn_id WHEN 'A' THEN 1800000000001 ELSE 1800000000000 END`);
+      await registryModules(registry).threadUsageLedger.emitThreadPricingUpdated({ backend, threadId, updatedTurnId: "B" });
+    }
+    const persisted = (await store.readThreadPricing({ backend, threadId })).lines.find((line) => line.turnId === "A")!;
+    expect(persisted.totalCostMicros).toBeGreaterThan(0);
+    expect(events.at(-1)!.params.pricing.lines).toContainEqual(expect.objectContaining({
+      turnId: "A", priceStatus: "priced", totalCostMicros: persisted.totalCostMicros,
+    }));
+  });
+
+  it("agrees with full ledger spend through cumulative gaps, replacements, and late turn corrections", async () => {
+    const registry = createRegistry();
+    const thread = { backend: "acp:antigravity", threadId: "thread-1" } as const;
+    const checkSpend = async () => {
+      const spend = await store.readThreadSpendMicros({ ...thread, localModelIds: [], liveLines: [] });
+      const pricing = await store.readThreadPricing(thread);
+      const gaps = estimateHistoricalThreadUsageGapLines(pricing.lines);
+      const expected = [...pricing.summaries, ...gaps].reduce((total, line) => total + line.totalCostMicros, 0);
+      expect(spend).toBe(expected);
+      return gaps;
+    };
+    const recover = vi.spyOn(store as unknown as {
+      readStoredThreadPricing: SqliteOverlayStore["readThreadPricing"];
+    }, "readStoredThreadPricing");
+    const turnUsage = (turnId: string, total: number) => registry.publishLocalEvent({
+      backend: thread.backend, notification: { method: "thread/tokenUsage/updated", params: {
+        threadId: thread.threadId, turnId, model: "gpt-5.5", tokenUsage: {
+          last: { inputTokens: 1000, cachedInputTokens: 0, outputTokens: 50, totalTokens: 1050 },
+          total: { inputTokens: total, cachedInputTokens: 0, outputTokens: 50, totalTokens: total + 50 },
+        },
+      } },
+    });
+    for (let i = 0; i < 7; i++) {
+      const turnId = `gap-turn-${i}`;
+      await registry.publishLocalEvent(started(thread.backend, turnId));
+      await turnUsage(turnId, 10_000 + i * 1000);
+      await complete(registry, thread.backend, turnId);
+      // The first cumulative gap establishes a baseline. Appending a turn
+      // must reuse it, even though the durable ledger changed.
+      expect(recover).toHaveBeenCalledTimes(i === 0 ? 1 : 0);
+      const gaps = await checkSpend();
+      recover.mockClear();
+      expect(gaps.some((line) => line.totalCostMicros > 0)).toBe(true);
+    }
+    await turnUsage("gap-turn-0", 10_500);
+    await complete(registry, thread.backend, "gap-turn-0");
+    await checkSpend();
+  });
+
+  it("recovers a spend checkpoint after another connection changes past usage", async () => {
+    stateDb.close();
+    const temp = createTempStateDb("pwragent-spend-recovery-");
+    tempDir = temp.tempDir;
+    stateDb = StateDb.open(temp.dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    const peer = StateDb.open(temp.dbPath);
+    const thread = { backend: "codex", threadId: "thread-1" } as const;
+    const spend = () => store.readThreadSpendMicros({ ...thread, liveLines: [], localModelIds: [] });
+    try {
+      const lines = Array.from({ length: 6 }, (_, index): ThreadUsageLineRecord => ({
+        ...thread, usageLineId: `line-${index}`, turnId: `turn-${index}`, createdAt: 1_800_000_000_000 + index,
+        model: "gpt-5.5", scope: "turn", source: "live", status: "pending", provider: "openai", currency: "USD",
+        pricingBasis: "provider-reported", priceStatus: "priced", totalCostMicros: 1000,
+        inputTokens: 100, uncachedInputTokens: 100, cachedInputTokens: 0, outputTokens: 0,
+        reasoningOutputTokens: 0, totalTokens: 100, cumulativeInputTokens: 200 + index * 100,
+        cumulativeCachedInputTokens: 0, cumulativeOutputTokens: 0,
+        uncachedInputCostMicros: 1000, cachedInputCostMicros: 0, outputCostMicros: 0,
+      }));
+      await store.upsertThreadUsageLines({ lines });
+      const original = await spend();
+      const revision = store.readPricingHistoryRevision();
+      expect(original).toBeGreaterThan(6000);
+      await new SqliteOverlayStore(peer).upsertThreadUsageLine({ line: { ...lines[0]!, totalCostMicros: 3000 } });
+      expect(store.readPricingHistoryRevision()).not.toBe(revision);
+      expect(await spend()).toBe(original + 2000);
+      let inside: Promise<number> | undefined;
+      expect(() => stateDb.raw.transaction(() => {
+        stateDb.raw.prepare("UPDATE thread_usage_lines SET total_cost_micros = 4000 WHERE usage_line_id = ?").run("line-0");
+        inside = spend();
+        throw new Error("rollback");
+      })()).toThrow("rollback");
+      expect(await inside).toBe(original + 3000);
+      expect(await spend()).toBe(original + 2000);
+      let transactionPricing: ReturnType<typeof store.readThreadPricing> | undefined;
+      expect(() => stateDb.raw.transaction(() => {
+        stateDb.raw.prepare("UPDATE thread_usage_lines SET price_status = 'unpriced', total_cost_micros = 0, pricing_basis = NULL WHERE usage_line_id = ?").run("line-0");
+        inside = spend();
+        transactionPricing = store.readThreadPricing(thread);
+        throw new Error("rollback");
+      })()).toThrow("rollback");
+      const pricing = (await transactionPricing)!;
+      const expected = [...pricing.summaries, ...estimateHistoricalThreadUsageGapLines(pricing.lines)]
+        .reduce((sum, row) => sum + row.totalCostMicros, 0);
+      expect(expected).not.toBe(original + 2000);
+      expect(await inside).toBe(expected);
+      expect(await spend()).toBe(original + 2000);
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("recovers marked pricing rows and preserves both spend alerts across viewer invalidations", async () => {
+    const policy = { threadSpendEnabled: true, threadSpendThresholdUsd: 0.001,
+      activeTurnSpendEnabled: true, activeTurnSpendThresholdUsd: 0.001 };
+    const registry = createRegistry([], { spendAlertPolicy: policy });
+    const backend = "acp:antigravity";
+    const threadId = "thread-1";
+    const events: PricingEvent[] = [];
+    const sender = new FederationAccountingStream();
+    const receiver = new FederationAccountingStream();
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/pricing/updated") {
+        const local = projectThreadDisplayEvent(event);
+        const wire = sender.encode(local, { epoch: "test-epoch", sequence: events.length + 1 });
+        const remote = receiver.decode(JSON.parse(JSON.stringify(wire)));
+        expect(remote?.notification).toEqual(local.notification);
+        events.push(local.notification as PricingEvent);
+      }
+    });
+    for (const turnId of ["first", "second"]) {
+      await registry.publishLocalEvent(started(backend, turnId));
+      if (turnId === "first") await registry.publishLocalEvent({ backend, notification: {
+        method: "item/completed", params: { threadId, turnId, item: { id: "compact-1", type: "contextCompaction" } },
+      } } as AgentEvent);
+      await registry.publishLocalEvent({ backend, notification: { method: "thread/tokenUsage/updated", params: {
+        threadId, turnId, model: "gpt-5.5",
+        tokenUsage: { last_token_usage: { input_tokens: 10_000, cached_input_tokens: 100, output_tokens: 200, total_tokens: 10_200 } },
+      } } });
+      await complete(registry, backend, turnId);
+    }
+    const request = { backend, threadId, display: { resource: "pricing" as const }, includeTurns: false, viewOnly: true } as const;
+    const local = (await registry.readThread(request)).display?.pricingPage;
+    const remote = (await readThreadForPeer(registry, request)).display?.pricingPage;
+    expect(remote).toEqual(local);
+    expect(local?.rows).toHaveLength(2);
+    const first = local!.rows.find(({ line }) => line.turnId === "first")!;
+    const second = local!.rows.find(({ line }) => line.turnId === "second")!;
+    expect(first.rowCompactions).toHaveLength(1);
+    expect(first.line.totalCostMicros).toBeGreaterThanOrEqual(1000);
+    expect(events.map(({ params }) => params.pricing)).toEqual(Array(2).fill({ lines: [], summaries: [] }));
+    expect(events.map(({ params }) => params.changedTurnIds)).toEqual([["first"], ["second"]]);
+    const [initial, pending] = events.map(({ params }) => params.triggeredSpendAlerts);
+    expect(initial).toMatchObject([
+      { kind: "active-turn-spend", turnId: "first", spendMicros: first.line.totalCostMicros },
+      { kind: "thread-spend", spendMicros: first.line.totalCostMicros },
+    ]);
+    expect(pending).toMatchObject([
+      { kind: "active-turn-spend", turnId: "second", spendMicros: second.line.totalCostMicros }, initial![1],
+    ]);
   });
 
   it("hydrates after live durability while an unrelated pricing publication is blocked", async () => {

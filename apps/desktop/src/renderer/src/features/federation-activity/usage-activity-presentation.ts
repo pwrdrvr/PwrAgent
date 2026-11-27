@@ -5,7 +5,7 @@ import {
 } from "@pwragent/shared/contracts/usage-activity";
 import type { OwnedUsageRow } from "./usage-activity-summary";
 import { formatUsedPercent as usagePercent } from "../../lib/backend-status-format";
-import { projectLimit, type LimitProjection, type LimitSeries } from "./usage-limits";
+import { projectLimit, type LimitPoint, type LimitProjection, type LimitSeries } from "./usage-limits";
 import { usageAccountKey, usageProviderLabel } from "./usage-activity-accounts";
 
 export const usageMoney = (micros: number) => new Intl.NumberFormat(undefined, {
@@ -62,6 +62,21 @@ export function describeLimitPace(series: LimitSeries, now: number, compact = fa
       ? `On pace to reach 100% ${usageWhen(projection.at, now, compact)}, ${usageDuration(latest.resetAt! - projection.at)} before the reset`
       : `At this pace, 100% in about ${usageDuration(projection.at - latest.at)} (${usageWhen(projection.at, now, compact)})`;
   return { rate: `+${usagePercent(series.pacePerHour)}%/h`, text, short, projection };
+}
+
+/**
+ * Where the pace lands, without the "On pace" lead-in: the line it ends
+ * starts with the rate.
+ */
+export function limitPaceOutcome(projection: LimitProjection, latest: LimitPoint, now: number): string {
+  if (projection.kind === "atReset") {
+    return `on pace for about ${Math.round(projection.percent)}% at the reset`;
+  }
+  const when = usageWhen(projection.at, now, true);
+  if (latest.resetAt !== undefined) {
+    return `hits 100% ${when}, ${usageDuration(latest.resetAt - projection.at)} before the reset`;
+  }
+  return `100% in about ${usageDuration(projection.at - latest.at)} (${when})`;
 }
 
 /** Why a row sits outside the window's total, in the words the list shows. */

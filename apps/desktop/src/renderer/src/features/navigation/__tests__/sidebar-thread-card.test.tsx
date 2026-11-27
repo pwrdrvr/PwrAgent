@@ -10,6 +10,7 @@ import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
 } from "../../../lib/native-drag-interaction";
+import { NavigationContextWindows } from "../../../lib/navigation-context-windows";
 import { POINTER_AIM_SETTLE_MS } from "../../../lib/pointer-aim";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
@@ -118,7 +119,9 @@ type SidebarParams = {
   onSelectThread?: (thread: NavigationThreadSummary) => void;
   onOpenThreadTerminal?: (threadKey: string, cwd?: string, remote?: unknown) => void;
   applications?: DesktopApplicationsSnapshot;
+  contextWindows?: NavigationContextWindows;
   selectedItemKey?: string;
+  readOpenThreadContext?: () => { threadKey: string; totalTokens: number; modelContextWindow: number };
 };
 
 function renderSidebar(params: SidebarParams) {
@@ -136,7 +139,9 @@ function sidebarElement(params: SidebarParams) {
       loading={false}
       threads={params.threads}
       localApplications={params.applications}
+      contextWindows={params.contextWindows}
       selectedItemKey={params.selectedItemKey}
+      readOpenThreadContext={params.readOpenThreadContext}
       localMachineLabel="Studio-Mac"
       platform="darwin"
       onBrowseModeChange={() => undefined}
@@ -208,8 +213,42 @@ describe("sidebar thread card", () => {
     expect(shown).toHaveTextContent("this machine");
     expect(shown).toHaveTextContent("fix/table-header");
     expect(shown).toHaveTextContent("gpt-6 · high");
-    // Context has a reading only for the open thread; none is given here.
     expect(shown).not.toHaveTextContent("Context");
+  });
+
+  it.each([
+    ["other", { totalTokens: 250, modelContextWindow: 1_000 }, "25%"],
+    ["open", { totalTokens: 250, modelContextWindow: 1_000 }, "25%"],
+    ["open", undefined, "60%"],
+    ["other", undefined, undefined],
+  ] as const)("uses the row's own context or its matching open session (%s, %j)", (id, contextWindow, percent) => {
+    renderSidebar({
+      threads: ["open", "other"].map((key) => thread(key, key === id ? { contextWindow } : {})),
+      selectedItemKey: "codex:open",
+      readOpenThreadContext: () => ({ threadKey: "codex:open", totalTokens: 600, modelContextWindow: 1_000 }),
+    });
+    const shown = hoverOpen(id);
+    if (percent) {
+      expect(shown).toHaveTextContent(percent);
+      expect(shown.querySelector(".thread-info-card__context-used")).toHaveStyle({ width: percent });
+    } else {
+      expect(shown).not.toHaveTextContent("Context");
+    }
+  });
+
+  it("updates a visible meter only for the hovered identity and reads earlier events on open", () => {
+    const contextWindows = new NavigationContextWindows();
+    const observe = (id: string, usedTokens: number) => act(() => contextWindows.observe(`codex:${id}`, "codex", {
+      method: "thread/contextWindow/updated", params: { threadId: id, usedTokens, modelContextWindow: 100 },
+    }));
+    renderSidebar({ threads: [thread("a"), thread("b")], selectedItemKey: "codex:b", contextWindows });
+    observe("a", 25);
+    const shown = hoverOpen("a");
+    expect(shown).toHaveTextContent("25%");
+    observe("b", 80);
+    expect(shown).toHaveTextContent("25%");
+    observe("a", 60);
+    expect(shown.querySelector(".thread-info-card__context-used")).toHaveStyle({ width: "60%" });
   });
 
   it("opens at once on keyboard focus, and not on a click's or a script's focus", () => {
@@ -447,9 +486,9 @@ describe("sidebar thread card", () => {
     const view = renderSidebar({ threads, onArchiveThread });
     archiveWalk.rows = 0;
     const shown = hoverOpen("a");
-    const updated = [...threads.slice(0, 2), thread("c", { title: "Thread c, renamed" })];
+    const updated = [thread("a", { contextWindow: { totalTokens: 40, modelContextWindow: 100 } }), ...threads.slice(1)];
     view.rerender(sidebarElement({ threads: updated, onArchiveThread }));
-    expect(card()).toHaveTextContent("Thread a");
+    expect(card()).toHaveTextContent("Context 40 of 100");
     expect(archiveWalk.rows).toBe(0);
     // Archiving checks the loaded rows once, for a sub-thread the count missed.
     fireEvent.click(within(shown).getByRole("button", { name: /Archive/, hidden: true }));

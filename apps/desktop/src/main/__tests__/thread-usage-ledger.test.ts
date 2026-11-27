@@ -49,7 +49,7 @@ function createLedger(options: {
   const context = registryContextStandIn({ lifecycle, turnState: options.turnState });
   Object.assign(context.stores, options.stores);
   const dependencies = {
-    managedReviewService: { activeReviewSubAgentRecords: new Map(), reviewSubAgentRecordsByReviewTurn: new Map() },
+    managedReviewService: { activeReviewSubAgentRecords: new Map(), historicalReviewForTurn: () => undefined },
     subAgentMonitorService: { liveCodexNativeSubAgentUsageRecords: new Map() },
   } as unknown as ThreadUsageLedgerDependencies;
   const host = {

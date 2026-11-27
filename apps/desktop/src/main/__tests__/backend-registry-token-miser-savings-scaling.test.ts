@@ -1,3 +1,4 @@
+import { LivePricingLines } from "../app-server/live-pricing-lines";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
@@ -117,6 +118,92 @@ describe("Token Miser savings scaling", () => {
       threadId: THREAD_ID,
     });
   }
+
+  it("reads a completed transcript turn without visiting live monitor prices", async () => {
+    const counter = new ReadCounter();
+    const gate = gateLine({ monitorId: "active-gate", index: 0, inputTokens: 1000, live: true });
+    internals.liveTokenMiserUsageLines.set(THREAD_ID, new LivePricingLines([[gate.usageLineId, counter.wrap("pricing", [gate])[0]!]]));
+    counter.reads.pricing = 0;
+    const turn = { id: "parent-turn", status: "completed" as const, completedAt: 1_800_000_100_000 };
+    await store.upsertThreadUsageLine({ line: parentLine({ id: turn.id, turnId: turn.id }) });
+    const display = await registry.readThread({
+      backend: "codex", threadId: THREAD_ID, includeTurns: false, viewOnly: true,
+      display: { resource: "accounting", turns: [turn] },
+    });
+    expect(display.replay.entries.map((entry) => entry.turn?.id)).toEqual([turn.id]);
+    expect(counter.reads.pricing).toBe(0);
+  });
+
+  it("probes only changed gate IDs as spend publications accumulate", async () => {
+    const live = new LivePricingLines();
+    internals.liveTokenMiserUsageLines.set(THREAD_ID, live);
+    const lookup = vi.spyOn(store as unknown as { readThreadUsageLineSync(id: string): unknown }, "readThreadUsageLineSync");
+    const ledger = registryModules(registry).threadUsageLedger;
+    for (let i = 0; i < 8; i++) {
+      const line = gateLine({ index: i, inputTokens: 100, monitorId: `gate-${i}`, live: true });
+      live.set(line.usageLineId, line);
+      await ledger.emitThreadPricingUpdated({ backend: "codex", threadId: THREAD_ID });
+    }
+    expect(lookup.mock.calls.length).toBeLessThanOrEqual(8);
+    lookup.mockClear();
+    await ledger.emitThreadPricingUpdated({ backend: "codex", threadId: THREAD_ID });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("keeps the gate adjustment equal to full spend across storage, replacement and retirement", async () => {
+    const thread = { backend: "codex", threadId: THREAD_ID } as const;
+    const live = new LivePricingLines();
+    internals.liveTokenMiserUsageLines.set(THREAD_ID, live);
+    const spend = vi.spyOn(store, "readThreadSpendMicros");
+    const ledger = registryModules(registry).threadUsageLedger;
+    const check = async () => {
+      spend.mockClear();
+      await ledger.emitThreadPricingUpdated(thread);
+      const full = await ledger.readThreadPricingWithLiveTokenMiser(thread);
+      expect(await spend.mock.results[0]?.value).toBe(full.lines.reduce((sum, line) => sum + line.totalCostMicros, 0));
+    };
+    const gate = gateLine({ index: 0, inputTokens: 1000, monitorId: "first", live: true });
+    live.set(gate.usageLineId, gate);
+    await check();
+    await store.upsertThreadUsageLine({ line: { ...gate, status: "pending" } });
+    await check();
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET total_cost_micros = 7 WHERE usage_line_id = ?").run(gate.usageLineId);
+    await check();
+    live.set(gate.usageLineId, { ...gate, totalCostMicros: gate.totalCostMicros + 100 });
+    await check();
+    const extra = gateLine({ index: 1, inputTokens: 100, monitorId: "second", live: true });
+    live.set(extra.usageLineId, extra);
+    live.delete(gate.usageLineId);
+    await check();
+    live.clear();
+    await check();
+    live.set(gate.usageLineId, gate);
+    await check();
+  });
+
+  it("reconciles live-only turns and replacements as a usage line changes scope", async () => {
+    const original = parentLine({ id: "usage", turnId: "first" });
+    await store.upsertThreadUsageLine({ line: original });
+    const live = new LivePricingLines();
+    internals.liveTokenMiserUsageLines.set(THREAD_ID, live);
+    const readTurns = async () => {
+      const turns = ["first", "second"].map((id) => ({ id, status: "completed" as const, completedAt: original.createdAt + 100 }));
+      const display = await registry.readThread({ backend: "codex", threadId: THREAD_ID, includeTurns: false,
+        viewOnly: true, display: { resource: "accounting", turns } });
+      return display.replay.entries.map((entry) => entry.turn?.id);
+    };
+    live.set(original.usageLineId, { ...original, turnId: "second" });
+    expect(await readTurns()).toEqual(["second"]);
+    live.set(original.usageLineId, { ...original, scope: "monitor" });
+    expect(await readTurns()).toEqual([]);
+    live.delete(original.usageLineId);
+    expect(await readTurns()).toEqual(["first"]);
+    const extra = parentLine({ id: "live-only", turnId: "second" });
+    live.set(extra.usageLineId, extra);
+    expect((await readTurns()).sort()).toEqual(["first", "second"]);
+    live.clear();
+    expect(await readTurns()).toEqual(["first"]);
+  });
 
   it("keeps thread-read savings totals and replay counts identical to the per-gate path", async () => {
     const result = (await readSavings(buildWorkload(2))).tokenMiser!;

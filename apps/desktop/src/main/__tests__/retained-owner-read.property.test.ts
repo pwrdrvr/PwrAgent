@@ -1,7 +1,7 @@
 import fc from "fast-check";
-import { readFileSync, writeFileSync } from "node:fs";
+import fs, { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { StateDb } from "../storage/state-db";
 import { RetainedOwnerThreadStore } from "../storage/retained-owner-thread-store";
 import { retainedOwnerFixture } from "./helpers/retained-owner-fixture";
@@ -118,11 +118,29 @@ it("requires committed, byte-verified import provenance and does not repair a ch
   try {
     const file = path.join(f.directory, "legacy-owner-backup-v1/threads.json");
     const original = readFileSync(file);
+    expect(f.retained.has("imported")).toBe(true);
     writeFileSync(file, JSON.stringify({ version: 1, threads: [{ id: "arbitrary" }] }));
+    expect(() => f.retained.has("imported")).toThrow("backup is missing or changed");
     expect(() => f.retained.list()).toThrow("backup is missing or changed");
     writeFileSync(file, original);
     expect(f.retained.list().map(thread => thread.id)).toEqual(["imported"]);
     f.db.raw.prepare("DELETE FROM meta WHERE key = ?").run("outpost_owner_json_import_v1");
+    expect(f.retained.has("imported")).toBe(false);
     expect(f.retained.list()).toEqual([]);
+  } finally { f.close(); }
+});
+
+it("reads no import backup for a job-backed identity or an import from the other archive collection", () => {
+  const f = retainedOwnerFixture(false, ["accepted", "import-only"]);
+  try {
+    f.jobs.save({ version: 1, id: "receipt", status: "completed", fingerprint: "accepted", threadId: "accepted" });
+    const backup = path.join(f.directory, "legacy-owner-backup-v1", "threads.json");
+    const reads = vi.spyOn(fs, "readFileSync");
+    try {
+      expect(f.retained.has("accepted")).toBe(true);
+      expect(f.retained.get("accepted")).toMatchObject({ id: "accepted", projectKey: f.root });
+      expect(f.retained.get("import-only", true)).toBeUndefined();
+      expect(reads.mock.calls.filter(([file]) => file === backup)).toHaveLength(0);
+    } finally { reads.mockRestore(); }
   } finally { f.close(); }
 });

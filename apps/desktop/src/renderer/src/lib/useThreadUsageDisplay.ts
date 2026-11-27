@@ -28,15 +28,29 @@ export function applyThreadUsageDisplay(entries: AppServerThreadEntry[], activit
   });
 }
 
-export async function readThreadUsageDisplay(params: {
+type UsageDisplayRead = {
   readThread: NonNullable<DesktopApi["readThread"]>;
   thread: NavigationThreadSummary;
   target: FederationTarget | undefined;
-  entries: AppServerThreadEntry[];
   isCurrent?: () => boolean;
-}): Promise<AppServerThreadActivityEntry[]> {
-  const { readThread, thread, target, entries, isCurrent } = params;
-  const turns = [...new Map(entries.flatMap((entry) => entry.turn ? [[entry.turn.id, entry.turn] as const] : [])).values()];
+};
+
+function indexTurns(entries: AppServerThreadEntry[]) {
+  const turns = new Map<string, NonNullable<AppServerThreadEntry["turn"]>>();
+  for (const entry of entries) {
+    if (entry.turn) turns.set(entry.turn.id, entry.turn);
+  }
+  return turns;
+}
+
+export function readThreadUsageDisplay(params: UsageDisplayRead & { entries: AppServerThreadEntry[] }) {
+  return readUsageForTurns(params, [...indexTurns(params.entries).values()]);
+}
+
+async function readUsageForTurns(
+  { readThread, thread, target, isCurrent }: UsageDisplayRead,
+  turns: NonNullable<AppServerThreadEntry["turn"]>[],
+): Promise<AppServerThreadActivityEntry[]> {
   const activities: AppServerThreadActivityEntry[] = [];
   const chunk = supportsBulkDisplayReads(target, thread)
     ? THREAD_DISPLAY_MAX_ACCOUNTING_TURNS : THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS;
@@ -72,23 +86,51 @@ export function useThreadUsageDisplay(params: {
     if (!response?.display || suspended || !readThread || !thread) return;
     let cancelled = false;
     let version = 0;
+    let fullRefresh = true;
+    let historyRevision: string | undefined;
+    const dirtyTurns = new Set<string>();
+    let indexedEntries: AppServerThreadEntry[] | undefined;
+    let loadedTurns = new Map<string, NonNullable<AppServerThreadEntry["turn"]>>();
+    let resolved: AppServerThreadActivityEntry[] = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
       const sequence = ++version;
       try {
-        const activities = await readThreadUsageDisplay({
-          readThread, thread, target: effectTarget, entries: current.current.entries,
-          isCurrent: () => !cancelled && sequence === version,
-        });
-        if (!cancelled && sequence === version) {
-          onResolved?.(activities);
-          setState({ key, entries: activities });
+        if (indexedEntries !== current.current.entries) {
+          indexedEntries = current.current.entries;
+          loadedTurns = indexTurns(indexedEntries);
         }
+        const turns = fullRefresh ? [...loadedTurns.values()] : [...dirtyTurns].flatMap((id) => loadedTurns.get(id) ?? []);
+        if (!fullRefresh && !turns.length) {
+          dirtyTurns.clear();
+          return;
+        }
+        const activities = await readUsageForTurns({
+          readThread, thread, target: effectTarget, isCurrent: () => !cancelled && sequence === version,
+        }, turns);
+        if (cancelled || sequence !== version) return;
+        if (fullRefresh) {
+          resolved = activities;
+        } else {
+          resolved = resolved.filter(({ turn }) => turn && loadedTurns.has(turn.id) && !dirtyTurns.has(turn.id)).concat(activities);
+        }
+        fullRefresh = false;
+        dirtyTurns.clear();
+        onResolved?.(resolved);
+        setState({ key, entries: resolved });
       } catch {
         // Keep the previous owner projection; the next boundary or reconnect retries.
       }
     };
-    const schedule = () => {
+    // Keep the complete dirty set until a current read succeeds. A new event
+    // can invalidate an in-flight read after it has requested an earlier turn.
+    const schedule = (turnIds?: readonly string[]) => {
+      if (!turnIds) {
+        fullRefresh = true;
+        dirtyTurns.clear();
+      } else if (!fullRefresh) {
+        for (const id of turnIds) dirtyTurns.add(id);
+      }
       version += 1;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => { timer = undefined; void refresh(); }, 200);
@@ -104,8 +146,17 @@ export function useThreadUsageDisplay(params: {
       if (event.backend !== thread.source
         || (event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : undefined)
           !== (effectTarget?.scope === "remote" ? effectTarget.instanceId : undefined)) return;
-      if (fields.threadId === thread.id
-        && ["thread/pricing/updated", "turn/completed"].includes(event.notification.method)) schedule();
+      if (fields.threadId !== thread.id) return;
+      if (event.notification.method === "thread/pricing/updated") {
+        const ids = fields.changedTurnIds;
+        const revision = typeof fields.pricingHistoryRevision === "string" ? fields.pricingHistoryRevision : undefined;
+        const sameHistory = revision === historyRevision;
+        historyRevision = revision;
+        schedule(sameHistory && Array.isArray(ids) && ids.every((id) => typeof id === "string") ? ids : undefined);
+      }
+      if (event.notification.method === "turn/completed") {
+        schedule(historyRevision !== undefined && typeof fields.turnId === "string" ? [fields.turnId] : undefined);
+      }
     });
     schedule();
     return () => { cancelled = true; version += 1; if (timer) clearTimeout(timer); unsubscribe?.(); };

@@ -262,6 +262,20 @@ function resolveNavigationParentThread(params: {
   };
 }
 
+/** Provider fields admitted by the compact owner navigation index. */
+export function compactNavigationProviderRow(thread: AppServerThreadSummary): AppServerThreadSummary {
+  return {
+    id: thread.id, source: thread.source, title: thread.title, titleSource: thread.titleSource,
+    threadStatus: thread.threadStatus, projectKey: thread.projectKey, createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt, archivedAt: thread.archivedAt, linkedDirectories: thread.linkedDirectories,
+    gitBranch: thread.gitBranch, gitOriginUrl: thread.gitOriginUrl, observedGitBranch: thread.observedGitBranch,
+    gitWorkingState: thread.gitWorkingState, executionMode: thread.executionMode, model: thread.model,
+    serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort, fastMode: thread.fastMode,
+    workspaceHandoff: thread.workspaceHandoff, codexNativeSubAgent: thread.codexNativeSubAgent,
+    ...(thread.contextWindow ? { contextWindow: thread.contextWindow } : {}),
+  };
+}
+
 export function materializeNavigationThreads(params: {
   firstSnapshot: boolean;
   now?: number;
@@ -274,11 +288,11 @@ export function materializeNavigationThreads(params: {
    */
   messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
   automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
-  previousKnownThreadKeys: string[];
+  previousKnownThreadKeys: string[] | ReadonlySet<string>;
   threads: AppServerThreadSummaryWithEnvironmentOptions[];
   workspaceRoots?: string[];
 }): NavigationThreadSummary[] {
-  const previousKnownThreadKeys = new Set(params.previousKnownThreadKeys);
+  const previousKnownThreadKeys = Array.isArray(params.previousKnownThreadKeys) ? new Set(params.previousKnownThreadKeys) : params.previousKnownThreadKeys;
   const workspaceRoots = params.workspaceRoots?.map((root) => canonicalizeNavigationPath(root.trim()));
 
   return params.threads.map((thread) => {

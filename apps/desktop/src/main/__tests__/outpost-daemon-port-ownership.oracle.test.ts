@@ -1,6 +1,6 @@
 import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { startOutpostDaemon } from "./helpers/outpost-daemon";
+import { startOutpostDaemon } from "./helpers/vitest-outpost-daemon";
 
 type CloseCallback = (error?: Error) => void;
 

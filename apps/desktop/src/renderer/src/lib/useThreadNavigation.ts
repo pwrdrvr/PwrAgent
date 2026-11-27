@@ -11,6 +11,7 @@ import type { CodexEnvironmentStartupFailure, LaunchpadCreationStatus } from "@p
 import type { NavigationAttentionScope, RemoteThreadPinPublication } from "@pwragent/shared/contracts/navigation";
 import { materializeObservableLaunchpad, LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "./launchpad-creation-client";
 import { readNavigationQueryRange } from "./read-navigation-query-range";
+import { NavigationContextWindows } from "./navigation-context-windows";
 import { applyCheckoutHibernationUpdate } from "./navigation-thread-event";
 import { readBridgedNavigationResumeState } from "./navigation-resume-state";
 import { findPeerCounterpartDirectory, type ProjectIdentity } from "./federation-project-match";
@@ -93,6 +94,7 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
+  applyLaunchpadDraftSettingsPatch,
   applyNavigationLaunchpadProviderExecutionModeDefaults,
   applyNavigationLaunchpadProviderModelDefaults,
   changedProviderExecutionModeDefaultBackends,
@@ -1074,6 +1076,8 @@ function threadSummariesEqual(
     left.queuedExecutionModeAt === right.queuedExecutionModeAt &&
     JSON.stringify(left.queuedTurns ?? []) ===
       JSON.stringify(right.queuedTurns ?? []) &&
+    left.contextWindow?.totalTokens === right.contextWindow?.totalTokens &&
+    left.contextWindow?.modelContextWindow === right.contextWindow?.modelContextWindow &&
     left.model === right.model &&
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
@@ -2767,6 +2771,7 @@ function mergeLaunchpadUpdateResponse(
   }
 
   const merged: NavigationLaunchpadDraft = { ...next };
+  merged.pendingModelPreference = current.pendingModelPreference;
   const backendChanged = "backend" in patch;
   const environmentChanged = "codexEnvironmentId" in patch;
   const preserveSetting = <Key extends keyof NavigationLaunchpadDraft>(
@@ -3489,7 +3494,7 @@ export function useThreadNavigation(
   updateDirectoryLaunchpad: (
     directoryKey: string,
     patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
-    options?: { stickySettingsChanged?: boolean; owner?: FederationTarget }
+    options?: { stickySettingsChanged?: boolean; explicitModelSelection?: boolean; owner?: FederationTarget }
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   /** The kind of member Attention is narrowed to; undefined lists the whole queue. */
@@ -3625,6 +3630,7 @@ export function useThreadNavigation(
     resolutions: ResolveProjectHeldWakeupsRequest["resolutions"],
   ) => Promise<ResolveProjectHeldWakeupsResponse>;
   loadedRows?: NavigationLoadedRows;
+  contextWindows: NavigationContextWindows;
   pagedNavigation: ReturnType<typeof useBoundedNavigationWindow>;
   /**
    * Paged resources whose landed page `threads` and `directories` do not
@@ -3711,6 +3717,8 @@ export function useThreadNavigation(
   const [localLaunchpads, setLocalLaunchpads] = useRecoverableState<
     Record<string, NavigationLaunchpadDraft>
   >("navigation.launchpads", {});
+  const localLaunchpadsRef = useRef(localLaunchpads);
+  localLaunchpadsRef.current = localLaunchpads;
   // Sub-thread launchpads the operator detached from their parent. Their
   // `subthread:` key still spells the parent, so materialization must not
   // fall back to reading the parent from it.
@@ -4201,6 +4209,7 @@ export function useThreadNavigation(
       [id, { request: resource.state.request, sequence: resource.state.pendingSequence }]));
     threadReactionPatchReadsRef.current.set(mutationKey, reads);
   }, []);
+  const [contextWindows] = useState(() => new NavigationContextWindows());
   const acceptedDefaultsRef = useRef<unknown>(undefined);
   const acceptedDraftHydrationRef = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
@@ -4219,6 +4228,14 @@ export function useThreadNavigation(
     const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
     if (changed && pages.size) {
       const changedPages = [...pages].filter(([id, page]) => acceptedPages.get(id) !== page);
+      for (const [id, page] of changedPages) {
+        const resource = boundedNavigation.resources.get(id);
+        // A cursor extends the same immutable owner observation. Its retained
+        // prefix cannot confirm a live fill received after that observation.
+        if (resource && !resource.restoredFromCache && !resource.extendedFromCursor && !resource.state.stale) {
+          contextWindows.observePage(page);
+        }
+      }
       for (const [key, pending] of deferredArchiveRemovalsRef.current) {
         const resource = boundedNavigation.resources.get(pending.resourceId);
         const page = resource?.state.page;
@@ -4422,7 +4439,7 @@ export function useThreadNavigation(
       setState((current) => current.loading === loading && current.refreshing === refreshing && current.error === error
         ? current : { ...current, loading, refreshing, error });
     }
-  }, [acceptedPages, boundedNavigation.resources, boundedNavigation.selectionAncestry, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
+  }, [acceptedPages, contextWindows, boundedNavigation.resources, boundedNavigation.selectionAncestry, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
   // The effect above folds a landed page into the rows, so a render in which
   // a page lands still shows the rows from before it. In that render the page
   // is not stale, yet nothing built from the rows reflects it. A selection's
@@ -4431,6 +4448,10 @@ export function useThreadNavigation(
   const pagesAwaitingRows = useMemo(() => [...boundedNavigation.resources]
     .filter(([id, resource]) => resource.state.page && acceptedPages.get(id) !== resource.state.page)
     .map(([id]) => id), [boundedNavigation.resources, acceptedPages]);
+
+  useLayoutEffect(() => {
+    if (!state.refreshing && !pagesAwaitingRows.length) contextWindows.settlePages(state.rows?.threadRows);
+  }, [contextWindows, pagesAwaitingRows, state.refreshing, state.rows?.threadRows]);
 
   const performRefresh = useCallback(async (
     preferredSelectionKey?: string, preferredOptimisticThread?: NavigationThreadSummary, forcePreferredSelection = false,
@@ -4730,6 +4751,15 @@ export function useThreadNavigation(
         if (method !== "navigation/threadGitWorkingState/updated" && method !== "navigation/directoryGitStatus/updated") {
           scheduleEventRefresh();
         }
+      }
+      if (event.notification.method === "thread/contextWindow/updated" || event.notification.method === "thread/tokenUsage/updated") {
+        if (windowTarget && !federationTargetsEqual(event.federationTarget, windowTarget)) return;
+        const notification = event.notification;
+        const key = event.federationTarget?.scope === "remote"
+          ? agentEventThreadIdentityKey(event, notification.params.threadId)
+          : buildThreadIdentityKey(event.backend, notification.params.threadId);
+        contextWindows.observe(key, event.backend, notification, stateRef.current.rows?.threadRows.get(key)?.contextWindow);
+        return;
       }
       if (method === "thread/start/pending") {
         // This machine's starts, drawn only in a window listing this machine.
@@ -5228,6 +5258,7 @@ export function useThreadNavigation(
           threadId: string;
         };
         const threadKey = agentEventThreadIdentityKey(event, threadId);
+        contextWindows.forget(threadKey);
         updateArchivedThreadKey(threadKey, true);
         const row = stateRef.current.rows?.threadRows.get(threadKey);
         const deferRemoval = row && deferNestedArchiveRemoval(row);
@@ -5807,6 +5838,7 @@ export function useThreadNavigation(
     invalidateNavigation,
     deferNestedArchiveRemoval,
     composerPreviews,
+    contextWindows,
     updateArchivedThreadKey,
     noteDirectoryPatch,
     noteThreadReactionPatch,
@@ -7223,6 +7255,7 @@ export function useThreadNavigation(
         };
         if (desktopApi.updateDirectoryLaunchpad) {
           const updated = await desktopApi.updateDirectoryLaunchpad({
+            federationTarget,
             directoryKey,
             patch,
           });
@@ -8180,6 +8213,7 @@ export function useThreadNavigation(
       patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
       options?: {
         stickySettingsChanged?: boolean;
+        explicitModelSelection?: boolean;
         /**
          * Whose draft this is. A pinned peer's draft and this window's own
          * draft can share a directory key, so the key alone picks whichever
@@ -8194,12 +8228,14 @@ export function useThreadNavigation(
       }
 
       setLaunchpadError(undefined);
-      const owner = options?.owner;
+      const draftOwner = localLaunchpadsRef.current[directoryKey]?.federationTarget;
+      const owner = options?.owner ?? (isSubthreadLaunchpadKey(directoryKey) ? draftOwner : undefined);
       // This window's own drafts: local in the main window, the peer's in a
       // remote window, where main fills the owner in.
       const ownsWindowDraft = owner !== undefined && (
         owner.scope === "local"
         || federationTargetsEqual(owner, rendererFederationTarget)
+        || Boolean(draftOwner && federationTargetsEqual(owner, draftOwner))
       );
       const federatedSelection =
         activeFederatedLaunchpad
@@ -8217,6 +8253,7 @@ export function useThreadNavigation(
             directoryKey,
             patch,
             stickySettingsChanged: options?.stickySettingsChanged,
+            explicitModelSelection: options?.explicitModelSelection,
           });
         } catch (error) {
           setLaunchpadError(error instanceof Error ? error.message : String(error));
@@ -8229,15 +8266,16 @@ export function useThreadNavigation(
       const revision =
         (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) ?? 0) + 1;
       launchpadUpdateRevisionRef.current.set(launchpadUpdateKey, revision);
+      const draftTarget = federatedSelection?.target ?? owner ?? rendererFederationTarget;
+      const rememberModelSettings = options?.explicitModelSelection && draftTarget?.scope === "remote";
+      const applyDraftPatch = (launchpad: NavigationLaunchpadDraft) =>
+        applyLaunchpadDraftSettingsPatch(launchpad, patch, rememberModelSettings);
 
       if (federatedSelection) {
         const applyFederatedPatch = (
           launchpad: NavigationLaunchpadDraft,
         ): NavigationLaunchpadDraft => ({
-          ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-            launchpad,
-            patch,
-          ),
+          ...applyDraftPatch(launchpad),
           directoryKey,
           federationTarget: federatedSelection.target,
           updatedAt: Date.now(),
@@ -8259,6 +8297,7 @@ export function useThreadNavigation(
             directoryKey,
             patch,
             stickySettingsChanged: options?.stickySettingsChanged,
+            explicitModelSelection: options?.explicitModelSelection,
           });
           if (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) !== revision) {
             return;
@@ -8306,10 +8345,7 @@ export function useThreadNavigation(
           rows: applyLaunchpadUpdate(
             currentResponse,
             {
-              ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-                currentLaunchpad,
-                patch,
-              ),
+              ...applyDraftPatch(currentLaunchpad),
               directoryKey,
               updatedAt: Date.now(),
             },
@@ -8325,10 +8361,7 @@ export function useThreadNavigation(
         return {
           ...current,
           [directoryKey]: {
-            ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-              currentLaunchpad,
-              patch,
-            ),
+            ...applyDraftPatch(currentLaunchpad),
             directoryKey,
             updatedAt: Date.now(),
           },
@@ -8337,10 +8370,7 @@ export function useThreadNavigation(
       const pendingPickedLaunchpad = pendingPickedLaunchpadRef.current.get(directoryKey);
       if (pendingPickedLaunchpad) {
         pendingPickedLaunchpadRef.current.set(directoryKey, {
-          ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-            pendingPickedLaunchpad,
-            patch,
-          ),
+          ...applyDraftPatch(pendingPickedLaunchpad),
           directoryKey,
           updatedAt: Date.now(),
         });
@@ -8348,9 +8378,11 @@ export function useThreadNavigation(
 
       try {
         const response = await desktopApi.updateDirectoryLaunchpad({
+          ...(draftTarget?.scope === "remote" ? { federationTarget: draftTarget } : {}),
           directoryKey,
           patch,
           stickySettingsChanged: options?.stickySettingsChanged,
+          explicitModelSelection: options?.explicitModelSelection,
         });
         if (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) !== revision) {
           return;
@@ -8364,8 +8396,7 @@ export function useThreadNavigation(
                   response.launchpad,
                   patch,
                   {
-                    preserveOwnerCodexEnvironmentMetadata:
-                      isRendererFederationWindow,
+                    preserveOwnerCodexEnvironmentMetadata: draftTarget?.scope === "remote",
                   },
                 ),
               }
@@ -8382,8 +8413,7 @@ export function useThreadNavigation(
               response.launchpad,
               patch,
               {
-                preserveOwnerCodexEnvironmentMetadata:
-                  isRendererFederationWindow,
+                preserveOwnerCodexEnvironmentMetadata: draftTarget?.scope === "remote",
               },
             ),
             response.defaults
@@ -8399,8 +8429,7 @@ export function useThreadNavigation(
               response.launchpad,
               patch,
               {
-                preserveOwnerCodexEnvironmentMetadata:
-                  isRendererFederationWindow,
+                preserveOwnerCodexEnvironmentMetadata: draftTarget?.scope === "remote",
               },
             ),
           );
@@ -8412,7 +8441,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [activeFederatedLaunchpad, desktopApi, isRendererFederationWindow, rendererFederationTarget, setFederatedLaunchpad, setLocalLaunchpads]
+    [activeFederatedLaunchpad, desktopApi, rendererFederationTarget, setFederatedLaunchpad, setLocalLaunchpads]
   );
 
   const resetDirectoryLaunchpad = useCallback(
@@ -8973,11 +9002,8 @@ export function useThreadNavigation(
         let remotePinFailure: string | undefined;
         if (federationTarget && desktopApi.resetDirectoryLaunchpad) {
           try {
-            // Remote launchpads are composed and persisted on the viewer, then
-            // sent in full to the owning instance for materialization. The owner
-            // clears its overlay row as part of that operation, but it cannot
-            // clear the viewer's local copy. Clear its submitted input after
-            // success while retaining the project's environment selection.
+            // The viewer owns this draft. Clear its submitted input after the
+            // owner creates the thread, retaining the project's environment.
             await desktopApi.resetDirectoryLaunchpad({
               federationTarget,
               directoryKey,
@@ -11044,6 +11070,7 @@ export function useThreadNavigation(
     listProjectHeldWakeups,
     resolveProjectHeldWakeups,
     loadedRows: state.rows,
+    contextWindows,
     pagedNavigation: boundedNavigation,
     pagesAwaitingRows,
     selectedLaunchpadConfigurationReady: Boolean(activeFederatedLaunchpad) || launchpadConfiguration.ready,

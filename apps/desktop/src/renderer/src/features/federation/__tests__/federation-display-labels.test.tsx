@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import { FederationDisplayLabelsProvider, federationLocalDisplayLabel } from "../../../lib/federation-display-label";
 import { buildFederationThreadTargets } from "../../chrome/federation-thread-targets";
@@ -68,6 +69,18 @@ describe("federation machine names", () => {
     expect(screen.getByLabelText("Runs on M4 Mini (Studio-Mac-Mini-M4)"))
       .toHaveTextContent("M4 Mini");
     expect(screen.getByTitle("Studio-Mac-Mini-M4 · mini")).toBeInTheDocument();
+  });
+
+  it("keeps the instance glyph when live health contains an icon from a newer gateway", () => {
+    const peers = health.peers.map((peer) => ({
+      ...peer,
+      celestialIcon: "new-gateway-icon" as CelestialIconId,
+    }));
+    render(<FederationDisplayLabelsProvider health={{ ...health, peers }}>
+      <InstanceChip instanceId="max" label="M5 Max" />
+    </FederationDisplayLabelsProvider>);
+    const chip = screen.getByLabelText("Runs on M5 Max (Studio-MBP-M5-Max)");
+    expect(chip.querySelector("svg")).toHaveClass("instance-glyph");
   });
 
   it("uses the remote viewer owner's short name while retaining its offline state and default choice", () => {

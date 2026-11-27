@@ -1,3 +1,4 @@
+import type { LivePricingLines } from "./live-pricing-lines";
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
@@ -1082,6 +1083,9 @@ export type McpGatewayConversationConsent = {
 
 export type ThreadListCacheState = {
   archived: boolean;
+  observationSequence?: number;
+  lookupOnly?: boolean;
+  retainedById?: Map<string, AppServerThreadSummary>;
   expiresAt?: number;
   promise?: Promise<AppServerThreadSummary[]>;
   providerRead?: {
@@ -1346,6 +1350,9 @@ export type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<Ow
     | "readThreadUsageActivities"
     | "readThreadUsageActivityForTurn"
     | "readThreadTurnUsageLines"
+    | "readThreadPricingPage"
+    | "readPricingHistoryRevision"
+    | "readThreadSpendMicros"
     | "readThreadUsageSettings"
     | "markThreadToolInvocationsNoisy"
     | "setThreadSpendAlertPending"
@@ -1414,7 +1421,7 @@ export type LiveCodexNativeSubAgentUsage = Pick<
   ThreadSubAgentSummary,
   "monitorUsage" | "preferredModel" | "preferredReasoningEffort" | "updatedAt"
 > & {
-  lines: ReadonlyMap<string, ThreadUsageLineRecord>;
+  lines: LivePricingLines;
 };
 
 export type LiveThreadUsageEmitWork = {

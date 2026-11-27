@@ -44586,10 +44586,13 @@ div.composer-error-row__toggle {
 /* One grid for the whole list. Each provider, and the label/value grid inside
    it, is a subgrid of it, so every provider's values start in the same column
    instead of each sizing its own label column to its longest label. The first
-   track holds the status dot; the summary row lays the name out beside it. */
+   track holds the status dot; the summary row lays the name out beside it.
+   The label track is fixed: it holds the facts' short labels ("Account") and
+   the limits' windows ("Weekly"), so a long limit name can never widen it and
+   squeeze the meters. */
 .backend-status-list {
   display: grid;
-  grid-template-columns: 16px max-content minmax(0, 1fr);
+  grid-template-columns: 16px 62px minmax(0, 1fr);
   margin: 12px 0 0;
   padding: 0;
   list-style: none;
@@ -44754,6 +44757,97 @@ div.composer-error-row__toggle {
 
 .rail-limit-grid dt {
   white-space: normal;
+}
+
+/* A provider's limits as their own block under its facts (`ProviderLimitRow`):
+   an optional scope subheader, then one row per window. The window sits in
+   the label column; the figure, meter and pace share the value column, so
+   every meter starts at the same edge and runs to the panel's. In the
+   provider list the window column is the facts' label column. */
+.provider-limits {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  row-gap: 8px;
+  min-width: 0;
+}
+
+.backend-status-list .provider-limits {
+  grid-column: 2 / -1;
+  grid-template-columns: subgrid;
+  margin-top: 3px;
+}
+
+.provider-limits__scope {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  margin-bottom: -3px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.provider-limits__row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  row-gap: 4px;
+}
+
+.provider-limits__window {
+  grid-column: 1;
+  padding-right: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* A window with no short name ("Cloud session credits") takes its own line
+   rather than widening the label column. */
+.provider-limits__row.is-long .provider-limits__window {
+  grid-column: 1 / -1;
+  padding-right: 0;
+}
+
+.provider-limits__stat,
+.provider-limits__bar,
+.provider-limits__pace {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.provider-limits__stat {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.provider-limits__stat.is-short .backend-status-list__figure {
+  color: var(--status-warning-text);
+}
+
+.backend-status-list__meter.provider-limits__bar {
+  margin-top: 0;
+}
+
+.provider-limits__bar.is-full i {
+  background: var(--danger-text);
+}
+
+/* The rate leads the pace line and the words flow after it, instead of the
+   whole sentence wrapping under the rate as one flex item. */
+.usage-pace.provider-limits__pace {
+  display: block;
+  line-height: 1.4;
+}
+
+.usage-pace.provider-limits__pace > span {
+  margin-right: 6px;
 }
 
 /* Shared subheading inside a rail panel (e.g. "Linked pull requests"). */

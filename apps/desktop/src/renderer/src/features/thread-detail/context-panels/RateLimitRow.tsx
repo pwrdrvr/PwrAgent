@@ -1,6 +1,6 @@
 import { describeRateLimitRow, type BackendRateLimitSummary } from "../../../lib/backend-status-format";
-import { limitSeriesFor, limitUsageDropped, sinceResetSeries, type LimitAccount } from "../../federation-activity/usage-limits";
-import { describeLimitPace } from "../../federation-activity/usage-activity-presentation";
+import type { LimitAccount } from "../../federation-activity/usage-limits";
+import { limitRowPace } from "./limit-pace";
 
 /**
  * One limit as a `dt`/`dd` pair: the figure, its reset, and a meter. The
@@ -14,26 +14,10 @@ export function RateLimitRow({ limit, now, account, labelTooltip }: {
   labelTooltip?: string;
 }) {
   const row = describeRateLimitRow(limit, now);
-  const series = limitSeriesFor(account, limit);
-  const candidate = series && series.latest.usedPercent < 100 && row.usedPercent !== undefined && row.usedPercent < 100
-    && !limitUsageDropped(series.latest.usedPercent, row.usedPercent) && series.latest.resetAt === limit.resetAt
-    && (limit.resetAt === undefined || limit.resetAt > now)
-    ? describeLimitPace(series, now, true)
-    : undefined;
-  // A cached series behind a live jump can project an end-of-window level
-  // below what the row already shows; hide it until the read catches up.
-  const described = candidate
-    && !(candidate.projection.kind === "atReset" && candidate.projection.percent < row.usedPercent!)
-    ? candidate
-    : undefined;
-  // Each Antigravity pool is a separate allowance. Elsewhere, keep
-  // the sentence for the main window and any window about to run out.
-  const sentence = described && (described.short || series === sinceResetSeries(account)
-    || account?.provider === "google");
+  const pace = limitRowPace(limit, row.usedPercent, account, now);
+  const described = pace?.described;
   const used = row.usedPercent === undefined ? undefined : Math.min(100, Math.max(0, row.usedPercent));
-  const projected = described
-    ? described.projection.kind === "full" ? 100 : Math.min(100, described.projection.percent)
-    : undefined;
+  const projected = pace?.projectedPercent;
   return (
     <div>
       <dt>
@@ -57,7 +41,7 @@ export function RateLimitRow({ limit, now, account, labelTooltip }: {
             ) : null}
           </span>
         ) : null}
-        {described && sentence ? (
+        {described && pace.sentence ? (
           <span className={`usage-pace backend-status-list__pace${described.short ? " is-short" : ""}`}>
             <span>{described.rate}</span>
             {" "}

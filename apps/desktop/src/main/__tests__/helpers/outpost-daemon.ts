@@ -5,7 +5,7 @@ import { addAbortListener } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import {
   FEDERATION_PROTOCOL_VERSION,
@@ -44,12 +44,7 @@ export type OutpostDaemon = OutpostViewer & {
   enrollViewer(capabilities: FederationCapability[]): Promise<OutpostViewer>;
 };
 
-/**
- * Starts the standalone Outpost on the fake Codex fixture
- * and enrolls one viewer through a real invite, Noise handshake and RPC
- * endpoint, the way a desktop viewer connects.
- */
-export async function startOutpostDaemon(options: {
+type OutpostDaemonOptions = {
   workspaceKind?: "direct" | "symlink";
   capabilities?: FederationCapability[];
   profileRoot?: string;
@@ -61,9 +56,30 @@ export async function startOutpostDaemon(options: {
   waitForCodexCommand?: boolean;
   /** Releases caller-owned startup barriers before waiting for the daemon to exit. */
   beforeFailedStartupClose?: () => Promise<void>;
-} = {}): Promise<OutpostDaemon> {
+};
+
+/**
+ * Start the standalone Outpost on the fake Codex fixture and enroll a viewer
+ * through a real invite, Noise handshake and RPC endpoint. The caller's test
+ * runner owns the startup and daemon until its teardown finishes.
+ */
+export function createOutpostDaemonStarter(onFinished: (cleanup: () => Promise<void>) => void) {
+  return (options: OutpostDaemonOptions = {}): Promise<OutpostDaemon> => {
+    const owner = new AbortController();
+    const signal = options.signal ? AbortSignal.any([options.signal, owner.signal]) : owner.signal;
+    onFinished(async () => {
+      owner.abort();
+      const daemon = await starting.catch(() => undefined);
+      await daemon?.close();
+    });
+    const starting = spawnOutpostDaemon({ ...options, signal });
+    return starting;
+  };
+}
+
+async function spawnOutpostDaemon(options: OutpostDaemonOptions & { signal: AbortSignal }): Promise<OutpostDaemon> {
   const { signal } = options;
-  signal?.throwIfAborted();
+  signal.throwIfAborted();
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
   // root inside the checkout makes that depend on where the checkout lives,
@@ -88,8 +104,14 @@ export async function startOutpostDaemon(options: {
   writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o700 });
   const env: NodeJS.ProcessEnv = { ...process.env, SHELL: shell, ...options.env, PWRAGENT_HOME: root, PWRAGENT_PROFILE: "t", PWRAGENT_TEST_DATA: data, CLAUDE_CONFIG_DIR: path.join(root, "claude") };
   const packageRoot = options.packageRoot ?? path.join(root, "owner-package");
-  const guard = options.fixturePreload ?? (options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind));
-  if (guard) env.NODE_OPTIONS = `--require=${JSON.stringify(guard)}`;
+  try {
+    const guard = options.fixturePreload ?? (options.packageRoot ? undefined : await buildOwnerFixture(packageRoot, options.hostKind));
+    signal.throwIfAborted();
+    if (guard) env.NODE_OPTIONS = `--require=${JSON.stringify(guard)}`;
+  } catch (error) {
+    if (!options.profileRoot) rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
   const cli = path.join(packageRoot, "bin/pwragent.js");
   const daemon = spawn(process.execPath, [cli, "serve", "--workspace", workspaceInput, "--codex-home", home,
     "--codex-bin", path.join(OUTPOST_PACKAGE_ROOT, "test/fixtures/codex.js")], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -97,17 +119,30 @@ export async function startOutpostDaemon(options: {
   let errors = "";
   daemon.stdout.on("data", (chunk) => { output += String(chunk); });
   daemon.stderr.on("data", (chunk) => { errors += String(chunk); });
-  let spawnError: Error | undefined;
-  daemon.once("error", (error) => { spawnError = error; });
-  const exited = new Promise<void>((resolve) => daemon.once("close", () => resolve()));
+  const ready = Promise.withResolvers<void>();
+  const lines = createInterface({ input: daemon.stdout });
+  lines.on("line", (line) => {
+    if (!line.startsWith("{")) return;
+    try {
+      if (JSON.parse(line)?.ready === true) ready.resolve();
+    } catch {
+      // The daemon also writes human-readable diagnostics.
+    }
+  });
+  daemon.on("error", ready.reject);
+  const exited = new Promise<void>((resolve) => daemon.once("close", (code, exitSignal) => {
+    ready.reject(new Error(`Outpost startup failed (${code ?? exitSignal}): ${errors} ${output.slice(-3000)}`));
+    resolve();
+  }));
   const connections = new Set<Awaited<ReturnType<typeof connectFederationClient>>>();
-  const close = async () => {
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= (async () => {
     for (const connection of connections) connection.close();
     connections.clear();
     daemon.kill("SIGTERM");
     await exited;
     if (!options.profileRoot) rmSync(root, { recursive: true, force: true });
-  };
+  })();
   const runCli = async (command: string, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     const request = promisify(execFile)(process.execPath, [cli, command], { env, signal });
@@ -177,12 +212,13 @@ export async function startOutpostDaemon(options: {
     };
   };
   try {
-    for (let attempt = 0; !output.includes('"ready":true'); attempt++) {
-      if (spawnError) throw spawnError;
-      if (daemon.exitCode !== null || daemon.signalCode !== null || attempt >= 200) {
-        throw new Error(`Outpost startup failed (${daemon.exitCode ?? daemon.signalCode}): ${errors} ${output.slice(-3000)}`);
-      }
-      await delay(20, undefined, { signal });
+    const abort = addAbortListener(signal, () => ready.reject(signal.reason));
+    try {
+      await ready.promise;
+    } finally {
+      abort[Symbol.dispose]();
+      lines.close();
+      daemon.stdout.resume();
     }
     const viewer = await enrollViewer(options.capabilities ?? OUTPOST_VIEWER_CAPABILITIES, signal);
     if (options.waitForCodexCommand) {

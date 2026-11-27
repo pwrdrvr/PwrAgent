@@ -60,3 +60,68 @@ it("does not overwrite a newer snapshot with cached corrections from its previou
   expect(result.current[1]).toMatchObject({ summary: "Turn usage: newest snapshot" });
   unmount();
 });
+
+it("requests only invalidated turns and keeps an interrupted refresh until it succeeds", async () => {
+  vi.useFakeTimers();
+  const ids = ["a", "b", "c"];
+  const entries = ids.map((id) => ({ ...content, id, turn: { ...turn, id } }));
+  const snapshot = response(entries);
+  const latest = new Map(ids.map((id) => [id, 0]));
+  const requests: string[][] = [];
+  let listener!: (event: AgentEvent) => void;
+  let release: (() => void) | undefined;
+  let block = false;
+  let revision = "original";
+  const read: NonNullable<DesktopApi["readThread"]> = async (request) => {
+    const selected = request.display?.turns?.map((item) => item.id) ?? [];
+    requests.push(selected);
+    const result = response(selected.map((id) => ({
+      ...usage(`Turn usage: ${id} ${latest.get(id)}`), id: `usage-${id}`, turn: { ...turn, id },
+    })));
+    if (block) {
+      block = false;
+      await new Promise<void>((resolve) => { release = resolve; });
+    }
+    return result;
+  };
+  const api: DesktopApi = { readThread: read, onAgentEvent: (fn) => { listener = fn; return () => {}; } };
+  const { result, unmount } = renderHook(() => useThreadUsageDisplay({ desktopApi: api, thread, entries, response: snapshot }));
+  const flush = () => act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  const change = (id: string) => {
+    latest.set(id, latest.get(id)! + 1);
+    act(() => listener({ backend: "codex", federationTarget: target, notification: {
+      method: "thread/pricing/updated", params: { threadId: "thread", changedTurnIds: [id], pricingHistoryRevision: revision, displayInvalidated: true, pricing: { lines: [], summaries: [] } },
+    } }));
+  };
+  await flush();
+  // Establish the owner revision before measuring incremental reads.
+  change("c");
+  await flush();
+  const unchanged = result.current[1];
+  block = true;
+  change("b");
+  await flush();
+  change("c");
+  await flush();
+  await act(async () => { release!(); });
+  expect(requests).toEqual([ids, ids, ["b"], ["b", "c"]]);
+  expect(result.current[1]).toBe(unchanged);
+  expect(result.current.filter((entry) => entry.type === "activity").map((row) => row.summary))
+    .toEqual(["Turn usage: a 0", "Turn usage: b 1", "Turn usage: c 2"]);
+  // A historical correction can arrive on a different connection. The owner
+  // revision invalidates all visible turns, including ones absent from the hint.
+  latest.set("a", 20);
+  revision = "repaired";
+  change("b");
+  await flush();
+  expect(requests.at(-1)).toEqual(ids);
+  expect(result.current[1]).toMatchObject({ summary: "Turn usage: a 20" });
+  latest.set("a", 30);
+  act(() => listener({ backend: "codex", notification: { method: "federation/peerStatus/changed",
+    params: { instanceId: "owner", status: "connected" },
+  } }));
+  await flush();
+  expect(requests.at(-1)).toEqual(ids);
+  expect(result.current[1]).toMatchObject({ summary: "Turn usage: a 30" });
+  unmount();
+});

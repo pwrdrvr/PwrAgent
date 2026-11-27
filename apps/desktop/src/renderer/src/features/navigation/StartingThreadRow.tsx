@@ -1,15 +1,17 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useId, useRef, type CSSProperties } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { useThreadProviderLabel } from "../../lib/thread-provider-label";
 import { useProviderChipNeeded } from "./provider-chip-visibility";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
+import { isFederationViewerWindow } from "../../lib/federation-window";
 import type {
   PendingLaunchpadCreation,
   SubthreadLaunchpadDraft,
 } from "../../lib/useThreadNavigation";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import { StartupTiming } from "../composer/StartupTiming";
+import { InstanceChip } from "../federation/InstanceGlyph";
 
 /**
  * A row a list draws before its thread exists: a sub-thread still being
@@ -78,6 +80,10 @@ export function StartingThreadRow(props: {
     model: creation.launchpad.model,
   });
   const branchName = creation.launchpad.branchName?.trim();
+  const remoteInstanceId = creation.target?.scope === "remote" && !isFederationViewerWindow()
+    ? creation.target.instanceId
+    : undefined;
+  const instanceDescriptionId = useId();
   const nested = props.nestedDepth !== undefined;
   const shellRef = useRef<HTMLDivElement>(null);
   // A selected starting row sits wherever its project or parent is, which can
@@ -110,6 +116,7 @@ export function StartingThreadRow(props: {
       >
         {selectable ? (
           <button
+            aria-describedby={remoteInstanceId ? instanceDescriptionId : undefined}
             aria-label={`${title}, starting in ${creation.directoryLabel}`}
             aria-pressed={props.selected}
             className="thread-row__open"
@@ -132,13 +139,21 @@ export function StartingThreadRow(props: {
           </span>
           <span className="thread-row__time"><StartupTiming submittedAt={creation.submittedAt} startedAt={creation.startup?.startedAt} compact /></span>
         </span>
-        <span aria-hidden="true" className="thread-row__chips">
+        <span className="thread-row__chips">
+          {remoteInstanceId ? (
+            <InstanceChip
+              descriptionId={selectable ? instanceDescriptionId : undefined}
+              instanceId={remoteInstanceId}
+              label={remoteInstanceId}
+            />
+          ) : null}
           {showProvider ? (
-            <span className="thread-row__chip thread-row__chip--backend">
+            <span aria-hidden="true" className="thread-row__chip thread-row__chip--backend">
               {providerLabel}
             </span>
           ) : null}
           <span
+            aria-hidden="true"
             className={`thread-row__chip${
               props.locationMode === "kind" ? " thread-row__chip--location" : ""
             }`}
@@ -151,7 +166,7 @@ export function StartingThreadRow(props: {
             ) : null}
           </span>
           {branchName ? (
-            <span className="thread-row__chip thread-row__chip--mono">
+            <span aria-hidden="true" className="thread-row__chip thread-row__chip--mono">
               <span className="thread-row__chip-icon">
                 <BranchIcon size={12} />
               </span>

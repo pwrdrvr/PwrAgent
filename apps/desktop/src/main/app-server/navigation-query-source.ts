@@ -1,14 +1,19 @@
+import { addAbortListener } from "node:events";
+import { isDeepStrictEqual } from "node:util";
+import { LiveNavigationIndex, type NavigationViewerProjection } from "./live-navigation-index";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AppServerBackendScope, AppServerThreadSummary, LinkedDirectorySummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationDirectorySummary, NavigationIdentity, NavigationQueryRequest, NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
-import { buildPullRequestStatusKey, buildThreadIdentityKey, parseThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey, NAVIGATION_INDEX_MAX_INPUT_BYTES } from "@pwragent/shared/contracts/navigation";
 import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
+  NAVIGATION_LIVE_INDEX_RECONCILED_METHOD,
   NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD,
   navigationPullRequestKeysMayMatch,
+  normalizedNavigationPullRequestKey,
   navigationQueryEventRequiresRefresh,
 } from "@pwragent/shared/navigation-query-events";
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
@@ -21,13 +26,15 @@ import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
 import { readMessagingBindingsRevision } from "../messaging/named-messaging-bindings";
 import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
-import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
+import { NAVIGATION_RETAINED_BYTE_BUDGET, NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
 import { nextNavigationObservation } from "./navigation-observation-clock";
 import { resolveNavigationWorktreeProjects } from "./navigation-worktree-projects";
 import {
+  DIRECTORY_SET_RECHECK_INTERVAL_MS,
   directorySetMayHaveChanged,
   NavigationDirectorySetAnnouncer,
 } from "./navigation-directory-set-announcer";
+import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY, SharedPrMetadataRead } from "../pr-status/pr-metadata-process";
@@ -42,9 +49,6 @@ import { readNavigationCheckouts } from "../git-info/directory-store";
 // Keep a bounded comparison candidate across nearby refreshes. The serving
 // window and the provider/filesystem validation on its expiry still apply.
 const indexReads = new NavigationIndexReadPool(1_000, 15_000);
-// Sidebar pages share the compact display inventory between switches.
-// Registry events and the durable source version revoke it immediately.
-const SIDEBAR_INDEX_REUSE_MS = 15_000;
 const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = getDesktopStackReader();
 const navigationQueryLog = getMainLogger("pwragent:navigation-query");
@@ -207,6 +211,7 @@ export function navigationPullRequestProjection(options: {
   signal?: AbortSignal;
   registry?: DesktopBackendRegistry;
   backgroundValidation?: boolean;
+  backend?: AppServerBackendScope;
 }): NavigationPullRequestProjection {
   const priority = options.kind === "star-map" ? PR_METADATA_PRIORITY.background : PR_METADATA_PRIORITY.page;
   const verify = (batches: PrSummary[][]) => {
@@ -220,7 +225,14 @@ export function navigationPullRequestProjection(options: {
     verify,
     read: (threads) => {
       options.signal?.throwIfAborted();
-      return verify(getDesktopOverlayStore().readNavigationPullRequests(threads));
+      const overlay = getDesktopOverlayStore();
+      if (options.backgroundValidation) {
+        const registry = options.registry ?? getDesktopBackendRegistry();
+        const owner = liveOwners.get(registry);
+        const live = owner?.overlay === overlay ? owner.scopes.get(options.backend ?? "all")?.reference.deref() : undefined;
+        if (live) return verify(threads.map((ref) => live.attachments(ref)));
+      }
+      return verify(overlay.readNavigationPullRequests(threads));
     },
   };
 }
@@ -232,65 +244,123 @@ function publishSidebarEnrichment(registry: DesktopBackendRegistry): void {
   pendingSidebarNotifications.add(registry);
   setImmediate(() => {
     pendingSidebarNotifications.delete(registry);
-    void registry.publishLocalEvent({ backend: "codex", notification: {
+    void registry.publishLocalEvent?.({ backend: "codex", notification: {
       method: NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD, params: {},
     } }).catch((error: unknown) => navigationQueryLog.warn("sidebar enrichment notification failed", { error: String(error) }));
   });
 }
 
-type SidebarPrValidation = { accepted?: Set<string>; expiresAt: number; pending: boolean };
-const sidebarPrValidations = new WeakMap<DesktopBackendRegistry, Map<string, SidebarPrValidation>>();
+type SidebarPrValidation = {
+  rows: PrSummary[];
+  prKeys: Set<string>;
+  epoch: number;
+  verifiedEpoch: number;
+  pending: boolean;
+  expiresAt: number;
+};
+type SidebarPrCache = {
+  validations: Map<string, SidebarPrValidation>;
+  byPr: Map<string, Set<SidebarPrValidation>>;
+  checkouts: Map<string, { admitted: Set<string>; expiresAt: number }>;
+};
+const sidebarPrValidations = new WeakMap<DesktopBackendRegistry, SidebarPrCache>();
 const SIDEBAR_PR_VALIDATION_REUSE_MS = 60_000;
 const MAX_SIDEBAR_PR_VALIDATIONS = 256;
 
-function needsSidebarPrValidation(pr: PrSummary): boolean {
-  return !pr.explicitlyAttached && Boolean(pr.linkedDirectoryPaths?.length);
+function indexValidation(cache: SidebarPrCache, entry: SidebarPrValidation, keys: Set<string>): void {
+  for (const key of entry.prKeys) {
+    const entries = cache.byPr.get(key);
+    entries?.delete(entry);
+    if (!entries?.size) cache.byPr.delete(key);
+  }
+  entry.prKeys = keys;
+  for (const key of keys) {
+    const entries = cache.byPr.get(key);
+    if (entries) entries.add(entry);
+    else cache.byPr.set(key, new Set([entry]));
+  }
+}
+
+function sidebarPrCache(registry: DesktopBackendRegistry): SidebarPrCache {
+  const existing = sidebarPrValidations.get(registry);
+  if (existing) return existing;
+  const cache: SidebarPrCache = { validations: new Map(), byPr: new Map(), checkouts: new Map() };
+  registry.onEvent?.(({ notification, navigationPullRequestKeyAliases }) => {
+    if (notification.method !== "pullRequest/status/updated") return;
+    const key = extractPullRequestEventKey(notification.params);
+    const affected = new Set<SidebarPrValidation>();
+    for (const value of [key, ...(navigationPullRequestKeyAliases ?? [])]) {
+      const normalized = value && normalizedNavigationPullRequestKey(value);
+      if (!normalized) {
+        for (const entry of cache.validations.values()) affected.add(entry);
+        break;
+      }
+      for (const entry of cache.byPr.get(normalized) ?? []) affected.add(entry);
+    }
+    for (const entry of affected) entry.epoch++;
+  });
+  sidebarPrValidations.set(registry, cache);
+  return cache;
+}
+
+// These fields decide automatic attachment membership in filterStoredDiscoveredPullRequests.
+// Status, CI and review updates can reuse the checkout verdict until its original expiry.
+function checkoutBinding(pr: PrSummary): string {
+  const source = pr.sourceRepository ?? pr;
+  return JSON.stringify([buildPullRequestStatusKey(pr), source.provider, source.org, source.repo,
+    pr.explicitlyAttached, pr.linkedDirectoryPaths, pr.headRefName]);
 }
 
 async function readSidebarPullRequests(registry: DesktopBackendRegistry, prs: PrSummary[],
-  demand: { signal?: AbortSignal; priority: () => number }): Promise<PrSummary[]> {
-  const canonical = await registry.canonicalizeNavigationPullRequests(prs, demand, false);
-  const automatic = canonical.filter(needsSidebarPrValidation);
-  if (!automatic.length) return canonical;
-  // Status changes alone do not invalidate a checkout's attachment verdict.
-  const key = createHash("sha256").update(JSON.stringify(automatic.map((pr) => [buildPullRequestStatusKey(pr),
-    pr.sourceRepository, pr.headRefName, pr.linkedDirectoryPaths]))).digest("base64url");
-  let validations = sidebarPrValidations.get(registry);
-  if (!validations) sidebarPrValidations.set(registry, validations = new Map());
-  let validation = validations.get(key);
-  if (!validation && validations.size >= MAX_SIDEBAR_PR_VALIDATIONS) {
-    // Keep fresh verdicts through a multi-page refresh. Cycling them through
-    // this cache would keep republishing the same validation results.
-    const now = Date.now();
-    const reusable = [...validations].find(([, entry]) => !entry.pending && entry.expiresAt <= now);
-    if (!reusable) {
-      return registry.getStartupProviderRefreshStatus?.()?.state === "checking"
-        ? canonical.filter((pr) => !needsSidebarPrValidation(pr))
-        : registry.canonicalizeNavigationPullRequests(canonical, demand);
+  demand: { signal?: AbortSignal }): Promise<PrSummary[]> {
+  demand.signal?.throwIfAborted();
+  if (!prs.length) return [];
+  const cache = sidebarPrCache(registry);
+  const key = createHash("sha256").update(JSON.stringify(prs)).digest("base64url");
+  let validation = cache.validations.get(key);
+  if (!validation) {
+    if (cache.validations.size >= MAX_SIDEBAR_PR_VALIDATIONS) {
+      const oldest = [...cache.validations].find(([, entry]) => !entry.pending);
+      if (!oldest) return [];
+      indexValidation(cache, oldest[1], new Set());
+      cache.validations.delete(oldest[0]);
     }
-    validations.delete(reusable[0]);
+    validation = { rows: [], prKeys: new Set(), epoch: 0, verifiedEpoch: -1, expiresAt: 0, pending: false };
+    cache.validations.set(key, validation);
+    indexValidation(cache, validation, new Set(prs.map(buildPullRequestStatusKey)));
   }
-  if (!validation) validations.set(key, validation = { expiresAt: 0, pending: false });
-  const accept = (pr: PrSummary) => !needsSidebarPrValidation(pr)
-    || validation.accepted?.has(buildPullRequestStatusKey(pr)) === true;
-  const visible = canonical.filter(accept);
-  if (!validation.pending && validation.expiresAt <= Date.now()) {
-    validation.pending = true;
-    const oldKeys = validation.accepted ?? new Set<string>();
-    void registry.canonicalizeNavigationPullRequests(automatic, {
-      priority: () => PR_METADATA_PRIORITY.background, signal: AbortSignal.timeout(30_000),
-    })
-      .then((verified) => {
-        const keys = new Set(verified.map(buildPullRequestStatusKey));
-        validation.accepted = keys;
-        if (keys.size !== oldKeys.size || [...keys].some((entry) => !oldKeys.has(entry))) publishSidebarEnrichment(registry);
-      }).finally(() => {
-        validation.expiresAt = Date.now() + SIDEBAR_PR_VALIDATION_REUSE_MS;
-        validation.pending = false;
-      }).catch((error: unknown) => navigationQueryLog.warn("sidebar PR validation failed", { error: String(error) }));
+  const entry = validation;
+  const { epoch } = entry;
+  if (!entry.pending && (entry.expiresAt <= Date.now() || entry.verifiedEpoch !== epoch)) {
+    entry.pending = true;
+    setImmediate(() => {
+      const demand = { priority: () => PR_METADATA_PRIORITY.background, signal: AbortSignal.timeout(30_000) };
+      void (async () => {
+        const canonical = await registry.canonicalizeNavigationPullRequests(prs, demand, false);
+        const bindings = JSON.stringify(canonical.map(checkoutBinding));
+        indexValidation(cache, entry, new Set([...prs, ...canonical].map(buildPullRequestStatusKey)));
+        const proof = cache.checkouts.get(bindings);
+        const reusable = proof && proof.expiresAt > Date.now() ? proof : undefined;
+        const verified = reusable ? canonical.filter((pr) => reusable.admitted.has(checkoutBinding(pr)))
+          : await registry.canonicalizeNavigationPullRequests(canonical, demand);
+        if (entry.epoch !== epoch) { publishSidebarEnrichment(registry); return; }
+        entry.expiresAt = reusable?.expiresAt ?? Date.now() + SIDEBAR_PR_VALIDATION_REUSE_MS;
+        if (!reusable) {
+          if (!cache.checkouts.has(bindings) && cache.checkouts.size >= MAX_SIDEBAR_PR_VALIDATIONS) {
+            cache.checkouts.delete(cache.checkouts.keys().next().value!);
+          }
+          cache.checkouts.set(bindings, { admitted: new Set(verified.map(checkoutBinding)), expiresAt: entry.expiresAt });
+        }
+        if (!isDeepStrictEqual(entry.rows, verified)) publishSidebarEnrichment(registry);
+        entry.rows = verified;
+        entry.verifiedEpoch = epoch;
+      })().catch((error: unknown) => navigationQueryLog.warn("sidebar PR validation failed", { error: String(error) }))
+        .finally(() => { entry.pending = false; });
+    });
   }
-  return visible;
+  return entry.rows;
 }
+
 export function navigationQueryShowsStacks(
   query: NavigationQueryRequest["query"],
   consumer?: NavigationQueryRequest["consumer"],
@@ -298,6 +368,10 @@ export function navigationQueryShowsStacks(
   if (consumer === "mentions") return false;
   return query.kind === "lens" || query.kind === "directory" || query.kind === "children"
     || query.kind === "exact" || query.kind === "search" || query.kind === "star-map";
+}
+
+export function isSidebarDisplayQuery(request: NavigationQueryRequest): boolean {
+  return request.consumer === "main-sidebar" && request.query.kind !== "group-members" && request.query.kind !== "star-map";
 }
 
 const latestVisibilityScanByRegistry = new WeakMap<DesktopBackendRegistry, number>();
@@ -366,7 +440,6 @@ export async function loadLocalNavigationQueryIndex(params: {
   refreshProviders?: boolean;
   /** Display and coverage checks can use saved membership while discovery runs. */
   useSavedStartupInventory?: boolean;
-  sidebarDisplay?: boolean;
   /** Actions that use checkout membership as authority need live Git verification. */
   requireVerifiedDirectories?: boolean;
   /** This caller renders thread stack membership. */
@@ -545,8 +618,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
     return createNavigationQuerySnapshot(index, undefined, undefined, previous());
-  }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source",
-  params.sidebarDisplay ? SIDEBAR_INDEX_REUSE_MS : undefined);
+  }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source");
 }
 
 type SidebarStackFields = Pick<NavigationThreadSummary, "stackMemberships" | "stackLeadPrKey">;
@@ -570,21 +642,45 @@ const sidebarStackReads = new WeakMap<DesktopBackendRegistry, {
   overlay: ReturnType<typeof getDesktopOverlayStore>;
   reads: Map<AppServerBackendScope, SidebarStackRead>;
 }>();
-const sidebarStackSnapshots = new WeakMap<NavigationQueryIndex, { rows: SidebarStackRead["rows"]; index: NavigationQueryIndex }>();
+function applySidebarStackRows(registry: DesktopBackendRegistry, backend: AppServerBackendScope,
+  threads: NavigationThreadSummary[]): NavigationThreadSummary[] {
+  const state = sidebarStackReads.get(registry);
+  const rows = state?.overlay === getDesktopOverlayStore() ? state.reads.get(backend)?.rows : undefined;
+  return threads.map((row) => {
+    const stack = rows?.get(buildThreadIdentityKey(row.source, row.id));
+    if (stack && stack.binding === sidebarStackBinding(row)) return { ...row, ...stack.fields };
+    if (!row.stackMemberships) return row;
+    const { stackMemberships: _members, stackLeadPrKey: _lead, ...plain } = row;
+    return plain;
+  });
+}
+
+async function waitForSidebarRead<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  const cancelled = Promise.withResolvers<never>();
+  using _abort = addAbortListener(signal, () => cancelled.reject(signal.reason));
+  return await Promise.race([work, cancelled.promise]);
+}
 
 /** Sidebar membership and selection can render while the stack lease verifies Git. */
 export async function loadSidebarNavigationQueryIndex(
-  params: Parameters<typeof loadLocalNavigationQueryIndex>[0],
+  params: Parameters<typeof loadLocalNavigationQueryIndex>[0] & { viewerPins?: NavigationViewerProjection },
 ): Promise<NavigationQueryIndex> {
-  const { includeStacks, ...source } = params;
-  const local = await loadLocalNavigationQueryIndex({ ...source, useSavedStartupInventory: true, sidebarDisplay: true });
   params.signal?.throwIfAborted();
-  // Discovery publishes a replacement inventory. Let it settle before
-  // starting an inventory-wide scan on the checkouts it may replace.
-  if (!includeStacks || local.coverage?.state === "checking") return local;
+  if (params.requireVerifiedDirectories || params.refreshProviders) return loadLocalNavigationQueryIndex(params);
   const registry = params.registry ?? getDesktopBackendRegistry();
   const backend = params.backend ?? "all";
   const overlay = getDesktopOverlayStore();
+  const live = liveOwnerIndex(registry, backend, params.callerReason, overlay, !params.registry);
+  const { owner, local } = await listingDiagnostics.trace("viewer-index", {}, async () => {
+    const owner = await waitForSidebarRead(live.read(), params.signal);
+    params.signal?.throwIfAborted();
+    const local = params.viewerPins ? await waitForSidebarRead(live.viewer(owner, params.viewerPins, overlay.readViewerNavigationSourceVersion?.() ?? overlay.readNavigationSourceVersion?.() ?? ""), params.signal)
+      : params.viewer ? createNavigationQuerySnapshot(await waitForSidebarRead(params.viewer.project(owner), params.signal), undefined, owner) : owner;
+    return { owner, local };
+  });
+  params.signal?.throwIfAborted();
+  if (!params.includeStacks || local.coverage?.state === "checking") return local;
   const epoch = stackInputEpoch(registry);
   let state = sidebarStackReads.get(registry);
   if (state?.overlay !== overlay) sidebarStackReads.set(registry, state = { overlay, reads: new Map() });
@@ -599,21 +695,12 @@ export async function loadSidebarNavigationQueryIndex(
     reads.set(backend, read = { rows: new Map(), expiresAt: 0, pending: false, requestedAgain: false });
   }
   const current = read.epoch === epoch?.value && read.version === navigationIndexVersion(registry, overlay, false);
-  if (!current || read.expiresAt <= Date.now()) refreshSidebarStacks(read, registry, params, epoch);
-  if (!read.rows.size) return local;
-  const rows = read.rows;
-  const snapshot = sidebarStackSnapshots.get(local);
-  if (snapshot?.rows === rows) return snapshot.index;
-  const index = createNavigationQuerySnapshot({ ...local, threads: local.threads.map((row) => {
-    const stack = !row.federation && rows.get(buildThreadIdentityKey(row.source, row.id));
-    return stack && stack.binding === sidebarStackBinding(row) ? { ...row, ...stack.fields } : row;
-  }) }, undefined, local);
-  sidebarStackSnapshots.set(local, { rows, index });
-  return index;
+  if (!current || read.expiresAt <= Date.now()) refreshSidebarStacks(read, registry, owner, live, backend, epoch);
+  return local;
 }
 
 function refreshSidebarStacks(read: SidebarStackRead, registry: DesktopBackendRegistry,
-  params: Parameters<typeof loadLocalNavigationQueryIndex>[0], epoch?: { value: number }): void {
+  owner: NavigationQueryIndex, live: LiveNavigationIndex, backend: AppServerBackendScope, epoch?: { value: number }): void {
   if (read.pending) {
     read.requestedAgain = true;
     return;
@@ -624,33 +711,41 @@ function refreshSidebarStacks(read: SidebarStackRead, registry: DesktopBackendRe
   const version = navigationIndexVersion(registry, overlay, false);
   const isCurrent = () => getDesktopOverlayStore() === overlay
     && startedEpoch === epoch?.value && version === navigationIndexVersion(registry, overlay, false);
-  // Use the owner index lease so a pin publication or the closing of one
-  // window cannot cancel Git work shared by the local sidebars.
-  void loadLocalNavigationQueryIndex({ backend: params.backend, registry: params.registry,
-    callerReason: params.callerReason, includeStacks: true, signal: AbortSignal.timeout(30_000) })
-    .then((index) => {
+  // Even candidate enumeration and reading attachments belong to the background refresh.
+  void new Promise<void>((resolve) => setImmediate(resolve))
+    .then(() => projectNavigationStacks(owner.threads.map((row) => {
+      if (!row.stackMemberships) return row;
+      const { stackMemberships: _members, stackLeadPrKey: _lead, ...unadorned } = row;
+      return unadorned;
+    }), registry, PR_METADATA_PRIORITY.background, AbortSignal.timeout(30_000)))
+    .then(({ projection, prScope }) => {
       if (!isCurrent()) return;
+      if (backend === "all" && startedEpoch !== undefined && owner.coverage?.state === "complete" && live.isCurrent(owner)) {
+        latestStackProjections.set(registry, {
+          stacks: projection?.stacks ?? [], prScope, overlayStore: overlay, epoch: startedEpoch, version, completedAt: Date.now(),
+        });
+      }
       const rows = new Map<string, SidebarStackRow>();
-      for (const row of index.threads) {
+      for (const row of projection?.threads ?? []) {
         if (row.stackMemberships?.length) rows.set(buildThreadIdentityKey(row.source, row.id), {
           binding: sidebarStackBinding(row),
           fields: { stackMemberships: row.stackMemberships, stackLeadPrKey: row.stackLeadPrKey },
         });
       }
-      const changed = rows.size !== read.rows.size || [...rows].some(([key, value]) =>
-        JSON.stringify(value) !== JSON.stringify(read.rows.get(key)));
+      const changed = [...new Set([...rows.keys(), ...read.rows.keys()])].filter((id) => !isDeepStrictEqual(rows.get(id), read.rows.get(id)));
       read.epoch = startedEpoch;
       read.version = version;
       read.expiresAt = Date.now() + STACK_DETAIL_REUSE_MS;
-      if (changed) {
+      if (changed.length) {
         read.rows = rows;
+        live.refreshRows(changed, true);
         publishSidebarEnrichment(registry);
       }
     }).finally(() => {
       read.pending = false;
       const requestedAgain = read.requestedAgain;
       read.requestedAgain = false;
-      if (requestedAgain && getDesktopOverlayStore() === overlay && !isCurrent()) refreshSidebarStacks(read, registry, params, epoch);
+      if (requestedAgain && getDesktopOverlayStore() === overlay && !isCurrent()) publishSidebarEnrichment(registry);
     }).catch((error: unknown) => navigationQueryLog.warn("sidebar stack refresh failed", { error: String(error) }));
 }
 
@@ -892,13 +987,8 @@ async function projectNavigationStacks(
     buildThreadIdentityKey(row.source, row.id), row.prs,
   ]));
   const { stacks, catalogs } = await stackReader.read(rows, [], undefined,
-    async (key) => {
-      const thread = parseThreadIdentityKey(key);
-      if (!thread) return {};
-      const held = registry.stackThreadHeld?.(thread) ?? false;
-      return { held, repair: !held && (Boolean(await getDesktopOverlayStore().getThreadPrAutoDispatchPending(thread))
-        || await registry.stackRepairActive?.(thread) === true) };
-    }, new StackReadObservation(demand), async (row, attachmentDemand) => {
+    (key) => registry.readStackThreadActivity?.(key) ?? Promise.resolve({}),
+    new StackReadObservation(demand), async (row, attachmentDemand) => {
       const prs = await registry.canonicalizeNavigationPullRequests(row.prs, attachmentDemand);
       validated.set(buildThreadIdentityKey(row.source, row.id), prs);
       return prs;
@@ -1072,33 +1162,8 @@ async function buildLocalNavigationQueryIndex(params: {
     workspaceRoots: resolveScratchProjectsRoots(),
   });
   params.signal?.throwIfAborted();
-  const bindings = await buildNavigationIndexMessagingBindings(index.threads);
-  params.signal?.throwIfAborted();
-  const boundThreads = bindings.size === 0 ? index.threads : index.threads.map((thread) => {
-    const messagingBindings = bindings.get(buildThreadIdentityKey(thread.source, thread.id));
-    return messagingBindings ? { ...thread, messagingBindings } : thread;
-  });
-  // One read of every active watch, for the rows' CI watch marks.
-  const watchedThreads = await attachNavigationPrCiWatchMarks(
-    boundThreads,
-    async () => await overlayStore.listAllActivePrStatusWatches(),
-  );
-  params.signal?.throwIfAborted();
-  const threads = await registry.hydrateThreadGitWorkingStates(registry.withNavigationPrimaryGitRepositories(watchedThreads), {
-    probeMissing: false,
-  });
-  params.signal?.throwIfAborted();
-  const directoryStatusCache = await overlayStore.readDirectoryGitStatusCache();
-  params.signal?.throwIfAborted();
-  const withGitStatus: NavigationDirectorySummary[] = index.directories.map(
-    (directory) => ({
-      ...directory,
-      gitStatus: directoryStatusCache[directory.key]?.gitStatus,
-    }),
-  );
-  const projects = await resolveNavigationWorktreeProjects(withGitStatus, {
-    threads, signal: params.signal, directoryOverlays: index.directoryOverlays, gitStatusByKey: directoryStatusCache,
-  });
+  const threads = await decorateNavigationRows(index.threads, registry, params.signal);
+  const projects = await projectDirectories(index, threads, overlayStore, true, params.signal);
   // Startup refresh status says only whether live listings have begun: it
   // records one attempt, and a Claude or ACP discovery failure in it says
   // nothing about rows PwrAgent stores itself. Completeness belongs to the
@@ -1113,4 +1178,212 @@ async function buildLocalNavigationQueryIndex(params: {
   return { ...projects, threads: registry.withNavigationSubAgentActivity(threads), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
     coverage,
   };
+}
+
+async function decorateNavigationRows(rows: NavigationThreadSummary[], registry: DesktopBackendRegistry, signal?: AbortSignal) {
+  const overlayStore = getDesktopOverlayStore();
+  const bindings = await buildNavigationIndexMessagingBindings(rows);
+  signal?.throwIfAborted();
+  const boundThreads = bindings.size === 0 ? rows : rows.map((thread) => {
+    const messagingBindings = bindings.get(buildThreadIdentityKey(thread.source, thread.id));
+    return messagingBindings ? { ...thread, messagingBindings } : thread;
+  });
+  // One read of every active watch, for the rows' CI watch marks.
+  const watchedThreads = await attachNavigationPrCiWatchMarks(
+    boundThreads,
+    () => rows.length === 1 && overlayStore.listActiveThreadPrStatusWatches
+      ? overlayStore.listActiveThreadPrStatusWatches({ backend: rows[0]!.source, threadId: rows[0]!.id })
+      : overlayStore.listAllActivePrStatusWatches(),
+  );
+  signal?.throwIfAborted();
+  return registry.hydrateThreadGitWorkingStates(registry.withNavigationPrimaryGitRepositories(watchedThreads), {
+    probeMissing: false,
+  });
+}
+
+async function projectDirectories(index: ReturnType<ReturnType<typeof getDesktopOverlayStore>["readNavigationQueryIndex"]> |
+  ReturnType<ReturnType<typeof getDesktopOverlayStore>["readNavigationQueryDirectories"]>, threads: NavigationThreadSummary[],
+  overlayStore: ReturnType<typeof getDesktopOverlayStore>, enrich: boolean, signal?: AbortSignal) {
+  const directoryStatusCache = await overlayStore.readDirectoryGitStatusCache();
+  signal?.throwIfAborted();
+  const withGitStatus: NavigationDirectorySummary[] = index.directories.map(
+    (directory) => ({
+      ...directory,
+      gitStatus: directoryStatusCache[directory.key]?.gitStatus,
+    }),
+  );
+  if (!enrich) return { directories: withGitStatus };
+  return resolveNavigationWorktreeProjects(withGitStatus, {
+    threads, signal, directoryOverlays: index.directoryOverlays, gitStatusByKey: directoryStatusCache,
+  });
+}
+
+type LiveScope = { live?: LiveNavigationIndex; reference: WeakRef<LiveNavigationIndex>; bytes: number; unsubscribe: () => void };
+type LiveOwner = { overlay: ReturnType<typeof getDesktopOverlayStore>; scopes: Map<AppServerBackendScope, LiveScope> };
+const liveOwners = new WeakMap<DesktopBackendRegistry, LiveOwner>();
+
+// A single oversized inventory can finish serving its readers and background
+// verification. Neither the registry listener nor the reuse slot keeps it alive.
+function listenToLiveIndex(registry: DesktopBackendRegistry, reference: WeakRef<LiveNavigationIndex>): () => void {
+  const stop = registry.onEvent((event) => {
+    const live = reference.deref();
+    if (live) live.event(event);
+    else stop();
+  });
+  return stop;
+}
+
+function admitLiveIndex(owner: LiveOwner, backend: AppServerBackendScope, live: LiveNavigationIndex, bytes: number): void {
+  const scope = owner.scopes.get(backend);
+  if (scope?.reference.deref() !== live) return;
+  scope.bytes = bytes;
+  scope.live = bytes <= NAVIGATION_RETAINED_BYTE_BUDGET ? live : undefined;
+  let total = 0;
+  for (const candidate of owner.scopes.values()) if (candidate.live) total += candidate.bytes;
+  for (const [key, candidate] of owner.scopes) {
+    if (total <= NAVIGATION_RETAINED_BYTE_BUDGET) break;
+    if (candidate === scope || !candidate.live) continue;
+    total -= candidate.bytes;
+    owner.scopes.delete(key);
+    candidate.unsubscribe();
+  }
+}
+
+function liveOwnerIndex(registry: DesktopBackendRegistry, backend: AppServerBackendScope, callerReason: string,
+  overlay: ReturnType<typeof getDesktopOverlayStore>, announce: boolean): LiveNavigationIndex {
+  let owner = liveOwners.get(registry);
+  if (owner?.overlay !== overlay) {
+    for (const scope of owner?.scopes.values() ?? []) { scope.unsubscribe(); scope.reference.deref()?.close(); }
+    liveOwners.set(registry, owner = { overlay, scopes: new Map() });
+  }
+  const existing = owner.scopes.get(backend);
+  const cached = existing?.reference.deref();
+  if (existing) {
+    owner.scopes.delete(backend);
+    if (cached) {
+      owner.scopes.set(backend, existing);
+      return cached;
+    }
+    existing.unsubscribe();
+  }
+  if (owner.scopes.size >= 8) {
+    const oldest = owner.scopes.keys().next().value!;
+    owner.scopes.get(oldest)!.unsubscribe();
+    owner.scopes.delete(oldest);
+  }
+  type CheckoutFields = Pick<AppServerThreadSummary, "projectKey" | "linkedDirectories" | "observedGitBranch">;
+  function checkoutFields({ projectKey, linkedDirectories, observedGitBranch }: CheckoutFields): CheckoutFields {
+    return { projectKey, linkedDirectories, observedGitBranch };
+  }
+  let checkouts = new Map<string, { input: CheckoutFields; output: CheckoutFields }>();
+  let managedKeys: ReadonlySet<string> | undefined;
+  // Keep SQLite's aggregate admission limit across incremental joins as well.
+  const rowBytes = new Map<string, number>();
+  let totalBytes = 0;
+  let directoryBytes = 0;
+  function measureRow(key: string, bytes: number): void {
+    totalBytes += bytes - (rowBytes.get(key) ?? 0);
+    if (bytes) rowBytes.set(key, bytes);
+    else rowBytes.delete(key);
+  }
+  let aliases: Parameters<typeof overlay.readNavigationQueryThreads>[0]["worktreeRepositoryAliases"];
+  const handoffChildren = new Map<string, Set<string>>();
+  function rememberHandoffDependency(child: string, dependency: string): void {
+    const children = handoffChildren.get(dependency);
+    if (children) children.add(child);
+    else handoffChildren.set(dependency, new Set([child]));
+  }
+  function useCheckout<T extends AppServerThreadSummary>(input: T): T {
+    const prior = checkouts.get(buildThreadIdentityKey(input.source, input.id));
+    if (!prior || prior.input.projectKey !== input.projectKey || !isDeepStrictEqual(prior.input.linkedDirectories, input.linkedDirectories)) return input;
+    return { ...input, linkedDirectories: prior.output.linkedDirectories,
+      ...(prior.input.observedGitBranch !== prior.output.observedGitBranch ? { observedGitBranch: prior.output.observedGitBranch } : {}) };
+  }
+  const live = new LiveNavigationIndex({
+    backend, recheckMs: DIRECTORY_SET_RECHECK_INTERVAL_MS,
+    visibility: backend === "all" ? (observedAt) => {
+      const version = overlay.readOwnerNavigationSourceVersion?.();
+      const fence = registry.navigationDirectoryScope?.checkpoint();
+      latestVisibilityScanByRegistry.set(registry, observedAt);
+      return (index) => {
+        if (latestVisibilityScanByRegistry.get(registry) !== observedAt || version !== overlay.readOwnerNavigationSourceVersion?.()
+          || registry.navigationDirectoryScope?.checkpoint() !== fence) return;
+        if (fence !== undefined) registry.navigationDirectoryScope.remember(index, fence);
+        if (index.coverage?.state === "complete") registry.rememberNavigationVisibilityIndex?.(index);
+        if (announce) getNavigationDirectorySetAnnouncer().observe(index.directories);
+      };
+    } : undefined,
+    version: () => (overlay.readOwnerNavigationSourceVersion?.() ?? overlay.readNavigationSourceVersion?.() ?? "")
+      + "|" + readMessagingBindingsRevision(),
+    sqlite: (rows) => registry.reconcileSqliteNavigationThreads(rows, backend),
+    changedKeys: (before, after) => {
+      const [storage, bindings] = before.split("|");
+      const [nextStorage, nextBindings] = after.split("|");
+      return bindings === nextBindings ? overlay.readChangedNavigationThreadKeys?.(storage!, nextStorage!) : undefined;
+    },
+    list: async (scope, seed, forceRefresh) => {
+      const provider = scope === "all" ? undefined : scope;
+      const checking = registry.getStartupProviderRefreshStatus?.()?.state === "checking";
+      const saved = (seed || checking) && (registry.readSavedNavigationThreads?.(provider) ?? registry.readStartupNavigationThreads?.(provider));
+      const rows = await (saved || withCodexRequestActivity({ countsAsActivity: false }, () => registry.listThreads({
+        backend: provider, callerReason, enrichDirectories: false, skipPendingDirectoryEnrichment: true, ...(forceRefresh ? { forceRefresh } : {}),
+      })));
+      return { rows, verifyAfterSeed: Boolean(saved) && !checking,
+        checkoutsAfterSeed: seed && !saved && !checking && rows.some((row) => row.source === "codex" && (row.projectKey || row.gitOriginUrl)), coverage: checking || saved ? { state: "checking" }
+        : registry.isIncompleteThreadList?.(rows) ? { state: "degraded", failedProviders: 1 } : { state: "complete" } };
+    },
+    cached: (provider, threadId) => registry.getCachedNavigationThread?.({ backend: provider, threadId }) ?? registry.getCachedThreadSummary?.({ backend: provider, threadId }),
+    refresh: (backend, threadId, activity, workers) => registry.refreshNavigationThread?.({ backend, threadId }, activity, workers),
+    verifySeedDirectories: (index) => index.directories.some((directory) => directory.kind === "directory" && directory.path && path.isAbsolute(directory.path)),
+    status: (row) => registry.navigationThreadStatus?.(row),
+    join: (rows, coverage, mode) => listingDiagnostics.trace("index", {}, async () => {
+      const enrich = mode !== "saved";
+      const projected = mode === "refresh" ? await projectNavigationCheckoutDirectories(rows, AbortSignal.timeout(30_000), () => {}, {})
+        : { threads: rows.map(useCheckout), worktreeRepositoryAliases: aliases };
+      aliases = projected.worktreeRepositoryAliases;
+      checkouts = new Map(rows.map((input, i) => [buildThreadIdentityKey(input.source, input.id),
+        { input: checkoutFields(input), output: checkoutFields(projected.threads[i]!) }]));
+      handoffChildren.clear();
+      rowBytes.clear();
+      totalBytes = 0;
+      const joined = overlay.readNavigationQueryIndex({ backend, ...projected, workspaceRoots: resolveScratchProjectsRoots(),
+        measureRow, measureDirectories: (bytes) => { directoryBytes = bytes; },
+        managedMembership: (keys) => { managedKeys = keys; }, handoffDependency: rememberHandoffDependency });
+      const threads = registry.withNavigationSubAgentActivity(await decorateNavigationRows(joined.threads, registry));
+      return { ...await projectDirectories(joined, threads, overlay, enrich), threads: applySidebarStackRows(registry, backend, threads), coverage,
+        inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys() };
+    }),
+    decorate: (rows) => applySidebarStackRows(registry, backend, rows),
+    forget: (id) => { measureRow(id, 0); checkouts.delete(id); },
+    dependents: (id) => handoffChildren.get(id),
+    projectRows: async (inputs, hasProvider) => {
+      const rows = inputs.map(useCheckout);
+      const { threads } = overlay.readNavigationQueryThreads({ backend, threads: rows, workspaceRoots: resolveScratchProjectsRoots(),
+        worktreeRepositoryAliases: aliases, hasProvider, measureRow, handoffDependency: rememberHandoffDependency,
+        managedMembership: (current) => {
+          if (managedKeys && managedKeys !== current) {
+            live.refreshRows([...managedKeys].filter((key) => !current.has(key)));
+            live.refreshRows([...current].filter((key) => !managedKeys!.has(key)));
+          }
+          managedKeys = current;
+        },
+      });
+      if (totalBytes + directoryBytes > NAVIGATION_INDEX_MAX_INPUT_BYTES) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
+      return registry.withNavigationSubAgentActivity(await decorateNavigationRows(threads, registry));
+    },
+    directories: async (threads) => projectDirectories(overlay.readNavigationQueryDirectories(threads, resolveScratchProjectsRoots(), totalBytes,
+      (bytes) => { directoryBytes = bytes; }),
+      threads, overlay, true),
+    inputKeys: () => registry.getNavigationInputRequestThreadKeys(),
+    notify: () => {
+      void registry.publishLocalEvent?.({ backend: backend === "all" ? "codex" : backend, notification: {
+        method: "navigation/invalidated", params: { sourceMethod: NAVIGATION_LIVE_INDEX_RECONCILED_METHOD },
+      } }).catch((error: unknown) => navigationQueryLog.warn("navigation reconciliation notification failed", { error: String(error) }));
+    },
+    retentionChanged: (bytes) => admitLiveIndex(owner, backend, live, bytes),
+    failed: (error) => navigationQueryLog.warn("navigation reconciliation failed", { error: String(error) }),
+  });
+  const reference = new WeakRef(live);
+  owner.scopes.set(backend, { live, reference, bytes: 0, unsubscribe: listenToLiveIndex(registry, reference) });
+  return live;
 }

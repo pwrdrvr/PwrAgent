@@ -7000,8 +7000,8 @@ describe("Composer", () => {
           { id: "owner-plain", label: "Owner plain", supportsReasoning: false, supportsFast: false },
         ] }), label: "OpenAI", modelDefaults: { model: "owner-default", reasoningEffortsByModel: { "owner-default": "high" } } },
       ]} launchpad={launchpad} providerModelDefaults={{ codex: { model: "viewer-only", reasoningEffortsByModel: {} } }}
-        onUpdateLaunchpad={async (_key, patch) => {
-          onUpdateLaunchpad(patch);
+        onUpdateLaunchpad={async (_key, patch, options) => {
+          onUpdateLaunchpad(patch, options);
           setLaunchpad((current) => applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(current, patch));
         }} skills={[]} />;
     }
@@ -7009,11 +7009,16 @@ describe("Composer", () => {
     chooseDropdownOption("Provider", "OpenAI");
     const model = remembered ? "owner-saved" : "owner-default";
     await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-model", model));
-    expect(onUpdateLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", model }));
+    expect(onUpdateLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", model }), {
+      stickySettingsChanged: true, owner: { scope: "remote", instanceId: "owner" },
+    });
     if (!remembered) expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
     chooseDropdownOption("Model", "Owner plain");
     await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-model", "owner-plain"));
-    expect(onUpdateLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ model: "owner-plain", reasoningEffort: undefined, serviceTier: undefined }));
+    expect(onUpdateLaunchpad).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: "owner-plain", reasoningEffort: undefined, serviceTier: undefined }),
+      { stickySettingsChanged: true, explicitModelSelection: true, owner: { scope: "remote", instanceId: "owner" } },
+    );
   });
 
   it("keeps an effort control for a thread whose provider lists efforts but no models", () => {
@@ -25093,7 +25098,7 @@ describe("Composer", () => {
           model: "gpt-5.5",
           prompt: "Keep this launchpad while changing settings",
         }),
-        { stickySettingsChanged: true },
+        { stickySettingsChanged: true, explicitModelSelection: true },
       );
     });
   });
@@ -25173,7 +25178,7 @@ describe("Composer", () => {
           reasoningEffort: "high",
           prompt: "keep this prompt",
         }),
-        { stickySettingsChanged: true },
+        { stickySettingsChanged: true, ...(remote ? { owner: { scope: "remote", instanceId: "owner" } } : {}) },
       );
     });
   });

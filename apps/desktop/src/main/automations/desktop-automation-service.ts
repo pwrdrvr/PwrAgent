@@ -1199,8 +1199,8 @@ export class DesktopAutomationService {
       line.scope === "turn"
       && line.status !== "superseded"
       && typeof line.turnId === "string");
-    // The event carries the thread's whole ledger. Resolve its turn ids in
-    // one batched lookup.
+    // Correlate every changed turn in this flush, including late final pricing.
+    if (!turnLines.length) return;
     const store = this.options.store;
     const backendTurnIds = [...new Set(turnLines.map((line) => line.turnId))];
     const runs = typeof store.findRunsByBackendTurnIds === "function"

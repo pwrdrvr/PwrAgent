@@ -784,6 +784,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     setForgeProjectLabelResolver: vi.fn(),
     setThreadPullRequestStatusToolHandler: vi.fn(),
     setThreadPullRequestCanonicalizer: vi.fn(),
+    setStackThreadActivityReader: vi.fn(),
     setPullRequestReferenceResolver: vi.fn(),
     setThreadPrimaryGitRepositoryReader: vi.fn(),
     setThreadAutoCompactionReader: vi.fn(),
@@ -985,6 +986,7 @@ describe("bootstrapApp", () => {
     const legacyHandlers = legacy.filter(isHandler);
     // Include the owner handlers added after the boot recording.
     const coreHandlers = legacyHandlers.flatMap((name) => {
+      if (name === "registry.setThreadPullRequestCanonicalizer") return [name, "registry.setStackThreadActivityReader"];
       if (name === "registry.setPwrAgentAppManagementHandler") return ["registry.setResourceCheckoutHandler", name];
       if (name === "registry.setPwrAgentOpenAIDecisionsHandler") return [name, "registry.setResearchHandler"];
       if (name === "registry.setMessagingAgentToolService") return [name, "registry.setMessagingWorkingUpdatesSettings"];

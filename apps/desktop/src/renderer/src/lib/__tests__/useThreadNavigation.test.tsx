@@ -10135,6 +10135,18 @@ describe("useThreadNavigation", () => {
       federationTarget: studio, parentThreadId: parent.id, parentThreadInstanceId: "harbor",
     });
 
+    const directoryKey = result.current.selectedLaunchpad!.directoryKey;
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(directoryKey, { model: "peer-model", reasoningEffort: "high" },
+        { stickySettingsChanged: true, explicitModelSelection: true });
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({
+      directoryKey, federationTarget: studio, explicitModelSelection: true,
+    }));
+    expect(result.current.selectedLaunchpad?.pendingModelPreference).toEqual({
+      provider: "codex", model: "peer-model", reasoningEffort: "high",
+    });
+
     // A second machine opens its own composer; the first machine's stays.
     await act(async () => {
       await result.current.createSubthread(parent, "new-workspace", { instanceId: "attic" });

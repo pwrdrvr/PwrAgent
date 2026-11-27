@@ -109,17 +109,22 @@ async function fixture(n: number) {
     pinnedRank: `owner-${i}`, federation: { ref: buildFederatedThreadRef({ backend: "codex", instanceId: "peer", threadId: `remote-${i}` }),
       instanceLabel: "Peer", peerStatus: "connected" } }));
   const provider = vi.fn(async () => rows);
+  const hydrate = vi.fn(async (value: NavigationThreadSummary[]) => value);
   let ownerReadScheduler: fc.Scheduler | undefined;
   const fetchPinnedSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => {
     const snapshot: NavigationSnapshot = { backend: "all", fetchedAt: 1, unchanged: false,
       threads: ownerRows, directories: [], inboxThreadKeys: [], launchpadDefaults: { backend: "codex", executionMode: "default" } };
     return ownerReadScheduler ? await ownerReadScheduler.schedule(Promise.resolve(snapshot), "owner snapshot") : snapshot;
   });
+  const geometryReady = Promise.withResolvers<void>();
   current.registry = {
+    publishLocalEvent: async (event: AgentEvent) => {
+      if (event.notification.method === "navigation/invalidated") geometryReady.resolve();
+    },
     listThreads: provider,
     onEvent: (listener: (event: AgentEvent) => void) => { listeners.add(listener); return () => listeners.delete(listener); },
     withNavigationPrimaryGitRepositories: (value: NavigationThreadSummary[]) => value,
-    hydrateThreadGitWorkingStates: async (value: NavigationThreadSummary[]) => value,
+    hydrateThreadGitWorkingStates: hydrate,
     withNavigationSubAgentActivity: (value: NavigationThreadSummary[]) => value,
     getNavigationInputRequestThreadKeys: () => new Set<string>(),
   } as unknown as DesktopBackendRegistry;
@@ -148,8 +153,14 @@ async function fixture(n: number) {
   };
   publish = () => emit({ backend: "codex", notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer" } } });
   const idle = () => [...queries.getSnapshot().resources.values()].every((r) => !r.loading);
-  const reset = () => { read.mockClear(); resolve.mockClear(); snapshots.mockClear(); materialize.mockClear(); provider.mockClear(); };
-  return { db, store, cache, resolve, snapshots, materialize, provider, requests, queries, read, emit, idle, reset,
+  const reset = () => { read.mockClear(); resolve.mockClear(); snapshots.mockClear(); materialize.mockClear(); provider.mockClear(); hydrate.mockClear(); };
+  const mountVerified = async () => {
+    queries.setDemand(requests);
+    await geometryReady.promise;
+    await queries.refresh();
+    await until(idle);
+  };
+  return { db, store, cache, resolve, snapshots, materialize, provider, hydrate, requests, queries, read, emit, idle, reset, mountVerified,
     disconnect: () => {
       connected = false;
       cache.invalidate("peer");
@@ -205,8 +216,7 @@ it("admits births from a mounted owner outside the visible page and fences a new
   const birth = (instanceId: string): AgentEvent => ({ backend: "codex", federationTarget: { scope: "remote", instanceId },
     notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/started", threadId: "unseen-child" } } });
   try {
-    f.queries.setDemand(f.requests);
-    await until(f.idle);
+    await f.mountVerified();
     f.reset();
     const attempt = (instanceId: string) => f.queries.invalidate(undefined, undefined, birth(instanceId));
     attempt("other");
@@ -420,7 +430,7 @@ it.each([4, 8])("budgets manual refresh and automatic turn-end passes with %i di
       snapshots: f.snapshots.mock.calls.length, commits: writes.commits })
       .toEqual({ ipc: 1 + 2 * n, provider: 0, materializations: 0, pins: 0, snapshots: 0, commits: 0 });
     f.reset();
-    // Move past the 15-second sidebar index reuse window before measuring a cold pass.
+    // Move past the display lease. The live owner and viewer projections remain available.
     await vi.advanceTimersByTimeAsync(15_001);
     const { writes: coldWrites } = await measureSqliteWrites(async () => {
       await f.queries.refresh(); await until(f.idle);
@@ -430,8 +440,7 @@ it.each([4, 8])("budgets manual refresh and automatic turn-end passes with %i di
     expect({ ipc: f.read.mock.calls.length, provider: f.provider.mock.calls.length,
       materializations: f.materialize.mock.calls.length, pins: f.resolve.mock.calls.length,
       snapshots: f.snapshots.mock.calls.length, commits: coldWrites.commits })
-      .toEqual({ ipc: 1 + 2 * n, provider: 1, materializations: 1, pins: 1, snapshots: 1, commits: 0 });
-    expect(f.resolve.mock.calls.reduce((sum, [pins]) => sum + pins.length, 0)).toBe(n);
+      .toEqual({ ipc: 1 + 2 * n, provider: 0, materializations: 0, pins: 0, snapshots: 0, commits: 0 });
     f.reset(); f.change(0);
     const relationshipGeneration = () => f.db.raw.prepare("SELECT generation FROM thread_navigation_relationship_generation").get();
     const before = relationshipGeneration();
@@ -453,7 +462,7 @@ it.each([4, 8])("budgets manual refresh and automatic turn-end passes with %i di
     expect({ ipc: f.read.mock.calls.length, provider: f.provider.mock.calls.length,
       materializations: f.materialize.mock.calls.length, pins: f.resolve.mock.calls.length,
       snapshots: f.snapshots.mock.calls.length, commits: turnWrites.commits })
-      .toEqual({ ipc: 3, provider: 1, materializations: 1, pins: 1, snapshots: 1, commits: 0 });
+      .toEqual({ ipc: 3, provider: 0, materializations: 0, pins: 0, snapshots: 0, commits: 0 });
     expect(f.read.mock.calls.map(([request]) => request.query.kind)).toEqual(["directory-index", "directory", "children"]);
     const exact = await f.read({ protocol: 2, inventory: "viewer", consumer: "main-sidebar",
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "root-0" }] } });
@@ -527,18 +536,17 @@ it("matches the owning peer and viewer pin model after generated publications an
       { index: 4, active: false, pinned: false, title: "Updated" }]]] });
 });
 
-it.each([4, 8])("bounds an automatic completion overtaken during listing with %i projects", async (n) => {
+it.each([4, 8])("bounds an automatic completion overtaking a row update with %i projects", async (n) => {
   const f = await fixture(n);
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => { finish = resolve; });
   try {
-    f.queries.setDemand(f.requests); await until(f.idle); f.reset(); f.change(0);
-    const original = f.provider.getMockImplementation()!;
-    f.provider.mockImplementationOnce(async () => { await gate; return original(); });
+    await f.mountVerified(); f.reset(); f.change(0);
+    f.hydrate.mockImplementationOnce(async (rows) => { await gate; return rows; });
     const { writes } = await measureSqliteWrites(async () => {
       f.emit({ backend: "codex", notification: { method: "thread/subAgents/updated", params: { threadId: "root-0", subAgents: [] } } } as AgentEvent);
       const first = f.queries.refresh(undefined, undefined, true);
-      await until(() => f.provider.mock.calls.length === 1);
+      await until(() => f.hydrate.mock.calls.length === 1);
       f.emit({ backend: "codex", notification: { method: "turn/completed", params: { threadId: "root-0", turn: { id: "turn", status: "completed" } } } } as AgentEvent);
       f.emit({ backend: "codex", notification: { method: "thread/status/changed", params: { threadId: "root-0", status: { type: "idle" } } } });
       const second = f.queries.refresh(undefined, undefined, true);
@@ -548,7 +556,7 @@ it.each([4, 8])("bounds an automatic completion overtaken during listing with %i
       note: "A completion/status boundary overtakes a pending listing across 4/8 projects: zero query commits, 0 MB/day added WAL." });
     expect({ ipc: f.read.mock.calls.length, listings: f.provider.mock.calls.length,
       materializations: f.materialize.mock.calls.length, pins: f.resolve.mock.calls.length, snapshots: f.snapshots.mock.calls.length })
-      .toEqual({ ipc: 6, listings: 2, materializations: 2, pins: 2, snapshots: 2 });
+      .toEqual({ ipc: 6, listings: 0, materializations: 0, pins: 0, snapshots: 0 });
     const exact = await f.read({ protocol: 2, inventory: "viewer", consumer: "main-sidebar",
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "root-0" }] } });
     expect(exact.entries[0]?.row.threadStatus).toBe("idle");

@@ -2259,9 +2259,6 @@ describe("DesktopBackendRegistry", () => {
       },
     });
     await registry.whenThreadTitleGenerationSettledForTests();
-    expect(events).toContainEqual(expect.objectContaining({
-      notification: expect.objectContaining({ method: "thread/pricing/updated" }),
-    }));
 
     expect(sessions[0]).toMatchObject({
       title: "Favorite Cereal Preference Personal Question",
@@ -2300,20 +2297,25 @@ describe("DesktopBackendRegistry", () => {
         method: "thread/pricing/updated",
         params: {
           threadId: "grok-session-1",
-          pricing: expect.objectContaining({
-            lines: expect.arrayContaining([
-              expect.objectContaining({
-                parentThreadId: "grok-session-1",
-                scope: "monitor",
-                sourceItemId:
-                  "system:title-helper:acp:grok:grok-session-1",
-                threadId: "grok-title-helper",
-              }),
-            ]),
-          }),
+          displayInvalidated: true,
+          pricing: { lines: [], summaries: [] },
         },
       },
     });
+    const refreshed = await registry.readThread({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      display: { resource: "pricing" },
+      includeTurns: false,
+      viewOnly: true,
+    });
+    expect(refreshed.display?.pricingPage?.rows.map((row) => row.line)).toContainEqual(expect.objectContaining({
+      parentThreadId: "grok-session-1",
+      scope: "monitor",
+      sourceItemId: "system:title-helper:acp:grok:grok-session-1",
+      threadId: "grok-title-helper",
+      totalTokens: 110,
+    }));
 
     await registry.close();
   });

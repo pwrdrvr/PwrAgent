@@ -1,3 +1,4 @@
+import { readCodexContextWindow } from "@pwragent/shared/thread-context-window";
 import {
   effectiveAutoCompactionRules,
   resolveAutoCompactionThreshold,
@@ -100,28 +101,14 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function readNumber(record: Record<string, unknown> | undefined, keys: readonly string[]): number | undefined {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
-}
-
 /**
  * Codex's `thread/tokenUsage/updated`: the last request's total is the
  * context in use, against `modelContextWindow`. The renderer's moon reads the
  * same pair.
  */
 export function readCodexContextFill(tokenUsage: unknown): Omit<ContextFill, "model"> | undefined {
-  const root = readRecord(readRecord(tokenUsage)?.tokenUsage) ?? readRecord(tokenUsage);
-  const last = readRecord(root?.last) ?? readRecord(root?.last_token_usage);
-  const usedTokens = readNumber(last, ["totalTokens", "total_tokens"]);
-  const reportedContextWindow = readNumber(root, ["modelContextWindow", "model_context_window"]);
-  if (usedTokens === undefined || usedTokens < 0 || !reportedContextWindow || reportedContextWindow <= 0) {
-    return undefined;
-  }
-  return { usedTokens, reportedContextWindow };
+  const reading = readCodexContextWindow(tokenUsage);
+  return reading && { usedTokens: reading.totalTokens, reportedContextWindow: reading.modelContextWindow };
 }
 
 function isContextCompactionItem(notification: AppServerNotification): boolean {

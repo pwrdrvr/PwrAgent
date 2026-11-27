@@ -45,6 +45,7 @@ const OWNER_ROW_CHANGES = new Set([
   "thread/status/changed", "thread/subAgents/updated", "thread/name/updated", "thread/modelSettings/updated",
   "thread/backgroundTasks/updated", "thread/turnQueue/updated", "navigation/thread/seen", "federation/peerStatus/changed",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled", "navigation/directoryGitStatus/updated",
+  "navigation/threadDirectories/updated",
 ]);
 const MAX_CONCURRENT_READS = 4;
 const MAX_DEMAND_BYTES = 1024 * 1024;
@@ -72,12 +73,61 @@ export type NavigationWindowResource = {
   loading: boolean;
   /** Cached membership awaiting a fresh owner read; existing row metadata wins. */
   restoredFromCache?: boolean;
+  /** Latest publication extends a previously accepted immutable owner generation. */
+  extendedFromCursor?: boolean;
 };
 export type NavigationWindowQueriesState = {
   resources: ReadonlyMap<string, NavigationWindowResource>;
   admissionError?: string;
 };
+type WindowPageRows = Pick<NavigationQueryPage, "ownerEpoch" | "queryKey" | "remoteOwner" | "entries" | "directories">;
+
+/** A retained range can have a new page shell or append another block. Keep only
+ * weak references to its individual rows so mounted rows remain usable as a base. */
+function rememberWindowPage(page: NavigationQueryPage, token: string) {
+  const { ownerEpoch, queryKey, remoteOwner } = page;
+  const entries = page.entries.map((row) => new WeakRef(row));
+  const directories = page.directories?.map((row) => new WeakRef(row));
+  return { token, rows(): WindowPageRows | undefined {
+    const liveEntries = entries.map((ref) => ref.deref());
+    const liveDirectories = directories?.map((ref) => ref.deref());
+    if (!liveEntries.every((row) => row !== undefined) || (liveDirectories && !liveDirectories.every((row) => row !== undefined))) return undefined;
+    return { ownerEpoch, queryKey, remoteOwner, entries: liveEntries, directories: liveDirectories };
+  } };
+}
+
+export function expandWindowNavigationPage(page: NavigationQueryPage, baseline?: WindowPageRows,
+  token?: string): NavigationQueryPage | undefined {
+  const { windowPagePatch: patch, ...result } = page;
+  if (!patch?.slots) return patch?.base ? undefined : result;
+  if (!baseline || token !== patch.base || page.ownerEpoch !== baseline.ownerEpoch || page.queryKey !== baseline.queryKey
+    || page.remoteOwner?.instanceId !== baseline.remoteOwner?.instanceId || patch.slots.length > NAVIGATION_QUERY_MAX_PAGE_ROWS) return undefined;
+  function expand<T>(previous: T[], replacements: T[], slots: number[]): T[] | undefined {
+    let changed = 0;
+    const rows: T[] = [];
+    for (const slot of slots) {
+      const row = slot === -1 ? replacements[changed++] : Number.isInteger(slot) ? previous[slot] : undefined;
+      if (!row) return undefined;
+      rows.push(row);
+    }
+    return changed === replacements.length ? rows : undefined;
+  }
+  if (patch.directories) {
+    const directories = expand(baseline.directories ?? [], page.directories ?? [], patch.slots);
+    return directories && { ...result, directories };
+  }
+  const entries = expand(baseline.entries, page.entries, patch.slots);
+  if (!entries) return undefined;
+  for (const [position, orderKey] of Object.entries(patch.orderKeys ?? {})) {
+    const index = Number(position);
+    if (!Number.isSafeInteger(index) || !entries[index] || typeof orderKey !== "string") return undefined;
+    entries[index] = { ...entries[index]!, orderKey };
+  }
+  return { ...result, entries };
+}
+
 type Resource = {
+  wireBase?: ReturnType<typeof rememberWindowPage>;
   diagnosticResource: number;
   diagnosticBatch?: number;
   diagnosticRefreshBatch?: number;
@@ -148,7 +198,7 @@ function loadedRows(page: NavigationQueryPage | undefined): number {
 /** Semantic demand ignores object insertion order and identity-set ordering. */
 export function navigationDemandKey(request: NavigationQueryRequest): string {
   return JSON.stringify(request, (key, value: unknown) => {
-    if (key === "readReason" || key === "deadlineAt" || key === "diagnostic") return undefined;
+    if (key === "readReason" || key === "deadlineAt" || key === "diagnostic" || key === "windowPageBase") return undefined;
     if (Array.isArray(value) && ["identities", "roots", "keys"].includes(key)) {
       return [...value].sort((a, b) => JSON.stringify(a, Object.keys(a ?? {}).sort()).localeCompare(JSON.stringify(b, Object.keys(b ?? {}).sort())));
     }
@@ -368,7 +418,7 @@ export class NavigationWindowQueries {
     this.ownerProofBytes -= proof.bytes;
   }
 
-  private acceptState(resource: Resource, { state, ownerProof }: RetainableState): void {
+  private acceptState(resource: Resource, { state, ownerProof }: RetainableState, extendedFromCursor: boolean): void {
     const previous = resource.value.state.page;
     const bytes = this.activePageBytes + this.pageBytes(state.page) - this.pageBytes(previous);
     if (bytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
@@ -382,7 +432,7 @@ export class NavigationWindowQueries {
       this.ownerProofBytes += ownerProof.bytes;
     }
     this.activePageBytes = bytes;
-    resource.value = { ...resource.value, state, restoredFromCache: false };
+    resource.value = { ...resource.value, state, restoredFromCache: false, extendedFromCursor };
   }
 
   private withoutGitProof(proof: OwnerPageProof): OwnerPageProof | undefined {
@@ -1201,7 +1251,7 @@ export class NavigationWindowQueries {
       };
       const acceptReply = (next: RetainableState, reply: ReplyDiagnostic | undefined) => {
         const before = resource.value.state.page;
-        this.acceptState(resource, next);
+        this.acceptState(resource, next, Boolean(cursor));
         if (explicitLoadMore) this.sessionExpandedQueries.add(queryKey);
         if (reply === lastReply) lastReply = undefined;
         if (!reply || !navigationListingDiagnostics.isRecording(reply.generation)) return;
@@ -1290,10 +1340,31 @@ export class NavigationWindowQueries {
             navigationListingDiagnostics.record({ ...attemptFields, phase: "dispatch" });
             let page: NavigationQueryPage;
             try {
-              page = await this.api.getNavigationQueryPage!({ ...request, pageSize: rows, diagnostic: { ...diagnostic },
+              const wireBase = resource.wireBase;
+              const baseline = wireBase?.rows();
+              const delta = request.consumer === "main-sidebar" && !request.cursor;
+              const sent = { ...request, pageSize: rows, diagnostic: { ...diagnostic },
+                ...(delta ? { windowPageBase: baseline ? wireBase!.token : "" } : {}),
                 ...(charged && budget?.until !== undefined ? { deadlineAt: Math.min(request.deadlineAt ?? Infinity, budget.until) } : {}),
                 readReason: continuation ? "continuation" : explicitAnchor || fromStart ? "rebaseline" : reason,
-              }, resource.token);
+              } satisfies NavigationQueryRequest;
+              page = await this.api.getNavigationQueryPage!(sent, resource.token);
+              if (page.windowPagePatch) {
+                const { token } = page.windowPagePatch;
+                const expanded = expandWindowNavigationPage(page, baseline, wireBase?.token);
+                if (expanded) {
+                  page = expanded;
+                  resource.wireBase = rememberWindowPage(page, token);
+                } else {
+                  resource.wireBase = undefined;
+                  const fresh = await this.api.getNavigationQueryPage!({ ...sent, completeBaselineRevision: undefined,
+                    retainedRange: undefined, windowPageBase: undefined }, resource.token);
+                  const full = expandWindowNavigationPage(fresh);
+                  if (!full || full.unchanged || full.rangeUnchanged) throw new Error("Navigation owner did not return a fresh page.");
+                  page = full;
+                  if (fresh.windowPagePatch) resource.wireBase = rememberWindowPage(page, fresh.windowPagePatch.token);
+                }
+              }
               navigationListingDiagnostics.record({ ...attemptFields, phase: "settled", outcome: "ok", durationMs: Math.max(0, Date.now() - sentAt) }, generation);
             } catch (error) {
               navigationListingDiagnostics.record({ ...attemptFields, phase: "settled", outcome: "error", durationMs: Math.max(0, Date.now() - sentAt) }, generation);
@@ -1335,7 +1406,6 @@ export class NavigationWindowQueries {
           throw new Error("Navigation anchor fallback did not reach the top of its list.");
         };
         let page: NavigationQueryPage;
-        let pageCursor = cursor;
         // Only displayed rows bypass continuation limits. A persisted target
         // is expansion demand, and may exceed what the previous owner served.
         const restoring = explicitAnchor || fromStart ? 0 : loadedRows(started.page);
@@ -1371,7 +1441,7 @@ export class NavigationWindowQueries {
         );
         const rebuildForLoadMore = async (): Promise<NavigationQueryPage> => {
           resource.membershipUncertain = true;
-          pageCursor = undefined;
+          cursor = undefined;
           const previous = started.page;
           const firstDirectory = previous?.directories?.[0];
           const firstThread = previous?.entries[0]?.row.ref;
@@ -1395,10 +1465,10 @@ export class NavigationWindowQueries {
           });
           if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
           const priorState = resource.value.state;
-          next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor: pageCursor }));
+          next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor }));
           nextReply = lastReply;
         } catch (error) {
-          if (!pageCursor || !isRecoverableCursorError(error)) throw error;
+          if (!cursor || !isRecoverableCursorError(error)) throw error;
           navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "cursor-expired" });
           // Cursor eviction or generation/lease mismatch is recoverable, not a
           // permanently dead Load more button. Rebuild the displayed range plus
@@ -1406,7 +1476,7 @@ export class NavigationWindowQueries {
           page = await rebuildForLoadMore();
           if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
           const priorState = resource.value.state;
-          next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor: pageCursor }));
+          next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor }));
           nextReply = lastReply;
         }
         const priorState = resource.value.state;
@@ -1457,7 +1527,7 @@ export class NavigationWindowQueries {
             // Once restored, commit refreshed membership and metadata plus
             // any growth delivered before the failure. Continuations also
             // retain their progress; both paths still report the error.
-            if (!pageCursor && loadedRows(next.state.page) < restoring) throw error;
+            if (!cursor && loadedRows(next.state.page) < restoring) throw error;
             if (!this.needsSeenReplacement(resource, next) && !this.needsWorkingStateReplacement(resource, next)) acceptReply(next, nextReply);
             throw error;
           }

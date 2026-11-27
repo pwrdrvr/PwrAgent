@@ -27,47 +27,55 @@ export function estimateHistoricalThreadUsageGapLines(
 ): EstimatedThreadUsageGapLine[] {
   const chronologicalLines = [...lines].sort(compareUsageLinesAscending);
   const estimatedLines: EstimatedThreadUsageGapLine[] = [];
-  let accountedMainTokens = emptyPricingTokenBreakdown();
-
+  const state = createUsageGapProjection();
   for (const line of chronologicalLines) {
-    if (line.scope === "monitor") {
-      continue;
-    }
-
-    const cumulativeTokens = readCumulativeTokenBreakdown(line);
-    const lineTokens = tokenBreakdownFromUsageLine(line);
-    const gapTokens = cumulativeTokens
-      ? subtractPricingTokenBreakdowns(
-          cumulativeTokens,
-          addPricingTokenBreakdowns(accountedMainTokens, lineTokens),
-        )
-      : emptyPricingTokenBreakdown();
-    const gapLine = hasPricingTokenBreakdownValue(gapTokens)
-      ? buildEstimatedHistoricalGapLine({
-          anchorLine: line,
-          gapTokens,
-        })
-      : undefined;
-    if (gapLine) {
-      estimatedLines.push(gapLine);
-      accountedMainTokens = addPricingTokenBreakdowns(
-        accountedMainTokens,
-        gapTokens,
-      );
-    }
-
-    accountedMainTokens = cumulativeTokens
-      ? maxPricingTokenBreakdowns(
-          addPricingTokenBreakdowns(accountedMainTokens, lineTokens),
-          cumulativeTokens,
-        )
-      : addPricingTokenBreakdowns(accountedMainTokens, lineTokens);
+    const gap = appendUsageGapLine(state, line);
+    if (gap) estimatedLines.push(gap);
   }
-
   return estimatedLines;
 }
 
-function compareUsageLinesAscending(
+export function createUsageGapProjection() {
+  return { accountedMainTokens: emptyPricingTokenBreakdown() };
+}
+
+/** Advance one chronological ledger row, retaining only the accounted counters. */
+export function appendUsageGapLine(
+  state: ReturnType<typeof createUsageGapProjection>,
+  line: ThreadUsageLineRecord,
+): EstimatedThreadUsageGapLine | undefined {
+  if (line.scope === "monitor") return undefined;
+  const cumulativeTokens = readCumulativeTokenBreakdown(line);
+  const lineTokens = tokenBreakdownFromUsageLine(line);
+  const gapTokens = cumulativeTokens
+    ? subtractPricingTokenBreakdowns(
+        cumulativeTokens,
+        addPricingTokenBreakdowns(state.accountedMainTokens, lineTokens),
+      )
+    : emptyPricingTokenBreakdown();
+  const gapLine = hasPricingTokenBreakdownValue(gapTokens)
+    ? buildEstimatedHistoricalGapLine({
+        anchorLine: line,
+        gapTokens,
+      })
+    : undefined;
+  if (gapLine) {
+    state.accountedMainTokens = addPricingTokenBreakdowns(
+      state.accountedMainTokens,
+      gapTokens,
+    );
+  }
+
+  state.accountedMainTokens = cumulativeTokens
+    ? maxPricingTokenBreakdowns(
+        addPricingTokenBreakdowns(state.accountedMainTokens, lineTokens),
+        cumulativeTokens,
+      )
+    : addPricingTokenBreakdowns(state.accountedMainTokens, lineTokens);
+  return gapLine;
+}
+
+export function compareUsageLinesAscending(
   left: ThreadUsageLineRecord,
   right: ThreadUsageLineRecord,
 ): number {

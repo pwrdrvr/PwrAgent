@@ -1,7 +1,7 @@
 import { cp, lstat, open, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -1241,6 +1241,33 @@ describe("stack checkout demand", () => {
       expect((await reader.read(rows, [bottomPr, topPr], [other], activity)).stacks).toEqual([]);
     } finally {
       await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the parent settled while a repair for its child waits on their shared thread", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-shared-stack-owner-"));
+    try {
+      initialize(cwd);
+      git(cwd, "branch", "main");
+      git(cwd, "branch", "upper");
+      const head = git(cwd, "rev-parse", "HEAD");
+      const bottom = { ...inferredPr(1, "topic", "main", cwd), headSha: head, baseSha: head, mergeState: "mergeable" as const };
+      const top = { ...inferredPr(2, "upper", "topic", cwd), headSha: head, baseSha: head, mergeState: "mergeable" as const };
+      const rows = [{ ...row(cwd, "shared"), prs: [bottom, top] }];
+      const reader = new StackReader();
+      for (const repair of [top, bottom]) {
+        const pendingRepairPrKey = buildPullRequestStatusKey(repair);
+        const activity = vi.fn(async () => ({ pendingRepairPrKey }));
+        const { stacks } = await reader.read(rows, [], [cwd], activity);
+        const layers = stacks[0]?.layers ?? [];
+        expect(layers.map(({ thread }) => thread?.key)).toEqual(["codex:shared", "codex:shared"]);
+        expect(layers.map(({ unsettled }) => unsettled)).toEqual(repair === top
+          ? [undefined, "repair in progress"] : ["repair in progress", undefined]);
+        expect(layers[1]?.heldBy?.number).toBe(repair === bottom ? bottom.number : undefined);
+        expect(activity).toHaveBeenCalledExactlyOnceWith("codex:shared");
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
     }
   });
 

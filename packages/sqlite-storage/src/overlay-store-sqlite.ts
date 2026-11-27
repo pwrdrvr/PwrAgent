@@ -42,12 +42,14 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { prepareSqliteRead } from "./sqlite-prepared-read";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
-import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
-import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
+import { sqliteChangedThreadKeys, sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
+import { forgetThreadSpend, projectedThreadSpend, type SpendGateLines } from "./thread-spend-projection";
+import { PricingPageMarkers, ThreadPricingPageIndex } from "./thread-pricing-page";
+import { sqliteUsageLedgerVersions, watchPricingPage } from "./sqlite-usage-ledger-change-version";
 import {
   PROJECT_CHECKOUT_GROUPS_META_KEY,
   sqliteNavigationChangeVersion,
-  sqliteOwnerNavigationChangeVersion,
+  sqliteOwnerNavigationChangeVersion, sqliteViewerNavigationChangeVersion,
 } from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import { insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared/subthreads";
@@ -163,6 +165,7 @@ import {
   MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
+  NAVIGATION_INDEX_MAX_INPUT_BYTES,
   buildPullRequestStatusKey,
   resolvePullRequestIdentity,
   buildThreadIdentityKey,
@@ -175,6 +178,7 @@ import {
   changedProviderModelDefaultBackends,
   forgetLegacyDefaultLaunchpadExecutionModes,
   isAcpBackendId,
+  isRemoteLaunchpadStorageKey,
   normalizeNavigationBrowseMode,
   normalizeThreadIdentityKey,
   parseThreadIdentityKey,
@@ -189,6 +193,7 @@ import {
 import {
   buildNavigationSnapshot,
   materializeNavigationThreads,
+  compactNavigationProviderRow,
   serializeNavigationSnapshotForHash,
 } from "@pwragent/shared/navigation-state";
 import { buildDirectorySummaries, hasPersistableLaunchpadState, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
@@ -213,7 +218,24 @@ import type {
 const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
 // The focused thread, its context panel, and a few threads open in other
 // windows. A long thread's ledger holds a few MB.
+type OpenPricingPage = {
+  index?: ThreadPricingPageIndex;
+  monitorId?: string;
+  version: number;
+  markers?: PricingPageMarkers;
+  dirtyMarkers: Set<string>;
+  dirty: Set<string>;
+  stop: () => void;
+};
+
 const THREAD_PRICING_CACHE_THREADS = 8;
+
+type ThreadPricingReadParams = {
+  backend: ThreadOverlayState["backend"];
+  threadId: string;
+  /** A publication also delivers older turn prices repaired by its reads. */
+  onRepriced?: (line: ThreadUsageLineRecord) => void;
+};
 
 type ThreadPricingLedgerRead = {
   lines: ThreadUsageLineRecord[];
@@ -833,6 +855,19 @@ function stripFederationStamp(
 }
 
 const NAVIGATION_UNREAD_BASELINE_KEY = "navigation-unread-baseline-v2";
+type NavigationThreadInputs = {
+  measureRow?: (key: string, bytes: number) => void;
+  measureDirectories?: (bytes: number) => void;
+  backend: AppServerBackendScope;
+  threads: (AppServerThreadSummary & { nativeSubAgentCount?: number })[];
+  workspaceRoots?: string[];
+  /** Physical checkout identity to verified primary for separate Git dirs. */
+  worktreeRepositoryAliases?: ReadonlyMap<string, { adminPath: string; path: string; label: string }>;
+  hasProvider?: (key: string) => boolean;
+  handoffDependency?: (child: string, dependency: string) => void;
+  managedMembership?: (keys: ReadonlySet<string>) => void;
+};
+
 type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
 
 export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadRegistry, PrAutoDispatchStorage, PrStatusWatchStorage {
@@ -854,6 +889,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     state: { knownThreadKeys: string[]; lastSnapshotHash?: string } | undefined;
   };
 
+  // Local repairs can change historical turns outside the current delivery.
+  private pricingRepairGeneration = 0;
+
+  readPricingHistoryRevision(): string {
+    const dataVersion = this.stateDb.raw.pragma("data_version", { simple: true }) as number;
+    return `${dataVersion}:${this.pricingRepairGeneration}`;
+  }
+
+  private readonly openPricingPages = new Map<string, OpenPricingPage>();
+
   /** Recent whole-ledger reads, least recently used first. */
   private readonly threadPricingCache = new Map<string, {
     dataVersion: number;
@@ -866,6 +911,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     activity: { rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[] };
   };
 
+  private readonly knownNavigationKeys = new WeakMap<string[], ReadonlySet<string>>();
+  private readonly navigationContextHashes = new Map<AppServerBackendScope, string>();
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   private readonly directoryLaunchpadListeners = new Set<() => void>();
   private transactionNavigationRead = 0;
@@ -909,6 +956,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const external = this.stateDb.raw.pragma("data_version", { simple: true });
     const local = sqliteOwnerNavigationChangeVersion(this.stateDb.raw);
     return `${external}:${local}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
+  }
+
+  readViewerNavigationSourceVersion(): string {
+    const external = this.stateDb.raw.pragma("data_version", { simple: true });
+    return `${external}:${sqliteViewerNavigationChangeVersion(this.stateDb.raw)}`;
+  }
+
+  readChangedNavigationThreadKeys(before: string, after: string): string[] | undefined {
+    const [external, threads, ...rest] = before.split(":");
+    const [nextExternal, , ...nextRest] = after.split(":");
+    if (external !== nextExternal || rest.length !== 2 || rest.join(":") !== nextRest.join(":")) return undefined;
+    return sqliteChangedThreadKeys(this.stateDb.raw, Number(threads))?.map((key) => normalizeThreadIdentityKey(key) ?? key);
   }
 
   /**
@@ -1092,17 +1151,45 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return this.navigationUnreadBaseline;
   }
 
+  /** Seek one observed turn per requested identity. Turns without a fill and
+   * pricing updates for older turns cannot displace the last reading. */
+  private withNavigationContextWindows(threads: AppServerThreadSummary[], measure?: (row: AppServerThreadSummary, bytes: number) => void): AppServerThreadSummary[] {
+    const requested = threads.flatMap((thread, index) =>
+      thread.contextWindow ? [] : [[index, thread.source, thread.id]]);
+    if (!requested.length) return threads;
+    const rows = this.stateDb.raw.prepare(`
+      SELECT json_extract(requested.value, '$[0]') AS position,
+             turn.final_context_tokens AS totalTokens, turn.model_context_window AS modelContextWindow
+      FROM json_each(?) AS requested
+      CROSS JOIN thread_usage_turns AS turn ON turn.rowid = (
+        SELECT rowid FROM thread_usage_turns
+        WHERE backend = json_extract(requested.value, '$[1]') AND thread_id = json_extract(requested.value, '$[2]')
+          AND final_context_tokens >= 0 AND model_context_window > 0
+        ORDER BY observed_at DESC, rowid DESC LIMIT 1
+      )
+    `).all(JSON.stringify(requested)) as Array<{ position: number; totalTokens: number; modelContextWindow: number }>;
+    if (!rows.length) return threads;
+    const projected = threads.slice();
+    for (const { position, totalTokens, modelContextWindow } of rows) {
+      const contextWindow = { totalTokens, modelContextWindow };
+      measure?.(threads[position]!, ',"contextWindow":'.length + JSON.stringify(contextWindow).length);
+      projected[position] = { ...threads[position]!, contextWindow };
+    }
+    return projected;
+  }
+
   /** Complete owner index inputs. Selected configuration and payload collections never enter this read. */
-  readNavigationQueryIndex(params: {
-    backend: AppServerBackendScope;
-    threads: AppServerThreadSummary[];
-    workspaceRoots?: string[];
-    /** Physical checkout identity to verified primary for separate Git dirs. */
-    worktreeRepositoryAliases?: ReadonlyMap<string, { adminPath: string; path: string; label: string }>;
-  }): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[]; directoryOverlays: Record<string, DirectoryOverlayState> } {
-    const backendState = this.getBackend(params.backend);
+  readNavigationQueryIndex(params: NavigationThreadInputs): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[]; directoryOverlays: Record<string, DirectoryOverlayState> } {
+    const { threads, inputBytes } = this.readNavigationQueryThreads(params);
+    return { threads, ...this.readNavigationQueryDirectories(threads, params.workspaceRoots, inputBytes, params.measureDirectories) };
+  }
+
+  readNavigationQueryThreads(params: NavigationThreadInputs): { threads: NavigationThreadSummary[]; inputBytes: number } {
+    const measured = params.measureRow ? new Map<string, number>() : undefined;
     const baseline = this.readNavigationUnreadBaseline();
+    const backendState = baseline ? undefined : this.readBackendForProjection(params.backend);
     const managed = this.listManagedSubAgentThreadKeys();
+    params.managedMembership?.(managed);
     // Explicit projection before materialization prevents provider additions
     // from silently expanding retained navigation metadata.
     let inputBytes = 0;
@@ -1111,30 +1198,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const keys: string[] = [];
     for (const thread of params.threads) {
       const key = buildThreadIdentityKey(thread.source, thread.id);
-      if (managed.has(key)) continue;
-      nativeCounts.set(key, thread.codexNativeSubAgents?.length ?? 0);
-      const row = {
-        id: thread.id, source: thread.source, title: thread.title, titleSource: thread.titleSource,
-        threadStatus: thread.threadStatus, projectKey: thread.projectKey, createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt, archivedAt: thread.archivedAt, linkedDirectories: thread.linkedDirectories,
-        gitBranch: thread.gitBranch, gitOriginUrl: thread.gitOriginUrl, observedGitBranch: thread.observedGitBranch,
-        gitWorkingState: thread.gitWorkingState, executionMode: thread.executionMode, model: thread.model,
-        serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort, fastMode: thread.fastMode,
-        workspaceHandoff: thread.workspaceHandoff, codexNativeSubAgent: thread.codexNativeSubAgent,
-      };
-      inputBytes += Buffer.byteLength(JSON.stringify(row), "utf8");
-      if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation metadata exceeds its 32 MiB admission budget.");
+      if (managed.has(key)) { measured?.set(key, 0); continue; }
+      nativeCounts.set(key, thread.codexNativeSubAgents?.length ?? thread.nativeSubAgentCount ?? 0);
+      const row = compactNavigationProviderRow(thread);
+      const bytes = Buffer.byteLength(JSON.stringify(row), "utf8");
+      measured?.set(key, bytes);
+      inputBytes += bytes;
+      if (inputBytes > NAVIGATION_INDEX_MAX_INPUT_BYTES) throw new Error("Owner navigation metadata exceeds its 32 MiB admission budget.");
       providerRows.push(row);
       keys.push(encodeThreadIdentityKeyForStorage(key));
     }
     const overlays: Record<string, ThreadOverlayState | undefined> = {};
     const handoffSources = new Map<string, { sourceBackend: AppServerBackendKind; sourceThreadId: string }>();
-    const rows = this.readNavigationOverlayRows(keys, 32 * 1024 * 1024 - inputBytes);
+    const rows = this.readNavigationOverlayRows(keys, NAVIGATION_INDEX_MAX_INPUT_BYTES - inputBytes);
     for (const row of rows) {
-      inputBytes += Buffer.byteLength(row.compact, "utf8");
-      if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
+      const bytes = Buffer.byteLength(row.compact, "utf8");
+      inputBytes += bytes;
+      if (inputBytes > NAVIGATION_INDEX_MAX_INPUT_BYTES) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
       const value = JSON.parse(row.compact) as Record<string, unknown>;
       const key = normalizeThreadIdentityKey(row.thread_id) ?? row.thread_id;
+      if (measured) measured.set(key, (measured.get(key) ?? 0) + bytes);
       const source = value.handoffGroupSource as { sourceBackend: AppServerBackendKind; sourceThreadId: string } | null;
       if (source?.sourceBackend && source.sourceThreadId) handoffSources.set(key, source);
       delete value.handoffGroupSource;
@@ -1159,14 +1242,61 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       const child = overlays[key];
       if (!child?.parentThreadId || child.parentThreadInstanceId) continue;
       const parentBackend = child.parentThreadBackend ?? child.backend;
-      if (nativeCounts.has(buildThreadIdentityKey(parentBackend, child.parentThreadId))) continue;
-      const source = overlays[buildThreadIdentityKey(origin.sourceBackend, origin.sourceThreadId)];
+      const parentKey = buildThreadIdentityKey(parentBackend, child.parentThreadId);
+      const originKey = buildThreadIdentityKey(origin.sourceBackend, origin.sourceThreadId);
+      params.handoffDependency?.(key, parentKey);
+      params.handoffDependency?.(key, originKey);
+      if (nativeCounts.has(parentKey) || (params.hasProvider?.(parentKey) && !managed.has(parentKey))) continue;
+      let source = overlays[originKey];
+      if (!source && params.hasProvider?.(originKey) && !managed.has(originKey)) {
+        const [stored] = this.readNavigationOverlayRows([encodeThreadIdentityKeyForStorage(originKey)]);
+        if (stored) source = JSON.parse(stored.compact) as ThreadOverlayState;
+      }
       if (source?.parentThreadInstanceId && source.parentThreadId === child.parentThreadId
         && (source.parentThreadBackend ?? source.backend) === parentBackend) {
         overlays[key] = { ...child, parentThreadInstanceId: source.parentThreadInstanceId };
       }
     }
     const activePrAutoDispatchKeys = this.attachNavigationPrAutoDispatchClaims(overlays);
+    for (const thread of providerRows) {
+      const key = buildThreadIdentityKey(thread.source, thread.id);
+      const seenUpdatedAt = baseline?.seenUpdatedAt[key];
+      if (seenUpdatedAt !== undefined && overlays[key]?.lastSeenUpdatedAt === undefined) {
+        overlays[key] = { backend: thread.source, threadId: thread.id, executionMode: thread.executionMode ?? "default",
+          extraLinkedDirectories: [], ...overlays[key], lastSeenUpdatedAt: seenUpdatedAt };
+      }
+    }
+    const knownKeys = baseline?.knownThreadKeys ?? backendState?.knownThreadKeys;
+    let previousKnownThreadKeys = knownKeys && this.knownNavigationKeys.get(knownKeys);
+    if (knownKeys && !previousKnownThreadKeys) this.knownNavigationKeys.set(knownKeys, previousKnownThreadKeys = new Set(knownKeys));
+    const withContext = this.withNavigationContextWindows(providerRows, (thread, bytes) => {
+      inputBytes += bytes;
+      if (inputBytes > NAVIGATION_INDEX_MAX_INPUT_BYTES) throw new Error("Owner navigation context readings exceed the metadata admission budget.");
+      if (measured) {
+        const key = buildThreadIdentityKey(thread.source, thread.id);
+        measured.set(key, (measured.get(key) ?? 0) + bytes);
+      }
+    });
+    const threads = materializeNavigationThreads({ threads: withContext, overlayByThreadKey: overlays, workspaceRoots: params.workspaceRoots,
+      firstSnapshot: !baseline && !backendState?.lastSnapshotHash,
+      previousKnownThreadKeys: previousKnownThreadKeys ?? [] }).map((thread) => {
+        const key = buildThreadIdentityKey(thread.source, thread.id);
+        const overlay = overlays[key];
+        // Legacy snapshot materialization flattens a tray to its local root.
+        // Query consumers traverse and mutate the actual tree: retaining the
+        // immediate parent keeps archive admission and descendant order in
+        // agreement with the saved relationships.
+        return { ...thread, parentThreadId: overlay?.parentThreadId,
+          parentThreadBackend: overlay?.parentThreadBackend, parentThreadInstanceId: overlay?.parentThreadInstanceId,
+          nativeSubAgentCount: nativeCounts.get(key) ?? 0,
+          ...(activePrAutoDispatchKeys.has(key) ? { prAutoDispatchActive: true as const } : {}) };
+      });
+    if (measured) for (const [key, bytes] of measured) params.measureRow!(key, bytes);
+    return { threads, inputBytes };
+  }
+
+  readNavigationQueryDirectories(threads: NavigationThreadSummary[], workspaceRoots?: string[], rowBytes = 0, measureDirectories?: (bytes: number) => void) {
+    let inputBytes = rowBytes;
     const launchpads: Record<string, DirectoryLaunchpadOverlayState> = {};
     const launchpadPresenceKeys = new Set<string>();
     const drafts = this.stateDb.raw.prepare(`
@@ -1191,38 +1321,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     `).iterate() as Iterable<{ directory_path: string; compact: string }>;
     for (const row of drafts) {
       inputBytes += Buffer.byteLength(row.compact, "utf8");
-      if (inputBytes > 32 * 1024 * 1024) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
+      if (inputBytes > NAVIGATION_INDEX_MAX_INPUT_BYTES) throw new Error("Owner navigation overlay index exceeds its 32 MiB admission budget.");
       const value = JSON.parse(row.compact) as Record<string, unknown>;
       launchpads[row.directory_path] = Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as DirectoryLaunchpadOverlayState;
       launchpadPresenceKeys.add(row.directory_path);
     }
-    for (const thread of providerRows) {
-      const key = buildThreadIdentityKey(thread.source, thread.id);
-      const seenUpdatedAt = baseline?.seenUpdatedAt[key];
-      if (seenUpdatedAt !== undefined && overlays[key]?.lastSeenUpdatedAt === undefined) {
-        overlays[key] = { backend: thread.source, threadId: thread.id, executionMode: thread.executionMode ?? "default",
-          extraLinkedDirectories: [], ...overlays[key], lastSeenUpdatedAt: seenUpdatedAt };
-      }
-    }
-    const threads = materializeNavigationThreads({ threads: providerRows, overlayByThreadKey: overlays, workspaceRoots: params.workspaceRoots,
-      firstSnapshot: !baseline && !backendState?.lastSnapshotHash,
-      previousKnownThreadKeys: baseline?.knownThreadKeys ?? backendState?.knownThreadKeys ?? [] }).map((thread) => {
-        const key = buildThreadIdentityKey(thread.source, thread.id);
-        const overlay = overlays[key];
-        // Legacy snapshot materialization flattens a tray to its local root.
-        // Query consumers traverse and mutate the actual tree: retaining the
-        // immediate parent keeps archive admission and descendant order in
-        // agreement with the saved relationships.
-        return { ...thread, parentThreadId: overlay?.parentThreadId,
-          parentThreadBackend: overlay?.parentThreadBackend, parentThreadInstanceId: overlay?.parentThreadInstanceId,
-          nativeSubAgentCount: nativeCounts.get(key) ?? 0,
-          ...(activePrAutoDispatchKeys.has(key) ? { prAutoDispatchActive: true as const } : {}) };
-      });
+    measureDirectories?.(inputBytes - rowBytes);
     const directoryOverlays = this.readAllDirectoryOverlaysSync();
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
-      directoryOverlayByKey: directoryOverlays, workspaceRoots: params.workspaceRoots,
+      directoryOverlayByKey: directoryOverlays, workspaceRoots,
       checkoutGroups: this.readProjectCheckoutGroups() });
-    return { threads, directories, directoryOverlays };
+    return { directories, directoryOverlays };
   }
 
   /** Cache only the durable compact projection, never provider rows or mutable
@@ -1537,7 +1646,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
       overlayByThreadKey,
       previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
-      threads,
+      threads: this.withNavigationContextWindows(threads),
       unchanged: false,
       workspaceRoots: params.workspaceRoots,
     });
@@ -1561,11 +1670,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           threads: snapshot.threads,
         })).digest("hex")
       : undefined;
-    const unchanged =
+    const durableStateUnchanged =
       persistReconciliation
       && backendState?.lastSnapshotHash === nextHash;
 
-    if (persistReconciliation && !unchanged) {
+    if (persistReconciliation && !durableStateUnchanged) {
       this.putBackend(params.backend, {
         knownThreadKeys: threads.map((thread) =>
           buildThreadIdentityKey(thread.source, thread.id),
@@ -1574,6 +1683,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       });
     }
 
+    // Legacy snapshots keep a durable membership baseline. Context-only
+    // changes must reach those clients without writing the baseline again.
+    let unchanged = durableStateUnchanged;
+    if (persistReconciliation) {
+      const readings = snapshot.threads.flatMap((thread) => thread.contextWindow
+        ? [[thread.source, thread.id, thread.contextWindow.totalTokens, thread.contextWindow.modelContextWindow]] : []);
+      const contextHash = readings.length ? createHash("sha256").update(JSON.stringify(readings)).digest("hex") : undefined;
+      unchanged &&= this.navigationContextHashes.get(params.backend) === contextHash;
+      if (contextHash) this.navigationContextHashes.set(params.backend, contextHash);
+      else this.navigationContextHashes.delete(params.backend);
+    }
     return { ...snapshot, unchanged };
   }
 
@@ -1632,7 +1752,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         executionMode: thread.executionMode ?? "default", extraLinkedDirectories: [],
         ...overlay, queuedExecutionMode: queue.mode, queuedNativeMode: queue.nativeMode, queuedExecutionModeAt: queue.queuedAt,
       } : overlay },
-      threads: [thread],
+      threads: this.withNavigationContextWindows([thread]),
       workspaceRoots: params.workspaceRoots,
     })[0]!;
   }
@@ -1648,6 +1768,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   async listThreadMetadata(): Promise<OwnerThreadRecord[]> {
     return this.readOwnerThreadMetadataList();
+  }
+
+  /** Match the list projection without running first-touch overlay migrations. */
+  readStoredOwnerThreadMetadata(identity: OwnerThreadIdentity): OwnerThreadRecord | undefined {
+    const key = encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(identity.backend, identity.threadId));
+    const row = this.stateDb.raw.prepare("SELECT payload FROM threads WHERE thread_id = ?").get(key) as { payload: string } | undefined;
+    return row && ownerThreadRecord(JSON.parse(row.payload));
   }
 
   readOwnerThreadMetadataList(): OwnerThreadRecord[] {
@@ -2178,9 +2305,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   async upsertThreadUsageLine(params: {
     line: ThreadUsageLineRecord;
+    fromReplay?: boolean;
   }): Promise<{ line: ThreadUsageLineRecord; summary: ThreadPricingSummary }> {
     const { lines, summaries } = await this.upsertThreadUsageLines({
       lines: [params.line],
+      fromReplay: params.fromReplay,
     });
     const line = lines[0];
     if (!line) {
@@ -2208,6 +2337,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    */
   async upsertThreadUsageLines(params: {
     lines: ThreadUsageLineRecord[];
+    fromReplay?: boolean;
     acpCompletions?: AcpUsageTurnCompletion[];
   }): Promise<{
     lines: ThreadUsageLineRecord[];
@@ -2751,7 +2881,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       ];
     });
 
-    return { lines, summaries: upsert() };
+    const summaries = upsert();
+    if (params.fromReplay && summaryTargets.size) this.pricingRepairGeneration++;
+    return { lines, summaries };
   }
 
   // Record timing separately from finalizing accounting: Codex may send a
@@ -3088,6 +3220,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }).changes, 0);
       const cleared = clearImplausible.run(now, span.from, span.before).changes;
       this.stateDb.setMeta(USAGE_TURN_TIME_REPAIR_META_KEY, String(now));
+      if (changed || cleared) this.pricingRepairGeneration++;
       return changed + cleared;
     })();
   }
@@ -3201,6 +3334,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       );
       return changed + complete.run(completedAt, now, row.usage_turn_id).changes;
     }, 0))();
+    if (repaired) this.pricingRepairGeneration++;
     return { repaired, remaining: candidates.length > params.limit, datedByFirstWrite };
   }
 
@@ -3453,20 +3587,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   /**
    * One thread's whole pricing ledger.
    *
-   * A turn end publishes the ledger once, and the renderer then reads it again
-   * for the transcript and an open context panel.
+   * Explicit transcript and Pricing reads can request the same baseline.
    * On a long thread each read materialized thousands of rows. A read is
    * reused until a row of this thread's ledger changes on this connection
    * (`sqliteUsageLedgerVersions`) or another connection commits. Callers
    * receive their own copy, because several of them decorate the lines.
    */
-  async readThreadPricing(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
-  }): Promise<ThreadPricingLedgerRead> {
+  async readThreadPricing(params: ThreadPricingReadParams): Promise<ThreadPricingLedgerRead> {
+    return structuredClone(this.readStoredThreadPricing(params));
+  }
+
+  private readStoredThreadPricing(params: ThreadPricingReadParams, ownedSnapshot = false): ThreadPricingLedgerRead {
     const db = this.stateDb.raw;
     const ledgerVersions = sqliteUsageLedgerVersions(db);
-    if (!ledgerVersions || db.inTransaction) {
+    if (!ledgerVersions || (db.inTransaction && !ownedSnapshot)) {
       return this.materializeThreadPricing(params);
     }
     const key = buildThreadIdentityKey(params.backend, params.threadId);
@@ -3479,7 +3613,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       && cached.ledgerVersion === (ledgerVersions.get(params.threadId) ?? 0)
     ) {
       this.threadPricingCache.set(key, cached);
-      return structuredClone(cached.pricing);
+      return cached.pricing;
     }
     const pricing = this.materializeThreadPricing(params);
     // Lazy repricing may have written; record the version after it.
@@ -3494,13 +3628,205 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       this.threadPricingCache.delete(staleKey);
     }
-    return structuredClone(pricing);
+    return pricing;
+  }
+
+  /** Page a chronological turn ledger. Gate grouping and live provider overlays
+   * use the full display projection. Caller-owned transactions never seed this cache. */
+  async readThreadPricingPage(params: {
+    backend: AppServerBackendKind; threadId: string; offset: number; limit: number;
+  }) {
+    const db = this.stateDb.raw;
+    if (db.inTransaction) return undefined;
+    const { backend, threadId } = params;
+    const key = buildThreadIdentityKey(backend, threadId);
+    let entry = this.openPricingPages.get(key);
+    if (entry?.index && entry.dirty.size && this.firstUnpricedBatchHasModel(params)) {
+      await this.repriceThreadUsageHistory(params);
+      entry = this.openPricingPages.get(key);
+    }
+    if (!entry) {
+      const page: OpenPricingPage = { version: -1, dirtyMarkers: new Set(), dirty: new Set(), stop: () => {} };
+      page.stop = watchPricingPage(db, backend, threadId, (table, id) => {
+        // A TEMP trigger also fires for rolled-back writes. Read the final values
+        // under a committed snapshot before applying any of these hints.
+        if (table === "thread_compactions") {
+          if (page.markers && id) page.dirtyMarkers.add(id);
+          if (page.dirtyMarkers.size > 256) {
+            page.markers = undefined;
+            page.dirtyMarkers.clear();
+          }
+          return;
+        }
+        if (table === "thread_usage_lines" && id === page.monitorId) page.monitorId = undefined;
+        if (!page.index || !id) return;
+        if (table === "thread_usage_lines") page.dirty.add(id);
+        if (table === "thread_usage_turns") {
+          for (const lineId of page.index.usageTurns.get(id) ?? []) page.dirty.add(lineId);
+        }
+        if (page.dirty.size > 256) {
+          page.index = undefined;
+          page.dirty.clear();
+        }
+      });
+      entry = page;
+    }
+    const page = entry;
+    this.openPricingPages.delete(key);
+    this.openPricingPages.set(key, page);
+    for (const [id, candidate] of this.openPricingPages) {
+      if (this.openPricingPages.size <= THREAD_PRICING_CACHE_THREADS) break;
+      candidate.stop();
+      this.openPricingPages.delete(id);
+    }
+    try {
+      return db.transaction(() => {
+        const version = db.pragma("data_version", { simple: true }) as number;
+        if (version !== page.version) {
+          page.index = undefined;
+          page.monitorId = undefined;
+          page.markers = undefined;
+          page.dirtyMarkers.clear();
+          page.version = version;
+        }
+        if (page.monitorId) return undefined;
+        if (page.index && !page.index.rewindChanged(page.dirty)) page.index = undefined;
+        if (page.index && page.dirty.size) {
+          const changed: ThreadUsageLineRecord[] = [];
+          for (const id of page.dirty) {
+            const line = this.readThreadUsageLineSync(id);
+            if (line && line.status !== "superseded" && line.backend === backend
+              && (line.threadId === threadId || line.parentThreadId === threadId)) changed.push(line);
+          }
+          this.attachUsageTurnMetadataSync(backend, threadId, changed);
+          if (!page.index.append(changed)) page.index = undefined;
+        }
+        page.dirty.clear();
+        if (!page.index) {
+          const baseline = this.readStoredThreadPricing(params, true);
+          const monitor = baseline.lines.find((line) => line.scope === "monitor");
+          if (monitor) {
+            page.monitorId = monitor.usageLineId;
+            return undefined;
+          }
+          page.index = ThreadPricingPageIndex.fromHistory(baseline.lines);
+          if (!page.index) return undefined;
+        }
+        type MarkerRow = ThreadCompactionRow & { rowid: number };
+        if (!page.markers) {
+          page.markers = new PricingPageMarkers();
+          const rows = prepareSqliteRead(db, `SELECT rowid, * FROM thread_compactions WHERE backend = ? AND thread_id = ?`)
+            .all(backend, threadId) as MarkerRow[];
+          for (const row of rows) page.markers.set(row.compaction_id, { marker: readThreadCompactionRow(row), rowid: row.rowid });
+        } else {
+          for (const id of page.dirtyMarkers) {
+            const row = prepareSqliteRead(db, `SELECT rowid, * FROM thread_compactions WHERE compaction_id = ? AND backend = ? AND thread_id = ?`)
+              .get(id, backend, threadId) as MarkerRow | undefined;
+            page.markers.set(id, row && { marker: readThreadCompactionRow(row), rowid: row.rowid });
+          }
+        }
+        page.dirtyMarkers.clear();
+        return page.index.page({
+          ...params, markerRevision: page.markers.revision(), summaries: this.readStoredPricingSummaries(params),
+          markers: (lineIds, turns) => page.markers!.read(lineIds, turns),
+        });
+      })();
+    } catch (error) {
+      page.stop();
+      this.openPricingPages.delete(key);
+      this.threadPricingCache.delete(key);
+      throw error;
+    }
+  }
+
+  /** The alert total includes priced historical gaps and in-flight monitor usage. */
+  async readThreadSpendMicros(params: ThreadPricingReadParams & {
+    localModelIds: readonly string[];
+    liveLines: readonly ThreadUsageLineRecord[];
+    liveGates?: SpendGateLines;
+  }): Promise<number> {
+    const db = this.stateDb.raw;
+    // The summary and gap probes share a SQLite snapshot. The partial
+    // indexes contain only main rows that could anchor a priced usage gap.
+    const readSummary = () => prepareSqliteRead(db, `
+      SELECT SUM(CASE WHEN UPPER(currency) = 'USD' THEN total_cost_micros ELSE 0 END) AS micros,
+             SUM(unpriced_usage_line_count) AS unpriced,
+             EXISTS (
+               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_spend_thread
+               WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
+                 AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL
+               UNION ALL
+               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_spend_parent
+               WHERE backend = @backend AND parent_thread_id = @threadId AND parent_thread_id IS NOT NULL
+                 AND status != 'superseded' AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL
+             ) AS possible_gap
+        FROM thread_pricing_summaries INDEXED BY idx_thread_pricing_summaries_thread
+       WHERE backend = @backend AND thread_id = @threadId
+    `).get({ backend: params.backend, threadId: params.threadId }) as {
+      micros: number | null; unpriced: number | null; possible_gap: number;
+    };
+    let summary = readSummary();
+    if (summary.unpriced && this.firstUnpricedBatchHasModel(params)) {
+      // A better-sqlite3 transaction callback cannot await. Complete the repair
+      // and total on its snapshot before returning the promise to the caller.
+      const pending = this.repriceThreadUsageHistory(params);
+      if (pending) await pending;
+      summary = readSummary();
+    }
+    if (!summary.possible_gap && !params.localModelIds.length && !params.liveLines.length && !params.liveGates?.size) return summary.micros ?? 0;
+    // Never retain uncommitted caller state. Our own read transaction keeps
+    // the spend checkpoint, changed rows, worker replacements and summary on
+    // the same snapshot when another owner is writing this profile.
+    const retain = !db.inTransaction;
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    if (retain) sqliteUsageLedgerVersions(db);
+    try {
+      return db.transaction(() => projectedThreadSpend({
+        ...params,
+        db,
+        key,
+        retain,
+        readSummaryMicros: () => readSummary().micros ?? 0,
+        readBaseline: () => this.readStoredThreadPricing(params, retain).lines,
+        readChanged: (ids) => {
+          const lines: ThreadUsageLineRecord[] = [];
+          for (const id of ids) {
+            const line = this.readThreadUsageLineSync(id);
+            if (line && line.backend === params.backend && line.status !== "superseded"
+              && (line.threadId === params.threadId || line.parentThreadId === params.threadId)) lines.push(line);
+          }
+          this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
+          return lines;
+        },
+      }))();
+    } catch (error) {
+      if (retain) {
+        this.threadPricingCache.delete(key);
+        forgetThreadSpend(db, key);
+      }
+      throw error;
+    }
+  }
+
+  /** A model-less retry batch cannot repair a price, apart from a free fork baseline. */
+  private firstUnpricedBatchHasModel(params: { backend: ThreadOverlayState["backend"]; threadId: string }): boolean {
+    return Boolean(prepareSqliteRead(this.stateDb.raw, `
+      SELECT 1 FROM (
+        SELECT model, scope, created_at, usage_line_id
+          FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_unpriced_thread
+         WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded' AND price_status != 'priced'
+         UNION ALL
+        SELECT model, scope, created_at, usage_line_id
+          FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_unpriced_parent
+         WHERE backend = @backend AND parent_thread_id = @threadId AND thread_id != @threadId
+           AND status != 'superseded' AND price_status != 'priced'
+         ORDER BY created_at DESC, usage_line_id DESC LIMIT @batch
+      ) WHERE model IS NOT NULL OR scope = 'fork-baseline' LIMIT 1
+    `).get({ backend: params.backend, threadId: params.threadId, batch: THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE }));
   }
 
   /** Transcript usage candidates for the requested turn IDs in ledger order. */
-  async readThreadTurnUsageLines(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
+  async readThreadTurnUsageLines(params: ThreadPricingReadParams & {
     turnIds: readonly string[];
   }): Promise<ThreadUsageLineRecord[]> {
     if (params.turnIds.length === 0) return [];
@@ -3535,10 +3861,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return lines;
   }
 
-  private materializeThreadPricing(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
-  }): ThreadPricingLedgerRead {
+  private materializeThreadPricing(params: ThreadPricingReadParams): ThreadPricingLedgerRead {
     const lineRows = this.stateDb.raw
       .prepare(
         `SELECT *
@@ -3614,11 +3937,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
 
       if (repairs.length > 0) {
-        this.persistThreadUsagePricingRepairsSync(repairs);
+        this.persistThreadUsagePricingRepairsSync(repairs, params.onRepriced);
         return this.materializeThreadPricing(params);
       }
     }
 
+    const lines = lineRows.map(threadUsageLineFromRow);
+    this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
+
+    return {
+      lines,
+      summaries: this.readStoredPricingSummaries(params),
+    };
+  }
+
+  private readStoredPricingSummaries(params: { backend: AppServerBackendKind; threadId: string }): ThreadPricingSummary[] {
     // Seek by thread and sort just its groups. The provider-first primary key
     // can walk unrelated summaries to satisfy this ordering.
     const summaryRows = this.stateDb.raw
@@ -3628,14 +3961,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
          ORDER BY provider ASC, currency ASC`,
       )
       .all(params.backend, params.threadId) as ThreadPricingSummaryRow[];
-
-    const lines = lineRows.map(threadUsageLineFromRow);
-    this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
-
-    return {
-      lines,
-      summaries: summaryRows.map(threadPricingSummaryFromRow),
-    };
+    return summaryRows.map(threadPricingSummaryFromRow);
   }
 
   /**
@@ -3679,6 +4005,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       existing: ThreadUsageLineRow;
       repaired: ThreadUsageLineRecord;
     }>,
+    onRepriced?: ThreadPricingReadParams["onRepriced"],
   ): void {
     const now = Date.now();
     const updateLine = this.stateDb.raw.prepare(
@@ -3728,9 +4055,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       );
     };
 
+    const changedTurns: ThreadUsageLineRecord[] = [];
     this.stateDb.raw.transaction(() => {
       for (const { existing, repaired } of repairs) {
-        updateLine.run({
+        const result = updateLine.run({
           cacheWriteInputCostMicros:
             repaired.cacheWriteInputCostMicros ?? 0,
           cachedInputCostMicros: repaired.cachedInputCostMicros,
@@ -3747,6 +4075,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           updatedAt: now,
           usageLineId: repaired.usageLineId,
         });
+        if (!result.changes) continue;
+        if (onRepriced && repaired.scope === "turn" && repaired.turnId && repaired.status !== "superseded") {
+          changedTurns.push(repaired);
+        }
         const threadId = repaired.parentThreadId ?? repaired.threadId;
         queueSummary({
           backend: existing.backend,
@@ -3767,6 +4099,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         this.readOrInitializeThreadPricingSummarySync(target);
       }
     })();
+    this.pricingRepairGeneration++;
+    if (onRepriced) changedTurns.forEach(onRepriced);
   }
 
   /**
@@ -3825,7 +4159,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         .prepare(
           `SELECT * FROM thread_compactions
            WHERE backend = ? AND thread_id = ?
-           ORDER BY observed_at ASC`,
+           ORDER BY observed_at ASC, rowid DESC`,
         )
         .all(params.backend, params.threadId) as ThreadCompactionRow[]
     ).map(readThreadCompactionRow);
@@ -4565,10 +4899,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    * staged. Page in ledger order and yield between groups, with one repair
    * transaction per pass, exactly as materializeThreadPricing does.
    */
-  private async repriceThreadUsageHistory(
-    params: { backend: ThreadOverlayState["backend"]; threadId: string },
+  private repriceThreadUsageHistory(
+    params: ThreadPricingReadParams,
     readRequestedRepairs?: () => Set<string>,
-  ): Promise<void> {
+  ): void | Promise<void> {
+    const batches = this.threadUsagePricingRepairBatches(params, readRequestedRepairs);
+    if (batches.next().done) return;
+    // Only a repair outside a caller-owned transaction yields a batch.
+    return (async () => {
+      do {
+        await yieldToEventLoop();
+      } while (!batches.next().done);
+    })();
+  }
+
+  private *threadUsagePricingRepairBatches(
+    params: ThreadPricingReadParams,
+    readRequestedRepairs?: () => Set<string>,
+  ): Generator<void> {
     const db = this.stateDb.raw;
     const versions = sqliteUsageLedgerVersions(db);
     const select = prepareSqliteRead(db,
@@ -4615,7 +4963,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         // stale pass instead of persisting prices derived before a local or
         // peer ledger edit. The generation includes raw SQL and rollbacks.
         if (!db.inTransaction && versions) {
-          await yieldToEventLoop();
+          yield;
           stale = version !== (versions.get(params.threadId) ?? 0)
             || dataVersion !== db.pragma("data_version", { simple: true });
           if (stale) break;
@@ -4623,11 +4971,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       if (stale) continue;
       if (repairs.length === 0) return;
-      this.persistThreadUsagePricingRepairsSync(repairs);
+      this.persistThreadUsagePricingRepairsSync(repairs, params.onRepriced);
       if (requested?.size === 0) return;
       // Repairs regroup the remaining unpriced rows. The old recursive full
       // read retries from the newest row too, until a pass makes no progress.
-      if (!db.inTransaction && versions) await yieldToEventLoop();
+      if (!db.inTransaction && versions) yield;
     }
   }
 
@@ -5050,6 +5398,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     threadId: string;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    forgetThreadSpend(this.stateDb.raw, threadKey);
     const current = this.getThread(threadKey) ?? {
       backend: params.backend,
       threadId: params.threadId,
@@ -10386,8 +10735,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     if (changedBackends.length === 0 && changedAccessBackends.length === 0) {
       return 0;
     }
-    // Access reaches every launchpad, including ones that have not used the
-    // provider yet, so switching a launchpad to it later finds the choice.
+    // Access reaches every local launchpad, including ones that have not
+    // used the provider yet.
     const apply = <T extends NavigationLaunchpadDefaults>(
       launchpad: T,
       includeAllModels: boolean,
@@ -10409,6 +10758,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       const now = Date.now();
       let count = 0;
       for (const launchpad of Object.values(this.readAllDirectoryLaunchpads())) {
+        // Peer sub-threads retain a plain key and record the owner in the draft.
+        if (launchpad.federationTarget?.scope === "remote" || isRemoteLaunchpadStorageKey(launchpad.directoryKey)) continue;
         const usesChangedModelBackend = changedBackends.some((backend) =>
           navigationLaunchpadProviderKey(launchpad) === backend
           || launchpad.providerSettings?.[backend] !== undefined
@@ -11771,6 +12122,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   private getBackend(
     scope: string,
   ): { knownThreadKeys: string[]; lastSnapshotHash?: string } | undefined {
+    const state = this.readBackendForProjection(scope);
+    return state && { ...state, knownThreadKeys: [...state.knownThreadKeys] };
+  }
+
+  private readBackendForProjection(scope: string): { knownThreadKeys: string[]; lastSnapshotHash?: string } | undefined {
     const db = this.stateDb.raw;
     // Transaction snapshots and rolled-back values must never certify a cache.
     if (db.inTransaction) this.backendReadCache = undefined;
@@ -11779,7 +12135,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const cache = this.backendReadCache;
     if (cache && cache.scope === scope && cache.dataVersion === dataVersion
       && cache.backendChanges === backendChanges) {
-      return cache.state && { ...cache.state, knownThreadKeys: [...cache.state.knownThreadKeys] };
+      return cache.state;
     }
     const row = db.prepare(READ_NAVIGATION_BACKEND_METADATA).get(scope) as {
       known_thread_keys: string;
@@ -11796,8 +12152,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     if (!db.inTransaction) {
       this.backendReadCache = { scope, dataVersion, backendChanges, state: normalized };
     }
-    // The cache owns its array; callers can freely mutate their returned value.
-    return normalized && { ...normalized, knownThreadKeys: [...normalized.knownThreadKeys] };
+    return normalized;
   }
 
   private putBackend(

@@ -1314,6 +1314,29 @@ export function applyNavigationLaunchpadProviderSettingsPatch<
   return projectNavigationLaunchpadProviderSettings(base as T);
 }
 
+/** Carry an explicit model choice from a viewer's draft to the instance that runs it. */
+export function applyLaunchpadDraftSettingsPatch(
+  draft: NavigationLaunchpadDraft,
+  patch: Partial<NavigationLaunchpadDraft>,
+  rememberModelSettings?: boolean,
+): NavigationLaunchpadDraft {
+  const next = applyNavigationLaunchpadProviderSettingsPatch(draft, patch);
+  if ("model" in patch || "reasoningEffort" in patch) {
+    return {
+      ...next,
+      pendingModelPreference: rememberModelSettings ? {
+        provider: navigationLaunchpadProviderKey(next),
+        model: next.model,
+        reasoningEffort: next.reasoningEffort,
+      } : undefined,
+    };
+  }
+  if (navigationLaunchpadProviderKey(next) !== navigationLaunchpadProviderKey(draft)) {
+    return { ...next, pendingModelPreference: undefined };
+  }
+  return next;
+}
+
 /**
  * Apply a defaults patch whose provider settings belong to `provider`. They
  * are filed under that provider while the defaults keep their own, unless
@@ -1518,6 +1541,8 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   /** A removed directory may retain its draft for recovery without advertising a project. */
   hiddenFromDirectoryList?: true;
   settingsTouchedAt?: number;
+  /** The viewer explicitly picked a model or effort to remember after an accepted peer launch. */
+  pendingModelPreference?: { provider: string; model?: string; reasoningEffort?: string };
   /** Explicit messaging `/new` override for this project. */
   messagingToolUpdateMode?: MessagingToolUpdateMode;
   /**
@@ -2356,6 +2381,7 @@ export type NavigationSnapshotTransportResponse =
 export const NAVIGATION_QUERY_PROTOCOL_VERSION = 2 as const;
 export const NAVIGATION_QUERY_MAX_PAGE_ROWS = 100;
 /** 256 KiB application message minus the reserved 4 KiB outer envelope. */
+export const NAVIGATION_INDEX_MAX_INPUT_BYTES = 32 * 1024 * 1024;
 export const NAVIGATION_QUERY_MAX_RESULT_BYTES = 252 * 1024;
 
 export type NavigationQueryConsumerClass =
@@ -2434,6 +2460,7 @@ export type NavigationRowAgent = {
  * durable protocol identity; consumers must use it for owner-routed reads.
  */
 export type NavigationRow = {
+  contextWindow?: NavigationThreadSummary["contextWindow"];
   /** Read compatibility for owners that still include full stacks on rows. */
   stacks?: NavigationThreadSummary["stacks"];
   stackMemberships?: NavigationThreadSummary["stackMemberships"];
@@ -2733,6 +2760,8 @@ export type NavigationQueryRequest = {
   deadlineAt?: number;
   /** Unchanged is legal only for a complete baseline of this exact query. */
   completeBaselineRevision?: string;
+  /** Local window transport only. Empty requests a full baseline. Echo its token when accepting a delta. */
+  windowPageBase?: string;
   /** Conditional acknowledgment of exactly the retained range, never a complete baseline. */
   retainedRange?: { revision: string; ownerEpoch: string; start: number; count: number };
 };
@@ -2774,6 +2803,9 @@ export type NavigationQueryPage = {
   directoryGitProof?: NavigationDirectoryGitProof;
   facets?: NavigationStarMapFacetCounts;
   entries: NavigationQueryEntry[];
+  /** Local window transport, expanded before applying owner paging semantics.
+   * Negative slots consume the next changed entry. Others copy a baseline slot. */
+  windowPagePatch?: { token: string; ownerContentBytes?: number; base?: string; slots?: number[]; directories?: true; orderKeys?: Record<number, string> };
   /** Offset of this page in its immutable owner generation. Omitted means zero. */
   rangeStart?: number;
   directories?: NavigationDirectoryRow[];
@@ -2789,6 +2821,21 @@ export type NavigationQueryPage = {
    */
   remoteOwner?: NavigationRemoteOwner;
 };
+
+/** With navigation_page_deltas_v1, offer an empty string for a fresh bounded page or echo the
+ * token of the raw owner page this viewer still holds. Window and revision proofs are separate. */
+export type FederationNavigationPageRequest = NavigationQueryRequest & { ownerPageBase?: string };
+/** No base means a full page. With a base, keep its collection order unless a slot or length
+ * changes. A base with no edits acknowledges every retained row. The page shell is always fresh. */
+export type FederationNavigationPagePatch = {
+  token: string;
+  base?: string;
+  /** Unspecified slots retain the same position. -1 consumes the next changed payload. */
+  slots?: Record<number, number>;
+  length?: number;
+  orderKeys?: Record<number, string>;
+};
+export type FederationNavigationPageResult = NavigationQueryPage & { ownerPagePatch?: FederationNavigationPagePatch };
 
 /** One owner's facts for a whole page, as its viewer knows them. */
 export type NavigationRemoteOwner = {

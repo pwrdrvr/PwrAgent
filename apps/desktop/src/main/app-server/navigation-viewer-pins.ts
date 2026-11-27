@@ -2,6 +2,7 @@ import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/s
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
   findRemoteHomeDirectoryIndex,
+  indexRemoteHomeDirectories,
   remoteThreadPlaceholderDirectory,
 } from "@pwragent/shared/federation-project-match";
 import type { FederatedThreadRef, FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
@@ -133,6 +134,7 @@ export function attachRemoteThreadsToLocalDirectories(
     return directories;
   }
   const mergedDirectories = [...directories];
+  const lookup = remoteThreads.length > 1 ? indexRemoteHomeDirectories(mergedDirectories) : undefined;
   const addedByDirectoryIndex = new Map<
     number,
     Array<{ threadKey: string; inInbox: boolean }>
@@ -145,17 +147,17 @@ export function attachRemoteThreadsToLocalDirectories(
     let homeIndex = findRemoteHomeDirectoryIndex(
       mergedDirectories,
       thread,
+      lookup,
     );
     if (homeIndex === undefined) {
       const placeholder = remoteThreadPlaceholderDirectory(thread);
       if (!placeholder) {
         continue;
       }
-      homeIndex = mergedDirectories.findIndex(
-        (directory) => directory.key === placeholder.key,
-      );
+      homeIndex = lookup ? lookup.byKey.get(placeholder.key) ?? -1 : mergedDirectories.findIndex((directory) => directory.key === placeholder.key);
       if (homeIndex === -1) {
         homeIndex = mergedDirectories.push(placeholder) - 1;
+        lookup?.append(homeIndex);
       }
     } else if (mergedDirectories[homeIndex]!.localAvailability === "unconfigured") {
       // A later thread finds an earlier thread's placeholder by name. Only
@@ -188,10 +190,11 @@ export function attachRemoteThreadsToLocalDirectories(
       ? federatedThreadIdentityKey(thread.federation.ref) : buildThreadIdentityKey(thread.source, thread.id), thread]))
     : undefined;
   return mergedDirectories.map((directory, index) => {
-    const added = addedByDirectoryIndex
-      .get(index)
-      ?.filter((entry) => !directory.threadKeys.includes(entry.threadKey));
-    if (!added?.length) {
+    const incomingRows = addedByDirectoryIndex.get(index);
+    if (!incomingRows) return directory;
+    const known = incomingRows.length > 1 && directory.threadKeys.length ? new Set(directory.threadKeys) : undefined;
+    const added = incomingRows.filter((entry) => !(known ? known.has(entry.threadKey) : directory.threadKeys.includes(entry.threadKey)));
+    if (!added.length) {
       return directory;
     }
     const incoming = placeholderThreads.get(index);

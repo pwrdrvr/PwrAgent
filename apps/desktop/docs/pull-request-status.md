@@ -283,10 +283,19 @@ for sync. A PR closed without a merge requires an explicit stack change.
 
 PR Auto-fix, review Auto-fix, watches, Continue After CI, and forge offers use
 the same gate as the stack projection. The lowest unsettled layer supplies the
-reason. A stale layer waits for its own new published head before dispatchers
-use its CI. Held snapshots spend no repair attempts. Inferred GitHub chains can
-hold automation, and adopting the chain gives the operation engine a catalog
-and an exact replay boundary.
+reason. A scheduled CI repair marks its own PR, even when several layers
+share a thread. The owner and navigation resolve that repair's PR key the
+same way, including after a repository rename. A review fix checks the gate
+for the PRs it covers, including attachments that appear on its captured
+branch and workspace while the review runs. The fix counts as a repair in
+progress as soon as the queue admits its turn. This lets a review of
+multiple layers wait for lower layers without becoming its own prerequisite.
+Each review admission check shares one owner inventory and projects each
+checkout scope once. The final admission guard reads fresh evidence. A stale
+layer waits for its own new published head before dispatchers use its CI.
+Held snapshots spend no repair attempts.
+Inferred GitHub chains can hold automation, and adopting the chain gives the
+operation engine a catalog and an exact replay boundary.
 CI watches and Continue After retain evidence-dependent wakes until immediate
 admission is possible. A saved merge-queue removal is reconsidered on a fresh
 poll once its stack settles.

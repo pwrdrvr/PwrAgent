@@ -1,8 +1,9 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stackAutomationGates, stackDispatchBlock } from "@pwragent/shared/stacks/stack-automation";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { StateDb } from "../state/state-db";
-import { readReviewAutoFixStatus, resetReviewAutoFixArmingForTests } from "../thread-reviews/review-auto-fix";
+import { getReviewAutoFixRuns, readReviewAutoFixStatus, resetReviewAutoFixArmingForTests } from "../thread-reviews/review-auto-fix";
 import { installThreadTodoRuntime, resetThreadTodoServiceForTests } from "../thread-todos/thread-todo-runtime";
 import { createDeferred, createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -37,6 +38,69 @@ const findings = {
 
 describe("review Auto-fix handoff", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("marks a lower review fix as repair work as soon as the queue claims it", async () => {
+    const client = new MockBackendClient({ startTurnResults: [{ threadId: thread.threadId, turnId: "review-fix" }] });
+    const registry = createDesktopBackendRegistry({
+      codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+    });
+    const preparing = createDeferred<void>();
+    const resume = createDeferred<void>();
+    vi.spyOn(registry, "assertThreadCodexInferenceAvailable").mockImplementationOnce(async () => {
+      preparing.resolve();
+      await resume.promise;
+    });
+    const start = registry.submitTurnIfIdle({
+      ...thread, origin: "automation", input: [{ type: "text", text: "Fix the review" }],
+      messageOrigin: { kind: "pwragent", reviewAutoFix: { reviewId: "review", findingCount: 1 } },
+    });
+    try {
+      await Promise.race([preparing.promise, start]);
+      expect(client.startTurnCalls).toHaveLength(0);
+      expect(registry.getQueuedTurnsForThread(thread)).toEqual([]);
+      expect(await registry.stackRepairActive(thread)).toBe(true);
+      resume.resolve();
+      await expect(start).resolves.toMatchObject({ status: "started" });
+      await client.emit(completed("review-fix"));
+      expect(await registry.stackRepairActive(thread)).toBe(false);
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([start]);
+      await registry.close();
+    }
+  });
+
+  it.each([
+    { provenance: "with captured PRs", capturedTargets: true },
+    { provenance: "without captured PRs", capturedTargets: false },
+  ])("keeps a waiting review $provenance from becoming its own prerequisite", async ({ capturedTargets }) => {
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+    });
+    try {
+      const prs = [1, 2].map((number) => ({
+        provider: "github.com", org: "fixture", repo: "stack", number,
+        url: `https://github.com/fixture/stack/pull/${number}`,
+      }));
+      // The dispatcher publishes the queued card before testing the gate.
+      // Nothing has been admitted to the turn queue yet.
+      const review = { ...thread, ...(capturedTargets ? {
+        context: { workspacePath: "/repo", pullRequest: prs[0], pullRequests: prs },
+      } : {}) };
+      getReviewAutoFixRuns().record(review, "review-of-stack", { kind: "queue", status: "held", at: 1 });
+      const repair = await registry.stackRepairActive(thread);
+      const layers = prs.map((pr) => ({
+        branch: `layer-${pr.number}`, pullRequest: pr, number: pr.number,
+        health: "in_sync" as const, checks: "passing" as const, conflict: false, repair,
+      }));
+      const gates = stackAutomationGates(layers);
+      expect(layers.map((layer, index) => stackDispatchBlock({ ...layer, ...gates[index] })))
+        .toEqual([undefined, undefined]);
+    } finally {
+      resetReviewAutoFixArmingForTests();
+      await registry.close();
+    }
+  });
 
   // Model: an armed review and its fix occupy consecutive turns. Other
   // messages wait in their admission order, including guidance that can steer.
@@ -228,10 +292,12 @@ describe("review Auto-fix handoff", () => {
       expect(client.startTurnCalls).toHaveLength(1);
       expect(client.startTurnCalls[0]?.input[0]).toMatchObject({ text: expect.stringContaining("Preserve the draft") });
       expect(Object.values(readReviewAutoFixStatus(thread).runs)[0]?.phase).toBe("running");
+      expect(await registry.stackRepairActive(thread)).toBe(true);
 
       await client.emit(completed("fix-0"));
       await secondStarted.promise;
       expect(client.startTurnCalls[1]?.input[0]).toMatchObject({ text: "Follow-up 0" });
+      expect(await registry.stackRepairActive(thread)).toBe(false);
     } finally {
       holdGate.resolve();
       resetThreadTodoServiceForTests();

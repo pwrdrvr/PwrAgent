@@ -1,3 +1,4 @@
+import { NavigationWindowPageDeltas } from "../../app-server/navigation-window-page-deltas";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../../../shared/ipc";
 import type { ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
@@ -343,8 +344,16 @@ async function withNavigationConsumer<T>(event: IpcMainInvokeEvent, consumerId: 
     }
   }
 }
+const windowPageDeltas = new NavigationWindowPageDeltas();
 const ownerNavigationTransport = new LocalOwnerNavigationTransport({
-  getNavigationQueryPage: (request, options) => appServerService.getNavigationQueryWirePage(request, options?.localConsumerId),
+  getNavigationQueryPage: async ({ windowPageBase, ...request }, options) => {
+    const consumer = options?.localConsumerId;
+    const page = await appServerService.getNavigationQueryWirePage(request, consumer);
+    if (consumer && request.consumer === "main-sidebar" && !request.cursor && typeof windowPageBase === "string") {
+      return windowPageDeltas.encode(consumer, windowPageBase, page);
+    }
+    return page;
+  },
   getNavigationSelectedDetail: (request, options) => appServerService.getNavigationSelectedDetail(request, options?.localConsumerId),
   getNavigationQueueProjection: (request, options) => appServerService.getNavigationQueueProjection(request, options?.localConsumerId),
   getNavigationLaunchpadConfig: (request, options) => appServerService.getNavigationLaunchpadConfig(request, options?.localConsumerId),

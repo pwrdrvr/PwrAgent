@@ -83,6 +83,7 @@ import {
   type LaunchpadWorkMode,
   type NavigationLaunchpadDraft,
   type NavigationLaunchpadDefaults,
+  applyLaunchpadDraftSettingsPatch,
   applyNavigationLaunchpadProviderSettingsPatch,
   projectNavigationLaunchpadProviderSettings,
   resolveDefaultLaunchpadExecutionMode,
@@ -671,6 +672,8 @@ export class ThreadDirectoryService {
     options?: {
       /** A remote viewer's draft takes no environment metadata from here. */
       skipFilesystemInspection?: boolean;
+      /** Owner-provided provider defaults for an untouched peer draft. */
+      ownerProviderSettings?: NavigationLaunchpadDefaults["providerSettings"];
       /** Leave the stored draft as it is unless this holds for it. */
       onlyIf?: (current: NavigationLaunchpadDraft) => boolean;
       /** The instance that owns `directoryKey`, as on an ensure. */
@@ -721,8 +724,19 @@ export class ThreadDirectoryService {
         ? { mcpConnectionIdsFromDefaults: undefined }
         : {}),
     };
+    // A sub-thread draft keeps its plain key under a peer owner.
+    const isPeerDraft =
+      owner?.scope === "remote"
+      || isRemoteLaunchpadStorageKey(request.directoryKey);
+    const ownerProviderSettings = options?.ownerProviderSettings;
+    const draft = ownerProviderSettings ? { ...current, providerSettings: ownerProviderSettings } : current;
+    const patched = applyLaunchpadDraftSettingsPatch(draft, patch, isPeerDraft && request.explicitModelSelection);
+    const provider = navigationLaunchpadProviderKey(patched);
     const patchedLaunchpad: NavigationLaunchpadDraft = {
-      ...applyNavigationLaunchpadProviderSettingsPatch(current, patch),
+      ...patched,
+      ...(ownerProviderSettings ? {
+        providerSettings: { ...ownerProviderSettings, [provider]: patched.providerSettings?.[provider] ?? {} },
+      } : {}),
       directoryKey: request.directoryKey,
       settingsTouchedAt: request.stickySettingsChanged
         ? Date.now()
@@ -730,10 +744,6 @@ export class ThreadDirectoryService {
       updatedAt: Date.now(),
     };
     let nextLaunchpad = patchedLaunchpad;
-    // A sub-thread draft keeps its plain key under a peer owner.
-    const isPeerDraft =
-      owner?.scope === "remote"
-      || isRemoteLaunchpadStorageKey(request.directoryKey);
     // A peer's draft carries the owner's model choices. The viewer's catalog
     // cannot normalize them; the owner validates them when creating the thread.
     if (
@@ -2037,6 +2047,10 @@ export class ThreadDirectoryService {
       );
     }
 
+    if (options?.sourceInstanceId && !options.messageOrigin && request.launchpad?.pendingModelPreference) {
+      await this.rememberPeerLaunchpadModel(request.launchpad, launchpad);
+    }
+
     // A messaging launch uses a separate creation key even when it borrows
     // the project's settings. A peer also owns its draft on its own viewer.
     if (!options?.sourceInstanceId && request.directoryKey === launchpad.directoryKey) {
@@ -2054,6 +2068,24 @@ export class ThreadDirectoryService {
       ...materializedThread,
       ...continuation,
     };
+  }
+
+  private async rememberPeerLaunchpadModel(draft: NavigationLaunchpadDraft, admitted: NavigationLaunchpadDraft): Promise<void> {
+    const choice = draft.pendingModelPreference;
+    const provider = navigationLaunchpadProviderKey(admitted);
+    // A later settings refresh may have replaced the viewer's choice.
+    // Save only the submitted choice, using the owner's admitted values.
+    if (!choice || !admitted.model || provider !== choice.provider
+      || draft.model !== choice.model || draft.reasoningEffort !== choice.reasoningEffort) return;
+    try {
+      await this.context.stores.launchpads.setLaunchpadDefaults({
+        model: admitted.model,
+        reasoningEffort: admitted.reasoningEffort,
+      }, { provider });
+    } catch (error) {
+      // The thread already exists. A failed defaults write cannot retry the launch.
+      backendRegistryLog.warn("peer-launchpad-defaults-save-failed", { error: String(error) });
+    }
   }
 
   private async startMaterializedLaunchpadRequest(

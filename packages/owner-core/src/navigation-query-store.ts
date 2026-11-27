@@ -14,6 +14,7 @@ import {
   navigationQuerySnapshotRowOwners,
   projectNavigationPullRequests,
   navigationQuerySnapshotToken,
+  type NavigationEntrySources,
   type NavigationQueryIndex,
   type NavigationQueryMaterialization,
 } from "./navigation-query-projection";
@@ -66,6 +67,8 @@ type NavigationQueryGeneration = {
   /** A retained generation can reuse projection from identical certified input. */
   snapshotToken?: symbol;
   projectionRequest?: string;
+  incremental?: boolean;
+  acceleration?: GenerationAcceleration;
   /** Membership and attachment presence, independent of read-time PR projection. */
   sourceRevision?: string;
   pullRequests?: Map<number, ReturnType<typeof projectNavigationPullRequests>>;
@@ -290,15 +293,62 @@ function validateRequest(request: NavigationQueryRequest): void {
   }
 }
 
-/** Hash the canonical JSON stream without allocating a whole-collection string. */
+type EntryDigest = { hash: string; bytes: number };
+type EntryTree = EntryDigest[][];
+type GenerationAcceleration = {
+  sources: NavigationEntrySources;
+  tree: EntryTree;
+};
+
+function accelerationBytes(generation: NavigationQueryGeneration): number {
+  // Two digest nodes per entry, level arrays and the weak source-to-entry lookup.
+  return generation.acceleration ? 1024 + 512 * generation.materialization.entries.length : 0;
+}
+
+/** Balance by position. Stable entries reuse their leaf digest; only ancestors
+ * of changed leaves need hashing. No serialized payload is retained. */
+function fingerprintEntries(entries: NavigationQueryMaterialization["entries"], previous?: NavigationQueryGeneration) {
+  const prior = previous?.acceleration?.tree;
+  let bytes = 2 + Math.max(entries.length - 1, 0);
+  let level = entries.map((entry, i): EntryDigest => {
+    let leaf = previous?.materialization.entries[i] === entry ? prior?.[0]?.[i] : undefined;
+    if (!leaf) {
+      const json = JSON.stringify(entry);
+      leaf = { hash: createHash("sha256").update(json).digest("base64url"), bytes: Buffer.byteLength(json) };
+    }
+    bytes += leaf.bytes;
+    if (bytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) throw new NavigationQueryError("navigation_busy", "Navigation query exceeds the process retained-memory budget.");
+    return leaf;
+  });
+  const tree = [level];
+  while (level.length > 1) {
+    const next: EntryDigest[] = [];
+    const old = prior?.[tree.length - 1];
+    const oldParents = prior?.[tree.length];
+    for (let i = 0; i < level.length; i += 2) {
+      const left = level[i]!;
+      const right = level[i + 1];
+      if (!right) next.push(left);
+      else if (oldParents && old?.[i] === left && old[i + 1] === right) next.push(oldParents[i / 2]!);
+      else next.push({ hash: createHash("sha256").update(left.hash).update(right.hash).digest("base64url"), bytes: left.bytes + right.bytes });
+    }
+    tree.push(next);
+    level = next;
+  }
+  return { tree, bytes, hash: level[0]?.hash ?? "" };
+}
+
+/** Stream canonical fields, substituting the ordered entry digest on live sidebar reads.
+ * Admission always counts the full serialized payload, including those entries. */
 export function fingerprintNavigationMaterialization(materialization: NavigationQueryMaterialization, viewerRowOwners?: readonly string[],
-  directoryGitProof?: NavigationQueryPage["directoryGitProof"]): {
+  directoryGitProof?: NavigationQueryPage["directoryGitProof"], entryDigest?: { hash: string; bytes: number }): {
   revision: string; retainedBytes: number; viewerRowOwners?: readonly string[]; directoryGitProof?: NavigationQueryPage["directoryGitProof"];
 } {
   const hash = createHash("sha256");
   let retainedBytes = 0;
-  const append = (value: string) => {
-    retainedBytes += Buffer.byteLength(value, "utf8");
+  if (entryDigest) hash.update("sidebar-entries-v1\0");
+  const append = (value: string, bytes = Buffer.byteLength(value, "utf8")) => {
+    retainedBytes += bytes;
     if (retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
       throw new NavigationQueryError("navigation_busy", "Navigation query exceeds the process retained-memory budget.");
     }
@@ -312,7 +362,9 @@ export function fingerprintNavigationMaterialization(materialization: Navigation
     first = false;
     append(JSON.stringify(key));
     append(":");
-    if (Array.isArray(value)) {
+    if (key === "entries" && entryDigest) {
+      append(JSON.stringify([materialization.entries.length, entryDigest.hash]), entryDigest.bytes);
+    } else if (Array.isArray(value)) {
       append("[");
       for (let index = 0; index < value.length; index += 1) {
         if (index) append(",");
@@ -334,6 +386,15 @@ export function fingerprintNavigationMaterialization(materialization: Navigation
   append("}");
   return { revision: hash.digest("base64url"), retainedBytes,
     ...(viewerRowOwners ? { viewerRowOwners } : {}), ...(directoryGitProof ? { directoryGitProof } : {}) };
+}
+
+// A local caller owns its page. Retained entries can back several generations,
+// while the directory proof is deeply frozen at construction.
+function pageForReader(page: NavigationQueryPage, generation: NavigationQueryGeneration): NavigationQueryPage {
+  if (!generation.incremental) return page;
+  const { directoryGitProof, ...mutable } = page;
+  const detached = structuredClone(mutable);
+  return directoryGitProof ? { ...detached, directoryGitProof } : detached;
 }
 
 function pageBase(params: {
@@ -386,6 +447,8 @@ export class NavigationQueryStore {
   async readPage(params: {
     loadIndex: () => Promise<NavigationQueryIndex>;
     pullRequests?: NavigationPullRequestProjection;
+    /** Reuse projected entries and their ordered content digest across sidebar generations. */
+    incremental?: boolean;
     request: NavigationQueryRequest;
     scopeKey: string;
   }): Promise<NavigationQueryPage> {
@@ -458,30 +521,39 @@ export class NavigationQueryStore {
       const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index, index.observedAt ?? readStartedAt);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
       const currentId = this.currentGenerationByScopeAndQuery.get(currentKey);
-      const current = currentId ? this.generations.get(currentId) : undefined;
+      const retained = currentId ? this.generations.get(currentId) : undefined;
+      const incremental = params.incremental === true;
+      const current = Boolean(retained?.incremental) === incremental ? retained : undefined;
       const deferPullRequests = Boolean(pullRequests) && !needsPullRequestMembership;
       // Attention order advances separately. A Star Map with live PR
       // membership has already replaced its certified index above.
       const snapshotToken = attentionOrder ? undefined : navigationQuerySnapshotToken(index);
-      const projectionRequest = snapshotToken && createHash("sha256").update(JSON.stringify([
+      const projectionRequest = (snapshotToken || incremental) ? createHash("sha256").update(JSON.stringify([
         params.request.query, params.request.backend, params.request.inventory, params.request.consumer, deferPullRequests,
-      ])).digest("base64url");
+      ])).digest("base64url") : undefined;
       if (snapshotToken && current?.snapshotToken === snapshotToken && current.projectionRequest === projectionRequest
         && !current.materialization.pullRequestPositions) {
         generation = current;
       } else {
+        const sources: NavigationEntrySources | undefined = incremental ? { entries: new WeakMap() } : undefined;
+        const previous = current?.projectionRequest === projectionRequest ? current : undefined;
         const { directoryGitProof: gitProof, ...materialization } = projectNavigationQuery({
           index, request: params.request, attentionOrder, includeDirectoryGitProof: true, deferPullRequests,
+          entrySources: sources, previousSources: previous?.acceleration?.sources,
         });
         const owners = params.request.inventory === "viewer" && params.request.consumer === "main-sidebar"
           ? navigationQuerySnapshotRowOwners(index) : undefined;
-        const { revision, retainedBytes, viewerRowOwners, directoryGitProof } = fingerprintNavigationMaterialization(materialization, owners, gitProof);
+        const digest = sources && materialization.entries.length ? fingerprintEntries(materialization.entries, previous) : undefined;
+        const acceleration = sources?.geometry && digest ? { sources, tree: digest.tree } : undefined;
+        const { revision, retainedBytes, viewerRowOwners, directoryGitProof } = fingerprintNavigationMaterialization(materialization, owners, gitProof, digest);
         if (current?.completeRevision === revision && !materialization.pullRequestPositions) {
           generation = current;
+          if (generation.projectionRequest !== projectionRequest) generation.acceleration = undefined;
           generation.snapshotToken = snapshotToken;
           generation.projectionRequest = projectionRequest;
         } else {
           generation = {
+            incremental, acceleration,
             completeRevision: revision,
             createdAt: now,
             generation: randomUUID(),
@@ -539,7 +611,7 @@ export class NavigationQueryStore {
         };
         this.finishPage(unchanged, generation);
         generation.lastAccessedAt = now;
-        return unchanged;
+        return pageForReader(unchanged, generation);
       }
     }
 
@@ -560,7 +632,7 @@ export class NavigationQueryStore {
         this.retainGeneration(generation);
         this.currentGenerationByScopeAndQuery.set(newCurrentKey, generation.generation);
       }
-      return page;
+      return pageForReader(page, generation);
     }
 
     if (params.request.cursor && generation.materialization.pullRequestPositions) {
@@ -593,7 +665,7 @@ export class NavigationQueryStore {
     if (newCurrentKey && page.nextCursor) {
       this.currentGenerationByScopeAndQuery.set(newCurrentKey, generation.generation);
     }
-    return page;
+    return pageForReader(page, generation);
   }
 
   private anchorOffset(generation: NavigationQueryGeneration, request: NavigationQueryRequest, index?: NavigationQueryIndex): number {
@@ -872,6 +944,15 @@ export class NavigationQueryStore {
     const evictable = [...this.generations.values()].sort((left, right) =>
       Number(currentIds.has(left.generation)) - Number(currentIds.has(right.generation))
       || left.lastAccessedAt - right.lastAccessedAt);
+    // Reuse metadata is optional. Drop it before it can displace any cursor or
+    // proof, including when a continuation increases its attachment backing.
+    let workingBytes = retainedBytes + generation.retainedBytes + accelerationBytes(generation);
+    for (const candidate of evictable) workingBytes += accelerationBytes(candidate);
+    for (const candidate of [...evictable, generation]) {
+      if (workingBytes <= NAVIGATION_QUERY_MAX_RETAINED_BYTES) break;
+      workingBytes -= accelerationBytes(candidate);
+      candidate.acceleration = undefined;
+    }
     // Proofs already sent belong to the immutable revision. A continuation
     // can omit their backing without expiring either owner's cursor.
     if (retainedBytes + generation.retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {

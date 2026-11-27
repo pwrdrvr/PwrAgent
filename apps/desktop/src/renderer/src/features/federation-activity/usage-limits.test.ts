@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
-import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries } from "./usage-limits";
+import {
+  buildLimitAccounts, fiveHourSeries, limitLabel, limitSeriesFor, projectLimit, seriesStart, sinceResetSeries, type LimitAccount,
+} from "./usage-limits";
 
 const HOUR = 3_600_000;
 const studio = { owner: "Studio", target: { scope: "local" as const } };
@@ -422,3 +424,42 @@ describe("usage limit history", () => {
     expect(seriesStart(idleSelected)).toBeUndefined();
   });
 });
+
+describe("series lookup work", () => {
+  /** An account with `count` pooled limits whose series reads are counted. */
+  function countedAccount(count: number) {
+    const limits = Array.from({ length: count }, (_, index) => ({
+      name: `${index % 2 ? "5h" : "Weekly"} Pool${Math.floor(index / 2)} limit`, limitId: `pool${index}`,
+      usedPercent: 10, windowMinutes: index % 2 ? 300 : 10_080, resetAt: t0 + 24 * HOUR,
+    }));
+    const [built] = buildLimitAccounts([{ ...studio, current: { observedAt: t0, provider: "google", limits } }]);
+    let reads = 0;
+    const account: LimitAccount = {
+      ...built!,
+      series: new Proxy(built!.series, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^\d+$/.test(property)) reads += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    };
+    return { limits, account, reads: () => reads };
+  }
+
+  // Found by the scaling audit: each limit row scanned the account's series
+  // for its own series and again for the "since reset" one, so one render of
+  // the AI providers panel was quadratic in a provider's limits, and the
+  // pace read's filter (each series, against each current limit) cubic.
+  it("reads an account's series a bounded number of times however many rows ask", () => {
+    const { limits, account, reads } = countedAccount(32);
+    for (const limit of limits) {
+      expect(limitSeriesFor(account, limit)?.limitId).toBe(limit.limitId);
+      sinceResetSeries(account);
+    }
+    // The pace read's filter: every series against every current limit.
+    for (const series of [...account.series]) limits.some((limit) => limitSeriesFor(account, limit) === series);
+    // One pass to index, a few to choose the "since reset" series, one to copy.
+    expect(reads()).toBeLessThanOrEqual(6 * limits.length);
+  });
+});
+

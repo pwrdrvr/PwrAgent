@@ -2,6 +2,7 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
+  NAVIGATION_LIVE_INDEX_RECONCILED_METHOD,
   navigationInvalidationMayChangeMembership,
   navigationQueryEventRequiresRefresh,
   navigationWorkingStatePath,
@@ -23,6 +24,7 @@ export class NavigationDirectoryScope {
     const method = event.notification.method;
     const sourceMethod = method === "navigation/invalidated"
       ? (event.notification.params as { sourceMethod?: unknown }).sourceMethod : method;
+    if (sourceMethod === NAVIGATION_LIVE_INDEX_RECONCILED_METHOD) return;
     if (method !== NAVIGATION_DIRECTORY_SET_CHANGED_METHOD
       && !(navigationQueryEventRequiresRefresh(method, event.notification.params)
         && navigationInvalidationMayChangeMembership(sourceMethod))) return;

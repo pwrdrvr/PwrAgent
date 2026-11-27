@@ -1,10 +1,12 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactElement,
   type RefObject,
 } from "react";
@@ -21,6 +23,7 @@ import {
 import { AppIcon } from "../../components/AppIcon";
 import { checkPeerApplicationWorkspace, readPeerApplications } from "../../lib/useDesktopApplications";
 import { useEventCallback } from "../../lib/useEventCallback";
+import type { NavigationContextWindows } from "../../lib/navigation-context-windows";
 import { getDesktopApi } from "../../lib/desktop-api";
 import {
   POINTER_AIM_SETTLE_MS,
@@ -81,6 +84,7 @@ export type SidebarThreadCardActions = {
 
 /** Everything the card reads about a row when it opens. */
 export type SidebarThreadCardOptions = {
+  contextWindows?: Pick<NavigationContextWindows, "read" | "subscribe">;
   readThread: (threadKey: string) => NavigationThreadSummary | undefined;
   rowFacts: (thread: NavigationThreadSummary) => ThreadInfoRowFacts;
   actionsFor: (thread: NavigationThreadSummary, row: HTMLElement) => SidebarThreadCardActions;
@@ -152,6 +156,8 @@ export const SidebarThreadCardHost = forwardRef<
     return (
       <SidebarThreadCardContent
         key={threadKey}
+        threadKey={threadKey}
+        contextWindows={optionsRef.current.contextWindows}
         thread={thread}
         facts={optionsRef.current.rowFacts(thread)}
         actions={optionsRef.current.actionsFor(thread, row)}
@@ -374,13 +380,19 @@ export function useSidebarThreadCardTriggers(
 }
 
 function SidebarThreadCardContent(props: {
+  threadKey: string;
+  contextWindows?: SidebarThreadCardOptions["contextWindows"];
   thread: NavigationThreadSummary;
   facts: ThreadInfoRowFacts;
   onPeerApplicationsReady: () => void;
   actions: SidebarThreadCardActions;
   onDone: () => void;
 }): ReactElement {
-  const { thread, actions, onDone } = props;
+  const { thread, threadKey, contextWindows, actions, onDone } = props;
+  const subscribe = useCallback((notify: () => void) =>
+    contextWindows?.subscribe(threadKey, notify) ?? (() => {}), [contextWindows, threadKey]);
+  const context = useSyncExternalStore(subscribe, () => contextWindows?.read(threadKey, thread.contextWindow) ?? props.facts.context);
+
   const target = thread.federation?.ref.target;
   const instanceId = target?.scope === "remote" ? target.instanceId : undefined;
   const instanceLabel = thread.federation?.instanceLabel;
@@ -424,7 +436,7 @@ function SidebarThreadCardContent(props: {
       link={link}
       label={thread.title}
       info={info}
-      row={props.facts}
+      row={{ ...props.facts, context }}
       onCopyBranch={actions.copyBranch}
       onOpenPullRequest={actions.showPullRequest
         ? () => {

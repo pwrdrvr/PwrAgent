@@ -341,6 +341,22 @@ it("keeps a settled partial directory index's exclusions across range acknowledg
   } finally { window.dispose(); }
 });
 
+it.each([false, true])("places a batch of peer pins with one pass over unrelated projects (checkout identity: %s)", (modern) => {
+  const raw = population(1);
+  let unrelatedReads = 0;
+  const local = Array.from({ length: 8 }, (_, i) => ({ ...raw.directories[0]!, key: directoryKey(i), path: "/local/" + i,
+    get label() { if (i) unrelatedReads++; return String(i); }, gitStatus: { originRepository: "repo-" + i }, threadKeys: [] as string[] }));
+  const pins = raw.threads.slice(0, 4).map((thread) => ({ ...thread, projectKey: undefined,
+    linkedDirectories: [{ id: "peer", kind: "local" as const, label: "0", path: "/peer/0" }],
+    checkoutProject: modern ? { key: "directory:/peer/0", label: "remote-name", repositoryKey: "repo-0" } : undefined,
+    federation: { instanceLabel: "Owner", ref: buildFederatedThreadRef({ backend: thread.source, instanceId: target.instanceId, threadId: thread.id }) } }));
+  const batch = attachRemoteThreadsToLocalDirectories(local, pins);
+  expect(unrelatedReads).toBeLessThanOrEqual(local.length - 1);
+  const individual = pins.reduce<NavigationQueryIndex["directories"]>((dirs, pin) => attachRemoteThreadsToLocalDirectories(dirs, [pin]), local);
+  expect(batch).toEqual(individual);
+  expect(batch[0]!.threadKeys).toHaveLength(pins.length);
+});
+
 it("places a mounted pin under the same repository as the fresh owner row after an origin change", async () => {
   const raw = population(1);
   const path = "/owner/checkout";
