@@ -53,6 +53,12 @@ describe("TranscriptList", () => {
     fireEvent.scroll(element);
   }
 
+  function mockMessageBox(list: HTMLElement, id: string, top: () => number) {
+    const box = list.querySelector(`[data-entry-id="${id}"]`)!.firstElementChild!;
+    vi.spyOn(box, "getBoundingClientRect")
+      .mockImplementation(() => new DOMRect(0, top() - list.scrollTop, 160, 60));
+  }
+
   beforeEach(() => {
     scrollHeight = 480;
     clientHeight = 240;
@@ -4446,7 +4452,7 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
   });
 
-  it("preserves the reader position when older messages are prepended", () => {
+  it("preserves the reader position when a prepend coincides with growth below it", () => {
     const { rerender } = render(
       <TranscriptList
         entries={[
@@ -4471,10 +4477,16 @@ Implementation notes remain in a readable bubble.`;
     );
 
     const list = screen.getByRole("list");
+    let prependedHeight = 0;
+    mockMessageBox(list, "message-2", () => 100 + prependedHeight);
+    mockMessageBox(list, "message-3", () => 170 + prependedHeight);
     list.scrollTop = 80;
     fireEvent.scroll(list);
 
-    scrollHeight = 640;
+    // The inserted rows add 160px above the reader. An image adds another
+    // 60px below them in the same layout, which must not affect scrollTop.
+    prependedHeight = 160;
+    scrollHeight = 700;
 
     rerender(
       <TranscriptList
@@ -4506,6 +4518,58 @@ Implementation notes remain in a readable bubble.`;
     );
 
     expect(list.scrollTop).toBe(240);
+  });
+
+  it("holds the reading position when an image load changes offsets without changing total height", () => {
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    scrollHeight = 720;
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "earlier",
+            role: "user",
+            text: "Earlier screenshot",
+            parts: [{ type: "image", url: "https://example.invalid/load.png", alt: "Earlier screenshot" }],
+          },
+          { type: "message", id: "reading", role: "assistant", text: "Reading here" },
+          { type: "message", id: "later", role: "user", text: "Later screenshot" },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="image-wrap"
+        onLoadOlder={async () => undefined}
+      />,
+    );
+    const list = screen.getByRole("list");
+    let shift = 0;
+    mockMessageBox(list, "earlier", () => 0);
+    mockMessageBox(list, "reading", () => 100 + shift);
+    mockMessageBox(list, "later", () => 170 + shift);
+    scrollAwayWithScrollbar(list, 80);
+
+    // Growing a photo line above can shrink a line below by the same amount.
+    // There is no content ResizeObserver delivery for that layout.
+    shift = 72;
+    const frames: FrameRequestCallback[] = [];
+    const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) =>
+      frames.push(callback));
+    try {
+      fireEvent.load(screen.getByAltText("Earlier screenshot"));
+      act(() => {
+        for (const frame of frames) frame(0);
+      });
+      expect(list.scrollTop).toBe(152);
+    } finally {
+      animationFrame.mockRestore();
+    }
   });
 
   it("preserves the reader position when entries expand behind a pinned prompt", () => {
@@ -4542,9 +4606,14 @@ Implementation notes remain in a readable bubble.`;
     );
 
     const list = screen.getByRole("list");
+    let prependedHeight = 0;
+    mockMessageBox(list, prompt.id, () => 0);
+    mockMessageBox(list, "message-2", () => 100 + prependedHeight);
+    mockMessageBox(list, lastMessage.id, () => 170 + prependedHeight);
     list.scrollTop = 80;
     fireEvent.scroll(list);
 
+    prependedHeight = 160;
     scrollHeight = 640;
 
     rerender(
