@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
+import { PrStatusTokenBucket } from "../pr-status/pr-status-token-bucket";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
 import { GithubPrFetcher, installGithubMergeStackTransport } from "../pr-status/github-pr-fetcher";
@@ -7,13 +8,21 @@ import { GithubPrFetcher, installGithubMergeStackTransport } from "../pr-status/
 const repository: ForgeRepository = { provider: "github", host: "github.com", owner: "fixture", repo: "project" };
 const headSha = "a".repeat(40);
 
-async function expectOperatorMergeWithEmptySharedBudget(number: number): Promise<void> {
+async function expectOperatorMergeWithEmptySharedBudget(number: number, saturate = false): Promise<void> {
   const pullRequest = `https://github.com/fixture/project/pull/${number}`;
   const path = `repos/fixture/project/pulls/${number}`;
   const requests: string[] = [];
+  const activeReads = Promise.withResolvers<void>();
+  const readsStarted = Promise.withResolvers<void>();
+  let heldCount = 0;
   const fetcher: typeof fetch = async (input) => {
     const route = new URL(String(input)).pathname;
     requests.push(route);
+    if (route.startsWith("/fixture/held/")) {
+      if (++heldCount === 3) readsStarted.resolve();
+      await activeReads.promise;
+      return Response.json({});
+    }
     if (route === `/${path}`) return Response.json({
       number, state: "open", created_at: "2026-11-10T00:00:00Z",
       head: { ref: "patch", sha: headSha }, base: { ref: "main", repo: { default_branch: "main" } },
@@ -23,9 +32,15 @@ async function expectOperatorMergeWithEmptySharedBudget(number: number): Promise
     } } } });
     throw new Error(`Unexpected request ${route}`);
   };
+  let sharedTokens = 0;
   const ci = new ForgeCiClient({
     githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true,
-    takeToken: () => false, fetch: fetcher,
+    takeToken: () => {
+      if (sharedTokens === 0) return false;
+      sharedTokens--;
+      return true;
+    },
+    fetch: fetcher,
   });
   const runGhCommand = vi.fn(async () => ({ stdout: "" }));
   const github = new GithubPrFetcher({
@@ -35,9 +50,22 @@ async function expectOperatorMergeWithEmptySharedBudget(number: number): Promise
   const uninstall = installGithubMergeStackTransport(ci);
   try {
     await expect(ci.requestGithub(repository, { path })).rejects.toMatchObject({ code: "rate_limited" });
-    await expect(github.mergePullRequest({ pullRequest, method: "squash", checkStackOrder: true }))
-      .resolves.toMatchObject({ mergedUrl: pullRequest });
-    expect(requests).toEqual([`/${path}`, "/graphql"]);
+    const heldPaths = saturate ? ["/fixture/held/1", "/fixture/held/2", "/fixture/held/3"] : [];
+    sharedTokens = heldPaths.length;
+    const holds = heldPaths.map((route) => ci.requestGithub(repository, { path: route.slice(1) }));
+    if (saturate) await readsStarted.promise;
+    const merge = github.mergePullRequest({ pullRequest, method: "squash", checkStackOrder: true });
+    // The pre-fix merge can reject before the reads are released.
+    void merge.catch(() => {});
+    if (saturate) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(requests).toEqual(heldPaths);
+      expect(runGhCommand).not.toHaveBeenCalled();
+      activeReads.resolve();
+    }
+    await expect(merge).resolves.toMatchObject({ mergedUrl: pullRequest });
+    await Promise.all(holds);
+    expect(requests).toEqual([...heldPaths, `/${path}`, "/graphql"]);
     expect(runGhCommand).toHaveBeenCalledExactlyOnceWith("/fixture/gh", ["pr", "merge", pullRequest, "--squash"], { timeout: 60_000 });
   } finally {
     uninstall();
@@ -46,11 +74,16 @@ async function expectOperatorMergeWithEmptySharedBudget(number: number): Promise
 
 it("allows a direct merge to check stack order with an empty shared budget", async () => {
   // Polling and agent requests cannot consume the capacity that runs both stack checks for a click.
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 100_000 }), expectOperatorMergeWithEmptySharedBudget));
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 100_000 }),
+    (number) => expectOperatorMergeWithEmptySharedBudget(number)));
 });
 
 it("squash-merges an unstacked pull request when polling has exhausted the shared budget", async () => {
   await expectOperatorMergeWithEmptySharedBudget(1);
+});
+
+it("waits for an active forge read slot before an operator merge checks stack order", async () => {
+  await expectOperatorMergeWithEmptySharedBudget(1, true);
 });
 
 it("bounds the operator reserve and falls back to the shared budget when needed", async () => {
@@ -105,4 +138,93 @@ it("honors a provider cooldown started by a shared request", async () => {
   await expect(ci.requestGithubForOperatorMergePreflight(repository, request))
     .rejects.toMatchObject({ code: "rate_limited", message: expect.stringContaining("Provider cooldown is active") });
   expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it("preserves four foreground tokens when a queued merge offer reaches admission", async () => {
+  const hold = Promise.withResolvers<void>();
+  const saturated = Promise.withResolvers<void>();
+  const now = Date.parse("2026-11-27T13:00:00Z");
+  const budget = new PrStatusTokenBucket();
+  for (let spent = 0; spent < 12; spent++) budget.tryTake(now);
+  const sent: string[] = [];
+  const ci = new ForgeCiClient({
+    githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true,
+    takeToken: (source) => budget.tryTake(now, source === "merge_offer" ? 4 : 0),
+    fetch: async (input) => {
+      sent.push(new URL(String(input)).pathname);
+      if (sent.length === 3) saturated.resolve();
+      await hold.promise;
+      return Response.json({});
+    },
+  });
+  const request = (path: string) => ci.requestGithub(repository, { path });
+  const active = ["active/1", "active/2", "active/3"].map(request);
+  await saturated.promise;
+  expect(budget.peek(now)).toBe(5);
+  const foreground = request("foreground");
+  const offer = ci.requestGithubForMergeOffer(repository, { path: "offer" });
+  void offer.catch(() => {});
+  hold.resolve();
+  await Promise.all([...active, foreground]);
+  await expect(offer).rejects.toMatchObject({ code: "rate_limited" });
+  expect(budget.peek(now)).toBe(4);
+  expect(sent).toEqual(["/active/1", "/active/2", "/active/3", "/foreground"]);
+});
+
+it.each(["waiting", "after preflight"] as const)("prevents a remote merge mutation when the deadline expires %s", async (phase) => {
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const deadlineAt = now + 173_000;
+  const deadline = new AbortController();
+  const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => ms === 173_000 ? deadline.signal : realTimeout(ms));
+  const held = Promise.withResolvers<void>();
+  const saturated = Promise.withResolvers<void>();
+  const requests: string[] = [];
+  const ci = new ForgeCiClient({
+    githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true,
+    fetch: async (input) => {
+      const route = new URL(String(input)).pathname;
+      requests.push(route);
+      if (route.startsWith("/hold/")) {
+        if (requests.length === 3) saturated.resolve();
+        await held.promise;
+        return Response.json({});
+      }
+      if (route.endsWith("/pulls/1")) return Response.json({
+        number: 1, state: "open", created_at: "2026-11-10T00:00:00Z",
+        head: { ref: "patch", sha: headSha }, base: { ref: "main", repo: { default_branch: "main" } },
+      });
+      now = deadlineAt;
+      return Response.json({ data: { repository: { pullRequest: {
+        baseRefName: "main", headRefOid: headSha, timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+      } } } });
+    },
+  });
+  const runGhCommand = vi.fn(async () => ({ stdout: "" }));
+  const github = new GithubPrFetcher({ discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never, runGhCommand });
+  const uninstall = installGithubMergeStackTransport(ci);
+  try {
+    const holds = phase === "waiting" ? [1, 2, 3].map((i) => ci.requestGithub(repository, { path: `hold/${i}` })) : [];
+    if (holds.length) await saturated.promise;
+    const merge = github.mergePullRequest({ pullRequest: "https://github.com/fixture/project/pull/1", method: "squash", checkStackOrder: true, deadlineAt });
+    void merge.catch(() => {});
+    if (holds.length) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      now = deadlineAt;
+      deadline.abort();
+    }
+    try {
+      await expect(merge).rejects.toThrow("Merge request deadline expired");
+    } finally {
+      held.resolve();
+      await Promise.all(holds);
+    }
+    expect(runGhCommand).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(phase === "waiting" ? 3 : 2);
+  } finally {
+    uninstall();
+    timeout.mockRestore();
+    clock.mockRestore();
+  }
 });
