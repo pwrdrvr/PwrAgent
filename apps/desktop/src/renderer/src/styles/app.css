@@ -9651,6 +9651,8 @@ button.stack-display__thread,
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
+  /* A hyphenless project or PR name still wraps inside the card. */
+  overflow-wrap: anywhere;
 }
 
 .pr-status-card__identity {
@@ -9974,8 +9976,13 @@ button.stack-display__thread,
   white-space: nowrap;
 }
 
+/* The folder name never shrinks while any head is left, but a name wider
+   than the card ellipsizes at its end instead of running out of the card. */
 .project-card__path-tail {
   flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
