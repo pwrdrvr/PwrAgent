@@ -11,7 +11,7 @@ import { createServer, type AddressInfo, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { beforeAll, describe, expect, inject, it, vi } from "vitest";
+import { type TestContext, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import type { OwnerFixtures } from "../../test-setup/owner-conformance-fixtures";
 import type { AgentEvent, InterruptTurnRequest } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
@@ -226,6 +226,16 @@ async function startOutpostOwner(
     providerSteerCount: () => readFileSync(path.join(outpost.env.PWRAGENT_TEST_DATA!, "calls.jsonl"), "utf8")
       .trim().split("\n").map(line => JSON.parse(line)).filter(item => item.method === "turn/steer").length,
     events: outpost.events, workspace: outpost.workspace, waitForEvent: outpost.waitForEvent, close: outpost.close };
+}
+
+function runWithOwnedStartup(
+  { signal, onTestFinished }: Pick<TestContext, "signal" | "onTestFinished">,
+  run: (signal: AbortSignal) => Promise<void>,
+): Promise<void> {
+  const running = Promise.resolve().then(() => run(signal));
+  // Join startup and owner cleanup even if Vitest times out the test body.
+  onTestFinished(async () => { await running.catch(() => undefined); });
+  return running;
 }
 
 const parityOwnerStarters = [startDesktopOwner, startOutpostOwner];
@@ -1593,41 +1603,43 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     await host.client.interruptTurn(active);
   });
 
-  it("the existing durable steering caller delivers once to the active turn on both registered owners and leaves waiting input intact", async () => {
-    const desktop = await startDesktopOwner();
-    let outpost: OwnerHost | undefined;
-    try {
-      outpost = await startOutpostOwner();
-      for (const host of [desktop, outpost]) {
-        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
-        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-        const waiting = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "Invented waiting input" }] });
-        const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
-        const runtime = durableViewer(host, ["turn_control", "durable_steer_requests_v1"]);
-        const value = (text: string, id: string = randomUUID()): SubmitDurableSteerRequest => {
-          const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id, createdAt: Date.now(), payloadHash: "" },
-            request: { backend: "codex", threadId: identity.threadId, expectedTurnId: active.turnId, input: [{ type: "text", text }] } };
-          request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(host.ownerInstanceId, request)).digest("hex");
-          return request;
-        };
-        const before = host.providerSteerCount!(), request = value("Invented durable interjection");
-        const receipts = await Promise.all(Array.from({ length: 8 }, () => runtime.submitDurableSteerRequest("mobile:device", request, target)));
-        const lookup = { ...identity, id: request.clientRequest.id };
-        const receipt = await runtime.getDurableSteerRequest("mobile:device", lookup, target);
-        expect(receipts.every(result => result.queueEntryId === receipt!.queueEntryId)).toBe(true);
-        expect(receipt, JSON.stringify(receipt)).toMatchObject({ state: "dispatched", operation: "steerTurn", result: {
-          ok: true, requestId: receipt!.queueEntryId, turnId: active.turnId, disposition: "steered",
-        } });
-        expect(host.providerSteerCount!()).toBe(before + 1);
-        expect(await runtime.getDurableSteerRequest("other-device", lookup, target)).toBeNull();
-        await expect(runtime.submitDurableSteerRequest("mobile:device", value("Changed input", request.clientRequest.id), target)).rejects.toThrow();
-        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([waiting.queueEntryId]);
-        await host.client.cancelQueuedTurn({ queueEntryId: waiting.queueEntryId! });
-        await host.client.interruptTurn(active);
-        expect(await runtime.submitDurableSteerRequest("mobile:device", request, target)).toEqual(receipt);
-        expect(host.providerSteerCount!()).toBe(before + 1);
-      }
-    } finally { await outpost?.close(); await desktop.close(); }
+  const durableSteeringTest = it.extend("steeringOwners", ({ signal, onTestFinished }) =>
+    prepareOwnerParity({ signal, onTestFinished }, [
+      () => startDesktopOwner(),
+      (startupSignal) => startOutpostOwner("headless", { signal: startupSignal, waitForCodexCommand: true }),
+    ]));
+  durableSteeringTest.beforeEach(async ({ steeringOwners }) => { await steeringOwners?.ready; });
+
+  durableSteeringTest("the existing durable steering caller delivers once to the active turn on both registered owners and leaves waiting input intact", async ({ steeringOwners }) => {
+    await steeringOwners.check(async (host) => {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      const waiting = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "Invented waiting input" }] });
+      const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
+      const runtime = durableViewer(host, ["turn_control", "durable_steer_requests_v1"]);
+      const value = (text: string, id: string = randomUUID()): SubmitDurableSteerRequest => {
+        const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id, createdAt: Date.now(), payloadHash: "" },
+          request: { backend: "codex", threadId: identity.threadId, expectedTurnId: active.turnId, input: [{ type: "text", text }] } };
+        request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableSteerRequest(host.ownerInstanceId, request)).digest("hex");
+        return request;
+      };
+      const before = host.providerSteerCount!(), request = value("Invented durable interjection");
+      const receipts = await Promise.all(Array.from({ length: 8 }, () => runtime.submitDurableSteerRequest("mobile:device", request, target)));
+      const lookup = { ...identity, id: request.clientRequest.id };
+      const receipt = await runtime.getDurableSteerRequest("mobile:device", lookup, target);
+      expect(receipts.every(result => result.queueEntryId === receipt!.queueEntryId)).toBe(true);
+      expect(receipt, JSON.stringify(receipt)).toMatchObject({ state: "dispatched", operation: "steerTurn", result: {
+        ok: true, requestId: receipt!.queueEntryId, turnId: active.turnId, disposition: "steered",
+      } });
+      expect(host.providerSteerCount!()).toBe(before + 1);
+      expect(await runtime.getDurableSteerRequest("other-device", lookup, target)).toBeNull();
+      await expect(runtime.submitDurableSteerRequest("mobile:device", value("Changed input", request.clientRequest.id), target)).rejects.toThrow();
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([waiting.queueEntryId]);
+      await host.client.cancelQueuedTurn({ queueEntryId: waiting.queueEntryId! });
+      await host.client.interruptTurn(active);
+      expect(await runtime.submitDurableSteerRequest("mobile:device", request, target)).toEqual(receipt);
+      expect(host.providerSteerCount!()).toBe(before + 1);
+    });
   });
 
   describe("steering grant admission", () => {
@@ -2741,12 +2753,12 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   });
 
-  it("retires protocol-refused desktop submissions through notification rejection before matching Outpost", async () => {
+  it("retires protocol-refused desktop submissions through notification rejection before matching Outpost", (context) => runWithOwnedStartup(context, async (signal) => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const desktop = await startDesktopOwner();
     let outpost: OwnerHost | undefined;
     try {
-      outpost = await startOutpostOwner("headless", { waitForCodexCommand: true });
+      outpost = await startOutpostOwner("headless", { signal, waitForCodexCommand: true });
       const hosts = [desktop, outpost];
       const identities = await startConformanceThreads(hosts);
       const registry = desktopOwner.registry as DesktopBackendRegistry;
@@ -2792,7 +2804,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await desktop.close();
       vi.unstubAllEnvs();
     }
-  }, 120_000);
+  }), 120_000);
 
   it("interrupts generated live turns through both real owners and preserves provider terminal order", async () => {
     const desktop = await startDesktopOwner();
@@ -2869,11 +2881,11 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     }
   }, 120_000);
 
-  it("generated read, model, rename and seen histories agree with the desktop owner oracle", async () => {
-    const desktop = await startOutpostOwner("desktop");
+  it("generated read, model, rename and seen histories agree with the desktop owner oracle", (context) => runWithOwnedStartup(context, async (signal) => {
+    const desktop = await startOutpostOwner("desktop", { signal });
     let outpost: OwnerHost | undefined;
     try {
-      outpost = await startOutpostOwner();
+      outpost = await startOutpostOwner("headless", { signal });
       const hosts = [desktop, outpost];
       const refs = await Promise.all(hosts.map(async host => ({ backend: "codex" as const,
         threadId: (await host.client.startThread({ backend: "codex", cwd: host.workspace, executionMode: "auto", model: "gpt-5.5", reasoningEffort: "medium" })).threadId })));
@@ -2914,7 +2926,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         expect(excluded.threads, host.name).toEqual([]);
       }
     } finally { await outpost?.close(); await desktop.close(); }
-  }, 120_000);
+  }), 120_000);
 
   async function openCodexGate() {
     const sockets = new Set<Socket>();
