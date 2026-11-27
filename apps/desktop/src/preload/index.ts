@@ -240,6 +240,7 @@ import type {
   ForkThreadRequest,
   ForkThreadResponse,
   InterruptTurnRequest,
+  StopThreadRequest,
   InterruptTurnResponse,
   DismissFailedSubAgentsRequest,
   DismissFailedSubAgentsResponse,
@@ -497,6 +498,7 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  PeerApplicationWorkspaceRequest,
   ReadDesktopApplicationsRequest,
   ReadDesktopApplicationsResponse,
   OpenMarkdownFileViewerRequest,
@@ -971,6 +973,7 @@ import {
   CODEX_MCP_SERVER_LOGIN_CHANNEL,
   CODEX_MCP_SERVER_REMOVE_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_STOP_THREAD_CHANNEL,
   AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -1106,6 +1109,7 @@ import {
   APP_SERVER_INSPECT_TOKEN_MISER_OUTPUT_CHANNEL,
   APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
+  APPLICATION_WORKSPACE_EXISTS_CHANNEL,
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
@@ -2550,6 +2554,8 @@ const desktopApi = Object.freeze({
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse> =>
     await ipcRenderer.invoke(APPLICATION_OPEN_CHANNEL, request),
+  applicationWorkspaceExists: async (request: PeerApplicationWorkspaceRequest): Promise<boolean> =>
+    await ipcRenderer.invoke(APPLICATION_WORKSPACE_EXISTS_CHANNEL, request),
   readApplications: async (
     request: ReadDesktopApplicationsRequest,
   ): Promise<ReadDesktopApplicationsResponse> =>
@@ -3096,6 +3102,8 @@ const desktopApi = Object.freeze({
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> =>
     await ipcRenderer.invoke(SCHEDULED_ACTIONS_SEND_NOW_CHANNEL, request),
+  stopThread: async (request: StopThreadRequest): Promise<void> =>
+    await ipcRenderer.invoke(AGENT_STOP_THREAD_CHANNEL, request),
   interruptTurn: async (
     request: InterruptTurnRequest
   ): Promise<InterruptTurnResponse> =>

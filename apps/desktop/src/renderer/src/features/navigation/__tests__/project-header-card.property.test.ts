@@ -35,8 +35,8 @@ describe("splitProjectPath", () => {
 describe("platform labels", () => {
   it("names the file manager and the machine per platform", () => {
     expect(revealInFileManagerLabel("darwin")).toBe("Show in Finder");
-    expect(revealInFileManagerLabel("win32")).toBe("Show in Explorer");
-    expect(revealInFileManagerLabel("linux")).toBe("Show in File Manager");
+    expect(revealInFileManagerLabel("win32")).toBe("Show in File Explorer");
+    expect(revealInFileManagerLabel("linux")).toBe("Show in Files");
     expect(thisMachineLabel("darwin")).toBe("This Mac");
     expect(thisMachineLabel("win32")).toBe("This PC");
     expect(thisMachineLabel(undefined)).toBe("This machine");

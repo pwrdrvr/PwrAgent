@@ -11952,33 +11952,8 @@ export class DesktopBackendRegistry {
     if (review) {
       return { ...params, turnId: review.turnId };
     }
-    if (params.backend === "codex") {
-      for (const key of this.context.turnState.executionKeys()) {
-        const parsed = parseThreadTurnKeyBody(key);
-        if (
-          parsed?.threadId === params.threadId &&
-          !parsed.turnId.startsWith("pending:")
-        ) {
-          return {
-            backend: params.backend,
-            threadId: parsed.threadId,
-            turnId: parsed.turnId,
-          };
-        }
-      }
-      return undefined;
-    }
-
-    for (const key of this.context.turnState.registeredTurnKeys()) {
-      const parsed = parseActiveTurnKey(key);
-      if (
-        parsed?.backend === params.backend &&
-        parsed.threadId === params.threadId
-      ) {
-        return parsed;
-      }
-    }
-    return undefined;
+    const turnId = this.context.turnState.activeTurnIdForThread(params);
+    return turnId === undefined ? undefined : { backend: params.backend, threadId: params.threadId, turnId };
   }
 
   isThreadTurnOccupied(params: {
@@ -13862,11 +13837,11 @@ export class DesktopBackendRegistry {
           async () => await this.interruptAcpTurn(target))
       : await this.interruptAcpTurn(target),
     interruptCodex: async (target, routing) => {
-      const requestedKey = buildActiveTurnModeKey(target.threadId, routing.requestedTurnId);
+      const requested = { threadId: target.threadId, turnId: routing.requestedTurnId };
       const activeMode = routing.review
-        ? this.context.turnState.executionMode(requestedKey)
+        ? this.context.turnState.executionMode(requested)
         : this.context.turnState.executionMode({ threadId: target.threadId, turnId: target.turnId })
-          ?? this.context.turnState.executionMode(requestedKey);
+          ?? this.context.turnState.executionMode(requested);
       if (routing.review) {
         const client = activeMode ? this.getClient("codex", activeMode) : this.codexClient;
         return await client.interruptTurn({ threadId: target.threadId, turnId: target.turnId });
@@ -13876,13 +13851,11 @@ export class DesktopBackendRegistry {
         : await this.withCodexThreadClient(target.threadId, async (client) => await client.interruptTurn(target));
     },
     retireCodexTurn: (requested, result) => {
-      const requestedKey = buildActiveTurnModeKey(requested.threadId, requested.turnId);
-      const activeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
-      this.context.turnState.forgetExecution(activeKey);
-      this.context.turnState.forgetReview(activeKey);
-      if (requestedKey !== activeKey) {
-        this.context.turnState.forgetExecution(requestedKey);
-        this.context.turnState.forgetReview(requestedKey);
+      this.context.turnState.forgetExecution(result);
+      this.context.turnState.forgetReview(result);
+      if (requested.threadId !== result.threadId || requested.turnId !== result.turnId) {
+        this.context.turnState.forgetExecution(requested);
+        this.context.turnState.forgetReview(requested);
       }
     },
     reviewInterrupted: (parent, review) => {

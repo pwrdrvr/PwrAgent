@@ -20,6 +20,55 @@ export function remoteApplicationInstanceIdFor(
   return readRendererFederationTarget()?.instanceId;
 }
 
+type ReadApplications = NonNullable<DesktopApi["readApplications"]>;
+const peerApplicationReads = new WeakMap<ReadApplications, Map<string, Promise<DesktopApplicationsSnapshot>>>();
+const APPLICATIONS_TTL_MS = 30_000;
+
+/** The composer and open sidebar card share each owner's discovery, including an in-flight read. */
+export function readPeerApplications(read: ReadApplications, instanceId: string): Promise<DesktopApplicationsSnapshot> {
+  let peers = peerApplicationReads.get(read);
+  if (!peers) {
+    peers = new Map();
+    peerApplicationReads.set(read, peers);
+  }
+  const cached = peers.get(instanceId);
+  if (cached) return cached;
+  const forget = (): void => {
+    if (peers.get(instanceId) === request) peers.delete(instanceId);
+  };
+  const request = read({ federationTarget: { scope: "remote", instanceId } }).then(
+    ({ applications }) => {
+      window.setTimeout(forget, APPLICATIONS_TTL_MS);
+      return applications;
+    },
+    (error: unknown) => {
+      forget();
+      throw error;
+    },
+  );
+  peers.set(instanceId, request);
+  return request;
+}
+
+type CheckWorkspace = NonNullable<DesktopApi["applicationWorkspaceExists"]>;
+const pendingWorkspaces = new WeakMap<CheckWorkspace, Map<string, Promise<boolean>>>();
+
+/** Several rows can share a checkout. Each visit after the owner's check settles needs a fresh stat. */
+export function checkPeerApplicationWorkspace(check: CheckWorkspace, instanceId: string, targetPath: string): Promise<boolean> {
+  let pending = pendingWorkspaces.get(check);
+  if (!pending) {
+    pending = new Map();
+    pendingWorkspaces.set(check, pending);
+  }
+  const key = JSON.stringify([instanceId, targetPath]);
+  const existing = pending.get(key);
+  if (existing) return existing;
+  const request = check({ federationTarget: { scope: "remote", instanceId }, targetPath })
+    .finally(() => { pending.delete(key); });
+  pending.set(key, request);
+  return request;
+}
+
 export function useDesktopApplications(params: {
   desktopApi?: DesktopApi;
   localApplications?: DesktopApplicationsSnapshot;
@@ -32,26 +81,22 @@ export function useDesktopApplications(params: {
   }>();
 
   useEffect(() => {
-    if (
-      !params.remoteInstanceId
-      || params.suspended
-      || !params.desktopApi?.readApplications
-    ) {
+    const read = params.desktopApi?.readApplications;
+    const remoteInstanceId = params.remoteInstanceId;
+    if (!remoteInstanceId || !read || params.suspended) {
+      if (params.suspended && remoteInstanceId && read) {
+        // In-flight and completed reads belong to the connection that authorized them.
+        peerApplicationReads.get(read)?.delete(remoteInstanceId);
+      }
       setRemoteApplications(undefined);
       return;
     }
 
-    const remoteInstanceId = params.remoteInstanceId;
     let cancelled = false;
-    void params.desktopApi.readApplications({
-      federationTarget: {
-        scope: "remote",
-        instanceId: remoteInstanceId,
-      },
-    }).then((response) => {
+    void readPeerApplications(read, remoteInstanceId).then((applications) => {
       if (!cancelled) {
         setRemoteApplications({
-          applications: response.applications,
+          applications,
           instanceId: remoteInstanceId,
         });
       }
@@ -69,7 +114,7 @@ export function useDesktopApplications(params: {
   if (!params.remoteInstanceId) {
     return params.localApplications;
   }
-  return remoteApplications?.instanceId === params.remoteInstanceId
+  return !params.suspended && remoteApplications?.instanceId === params.remoteInstanceId
     ? remoteApplications.applications
     : undefined;
 }

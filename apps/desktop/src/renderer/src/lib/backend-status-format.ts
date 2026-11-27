@@ -250,8 +250,13 @@ function formatWholeNumber(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
-function isSparkRateLimit(limit: BackendRateLimitSummary): boolean {
+export function isSparkRateLimit(limit: BackendRateLimitSummary): boolean {
   return isSparkName(limit.limitId) || isSparkName(limit.name);
+}
+
+/** A Codex business account's own cap, which has no window. */
+export function isIndividualRateLimit(limit: BackendRateLimitSummary): boolean {
+  return splitRateLimitName(limit.name).label === "Individual limit";
 }
 
 function isCreditsRateLimit(limit: BackendRateLimitSummary): boolean {
@@ -277,7 +282,7 @@ function formatCreditsLine(limit: BackendRateLimitSummary): string {
   return "Credits: 0";
 }
 
-function isReserveRateLimit(limit: BackendRateLimitSummary): boolean {
+export function isReserveRateLimit(limit: BackendRateLimitSummary): boolean {
   return limit.limitId?.toLowerCase() === "base_model_inference"
     || limit.limitName?.toLowerCase() === "gpt-reserve"
     || limit.name.toLowerCase().startsWith("gpt-reserve ");

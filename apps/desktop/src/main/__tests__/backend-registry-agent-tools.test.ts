@@ -1387,6 +1387,47 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("resolves and stops only the requested thread without reading unrelated activity", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      initializeResult: { methods: ["thread/resume", "turn/interrupt"] },
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    await discoverCodexBackendForTest(registry);
+    const state = registryModules(registry).turnState;
+    const threadId = "target";
+    const claude = { backend: "claude" as const, threadId, turnId: "claude-turn" };
+    onTestFinished(async () => {
+      state.unregisterTurn(claude);
+      state.unregisterTurn({ backend: "codex", threadId, turnId: "later" });
+      await registry.close();
+    });
+    state.registerTurn(claude);
+    state.acceptExecution({ threadId: "elsewhere", turnId: "other" }, "default");
+    // Registration and execution can arrive in different orders. Pending IDs cannot be stopped.
+    state.registerTurn({ backend: "codex", threadId, turnId: "later" });
+    for (const turnId of ["pending:target", "first", "later"]) {
+      state.acceptExecution({ threadId, turnId }, "default");
+    }
+    const unrelated = state.codex("elsewhere");
+    const turns = unrelated.turns;
+    const readUnrelated = vi.fn(() => turns);
+    Object.defineProperty(unrelated, "turns", { get: readUnrelated, configurable: true });
+    const allReviews = vi.spyOn(state, "liveReviewRecords");
+    const allRegistrations = vi.spyOn(state, "registeredTurnKeys");
+
+    expect(registry.getActiveTurnForThread(claude)).toEqual(claude);
+    await expect(registry.controlActiveTurn({
+      backend: "codex", threadId, operation: "stop", requestId: "stop-first",
+    })).resolves.toMatchObject({ ok: true, turnId: "first" });
+    expect(codexClient.lastInterruptTurnParams).toMatchObject({ threadId, turnId: "first" });
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+    expect(registry.getActiveTurnForThread({ backend: "codex", threadId })?.turnId).toBe("later");
+    expect(readUnrelated).not.toHaveBeenCalled();
+    expect(allReviews).not.toHaveBeenCalled();
+    expect(allRegistrations).not.toHaveBeenCalled();
+  });
+
   it("stops and steers another active local thread with distinct dispositions", async () => {
     const codexClient = new MockBackendClient({
       interruptEndsTurn: true,

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { registerApplicationIpcHandlers } from "../shell/ipc/applications";
-import { MARKDOWN_FILE_READ_CHANNEL, TRANSCRIPT_FILES_RESOLVE_CHANNEL } from "../../shared/ipc";
+import { APPLICATION_WORKSPACE_EXISTS_CHANNEL, MARKDOWN_FILE_READ_CHANNEL, TRANSCRIPT_FILES_RESOLVE_CHANNEL } from "../../shared/ipc";
 import type {
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -43,7 +43,7 @@ const mocks = vi.hoisted(() => {
     async (): Promise<OpenDesktopApplicationResponse> => ({ opened: true }),
   );
   const readApplications = vi.fn(async () => remoteApplications);
-  const remoteBackend = { openApplication, readApplications };
+  const remoteBackend = { openApplication, readApplications, applicationWorkspaceExists: vi.fn(async () => false) };
   return {
     handlers,
     openApplication,
@@ -244,6 +244,15 @@ describe("application IPC", () => {
     });
     expect(mocks.openDesktopApplication).not.toHaveBeenCalled();
     expect(response).toEqual({ opened: true });
+  });
+
+  it("checks the folder on the peer even if it exists on the viewer", async () => {
+    registerApplicationIpcHandlers();
+    const federationTarget = { scope: "remote" as const, instanceId: "owner" };
+    const targetPath = os.tmpdir();
+    expect(await mocks.handlers.get(APPLICATION_WORKSPACE_EXISTS_CHANNEL)?.({}, { federationTarget, targetPath })).toBe(false);
+    expect(mocks.remoteBackendForTarget).toHaveBeenCalledWith(federationTarget);
+    expect(mocks.remoteBackend.applicationWorkspaceExists).toHaveBeenCalledExactlyOnceWith(targetPath);
   });
 
   it("reads application candidates from the selected federation peer", async () => {

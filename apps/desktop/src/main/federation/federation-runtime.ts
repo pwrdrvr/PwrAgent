@@ -438,9 +438,8 @@ import {
 } from "./federation-owner-thread-reads";
 import { getMainLogger } from "../log";
 import {
-  discoverDesktopApplications,
+  applicationWorkspaceExists,
   openDesktopApplication,
-  withApplicationIcons,
 } from "../settings/application-discovery";
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -8922,8 +8921,9 @@ function localBackendOperations(
     ): Promise<RenameThreadResponse> {
       return await getDesktopBackendRegistry().renameThread(request);
     },
+    applicationWorkspaceExists,
     async readApplications(): Promise<DesktopApplicationsSnapshot> {
-      return await withApplicationIcons(await discoverDesktopApplications());
+      return await getDesktopSettingsService().readApplications();
     },
     async openApplication(
       request: OpenDesktopApplicationRequest,

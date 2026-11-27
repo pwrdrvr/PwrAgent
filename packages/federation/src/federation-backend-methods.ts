@@ -158,6 +158,7 @@ export const FEDERATION_BACKEND_METHODS = {
   readThreadWorktreeLock: "backend.readThreadWorktreeLock",
   removeLockedThreadWorktrees: "backend.removeLockedThreadWorktrees",
   renameThread: "backend.renameThread",
+  applicationWorkspaceExists: "backend.applicationWorkspaceExists",
   readApplications: "backend.readApplications",
   openApplication: "backend.openApplication",
   readMessagingPlatformStatuses: "backend.readMessagingPlatformStatuses",
@@ -338,6 +339,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // Unlocks and removes a worktree on the owner's disk: as strict as a handoff.
   [FEDERATION_BACKEND_METHODS.removeLockedThreadWorktrees]: "turn_control",
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.applicationWorkspaceExists]: "remote_window",
   [FEDERATION_BACKEND_METHODS.readApplications]: "remote_window",
   [FEDERATION_BACKEND_METHODS.openApplication]: "remote_window",
   // Read-only peer messaging health for the remote window's MSG chip.
@@ -511,6 +513,7 @@ export const FEDERATION_BACKEND_CONTAINED_DECISIONS = {
   [FEDERATION_BACKEND_METHODS.readThreadWorktreeLock]: "deny",
   [FEDERATION_BACKEND_METHODS.removeLockedThreadWorktrees]: "deny",
   [FEDERATION_BACKEND_METHODS.renameThread]: "deny",
+  [FEDERATION_BACKEND_METHODS.applicationWorkspaceExists]: "deny",
   [FEDERATION_BACKEND_METHODS.readApplications]: "deny",
   [FEDERATION_BACKEND_METHODS.openApplication]: "deny",
   [FEDERATION_BACKEND_METHODS.readMessagingPlatformStatuses]: "deny",

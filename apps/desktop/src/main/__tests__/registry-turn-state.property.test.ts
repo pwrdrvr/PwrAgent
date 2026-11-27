@@ -189,6 +189,7 @@ it("derives immutable review views from membership changes across every parent p
       const key = `codex:${record.reviewThreadId}:${record.turnId}`;
       expected.set(key, record);
       state.activateReview(record);
+      expect(state.liveReviewForParent(backend, record.parentThreadId)).toBe(record);
       expect([...state.liveReviewRecords()]).toEqual([...expected]);
       expect(state.liveReviewsForChild(record.backend, record.reviewThreadId)?.get(record.turnId)).toBe(record);
       const projection = state.liveReviewRecords();
@@ -206,6 +207,23 @@ it("derives immutable review views from membership changes across every parent p
       expect([...state.liveReviewRecords()]).toEqual([...expected]);
     }
   }));
+});
+
+it("keeps the first registered provider turn addressable through duplicate starts, terminal events and reuse", () => {
+  const state = new RegistryTurnState();
+  const first = { backend: "acp:grok" as const, threadId: "shared:id", turnId: "first" };
+  const second = { ...first, turnId: "second" };
+  const claude = { ...first, backend: "claude" as const };
+  for (const turn of [first, second, first, claude]) state.registerTurn(turn);
+  expect(state.activeTurnIdForThread(first)).toBe("first");
+  state.unregisterTurn(first);
+  state.registerTurn(first);
+  expect(state.activeTurnIdForThread(first)).toBe("second");
+  expect(state.registeredOtherProviderTurnsForThread(first)).toEqual([second, first]);
+  state.unregisterTurn(second);
+  state.unregisterTurn(first);
+  expect(state.activeTurnIdForThread(first)).toBeUndefined();
+  expect(state.activeTurnIdForThread(claude)).toBe("first");
 });
 
 it("preserves global registration/mode order and commits before notifying turn waiters", () => {

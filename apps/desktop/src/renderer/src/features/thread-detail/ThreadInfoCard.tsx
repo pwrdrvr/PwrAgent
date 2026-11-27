@@ -360,9 +360,15 @@ function ThreadInfoRowLayout(props: {
             <BranchGlyph aria-hidden="true" size={13} />
             <span className="thread-info-card__fact-value thread-info-card__fact-value--mono">{row.branch.name}</span>
             <span className="thread-info-card__fact-meta">
-              {copied ? (
-                <><CopyIcon aria-hidden="true" size={10} /> copied</>
-              ) : row.branch.kind}
+              {copied ? "Copied" : (
+                <>
+                  {row.branch.kind}
+                  {/* Shown on hover or focus: the row copies the name. */}
+                  {props.onCopyBranch ? (
+                    <CopyIcon aria-hidden="true" className="thread-info-card__copy-hint" size={11} />
+                  ) : null}
+                </>
+              )}
             </span>
           </FactTarget>
         ) : null}
@@ -384,7 +390,12 @@ function ThreadInfoRowLayout(props: {
           </div>
         ) : null}
         {pr ? (
-          <FactTarget label={`Open pull request #${pr.pr.number}`} onActivate={props.onOpenPullRequest}>
+          <FactTarget
+            label={pr.more > 0
+              ? `Show ${pr.more + 1} pull requests, #${pr.pr.number} leading`
+              : `Open pull request #${pr.pr.number}`}
+            onActivate={props.onOpenPullRequest}
+          >
             <PullRequestIcon aria-hidden="true" size={13} />
             <span className="thread-info-card__fact-value">
               <span
@@ -392,9 +403,9 @@ function ThreadInfoRowLayout(props: {
                 className={`thread-info-card__pr-dot pr-status-card__dot--${resolveChipState(pr.pr)}`}
               />
               #{pr.pr.number}
-              {pr.more > 0
-                ? ` + ${pr.more} more PR${pr.more === 1 ? "" : "s"}`
-                : ` · ${prStatusLabel(pr.pr)}`}
+              {pr.more > 0 ? (
+                <span className="thread-info-card__aside"> +{pr.more}</span>
+              ) : ` · ${prStatusLabel(pr.pr)}`}
             </span>
             <span className="thread-info-card__fact-meta">{prState}</span>
           </FactTarget>

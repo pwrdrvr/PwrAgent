@@ -316,6 +316,7 @@ export const CODEX_MCP_SERVERS_RELOAD_CHANNEL = "codex-mcp-servers:reload";
 export const CODEX_MCP_SERVER_LOGIN_CHANNEL = "codex-mcp-server:login";
 export const CODEX_MCP_SERVER_REMOVE_CHANNEL = "codex-mcp-server:remove";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
+export const AGENT_STOP_THREAD_CHANNEL = "agent:stop-thread";
 export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
 export const AGENT_DISMISS_FAILED_SUB_AGENTS_CHANNEL = "agent:dismiss-failed-sub-agents";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
@@ -964,6 +965,7 @@ export const SETTINGS_INSPECT_CODE_SIGNATURES_CHANNEL =
   "settings:inspect-code-signatures";
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
+export const APPLICATION_WORKSPACE_EXISTS_CHANNEL = "applications:workspace-exists";
 export const APPLICATIONS_READ_CHANNEL = "applications:read";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";

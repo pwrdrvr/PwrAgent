@@ -99,6 +99,10 @@ import {
 } from "@pwragent/shared/codex-environment-action-runs";
 import { resolveThreadTerminalCwd } from "@pwragent/shared/thread-terminal";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  resolveRemoteTerminalDisabledReason,
+  threadTerminalRemote,
+} from "../../lib/thread-terminal-request";
 import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import {
   agentEventMatchesThread,
@@ -2037,22 +2041,9 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadTerminalDisabledReason = resolveRemoteTerminalDisabledReason(
     selectedThread?.federation,
   );
-  // For a remote thread the create request must name the owning instance and
-  // the pane wears its chip — the shell runs there, not on this machine.
   const selectedThreadTerminalRemote = useMemo<
     IntegratedTerminalPaneRemote | undefined
-  >(() => {
-    const federation = selectedThread?.federation;
-    if (!federation || federation.ref.target.scope !== "remote") {
-      return undefined;
-    }
-    return {
-      target: federation.ref.target,
-      instanceId: federation.ref.target.instanceId,
-      instanceLabel: federation.instanceLabel,
-      celestialIcon: federation.celestialIcon,
-    };
-  }, [selectedThread?.federation]);
+  >(() => threadTerminalRemote(selectedThread?.federation), [selectedThread?.federation]);
   const toggleSelectedThreadTerminal = useEventCallback(() => {
     if (!selectedThreadKey) return;
     if (selectedThreadTerminalDisabledReason) return;
@@ -4234,30 +4225,6 @@ function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {
     return paths;
   });
   return thread.projectKey ? [thread.projectKey, ...linkedDirectoryPaths] : linkedDirectoryPaths;
-}
-
-/**
- * Why the remote terminal toggle is inert for a federated thread — or
- * undefined when it can open (always undefined for local threads). Mirrors
- * the owner-side gate: the peer must be connected DIRECTLY and must have
- * granted `remote_pty`.
- */
-function resolveRemoteTerminalDisabledReason(
-  federation: NavigationThreadSummary["federation"],
-): string | undefined {
-  if (!federation) {
-    return undefined;
-  }
-  if (
-    federation.peerStatus !== undefined &&
-    federation.peerStatus !== "connected"
-  ) {
-    return `Remote terminal unavailable: ${federation.instanceLabel} is disconnected.`;
-  }
-  if (!federation.capabilities?.includes("remote_pty")) {
-    return `Remote terminal not granted by ${federation.instanceLabel}.`;
-  }
-  return undefined;
 }
 
 // Pure header projection shared by the thread, launchpad and setup views.

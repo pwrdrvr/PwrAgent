@@ -711,6 +711,7 @@ export class DesktopSettingsService {
     promise: Promise<DesktopGitDiscoverySnapshot>;
     result?: DesktopGitDiscoverySnapshot;
   };
+  private peerApplicationsInFlight?: Promise<DesktopApplicationsSnapshot>;
   private applicationsDiscoveryPromise?: Promise<DesktopApplicationsSnapshot>;
   private applicationsDiscovery?: DesktopApplicationsSnapshot;
   // Icons for the discovered snapshot, added on the first projection read.
@@ -991,12 +992,6 @@ export class DesktopSettingsService {
     const applications = this.applicationsDiscovery
       ? await this.readApplicationsWithIcons(this.applicationsDiscovery)
       : emptyApplicationsSnapshot();
-    const preferredEditorId = this.resolveConfigString(
-      config.applications?.editor?.preferredId,
-    );
-    const preferredTerminalId = this.resolveConfigString(
-      config.applications?.terminal?.preferredId,
-    );
     const messagingOverride = resolveRuntimeMessagingOverride({
       argv: this.argv,
       env: this.env,
@@ -1863,8 +1858,7 @@ export class DesktopSettingsService {
       },
       applications: {
         ...applications,
-        preferredEditorId,
-        preferredTerminalId,
+        ...this.applicationPreferences(config.applications),
         glab: {
           // Derived default: an operator who has never heard of glab gets a
           // resting "off" instead of a red failure for a forge they cannot
@@ -2176,6 +2170,22 @@ export class DesktopSettingsService {
       this.gitDiscoveryCache = cache;
     }
     return this.gitDiscoveryCache.promise;
+  }
+
+  /** A peer reads only this owner's application inventory and current selections. */
+  async readApplications(): Promise<DesktopApplicationsSnapshot> {
+    this.peerApplicationsInFlight ??= discoverDesktopApplications({ env: this.env })
+      .then(withApplicationIcons)
+      .finally(() => { this.peerApplicationsInFlight = undefined; });
+    const applications = await this.peerApplicationsInFlight;
+    return { ...applications, ...this.applicationPreferences(this.configStore.read("applications")) };
+  }
+
+  private applicationPreferences(config: ConfigDomainMap["applications"] | undefined) {
+    return {
+      preferredEditorId: this.resolveConfigString(config?.editor?.preferredId),
+      preferredTerminalId: this.resolveConfigString(config?.terminal?.preferredId),
+    };
   }
 
   private readApplicationsWithIcons(
