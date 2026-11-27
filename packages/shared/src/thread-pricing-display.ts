@@ -448,35 +448,39 @@ export function buildPricingRunningTotals(lines: PricingUsageLine[]): {
 } {
   const sortedLines = [...lines].sort(compareUsageLinesAscending);
   const byLineId = new Map<string, PricingRunningLineTotals>();
-  let hasEstimatedRows = false;
-  let hasAssumedPricing = false;
-  let runningCostMicros = 0;
-  let runningCreditMicros = 0;
-  for (const line of sortedLines) {
-    const estimate = estimateCodexCreditsForLine(line);
-    if (isEstimatedUsageGap(line) || line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID) {
-      hasEstimatedRows = true;
-    }
-    if (line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID) hasAssumedPricing = true;
-    if (line.priceStatus === "priced") {
-      runningCostMicros += Math.max(0, line.totalCostMicros);
-    }
-    if (estimate) {
-      runningCreditMicros += estimate.totalCreditMicros;
-    }
-    byLineId.set(line.usageLineId, {
-      ...(estimate ? { creditMicros: estimate.totalCreditMicros } : {}),
-      ...(hasEstimatedRows ? { runningHasEstimate: true } : {}),
-      runningCostMicros,
-      ...(runningCreditMicros > 0 ? { runningCreditMicros } : {}),
-    });
+  const totals = new PricingRunningTotals();
+  for (const line of sortedLines) byLineId.set(line.usageLineId, totals.add(line));
+  return { byLineId, ...totals.summary() };
+}
+
+export class PricingRunningTotals {
+  private hasEstimatedRows = false;
+  private hasAssumedPricing = false;
+  private cost = 0;
+  private credits = 0;
+
+  copy(): PricingRunningTotals {
+    return Object.assign(new PricingRunningTotals(), this);
   }
-  return {
-    byLineId,
-    hasEstimatedRows,
-    ...(hasAssumedPricing ? { hasAssumedPricing: true as const } : {}),
-    totalCreditMicros: runningCreditMicros,
-  };
+
+  add(line: PricingUsageLine): PricingRunningLineTotals {
+    const estimate = estimateCodexCreditsForLine(line);
+    this.hasAssumedPricing ||= line.pricingCatalogId === OPENROUTER_ASSUMED_PRICING_CATALOG_ID;
+    this.hasEstimatedRows ||= this.hasAssumedPricing || isEstimatedUsageGap(line);
+    if (line.priceStatus === "priced") this.cost += Math.max(0, line.totalCostMicros);
+    this.credits += estimate?.totalCreditMicros ?? 0;
+    return {
+      ...(estimate ? { creditMicros: estimate.totalCreditMicros } : {}),
+      ...(this.hasEstimatedRows ? { runningHasEstimate: true } : {}),
+      runningCostMicros: this.cost,
+      ...(this.credits > 0 ? { runningCreditMicros: this.credits } : {}),
+    };
+  }
+
+  summary() {
+    return { hasEstimatedRows: this.hasEstimatedRows, totalCreditMicros: this.credits,
+      ...(this.hasAssumedPricing ? { hasAssumedPricing: true as const } : {}) };
+  }
 }
 
 export function estimateCodexCreditsForLine(line: PricingUsageLine):
@@ -508,6 +512,17 @@ export function estimateCodexCreditsForLine(line: PricingUsageLine):
   return estimate ? { totalCreditMicros: estimate.totalCreditMicros } : undefined;
 }
 
+export type PricingHistoryPage = {
+  revision: string;
+  lines: PricingUsageLine[];
+  compactions: ThreadCompactionRecord[];
+  lineTotals: Map<string, PricingRunningLineTotals>;
+  totals: ReturnType<PricingRunningTotals["summary"]>;
+  spendByModel: ReturnType<typeof buildPricingSpendByModel>;
+  summary?: ThreadPricingSummary;
+  totalRows: number;
+};
+
 /**
  * Owner-prepared rail data. Totals include history outside this page.
  *
@@ -517,6 +532,7 @@ export function estimateCodexCreditsForLine(line: PricingUsageLine):
  * `tokenMiserGateTotals` for the whole thread with them.
  */
 export function buildThreadPricingDisplay(params: {
+  historyPage?: PricingHistoryPage;
   pricing?: { compactions?: ThreadCompactionRecord[]; lines: ThreadUsageLineRecord[]; summaries: ThreadPricingSummary[]; snapshot?: ThreadPricingSnapshot };
   subAgents?: ThreadSubAgentSummary[];
   tokenMiserGateTotals?: TokenMiserGateAccountingTotals;
@@ -530,12 +546,13 @@ export function buildThreadPricingDisplay(params: {
   gateSelection?: PricingGateSelection;
 }) {
   const summaries = params.pricing?.summaries ?? [];
-  const allDisplayLines = buildPricingDisplayLines(params.pricing?.lines ?? []);
+  const page = params.historyPage;
+  const allDisplayLines = page?.lines ?? buildPricingDisplayLines(params.pricing?.lines ?? []);
   const subAgentsById = new Map((params.subAgents ?? []).map((agent) => [agent.monitorId, agent]));
   const { displayLines, gateLinesByTurn, orphanGroupsByAnchor } = partitionTokenMiserGateLines(allDisplayLines, subAgentsById);
-  const summary = buildPricingDisplaySummary(summaries, allDisplayLines);
-  const totals = buildPricingRunningTotals(allDisplayLines);
-  const compactionsByRow = groupCompactionsByRow(params.pricing?.compactions ?? []);
+  const summary = page ? page.summary : buildPricingDisplaySummary(summaries, allDisplayLines);
+  const totals = page ? { ...page.totals, byLineId: page.lineTotals } : buildPricingRunningTotals(allDisplayLines);
+  const compactionsByRow = groupCompactionsByRow(page?.compactions ?? params.pricing?.compactions ?? []);
   const claimedCompactionTurns = new Set<string>();
   const gatesForLine = (line: PricingUsageLine) => orphanGroupsByAnchor.get(line.usageLineId)
     ?? (line.scope !== "monitor" && line.turnId ? gateLinesByTurn.get(line.turnId) ?? [] : []);
@@ -575,7 +592,7 @@ export function buildThreadPricingDisplay(params: {
     const groups = partitionPricingGateCards(anchor ? gatesForLine(anchor) : [], subAgentsById);
     pageLines = groups[params.gateSelection.filter];
   }
-  const offset = params.offset ?? 0;
+  const offset = page ? 0 : params.offset ?? 0;
   // Earlier rows still claim their compactions when reading a later page.
   for (const line of pageLines.slice(0, offset)) selectRowCompactions(compactionsByRow, line, claimedCompactionTurns);
   return {
@@ -583,7 +600,7 @@ export function buildThreadPricingDisplay(params: {
     fallbackEstimate: !summary && allDisplayLines.length === 0 && params.pricing?.snapshot
       ? buildThreadPricingSnapshotEstimate(params.pricing.snapshot)
       : undefined,
-    spendByModel: buildPricingSpendByModel({
+    spendByModel: page?.spendByModel ?? buildPricingSpendByModel({
       lines: allDisplayLines,
       resolveModel: (line) => resolveUsageLineModel(line, line.scope === "monitor" && line.sourceItemId ? subAgentsById.get(line.sourceItemId) : undefined),
     }),
@@ -599,7 +616,7 @@ export function buildThreadPricingDisplay(params: {
       ...(totals.hasAssumedPricing ? { hasAssumedPricing: true as const } : {}),
     },
     rows: pageLines.slice(offset, params.limit === undefined ? undefined : offset + params.limit).map((line) => buildRow(line, params.gateSelection !== undefined)),
-    totalRows: pageLines.length,
+    totalRows: page?.totalRows ?? pageLines.length,
   };
 }
 

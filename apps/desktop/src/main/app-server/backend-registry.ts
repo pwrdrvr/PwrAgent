@@ -174,6 +174,7 @@ import {
 } from "../pr-status/forge-reference";
 import {
   projectThreadDisplay,
+  threadDisplayRange,
   readThreadSubAgentPanel,
   threadDisplayAccountingTurns,
   type ThreadSubAgentPanel,
@@ -8090,6 +8091,19 @@ export class DesktopBackendRegistry {
       || (resource === "subagent" && monitorId && isTokenMiserSubAgent({ monitorId }))
     )) {
       await this.threadUsageLedger.repairTokenMiserHistory(request.threadId);
+    }
+    const pricingHistoryPage = resource === "pricing" && backend !== "codex" && !request.display.pricingGateGroup
+      ? await this.overlayStore.readThreadPricingPage?.({ backend, threadId: request.threadId, ...threadDisplayRange(request.display) })
+      : undefined;
+    if (pricingHistoryPage) {
+      const tokenMiserGateTotals = await this.overlayStore.readThreadTokenMiserGateTotals({ backend, threadId: request.threadId });
+      return projectThreadDisplay({
+        backend, threadId: request.threadId, fetchedAt: Date.now(),
+        replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+      }, request, {
+        ...overlay, pricingHistoryPage, tokenMiserGateTotals,
+        activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
+      });
     }
     const pricing = await this.threadUsageLedger.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
     if (backend === "codex" && request.display.resource === "pricing"

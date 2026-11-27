@@ -44,7 +44,8 @@ import { prepareSqliteRead } from "./sqlite-prepared-read";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { forgetThreadSpend, projectedThreadSpend, type SpendGateLines } from "./thread-spend-projection";
-import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
+import { PricingPageMarkers, ThreadPricingPageIndex } from "./thread-pricing-page";
+import { sqliteUsageLedgerVersions, watchPricingPage } from "./sqlite-usage-ledger-change-version";
 import {
   PROJECT_CHECKOUT_GROUPS_META_KEY,
   sqliteNavigationChangeVersion,
@@ -214,6 +215,16 @@ import type {
 const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
 // The focused thread, its context panel, and a few threads open in other
 // windows. A long thread's ledger holds a few MB.
+type OpenPricingPage = {
+  index?: ThreadPricingPageIndex;
+  monitorId?: string;
+  version: number;
+  markers?: PricingPageMarkers;
+  dirtyMarkers: Set<string>;
+  dirty: Set<string>;
+  stop: () => void;
+};
+
 const THREAD_PRICING_CACHE_THREADS = 8;
 
 type ThreadPricingReadParams = {
@@ -869,6 +880,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const dataVersion = this.stateDb.raw.pragma("data_version", { simple: true }) as number;
     return `${dataVersion}:${this.pricingRepairGeneration}`;
   }
+
+  private readonly openPricingPages = new Map<string, OpenPricingPage>();
 
   /** Recent whole-ledger reads, least recently used first. */
   private readonly threadPricingCache = new Map<string, {
@@ -3520,6 +3533,114 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return pricing;
   }
 
+  /** Page a chronological turn ledger. Gate grouping and live provider overlays
+   * use the full display projection. Caller-owned transactions never seed this cache. */
+  async readThreadPricingPage(params: {
+    backend: AppServerBackendKind; threadId: string; offset: number; limit: number;
+  }) {
+    const db = this.stateDb.raw;
+    if (db.inTransaction) return undefined;
+    const { backend, threadId } = params;
+    const key = buildThreadIdentityKey(backend, threadId);
+    let entry = this.openPricingPages.get(key);
+    if (entry?.index && entry.dirty.size && this.firstUnpricedBatchHasModel(params)) {
+      await this.repriceThreadUsageHistory(params);
+      entry = this.openPricingPages.get(key);
+    }
+    if (!entry) {
+      const page: OpenPricingPage = { version: -1, dirtyMarkers: new Set(), dirty: new Set(), stop: () => {} };
+      page.stop = watchPricingPage(db, backend, threadId, (table, id) => {
+        // A TEMP trigger also fires for rolled-back writes. Read the final values
+        // under a committed snapshot before applying any of these hints.
+        if (table === "thread_compactions") {
+          if (page.markers && id) page.dirtyMarkers.add(id);
+          if (page.dirtyMarkers.size > 256) {
+            page.markers = undefined;
+            page.dirtyMarkers.clear();
+          }
+          return;
+        }
+        if (table === "thread_usage_lines" && id === page.monitorId) page.monitorId = undefined;
+        if (!page.index || !id) return;
+        if (table === "thread_usage_lines") page.dirty.add(id);
+        if (table === "thread_usage_turns") {
+          for (const lineId of page.index.usageTurns.get(id) ?? []) page.dirty.add(lineId);
+        }
+        if (page.dirty.size > 256) {
+          page.index = undefined;
+          page.dirty.clear();
+        }
+      });
+      entry = page;
+    }
+    const page = entry;
+    this.openPricingPages.delete(key);
+    this.openPricingPages.set(key, page);
+    for (const [id, candidate] of this.openPricingPages) {
+      if (this.openPricingPages.size <= THREAD_PRICING_CACHE_THREADS) break;
+      candidate.stop();
+      this.openPricingPages.delete(id);
+    }
+    try {
+      return db.transaction(() => {
+        const version = db.pragma("data_version", { simple: true }) as number;
+        if (version !== page.version) {
+          page.index = undefined;
+          page.monitorId = undefined;
+          page.markers = undefined;
+          page.dirtyMarkers.clear();
+          page.version = version;
+        }
+        if (page.monitorId) return undefined;
+        if (page.index && !page.index.rewindChanged(page.dirty)) page.index = undefined;
+        if (page.index && page.dirty.size) {
+          const changed: ThreadUsageLineRecord[] = [];
+          for (const id of page.dirty) {
+            const line = this.readThreadUsageLineSync(id);
+            if (line && line.status !== "superseded" && line.backend === backend
+              && (line.threadId === threadId || line.parentThreadId === threadId)) changed.push(line);
+          }
+          this.attachUsageTurnMetadataSync(backend, threadId, changed);
+          if (!page.index.append(changed)) page.index = undefined;
+        }
+        page.dirty.clear();
+        if (!page.index) {
+          const baseline = this.readStoredThreadPricing(params, true);
+          const monitor = baseline.lines.find((line) => line.scope === "monitor");
+          if (monitor) {
+            page.monitorId = monitor.usageLineId;
+            return undefined;
+          }
+          page.index = ThreadPricingPageIndex.fromHistory(baseline.lines);
+          if (!page.index) return undefined;
+        }
+        type MarkerRow = ThreadCompactionRow & { rowid: number };
+        if (!page.markers) {
+          page.markers = new PricingPageMarkers();
+          const rows = prepareSqliteRead(db, `SELECT rowid, * FROM thread_compactions WHERE backend = ? AND thread_id = ?`)
+            .all(backend, threadId) as MarkerRow[];
+          for (const row of rows) page.markers.set(row.compaction_id, { marker: readThreadCompactionRow(row), rowid: row.rowid });
+        } else {
+          for (const id of page.dirtyMarkers) {
+            const row = prepareSqliteRead(db, `SELECT rowid, * FROM thread_compactions WHERE compaction_id = ? AND backend = ? AND thread_id = ?`)
+              .get(id, backend, threadId) as MarkerRow | undefined;
+            page.markers.set(id, row && { marker: readThreadCompactionRow(row), rowid: row.rowid });
+          }
+        }
+        page.dirtyMarkers.clear();
+        return page.index.page({
+          ...params, markerRevision: page.markers.revision(), summaries: this.readStoredPricingSummaries(params),
+          markers: (lineIds, turns) => page.markers!.read(lineIds, turns),
+        });
+      })();
+    } catch (error) {
+      page.stop();
+      this.openPricingPages.delete(key);
+      this.threadPricingCache.delete(key);
+      throw error;
+    }
+  }
+
   /** The alert total includes priced historical gaps and in-flight monitor usage. */
   async readThreadSpendMicros(params: ThreadPricingReadParams & {
     localModelIds: readonly string[];
@@ -3723,6 +3844,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
     }
 
+    const lines = lineRows.map(threadUsageLineFromRow);
+    this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
+
+    return {
+      lines,
+      summaries: this.readStoredPricingSummaries(params),
+    };
+  }
+
+  private readStoredPricingSummaries(params: { backend: AppServerBackendKind; threadId: string }): ThreadPricingSummary[] {
     // Seek by thread and sort just its groups. The provider-first primary key
     // can walk unrelated summaries to satisfy this ordering.
     const summaryRows = this.stateDb.raw
@@ -3732,14 +3863,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
          ORDER BY provider ASC, currency ASC`,
       )
       .all(params.backend, params.threadId) as ThreadPricingSummaryRow[];
-
-    const lines = lineRows.map(threadUsageLineFromRow);
-    this.attachUsageTurnMetadataSync(params.backend, params.threadId, lines);
-
-    return {
-      lines,
-      summaries: summaryRows.map(threadPricingSummaryFromRow),
-    };
+    return summaryRows.map(threadPricingSummaryFromRow);
   }
 
   /**
@@ -3937,7 +4061,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         .prepare(
           `SELECT * FROM thread_compactions
            WHERE backend = ? AND thread_id = ?
-           ORDER BY observed_at ASC`,
+           ORDER BY observed_at ASC, rowid DESC`,
         )
         .all(params.backend, params.threadId) as ThreadCompactionRow[]
     ).map(readThreadCompactionRow);

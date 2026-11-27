@@ -18,6 +18,23 @@ export function watchThreadSpend(db: Database.Database, threadId: string, change
   };
 }
 
+type PageChange = (table: string, id: string | null) => void;
+const pageObservers = new WeakMap<Database.Database, Map<string, Set<PageChange>>>();
+
+export function watchPricingPage(db: Database.Database, backend: string, threadId: string, changed: PageChange): () => void {
+  sqliteUsageLedgerVersions(db);
+  const key = JSON.stringify([backend, threadId]);
+  const threads = pageObservers.get(db) ?? new Map<string, Set<PageChange>>();
+  pageObservers.set(db, threads);
+  const listeners = threads.get(key) ?? new Set<PageChange>();
+  threads.set(key, listeners);
+  listeners.add(changed);
+  return () => {
+    listeners.delete(changed);
+    if (!listeners.size) threads.delete(key);
+  };
+}
+
 /** The tables a thread's pricing ledger read selects from, and the columns
  * that read filters on. A ledger is every row whose thread or parent thread
  * is the thread read, so these columns name every ledger a row belongs to. */
@@ -26,6 +43,7 @@ const LEDGER_TABLES = [
   // Turn rows carry the end time and context ceiling attached to each line.
   { table: "thread_usage_turns", columns: ["thread_id", "parent_thread_id"] },
   { table: "thread_pricing_summaries", columns: ["thread_id"] },
+  { table: "thread_compactions", columns: ["thread_id"] },
 ] as const;
 
 /**
@@ -49,10 +67,15 @@ export function sqliteUsageLedgerVersions(
     db.function(
       "pwragent_usage_ledger_changed",
       { varargs: true },
-      (backend: unknown, table: unknown, id: unknown, old: unknown, timestamp: unknown, ...threadIds: unknown[]) => {
+      (backend: unknown, table: unknown, id: unknown, affectsSpend: unknown, old: unknown, timestamp: unknown, ...threadIds: unknown[]) => {
         for (const threadId of threadIds) {
           if (typeof threadId === "string") {
-            if (typeof id === "string" && typeof table === "string" && typeof backend === "string") {
+            const pages = pageObservers.get(db);
+            if (pages?.size && typeof backend === "string" && typeof table === "string") {
+              for (const notify of pages.get(JSON.stringify([backend, threadId])) ?? []) notify(table, typeof id === "string" ? id : null);
+            }
+            if (table === "thread_compactions") continue;
+            if (affectsSpend && typeof id === "string" && typeof table === "string" && typeof backend === "string") {
               for (const listener of observers.get(db)?.get(threadId) ?? []) listener(backend, table, id, old === 1, typeof timestamp === "number" ? timestamp : null);
             }
             counters.set(threadId, (counters.get(threadId) ?? 0) + 1);
@@ -66,17 +89,18 @@ export function sqliteUsageLedgerVersions(
         const rows = operation === "INSERT" ? ["NEW"] : operation === "DELETE" ? ["OLD"] : ["OLD", "NEW"];
         const id = table === "thread_usage_lines" ? "usage_line_id" : "usage_turn_id";
         const calls = rows.map((row) => {
-          let key = table === "thread_pricing_summaries" ? "NULL" : `${row}.${id}`;
+          const key = table === "thread_pricing_summaries" ? "NULL" : table === "thread_compactions" ? `${row}.compaction_id` : `${row}.${id}`;
+          let affectsSpend = "1";
           if (table === "thread_usage_turns" && operation === "UPDATE") {
             // Only the attached start time orders historical gap estimates.
-            key = `CASE WHEN OLD.started_at IS NOT NEW.started_at OR OLD.usage_turn_id IS NOT NEW.usage_turn_id
+            affectsSpend = `(OLD.started_at IS NOT NEW.started_at OR OLD.usage_turn_id IS NOT NEW.usage_turn_id
               OR OLD.backend IS NOT NEW.backend OR OLD.thread_id IS NOT NEW.thread_id
-              OR OLD.parent_thread_id IS NOT NEW.parent_thread_id THEN ${key} END`;
+              OR OLD.parent_thread_id IS NOT NEW.parent_thread_id)`;
           }
           const timestamp = table === "thread_usage_lines" ? `${row}.created_at`
             : table === "thread_usage_turns" ? `${row}.started_at` : "NULL";
           const threadIds = columns.map((column) => `${row}.${column}`);
-          return `SELECT pwragent_usage_ledger_changed(${row}.backend, '${table}', ${key}, ${row === "OLD" ? 1 : 0}, ${timestamp}, ${threadIds.join(", ")});`;
+          return `SELECT pwragent_usage_ledger_changed(${row}.backend, '${table}', ${key}, ${affectsSpend}, ${row === "OLD" ? 1 : 0}, ${timestamp}, ${threadIds.join(", ")});`;
         });
         db.exec(`CREATE TEMP TRIGGER pwragent_usage_ledger_${table}_${operation.toLowerCase()}
           AFTER ${operation} ON main.${table}
