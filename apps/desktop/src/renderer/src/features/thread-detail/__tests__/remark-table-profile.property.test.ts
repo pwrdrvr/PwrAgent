@@ -328,6 +328,20 @@ describe("remarkTableProfile regression counterexamples", () => {
 });
 
 describe("first-column pin heuristic properties", () => {
+  function boldRowTitleMatrix(cols: number, titles: readonly string[]): TestNode[][] {
+    const header = [
+      textCell("Capability"),
+      ...Array.from({ length: cols - 1 }, (_, index) => textCell(`System ${index}`)),
+    ];
+    const body = titles.map((title, rowIndex) => [
+      strongCell(title),
+      ...Array.from({ length: cols - 1 }, (_, colIndex) =>
+        textCell(`Detailed explanation for row ${rowIndex} col ${colIndex}`),
+      ),
+    ]);
+    return [header, ...body];
+  }
+
   it("never recommends pinning tables with fewer than 3 columns or fewer than 2 data rows", () => {
     fc.assert(
       fc.property(
@@ -347,7 +361,7 @@ describe("first-column pin heuristic properties", () => {
     );
   });
 
-  it("auto-pins bold row-title first columns across 3+ column comparison matrices", () => {
+  it("auto-pins compact bold row-title first columns across 3+ column comparison matrices", () => {
     const titleArb = fc
       .array(fc.stringMatching(/^[A-Za-z][A-Za-z0-9/&-]{1,9}$/), {
         minLength: 2,
@@ -365,20 +379,22 @@ describe("first-column pin heuristic properties", () => {
           selector: (title) => title.toLowerCase(),
         }),
         (cols, titles) => {
-          const header = [
-            textCell("Capability"),
-            ...Array.from({ length: cols - 1 }, (_, index) => textCell(`System ${index}`)),
-          ];
-          const body = titles.map((title, rowIndex) => [
-            strongCell(title),
-            ...Array.from({ length: cols - 1 }, (_, colIndex) =>
-              textCell(`Detailed explanation for row ${rowIndex} col ${colIndex}`),
-            ),
-          ]);
-          expect(profilePinRecommendation([header, ...body])).toBe("auto");
+          // These ASCII titles are one display column per character. Auto-pinning
+          // requires an average width of at most 54 columns across the titles.
+          const totalTitleWidth = titles.reduce((total, title) => total + title.length, 0);
+          fc.pre(totalTitleWidth <= 54 * titles.length);
+          expect(profilePinRecommendation(boldRowTitleMatrix(cols, titles))).toBe("auto");
         },
       ),
     );
+  });
+
+  it("offers manual pinning when bold row titles average over 54 characters", () => {
+    const matrix = boldRowTitleMatrix(3, [
+      "a&AA Aa-&/-&A& Aaa0a0&-a AaA/A/-a-A A000&a&a a-&&-a& a0a",
+      "Aaa&a00a A/&-aA A--/---Aa aa0a-A-0-- A/AA/// a/& aa-0",
+    ]);
+    expect(profilePinRecommendation(matrix)).toBe("eligible");
   });
 
   it("never auto-pins repetitive status columns or purely numeric index columns", () => {
