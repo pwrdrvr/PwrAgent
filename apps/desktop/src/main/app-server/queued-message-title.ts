@@ -3,6 +3,7 @@ import type {
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
 } from "@pwragent/shared/contracts/normalized-app-server";
+import { graphemePrefix } from "@pwragent/shared/text-graphemes";
 import queuedMessageTitlePrompt from "./queued-message-title-prompt.md?raw";
 import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title-generation-service";
 
@@ -24,8 +25,7 @@ import type { ThreadTitleAdapterResult } from "@pwragent/owner-core/thread-title
  * and never sent to the helper. Measured against the trimmed text.
  */
 export const QUEUED_MESSAGE_TITLE_SOURCE_THRESHOLD = 60;
-export const QUEUED_MESSAGE_TITLE_MAX_CHARACTERS = 48;
-const QUEUED_MESSAGE_TITLE_MAX_WORDS = 7;
+export const QUEUED_MESSAGE_TITLE_MAX_CHARACTERS = 100;
 /** Long enough to name any message; a pasted log needs no more context. */
 const QUEUED_MESSAGE_TITLE_SOURCE_LIMIT = 4_000;
 const QUEUED_MESSAGE_TITLE_TIMEOUT_MS = 20_000;
@@ -170,10 +170,11 @@ export function normalizeQueuedMessageTitle(object: unknown): string | undefined
   if (typeof raw !== "string") return undefined;
   const cleaned = cleanTitle(raw);
   if (!cleaned) return undefined;
-  const words = cleaned.split(/\s+/u).slice(0, QUEUED_MESSAGE_TITLE_MAX_WORDS).join(" ");
-  const characters = Array.from(words);
-  if (characters.length <= QUEUED_MESSAGE_TITLE_MAX_CHARACTERS) return words;
-  return cleanTitle(characters.slice(0, QUEUED_MESSAGE_TITLE_MAX_CHARACTERS).join(""))
+  if (cleaned.length <= QUEUED_MESSAGE_TITLE_MAX_CHARACTERS) return cleaned;
+  const prefix = graphemePrefix(cleaned, QUEUED_MESSAGE_TITLE_MAX_CHARACTERS);
+  const wordBreak = prefix.lastIndexOf(" ");
+  const endsInsideWord = cleaned[prefix.length] !== " ";
+  return cleanTitle(endsInsideWord && wordBreak >= 0 ? prefix.slice(0, wordBreak) : prefix)
     || undefined;
 }
 
