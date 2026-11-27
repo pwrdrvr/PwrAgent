@@ -85,6 +85,49 @@ it("shares at most one replacement among refresh callers when the owner changes 
   });
 });
 
+it("keeps a completed page covered while another page holds the window refresh open", async () => {
+  const gate = Promise.withResolvers<void>();
+  const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const owners = [{ scope: "local" as const }];
+  try {
+    queries.setDemand(new Map([["slow", request(0)], ["fast", request(1)]]));
+    await until(() => idle(queries));
+    read.mockClear();
+    read.mockImplementationOnce(async (sent) => { await gate.promise; return page(sent); });
+    const first = queries.refresh(undefined, owners);
+    await until(() => read.mock.calls.length === 2 && !queries.getSnapshot().resources.get("fast")!.loading);
+    const duplicate = queries.refresh(undefined, [{ scope: "local" }]);
+    gate.resolve();
+    await Promise.all([first, duplicate]);
+    expect(read).toHaveBeenCalledTimes(2);
+    await queries.refresh(undefined, owners);
+    expect(read).toHaveBeenCalledTimes(4);
+  } finally { gate.resolve(); queries.dispose(); }
+});
+
+it("refreshes a completed page invalidated during the rest of its window refresh", async () => {
+  const gate = Promise.withResolvers<void>();
+  const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["slow", request(0)], ["fast", request(1)]]));
+    await until(() => idle(queries));
+    read.mockClear();
+    read.mockImplementationOnce(async (sent) => { await gate.promise; return page(sent); });
+    const first = queries.refresh();
+    await until(() => read.mock.calls.length === 2 && !queries.getSnapshot().resources.get("fast")!.loading);
+    read.mockImplementation(async (sent) => page(sent, "changed"));
+    queries.invalidate("fast", undefined, event(1));
+    const changed = queries.refresh();
+    await until(() => queries.getSnapshot().resources.get("fast")!.state.page?.countsRevision === "changed");
+    gate.resolve();
+    await Promise.all([first, changed]);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(queries.getSnapshot().resources.get("slow")!.state.page?.countsRevision).toBe("0");
+  } finally { gate.resolve(); queries.dispose(); }
+});
+
 it("row-only bursts obey complete child membership even while metadata is stale or refreshing", async () => {
   // Specification: without a membership change, the owner's complete child
   // set remains the exclusion oracle throughout any ordering of row events.

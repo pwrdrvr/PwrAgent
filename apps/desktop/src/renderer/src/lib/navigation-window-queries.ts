@@ -18,7 +18,7 @@ import {
 } from "@pwragent/shared/navigation-query-events";
 import { readDirectoryGitProof, readDirectoryGitRevisions, readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
-import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import { federationTargetKey, type FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
   NavigationDirectoryGitRevisions,
   NavigationIdentity,
@@ -200,6 +200,7 @@ export class NavigationWindowQueries {
   private readonly pageDependencies = new WeakMap<NavigationQueryPage, NavigationMetadataDependencies | undefined>();
   private readonly recentPinPublications = new Set<string>();
   private readonly readWaiters = new Set<() => void>();
+  private readonly pendingWindowRefreshes = new Map<string, Promise<void>>();
   private snapshot: NavigationWindowQueriesState = { resources: new Map() };
 
   private nextLogical = 0;
@@ -465,8 +466,11 @@ export class NavigationWindowQueries {
       added.push(resource);
       changed = true;
     }
-    if (changed) this.trimRetained(this.activePageBytes);
-    if (changed) navigationListingDiagnostics.record({ ...this.diagnostic, phase: "demand", count: added.length });
+    if (changed) {
+      this.pendingWindowRefreshes.clear();
+      this.trimRetained(this.activePageBytes);
+      navigationListingDiagnostics.record({ ...this.diagnostic, phase: "demand", count: added.length });
+    }
     let startedReads = false;
     if (this.visible) {
       for (const resource of added) {
@@ -483,6 +487,7 @@ export class NavigationWindowQueries {
 
   setVisible(visible: boolean): void {
     if (this.disposed || this.visible === visible) return;
+    this.pendingWindowRefreshes.clear();
     this.visible = visible;
     let budget: ResumeBudget | undefined;
     for (const resource of this.resources.values()) {
@@ -506,6 +511,18 @@ export class NavigationWindowQueries {
   refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause,
     trigger?: string, includeDirectoryIndex = false, requireNewObservation = false): Promise<void> {
     if (!this.visible || this.disposed) return Promise.resolve();
+    if (requireNewObservation) this.pendingWindowRefreshes.clear();
+    // One ordinary window refresh covers its completed pages as long as it
+    // still has reads pending. An owner change or new demand ends that cover.
+    const owner = owners?.[0];
+    const windowScope = id === undefined && !invalidatedOnly && !trigger && !includeDirectoryIndex
+      && !requireNewObservation && (!owners || owners.length === 1)
+      ? (owner ? federationTargetKey(owner) : "all") : undefined;
+    const pendingWindowRefresh = windowScope === undefined ? undefined : this.pendingWindowRefreshes.get(windowScope);
+    if (pendingWindowRefresh) {
+      navigationListingDiagnostics.record({ ...this.diagnostic, phase: "coalesced", cause });
+      return pendingWindowRefresh;
+    }
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
     // Keep the caller separate from the event that fenced each page: a queued
     // action can consume a seen/status invalidation without becoming its cause.
@@ -549,10 +566,17 @@ export class NavigationWindowQueries {
         await this.read(resource, false);
       }
     }));
+    let completion = refreshed.then(() => undefined);
+    if (windowScope !== undefined && selected.length > 0) {
+      completion = completion.finally(() => {
+        if (this.pendingWindowRefreshes.get(windowScope) === completion) this.pendingWindowRefreshes.delete(windowScope);
+      });
+      this.pendingWindowRefreshes.set(windowScope, completion);
+    }
     // One refresh queues its reads in one turn. Publish every newly queued
     // read's loading state together, including a refresh of multiple owners.
     if (startedReads) this.publish();
-    return refreshed.then(() => undefined);
+    return completion;
   }
 
   /** Invalidate transport baselines before canonical owner events can race a late page. */
@@ -647,7 +671,10 @@ export class NavigationWindowQueries {
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "invalidate", batch, count,
       cause: navigationDiagnosticCause(event), trigger: navigationDiagnosticTrigger(event),
       source: event ? event.federationTarget?.scope === "remote" ? "remote" : "local" : undefined });
-    if (changed) this.publish();
+    if (changed) {
+      this.pendingWindowRefreshes.clear();
+      this.publish();
+    }
   }
 
   private fenceBaseline(resource: Resource): void {
@@ -1130,6 +1157,7 @@ export class NavigationWindowQueries {
     if (resource.value.state.rebaselineRequired && !explicitAnchor && !fromStart) return Promise.resolve();
     let cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
+    if (explicitLoadMore || explicitAnchor || fromStart) this.pendingWindowRefreshes.clear();
     const queryKey = this.resumeKey(resource);
     const previousExpandedRows = resource.expandedRows;
     const restoringBeforeRead = explicitAnchor || fromStart ? 0 : loadedRows(resource.value.state.page);
@@ -1469,6 +1497,7 @@ export class NavigationWindowQueries {
     if (this.disposed) return;
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "dispose" });
     this.disposed = true;
+    this.pendingWindowRefreshes.clear();
     for (const resource of this.resources.values()) this.release(resource);
     this.resources.clear();
     this.activePageBytes = 0;
