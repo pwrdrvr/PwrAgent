@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { registryModules } from "../app-server/backend-registry-wiring";
-import type { ReviewSubAgentRecord, TaskMonitorDelegationRecord } from "../app-server/backend-registry-types";
+import type { TaskMonitorDelegationRecord } from "../app-server/backend-registry-types";
 import type { StateDb } from "../state/state-db";
 import { taskMonitorThreadKey } from "../app-server/thread-turn-keys";
 import { registryWithInMemoryStore } from "./helpers/registry-in-memory-fixture";
@@ -63,7 +63,6 @@ describe("stream notice owner context", () => {
         const registry = registryWithInMemoryStore(databases);
         const modules = registryModules(registry);
         const monitors = modules.subAgentMonitorService;
-        const reviews = modules.managedReviewService.activeReviewSubAgentRecords as Map<string, ReviewSubAgentRecord>;
         const internals = monitors as unknown as {
           taskMonitorDelegations: Map<string, TaskMonitorDelegationRecord>;
           completedTaskMonitorsByThread: Map<string, TaskMonitorDelegationRecord>;
@@ -77,7 +76,7 @@ describe("stream notice owner context", () => {
             if (kind === "native") {
               monitors.setCodexNativeSubAgentParent(threadId, parentThreadId);
             } else if (kind === "review") {
-              reviews.set(threadId, {
+              modules.turnState.activateReview({
                 backend: "codex", parentBackend: "codex", parentThreadId, reviewThreadId: threadId,
                 createdAt: 1, displayText: "Review", mode: "managed", task: "Review", turnId: "turn",
               });
@@ -106,7 +105,7 @@ describe("stream notice owner context", () => {
         } finally {
           internals.taskMonitorDelegations.clear();
           internals.completedTaskMonitorsByThread.clear();
-          reviews.clear();
+          for (const record of modules.turnState.liveReviewRecords().values()) modules.turnState.finishReview(record);
           await registry.close();
           for (const db of databases) db.close();
         }

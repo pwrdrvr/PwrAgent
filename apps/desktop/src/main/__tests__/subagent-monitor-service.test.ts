@@ -6,7 +6,6 @@ import type { TaskMonitorRequest, TaskMonitorResponse } from "@pwragent/shared/c
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type {
   CodexNativeSubAgentReconciliation,
-  ReviewSubAgentRecord,
   TaskMonitorDelegationRecord,
 } from "../app-server/backend-registry-types";
 import { TASK_MONITOR_STALE_GRACE_MS } from "../app-server/backend-registry-runtime-helpers";
@@ -75,13 +74,11 @@ function monitorRecord(overrides: Partial<TaskMonitorDelegationRecord> = {}): Ta
 
 /**
  * A service over a fixture context and host. `claudeTasks` is what the Claude
- * provider reports running for each monitor thread; `reviews` are the managed
- * review service's live review sub-agents. `claude` and `dependencies` add to
+ * provider reports running for each monitor thread. `claude` and `dependencies` add to
  * the Claude provider and the service's collaborators.
  */
 function createService(options: {
   claudeTasks?: ReadonlyMap<string, number>;
-  reviews?: ReadonlyMap<string, ReviewSubAgentRecord>;
   host?: Partial<SubAgentMonitorServiceHost>;
   stores?: Record<string, unknown>;
   claude?: Record<string, unknown>;
@@ -102,7 +99,7 @@ function createService(options: {
   const dependencies = {
     forgeToolBridge: {},
     threadMcpConnections: {},
-    managedReviewService: { activeReviewSubAgentRecords: options.reviews ?? new Map() },
+    managedReviewService: { get activeReviewSubAgentRecords() { return context.turnState.liveReviewRecords(); } },
     ...options.dependencies,
   } as unknown as SubAgentMonitorServiceDependencies;
   const host = {
@@ -114,7 +111,7 @@ function createService(options: {
     ...options.host,
   } as unknown as SubAgentMonitorServiceHost;
   const service = new SubAgentMonitorService(context, dependencies, () => host);
-  return { service, internals: service as unknown as ServiceInternals, host };
+  return { service, turnState: context.turnState, internals: service as unknown as ServiceInternals, host };
 }
 
 function createRegistry() {
@@ -467,8 +464,7 @@ describe("SubAgentMonitorService monitor lookups", () => {
             parent: fc.integer({ min: 0, max: index - 1 }),
           }), { nil: undefined }))));
     fc.assert(fc.property(forest, fc.nat(), (links, pick) => {
-      const reviews = new Map<string, ReviewSubAgentRecord>();
-      const { service, internals } = createService({ reviews });
+      const { service, turnState, internals } = createService();
       links.forEach((link, index) => {
         if (!link) return;
         const threadId = `w-${index}`;
@@ -477,7 +473,7 @@ describe("SubAgentMonitorService monitor lookups", () => {
           const record = monitorRecord({ monitorId: `monitor-${index}`, monitorThreadId: threadId, parentThreadId });
           internals.taskMonitorDelegations.set(record.monitorId, record);
         } else if (link.kind === "review") {
-          reviews.set(`review-${index}`, {
+          turnState.activateReview({
             backend: "codex", createdAt: 1, displayText: "review", mode: "managed",
             parentBackend: "codex", parentThreadId, reviewThreadId: threadId, task: "review", turnId: `turn-${index}`,
           });

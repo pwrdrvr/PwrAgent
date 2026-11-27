@@ -16110,21 +16110,11 @@ export class DesktopBackendRegistry {
     return undefined;
   }
 
-  private clearCodexReviewInterruptMappingForTurn(
-    threadId: string,
-    turnId: string,
-  ): void {
-    const activeTurnModeKey = buildActiveTurnModeKey(threadId, turnId);
-    this.context.turnState.forgetReviewInterrupt(activeTurnModeKey);
-    for (const [reviewTurnKey, interruptTurnId] of Array.from(
-      this.context.turnState.reviewInterruptEntries()
-    )) {
-      if (
-        reviewTurnKey.startsWith(`${threadId}:`) &&
-        interruptTurnId === turnId
-      ) {
-        this.context.turnState.forgetReviewInterrupt(reviewTurnKey);
-      }
+  private clearCodexReviewInterruptMappingForTurn(threadId: string, turnId: string): void {
+    const turn = { threadId, turnId };
+    if (this.context.turnState.reviewInterrupt(turn)) this.context.turnState.forgetReviewInterrupt(turn);
+    for (const rootTurnId of this.context.turnState.reviewRootsForInterrupt(threadId, turnId)) {
+      this.context.turnState.forgetReviewInterrupt({ threadId, turnId: rootTurnId });
     }
   }
 
@@ -23873,26 +23863,16 @@ export class DesktopBackendRegistry {
       });
     }
     if (event.backend === "codex" && turnId) {
-      const activeTurnModeKey = buildActiveTurnModeKey(
-        notification.params.threadId,
-        turnId,
-      );
-      const wasKnownActiveTurn =
-        !turnId.startsWith("pending:") &&
-        this.context.turnState.ownsExecution(activeTurnModeKey);
+      const turn = { backend: "codex" as const, threadId: thread.threadId, turnId };
+      const wasKnownActiveTurn = !turnId.startsWith("pending:") && this.context.turnState.ownsExecution(turn);
       if (managedReview?.mode === "native") {
         this.managedReviewService.clearNativeReviewActiveTurns(managedReview);
       }
-      this.clearCodexReviewInterruptMappingForTurn(
-        notification.params.threadId,
-        turnId,
-      );
-      this.context.turnState.forgetExecution(activeTurnModeKey);
+      this.clearCodexReviewInterruptMappingForTurn(turn.threadId, turnId);
+      this.context.turnState.forgetExecution(turn);
       // The start response can register a turn whose started notification was absent.
-      this.context.turnState.forgetCollaboration(
-        { backend: "codex", threadId: notification.params.threadId, turnId: turnId },
-      );
-      this.context.turnState.forgetReview(activeTurnModeKey);
+      this.context.turnState.forgetCollaboration(turn);
+      this.context.turnState.forgetReview(turn);
       if (wasKnownActiveTurn) {
         await this.adoptThreadBranchChangeFromActiveTurn({
           backend: event.backend,

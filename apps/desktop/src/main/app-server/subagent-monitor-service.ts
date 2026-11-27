@@ -794,11 +794,7 @@ export class SubAgentMonitorService {
       const taskMonitor = this.taskMonitorForThread({ backend, threadId })
         ?? this.completedTaskMonitorsByThread.get(taskMonitorThreadKey(backend, threadId));
       const reviewSubAgentCandidate = !taskMonitor
-        ? [...this.managedReviewService.activeReviewSubAgentRecords.values()].find(
-            (record) =>
-              record.backend === backend
-              && record.reviewThreadId === threadId,
-          )
+        ? this.context.turnState.liveReviewsForChild(backend, threadId)?.values().next().value
         : undefined;
       const reviewSubAgent =
         reviewSubAgentCandidate
@@ -1669,7 +1665,7 @@ export class SubAgentMonitorService {
         notification.params.turnId,
       );
       const reviewRecord = this.managedReviewService.activeReviewSubAgentRecords.get(reviewKey);
-      const completedReviewRecord = this.managedReviewService.reviewSubAgentRecordsByReviewTurn.get(reviewKey);
+      const completedReviewRecord = this.managedReviewService.historicalReviewForTurn(reviewKey);
       const model =
         readTaskMonitorUsageModel({
           notificationModel: notification.params.model,

@@ -1716,7 +1716,7 @@ export class ThreadUsageLedger {
         );
         if (
           this.managedReviewService.activeReviewSubAgentRecords.has(reviewKey)
-          || this.managedReviewService.reviewSubAgentRecordsByReviewTurn.has(reviewKey)
+          || this.managedReviewService.historicalReviewForTurn(reviewKey)
         ) {
           return;
         }

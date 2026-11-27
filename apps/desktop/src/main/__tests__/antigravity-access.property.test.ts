@@ -315,7 +315,7 @@ async function exercise(
                 ? modules.managedReviewService["startManagedReviewChild"]({
                     backend, parentBackend: backend, parentThreadId: sessionId, overlay,
                     modelSettings: {}, target: { type: "baseBranch", branch: "main" },
-                    terminals: {}, tokenMiserEnabled: false,
+                    terminals: { backend, threadId: sessionId }, tokenMiserEnabled: false,
                   })
                 : modules.subAgentMonitorService["startManagedTaskMonitor"]({
                     context: { backend, threadId: sessionId, turnId: "parent-turn" },
