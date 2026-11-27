@@ -102,6 +102,21 @@ signature check.
 - Do not put a standalone `--` before the focus arguments.
 - The command `pnpm test -- apps/...` runs the full workspace suite.
 
+## Chromium renderer layout check
+
+Install the browser once with
+`pnpm --filter @pwragent/desktop exec playwright install --only-shell chromium`.
+Run `pnpm --filter @pwragent/desktop test:renderer-layout`.
+The required Linux `Test` check includes this Playwright project on product
+changes. Vite serves the real renderer components and stylesheet to headless
+Chromium. The project runs without Electron or a desktop bridge.
+
+The suite shares one page across five seeded fast-check layouts, one for each
+sidebar lens, and three fixed regressions. It checks that sidebar lanes fit,
+PR numbers remain visible, and controls stay inside their surfaces. A failure
+identifies the example or seed and case, the sidebar and rail widths, and the
+element that overflowed or clipped the number.
+
 ## Code Formatting & Linting
 
 - Use Oxlint only as a correctness linter. Run `pnpm lint:oxlint` after edits.

@@ -8,6 +8,8 @@
   "include": [
     "playwright.config.ts",
     "e2e/**/*.ts",
+    "renderer-layout/**/*.ts",
+    "renderer-layout/**/*.tsx",
     "scripts/**/*.ts",
     "src/**/*.d.ts",
     "src/**/__tests__/**/*",
