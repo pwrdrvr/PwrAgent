@@ -74,6 +74,19 @@ describe("navigation overlay projection reuse", () => {
     expect(read(threads).threads.find((thread) => thread.id === "same" && thread.source === "codex")?.model).toBeUndefined();
   });
 
+  it("reports every locally changed identity across stores and rejects an evicted journal prefix", () => {
+    const before = store.readOwnerNavigationSourceVersion();
+    seed("one");
+    seed("two", "grok-model", db.raw, "acp:grok");
+    seed("one", "new-model");
+    expect(store.readChangedNavigationThreadKeys(before, store.readOwnerNavigationSourceVersion())?.sort())
+      .toEqual(["acp:grok:two", "codex:one"]);
+    db.raw.transaction(() => {
+      for (let i = 0; i <= 512; i++) seed("one", String(i));
+    })();
+    expect(store.readChangedNavigationThreadKeys(before, store.readOwnerNavigationSourceVersion())).toBeUndefined();
+  });
+
   it("observes cross-connection changes and deletion without a TTL", () => {
     db.close();
     const temp = createTempStateDb("pwragent-navigation-projections-"); tempDir = temp.tempDir;
@@ -81,7 +94,9 @@ describe("navigation overlay projection reuse", () => {
     const other = new Database(temp.dbPath);
     try {
       seed("same"); read([provider("same")]);
+      const before = store.readOwnerNavigationSourceVersion();
       seed("same", "external", other);
+      expect(store.readChangedNavigationThreadKeys(before, store.readOwnerNavigationSourceVersion())).toBeUndefined();
       expect(read([provider("same")]).threads[0]?.model).toBe("external");
       other.prepare("DELETE FROM threads WHERE thread_id = ?").run("codex:same");
       expect(read([provider("same")]).threads[0]?.model).toBeUndefined();

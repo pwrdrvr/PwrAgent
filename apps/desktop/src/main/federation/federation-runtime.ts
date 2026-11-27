@@ -103,7 +103,7 @@ import {
   FEDERATION_HEALTH_CHANGED_METHOD,
   FEDERATION_SHUTDOWN_CHANGED_METHOD,
 } from "@pwragent/shared/contracts/federation";
-import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD } from "@pwragent/shared/navigation-query-events";
+import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD, NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD } from "@pwragent/shared/navigation-query-events";
 import { THREAD_TODO_FEED_ACKNOWLEDGED_METHOD } from "@pwragent/shared/thread-todo-feed";
 import { mcpConnectionsForPeer } from "@pwragent/shared/contracts/mcp-connections";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
@@ -481,6 +481,8 @@ import {
   awaitStartupProviderCoverage,
   getNavigationDirectorySetAnnouncer,
   loadLocalNavigationQueryIndex,
+  loadSidebarNavigationQueryIndex,
+  isSidebarDisplayQuery,
   navigationPullRequestProjection,
   navigationQueryShowsStacks,
 } from "../app-server/navigation-query-source";
@@ -887,6 +889,8 @@ type RelayedEventSubscription = IncomingEventSubscription & {
 };
 
 const NAVIGATION_EVENT_METHODS = new Set<string>([
+  NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD,
+  "thread/rewound",
   "thread/dependencies/updated",
   "thread/scheduledAction/updated",
   "automation/run/transcript/updated",
@@ -7860,15 +7864,18 @@ function localBackendOperations(
   const messagingBridge = new DesktopMessagingBackendBridge();
   return {
     async getNavigationQueryPage(request, rpcOptions) {
+      const sidebar = isSidebarDisplayQuery(request);
       return withFederationNavigationConsumer(rpcOptions, (consumerId, scopeKey) =>
         getDesktopNavigationQueryPool().read({ consumerId, scopeKey,
           request: { ...request, deadlineAt: rpcOptions?.deadlineAt === undefined ? request.deadlineAt
             : Math.min(request.deadlineAt ?? rpcOptions.deadlineAt, rpcOptions.deadlineAt) },
           load: ({ signal, deadlineAt }) => getDesktopNavigationQueryStore().readPage({
-            pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal }),
+            incremental: sidebar,
+            pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal, backgroundValidation: sidebar, backend: request.backend }),
             loadIndex: async () => {
               await awaitStartupProviderCoverage({ query: request.query, readReason: request.readReason, deadlineAt, signal });
-              return loadLocalNavigationQueryIndex({ backend: request.backend,
+              const load = sidebar ? loadSidebarNavigationQueryIndex : loadLocalNavigationQueryIndex;
+              return load({ backend: request.backend,
                 useSavedStartupInventory: request.query.kind === "group-members",
                 callerReason: "federation-navigation-query", includeStacks: navigationQueryShowsStacks(request.query, request.consumer), signal });
             },

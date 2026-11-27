@@ -161,7 +161,10 @@ it.each([[0, 3], [1, 3], [3, 3], [3, 6]])("materializes a child with %i subscrib
     });
 
     await drain();
-    for (const methods of received.values()) expect(methods).toEqual(["thread/started", "thread/parent/set", "thread/pin/added", "turn/started", "turn/started"]);
+    for (const methods of received.values()) expect(methods).toEqual([
+      "thread/started", "thread/parent/set", "thread/pin/added",
+      "navigation/threadDirectories/updated", "turn/started", "turn/started",
+    ]);
     await Promise.all(sidebars.map(({ window }) => window.refresh(undefined, undefined, true)));
     expectSqliteWriteBudget({ scenario: "child-launch-with-automatic-pin-and-turn", writes,
       note: "Materialize a child, set its parent, pin it in the collapsed project and start its first turn." });

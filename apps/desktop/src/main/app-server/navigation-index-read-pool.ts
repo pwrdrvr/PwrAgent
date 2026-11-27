@@ -2,14 +2,14 @@ import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { navigationQuerySnapshotAuxiliaryBytes, navigationQuerySnapshotSharedThreads, navigationQuerySnapshotToken, releaseNavigationQuerySnapshotProjection } from "@pwragent/owner-core/navigation-query-projection";
 
-const RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
+export const NAVIGATION_RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
 
 /** Measure only enough of a snapshot to admit it. Native JSON serialization
  * runs on bounded row batches, avoiding one full temporary snapshot string.
  * The shell includes empty-array brackets; batches add contents and commas.
  * Every retained snapshot is charged exactly its original JSON UTF-8 size.
  */
-function rowBytes(rows: readonly unknown[], start = 0, remaining = RETAINED_BYTE_BUDGET): number {
+function rowBytes(rows: readonly unknown[], start = 0, remaining = NAVIGATION_RETAINED_BYTE_BUDGET): number {
   let bytes = 0;
   for (let offset = start; offset < rows.length; offset += 128) {
     bytes += Buffer.byteLength(JSON.stringify(rows.slice(offset, offset + 128))) - 2 + (offset ? 1 : 0);
@@ -18,8 +18,8 @@ function rowBytes(rows: readonly unknown[], start = 0, remaining = RETAINED_BYTE
   return bytes;
 }
 
-function retainedIndexBytes(index: NavigationQueryIndex, sharedRows: number, budget: number,
-  sizeRows: (rows: readonly unknown[], start: number, remaining: number) => number): number {
+export function retainedIndexBytes(index: NavigationQueryIndex, sharedRows: number, budget: number,
+  sizeRows: (rows: readonly unknown[], start: number, remaining: number) => number = rowBytes): number {
   let bytes = Buffer.byteLength(JSON.stringify({ ...index, threads: [], directories: [], inputRequestThreadKeys: [],
     ...(index.stacks ? { stacks: [] } : {}),
   }));
@@ -136,15 +136,15 @@ export class NavigationIndexReadPool {
     };
     const entries = rows ? [...this.retained.values()] : [];
     const threads = rows ? entries.find((entry) => entry.threads?.rows === rows)?.threads
-      ?? { rows, bytes: sizeRows(rows, 0, RETAINED_BYTE_BUDGET), leases: 0 } : undefined;
+      ?? { rows, bytes: sizeRows(rows, 0, NAVIGATION_RETAINED_BYTE_BUDGET), leases: 0 } : undefined;
     const prefixBytes = threads?.bytes ?? 0;
-    if (prefixBytes > RETAINED_BYTE_BUDGET) return;
+    if (prefixBytes > NAVIGATION_RETAINED_BYTE_BUDGET) return;
     let backing = entries.find((entry) => entry.index === index)?.backing;
     if (!backing) {
-      let bytes = retainedIndexBytes(index, rows?.length ?? 0, RETAINED_BYTE_BUDGET - prefixBytes, sizeRows);
-      if (prefixBytes + bytes > RETAINED_BYTE_BUDGET) return;
+      let bytes = retainedIndexBytes(index, rows?.length ?? 0, NAVIGATION_RETAINED_BYTE_BUDGET - prefixBytes, sizeRows);
+      if (prefixBytes + bytes > NAVIGATION_RETAINED_BYTE_BUDGET) return;
       const auxiliaryBytes = navigationQuerySnapshotAuxiliaryBytes(index);
-      if (prefixBytes + bytes + auxiliaryBytes > RETAINED_BYTE_BUDGET) {
+      if (prefixBytes + bytes + auxiliaryBytes > NAVIGATION_RETAINED_BYTE_BUDGET) {
         releaseNavigationQuerySnapshotProjection(index);
       } else bytes += auxiliaryBytes;
       backing = { bytes, leases: 0 };
@@ -155,7 +155,7 @@ export class NavigationIndexReadPool {
     if (backing.leases++ === 0) this.retainedBytes += backing.bytes;
     if (threads && threads.leases++ === 0) this.retainedBytes += threads.bytes;
     this.evict(key);
-    while (this.retained.size >= 8 || this.retainedBytes > RETAINED_BYTE_BUDGET) {
+    while (this.retained.size >= 8 || this.retainedBytes > NAVIGATION_RETAINED_BYTE_BUDGET) {
       const comparisonOnly = [...this.retained].find(([, entry]) => entry.expires <= now);
       this.evict(comparisonOnly?.[0] ?? this.retained.keys().next().value!);
     }

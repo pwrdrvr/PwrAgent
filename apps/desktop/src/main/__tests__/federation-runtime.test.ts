@@ -849,7 +849,7 @@ describe("DesktopFederationRuntime", () => {
     const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
       .mockReturnValue({} as never);
     const signals: AbortSignal[] = [];
-    const source = vi.spyOn(navigationQuerySource, "loadLocalNavigationQueryIndex").mockImplementation(({ signal }) => {
+    const source = vi.spyOn(navigationQuerySource, "loadSidebarNavigationQueryIndex").mockImplementation(({ signal }) => {
       signals.push(signal!);
       return new Promise((_resolve, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
     });

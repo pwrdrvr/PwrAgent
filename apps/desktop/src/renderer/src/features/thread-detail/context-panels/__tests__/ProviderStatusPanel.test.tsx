@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
@@ -19,13 +19,45 @@ function valueFor(label: string): HTMLElement {
   return screen.getByText(label, { selector: "dt" }).nextElementSibling as HTMLElement;
 }
 
+/** The scope subheader a limit row sits under, if its provider has several. */
+function scopeOf(row: Element): string | undefined {
+  for (let node = row.previousElementSibling; node; node = node.previousElementSibling) {
+    if (node.classList.contains("provider-limits__scope")) return node.textContent ?? undefined;
+  }
+  return undefined;
+}
+
+/** A limit row, found by its window and, for a provider with several, its scope. */
+function limitRow(window: string, scope?: string, within: ParentNode = document): HTMLElement {
+  const rows = [...within.querySelectorAll<HTMLElement>(".provider-limits__row")]
+    .filter((row) => row.dataset.window === window && scopeOf(row) === scope);
+  expect(rows, `${scope ?? "(no scope)"} ${window}`).toHaveLength(1);
+  return rows[0]!;
+}
+
+/** A limit row's pace line. */
+function paceOf(window: string, scope?: string, within?: ParentNode): HTMLElement {
+  return limitRow(window, scope, within).querySelector<HTMLElement>(".provider-limits__pace")!;
+}
+
+/** A limit row's pace line, once the usage read that draws it answers. */
+async function waitForPace(window: string, scope?: string): Promise<HTMLElement> {
+  await waitFor(() => expect(paceOf(window, scope)).not.toBeNull());
+  return paceOf(window, scope);
+}
+
+/** The figure and reset of a limit row: its line beside the window. */
+function limitValue(window: string, scope?: string, within?: ParentNode): HTMLElement {
+  return limitRow(window, scope, within).querySelector<HTMLElement>(".provider-limits__stat")!;
+}
+
 const codexBackend: BackendSummary = {
   kind: "codex",
   label: "Codex app server",
   available: true,
   account: {
     type: "chatgpt",
-    email: "user@example.com",
+    email: "you@example.com",
     planType: "pro",
     requiresOpenaiAuth: false,
   },
@@ -151,8 +183,8 @@ describe("ProviderStatusPanel", () => {
       />,
     );
 
-    expect(screen.getByText("0.149.1")).toBeInTheDocument();
-    expect(screen.getByText("OpenAI release")).toBeInTheDocument();
+    // Version and build share a line.
+    expect(valueFor("Version")).toHaveTextContent(/^0\.149\.1 · OpenAI release$/);
   });
 
   it("names a PwrDrvr build rather than leaving it to the version suffix", () => {
@@ -170,23 +202,90 @@ describe("ProviderStatusPanel", () => {
       />,
     );
 
-    expect(screen.getByText("0.149.0-pwragent.2")).toBeInTheDocument();
-    expect(screen.getByText("PwrDrvr build")).toBeInTheDocument();
+    expect(valueFor("Version")).toHaveTextContent(/^0\.149\.0-pwragent\.2 · PwrDrvr build$/);
   });
 
-  it("renders account, plan, credits, and limits as rows of one grid", () => {
+  it("puts facts in the grid and limits in their own block, labelled by window", () => {
     render(<ProviderStatusPanel backends={[codexBackend]} />);
 
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Available")).toBeInTheDocument();
-    expect(valueFor("Account")).toHaveTextContent("user@example.com");
-    // Codex sends the plan id in lowercase.
-    expect(valueFor("Plan")).toHaveTextContent(/^Pro$/);
-    // Credits and limits are label-column rows, not prose under the grid, and
-    // read "% used" as the Usage Activity window does.
-    expect(valueFor("Credits")).toHaveTextContent(/^100$/);
-    expect(valueFor("5h limit")).toHaveTextContent(/^15% used/);
-    expect(valueFor("Weekly limit")).toHaveTextContent(/^9% used/);
+    expect(valueFor("Account")).toHaveTextContent("you@example.com");
+    // Codex sends the plan id in lowercase; credits share the plan's line.
+    expect(valueFor("Plan")).toHaveTextContent(/^Pro · 100 credits$/);
+    expect(screen.queryByText("Credits", { selector: "dt" })).not.toBeInTheDocument();
+    // Limits read "% used" as the Usage Activity window does, Weekly first,
+    // and a single-scope provider has no scope subheader.
+    expect([...document.querySelectorAll<HTMLElement>(".provider-limits__row")].map((row) => row.dataset.window))
+      .toEqual(["Weekly", "5h"]);
+    expect(document.querySelector(".provider-limits__scope")).toBeNull();
+    expect(limitValue("Weekly")).toHaveTextContent(/^9% used/);
+    expect(limitValue("5h")).toHaveTextContent(/^15% used/);
+    expect(document.querySelector(".backend-status-list__metadata-grid .backend-status-list__meter")).toBeNull();
+    expect(screen.queryByText(/limit/i)).not.toBeInTheDocument();
+  });
+
+  it("groups Antigravity's limits under a subheader per pool, Weekly before 5h", () => {
+    const now = Date.UTC(2026, 10, 26, 14);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const antigravity: BackendSummary = {
+      ...kimiBackend,
+      kind: "acp:antigravity",
+      label: "Antigravity",
+      // As the ACP status reports them: 5h before Weekly, Gemini first.
+      rateLimits: [
+        { name: "5h Gemini limit", limitId: "gemini-5h", usedPercent: 2.4, resetAt: now + HOUR, windowMinutes: 300 },
+        { name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 31, resetAt: now + 90 * HOUR, windowMinutes: 10_080 },
+        { name: "5h Claude/GPT limit", limitId: "3p-5h", usedPercent: 0, windowMinutes: 300 },
+        { name: "Weekly Claude/GPT limit", limitId: "3p-weekly", usedPercent: 36, resetAt: now + 100 * HOUR, windowMinutes: 10_080 },
+      ],
+    };
+    render(<ProviderStatusPanel backends={[antigravity]} />);
+
+    const block = document.querySelector(".provider-limits")!;
+    expect([...block.children].map((child) => child.classList.contains("provider-limits__scope")
+      ? `# ${child.textContent}` : (child as HTMLElement).dataset.window)).toEqual([
+      // Scopes in the shared grouping's order, the same as the gauge peek's.
+      "# Gemini", "Weekly", "5h",
+      "# Claude/GPT", "Weekly", "5h",
+    ]);
+    expect(limitValue("Weekly", "Gemini")).toHaveTextContent(/^31% used/);
+    expect(limitValue("5h", "Gemini")).toHaveTextContent(/^2\.4% used/);
+    expect(limitValue("Weekly", "Claude/GPT")).toHaveTextContent(/^36% used/);
+    expect(block).not.toHaveTextContent(/limit/i);
+    // The facts' label column is "Auth", not the longest limit name.
+    expect(valueFor("Auth")).toHaveTextContent("Managed by provider");
+    // Every meter is a row's own child in the block's one value column, not
+    // part of a fact's value, so each starts at the same edge and runs the
+    // same width (jsdom does no layout; the column structure is the guarantee).
+    const meters = [...document.querySelectorAll(".backend-status-list__meter")];
+    expect(meters).toHaveLength(4);
+    for (const meter of meters) {
+      expect(meter).toHaveClass("provider-limits__bar");
+      expect(meter.parentElement).toHaveClass("provider-limits__row");
+      expect(meter.parentElement!.parentElement).toBe(block);
+    }
+  });
+
+  it("keeps a limit with no window, beside the provider's other limits", () => {
+    const claude: BackendSummary = {
+      ...codexBackend,
+      kind: "claude",
+      label: "Claude",
+      rateLimits: [
+        { name: "Weekly limit", limitId: "seven_day", usedPercent: 29, windowMinutes: 10_080 },
+        { name: "Weekly Fable limit", limitId: "seven_day_overage_included", usedPercent: 4, windowMinutes: 10_080 },
+        { name: "Cloud session credits", limitId: "iguana_necktie", usedPercent: 3, expires: true },
+      ],
+    };
+    render(<ProviderStatusPanel backends={[claude]} />);
+
+    expect([...document.querySelector(".provider-limits")!.children].map((child) =>
+      child.classList.contains("provider-limits__scope") ? `# ${child.textContent}` : (child as HTMLElement).dataset.window))
+      .toEqual(["# All models", "Weekly", "Cloud session credits", "# Fable", "Weekly"]);
+    // A long window name takes the row line rather than widening the column.
+    expect(limitRow("Cloud session credits", "All models")).toHaveClass("is-long");
+    expect(limitValue("Cloud session credits", "All models")).toHaveTextContent(/^3% used/);
   });
 
   it("opens Usage Activity from the heading", () => {
@@ -207,7 +306,13 @@ describe("ProviderStatusPanel", () => {
   it("identifies a Free plan even without an account email", () => {
     render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { type: "chatgpt", planType: "free", requiresOpenaiAuth: true } }]} />);
     expect(valueFor("Account")).toHaveTextContent(/^ChatGPT account$/);
-    expect(valueFor("Plan")).toHaveTextContent(/^Free$/);
+    expect(valueFor("Plan")).toHaveTextContent(/^Free · 100 credits$/);
+  });
+
+  it("keeps a credit balance off a Plan line that names no plan", () => {
+    render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { type: "apiKey", requiresOpenaiAuth: true } }]} />);
+    expect(valueFor("Plan")).toHaveTextContent(/^API billing$/);
+    expect(valueFor("Credits")).toHaveTextContent(/^100 credits$/);
   });
 
   it("identifies a signed-out account without implying a Free plan", () => {
@@ -248,9 +353,11 @@ describe("ProviderStatusPanel", () => {
       />,
     );
 
-    const weeklyValue = valueFor("Weekly limit");
-    expect(await within(weeklyValue).findByText(/On pace to reach 100% .*, 6 h 3\d m before the reset/)).toBeInTheDocument();
-    expect(weeklyValue.querySelector(".backend-status-list__pace")).toHaveClass("is-short");
+    // The rate leads the pace line, and running out early keeps its warning.
+    const weeklyPace = await waitForPace("Weekly");
+    expect(weeklyPace).toHaveTextContent(/^\+\d+(\.\d)?%\/h hits 100% .*, 6 h 3\d m before the reset$/);
+    expect(weeklyPace.firstElementChild).toHaveTextContent(/^\+.*%\/h$/);
+    expect(weeklyPace).toHaveClass("is-short");
     expect(readUsageActivity).toHaveBeenCalledWith({ from: now - 8 * 24 * HOUR, to: now });
   });
 
@@ -264,7 +371,7 @@ describe("ProviderStatusPanel", () => {
       resetAt: now + 120 * HOUR, windowMinutes: 10_080,
     };
     const claudeLimit = { ...weekly, usedPercent: 10 };
-    const claudeGptLimit = { ...weekly, usedPercent: 20 };
+    const claudeGptLimit = { ...weekly, name: "Weekly Claude/GPT limit", usedPercent: 20 };
     const geminiLimit = { ...weekly, limitId: "gemini", name: "Weekly Gemini limit", usedPercent: 22 };
     const limitObservations: UsageLimitObservation[] = [
       { observedAt: now, provider: "anthropic", accountKey: "same-key", limits: [claudeLimit] },
@@ -283,9 +390,9 @@ describe("ProviderStatusPanel", () => {
     const claudeRow = screen.getByText("Claude", { selector: ".backend-status-list__name" }).closest("li")!;
     const antigravityRow = screen.getByText("Antigravity", { selector: ".backend-status-list__name" }).closest("li")!;
 
-    expect(await within(claudeRow).findByText(/On pace for about 35%/)).toBeInTheDocument();
-    expect(within(antigravityRow).getByText(/On pace for about 70%/)).toBeInTheDocument();
-    expect(within(antigravityRow).getByText(/On pace for about 77%/)).toBeInTheDocument();
+    expect(await within(claudeRow).findByText(/on pace for about 35%/)).toBeInTheDocument();
+    expect(paceOf("Weekly", "Claude/GPT", antigravityRow)).toHaveTextContent(/on pace for about 70%/);
+    expect(paceOf("Weekly", "Gemini", antigravityRow)).toHaveTextContent(/on pace for about 77%/);
     expect(readUsageActivity).toHaveBeenCalledTimes(1);
 
     // The status stream can advance to a new window before its usage read.
@@ -294,8 +401,8 @@ describe("ProviderStatusPanel", () => {
       backends={[{ ...claude, rateLimits: [{ ...claudeLimit, resetAt: weekly.resetAt + 168 * HOUR }] }, antigravity]}
       desktopApi={{ readUsageActivity }}
     />);
-    expect(within(claudeRow).queryByText(/On pace/)).not.toBeInTheDocument();
-    expect(within(antigravityRow).getByText(/On pace for about 70%/)).toBeInTheDocument();
+    expect(within(claudeRow).queryByText(/on pace/)).not.toBeInTheDocument();
+    expect(within(antigravityRow).getByText(/on pace for about 70%/)).toBeInTheDocument();
 
     // If live usage climbs past a cached series's projected end-of-window level
     // before the usage read refreshes, hide the contradictory stale projection.
@@ -303,7 +410,7 @@ describe("ProviderStatusPanel", () => {
       backends={[{ ...claude, rateLimits: [{ ...claudeLimit, usedPercent: 45 }] }, antigravity]}
       desktopApi={{ readUsageActivity }}
     />);
-    expect(within(claudeRow).queryByText(/On pace for about 35%/)).not.toBeInTheDocument();
+    expect(within(claudeRow).queryByText(/on pace for about 35%/)).not.toBeInTheDocument();
   });
 
   it("paces Antigravity 5h buckets on their 300-minute window and omits reset text when absent", async () => {
@@ -345,18 +452,16 @@ describe("ProviderStatusPanel", () => {
     render(<ProviderStatusPanel backends={[antigravity]} desktopApi={{ readUsageActivity }} />);
 
     // 2 hours into a 5-hour window at 20% used -> +10%/h, on pace for 50% at reset.
-    const gemini5hCell = valueFor("5h Gemini limit");
-    expect(await within(gemini5hCell).findByText(/\+10%\/h/)).toBeInTheDocument();
-    expect(within(gemini5hCell).getByText(/On pace for about 50%/)).toBeInTheDocument();
+    const gemini5hPace = await waitForPace("5h", "Gemini");
+    expect(gemini5hPace).toHaveTextContent(/^\+10%\/h on pace for about 50% at the reset$/);
 
     // Full 5h bucket without a real reset shows 0% used with no reset or pace text.
-    const claude5hCell = valueFor("5h Claude/GPT limit");
-    expect(claude5hCell).toHaveTextContent(/^0% used$/);
-    expect(within(claude5hCell).queryByText(/resets|1970|On pace/i)).not.toBeInTheDocument();
+    const claude5hRow = limitRow("5h", "Claude/GPT");
+    expect(limitValue("5h", "Claude/GPT")).toHaveTextContent(/^0% used$/);
+    expect(within(claude5hRow).queryByText(/resets|1970|on pace/i)).not.toBeInTheDocument();
 
     // Weekly bucket still uses its 10,080-minute (168h) window: 48h elapsed -> 35%.
-    const weeklyCell = valueFor("Weekly Gemini limit");
-    expect(within(weeklyCell).getByText(/On pace for about 35%/)).toBeInTheDocument();
+    expect(paceOf("Weekly", "Gemini")).toHaveTextContent(/on pace for about 35%/);
   });
 
   it("refreshes Antigravity's projection from a newer sample at the same percentage", async () => {
@@ -378,13 +483,13 @@ describe("ProviderStatusPanel", () => {
       const view = render(<ProviderStatusPanel backends={[backend(firstAt)]} desktopApi={{ readUsageActivity }} />);
       try {
         await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-        expect(screen.getByText(/On pace to reach 100%/)).toBeInTheDocument();
+        expect(screen.getByText(/hits 100%/)).toBeInTheDocument();
         vi.setSystemTime(nextAt);
         readUsageActivity.mockResolvedValue(response(nextAt));
         view.rerender(<ProviderStatusPanel backends={[backend(nextAt)]} desktopApi={{ readUsageActivity }} />);
         await act(async () => { await vi.advanceTimersByTimeAsync(0); });
         const expected = Math.round(10 * 168 / elapsedHours);
-        expect(screen.getByText(new RegExp(`On pace for about ${expected}%`))).toBeInTheDocument();
+        expect(screen.getByText(new RegExp(`on pace for about ${expected}%`))).toBeInTheDocument();
         expect(readUsageActivity).toHaveBeenCalledTimes(2);
       } finally {
         view.unmount();
@@ -406,13 +511,13 @@ describe("ProviderStatusPanel", () => {
       const view = render(<ProviderStatusPanel backends={[backend]} desktopApi={{ readUsageActivity }} />);
       try {
         await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-        expect(screen.getByText(/On pace to reach 100%/)).toBeInTheDocument();
+        expect(screen.getByText(/hits 100%/)).toBeInTheDocument();
         view.rerender(<ProviderStatusPanel
           backends={[{ ...backend, rateLimits: [{ ...limit, usedPercent }] }]}
           desktopApi={{ readUsageActivity }}
         />);
-        expect(screen.queryByText(/On pace/)).not.toBeInTheDocument();
-        expect(valueFor("Weekly limit").querySelector("s")).toBeNull();
+        expect(screen.queryByText(/on pace|hits 100%/)).not.toBeInTheDocument();
+        expect(limitRow("Weekly").querySelector("s")).toBeNull();
         expect(readUsageActivity).toHaveBeenCalledTimes(1);
       } finally {
         view.unmount();
@@ -486,11 +591,12 @@ describe("ProviderStatusPanel", () => {
   it("shows Grok subscription and included-credit usage from ACP billing", () => {
     render(<ProviderStatusPanel backends={[grokAcpBackend]} />);
 
-    // "Grok account" only repeats the provider name; Authentication carries
-    // the sign-in state.
+    // "Grok account" only repeats the provider name; Auth carries the
+    // sign-in state.
     expect(screen.queryByText("Grok account")).not.toBeInTheDocument();
+    expect(valueFor("Auth")).toHaveTextContent("Signed in");
     expect(valueFor("Plan")).toHaveTextContent("SuperGrok Heavy");
-    expect(valueFor("Included credits")).toHaveTextContent(/^43% used/);
+    expect(limitValue("Included credits")).toHaveTextContent(/^43% used/);
   });
 
   it("renders a backend error when status is unavailable", () => {

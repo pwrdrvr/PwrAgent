@@ -5,7 +5,7 @@ exports[`budgets federation navigation traffic for 1 visible mounts 1`] = `
   "cold": {
     "diagnosticBytes": 217,
     "duplicates": 0,
-    "requestBytes": 479,
+    "requestBytes": 499,
     "requests": 1,
     "responseBytes": 1044,
     "rows": 1,
@@ -13,7 +13,7 @@ exports[`budgets federation navigation traffic for 1 visible mounts 1`] = `
   "refresh": {
     "diagnosticBytes": 279,
     "duplicates": 0,
-    "requestBytes": 653,
+    "requestBytes": 673,
     "requests": 1,
     "responseBytes": 1044,
     "rows": 1,
@@ -21,7 +21,7 @@ exports[`budgets federation navigation traffic for 1 visible mounts 1`] = `
   "selection": {
     "diagnosticBytes": 217,
     "duplicates": 0,
-    "requestBytes": 559,
+    "requestBytes": 579,
     "requests": 1,
     "responseBytes": 1044,
     "rows": 1,
@@ -34,7 +34,7 @@ exports[`budgets federation navigation traffic for 10 visible mounts 1`] = `
   "cold": {
     "diagnosticBytes": 217,
     "duplicates": 0,
-    "requestBytes": 1082,
+    "requestBytes": 1102,
     "requests": 1,
     "responseBytes": 8659,
     "rows": 10,
@@ -42,7 +42,7 @@ exports[`budgets federation navigation traffic for 10 visible mounts 1`] = `
   "refresh": {
     "diagnosticBytes": 558,
     "duplicates": 0,
-    "requestBytes": 1762,
+    "requestBytes": 1802,
     "requests": 2,
     "responseBytes": 8858,
     "rows": 10,
@@ -50,7 +50,7 @@ exports[`budgets federation navigation traffic for 10 visible mounts 1`] = `
   "selection": {
     "diagnosticBytes": 434,
     "duplicates": 0,
-    "requestBytes": 1574,
+    "requestBytes": 1614,
     "requests": 2,
     "responseBytes": 8858,
     "rows": 10,
@@ -63,7 +63,7 @@ exports[`budgets federation navigation traffic for 101 visible mounts 1`] = `
   "cold": {
     "diagnosticBytes": 651,
     "duplicates": 10,
-    "requestBytes": 8765,
+    "requestBytes": 8825,
     "requests": 3,
     "responseBytes": 94874,
     "rows": 111,
@@ -71,7 +71,7 @@ exports[`budgets federation navigation traffic for 101 visible mounts 1`] = `
   "refresh": {
     "diagnosticBytes": 558,
     "duplicates": 0,
-    "requestBytes": 7951,
+    "requestBytes": 7991,
     "requests": 2,
     "responseBytes": 86214,
     "rows": 101,
@@ -79,7 +79,7 @@ exports[`budgets federation navigation traffic for 101 visible mounts 1`] = `
   "selection": {
     "diagnosticBytes": 434,
     "duplicates": 0,
-    "requestBytes": 7763,
+    "requestBytes": 7803,
     "requests": 2,
     "responseBytes": 86214,
     "rows": 101,

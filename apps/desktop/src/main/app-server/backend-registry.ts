@@ -255,6 +255,7 @@ import {
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
+  type AppServerBackendScope,
   type AppServerBackendKind,
   type AppServerBackendWake,
   type CodexThreadEnvironmentRuntime,
@@ -1044,6 +1045,19 @@ function logBackendLifecycleNotification(
 const ENVIRONMENT_TIMEOUT_THREAD_LIST_REUSE_WINDOW_MS = 5_000;
 let threadListCacheSequence = 0;
 
+type RegistryThreadListParams = {
+  archived?: boolean;
+  backend?: AppServerBackendKind;
+  callerReason?: ThreadListCallerReason;
+  enrichDirectories?: boolean;
+  skipPendingDirectoryEnrichment?: boolean;
+  filter?: string;
+  forceRefresh?: boolean;
+  limit?: number;
+  maxPages?: number;
+  skipArchivedMetadataRefresh?: boolean;
+};
+
 function requiresSuccessfulCodexThreadList(callerReason?: string): boolean {
   return callerReason === "archive-cleanup"
     || callerReason === "startup-provider-refresh"
@@ -1180,6 +1194,9 @@ export class DesktopBackendRegistry {
   private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
+  private readonly codexInventorySequences = new WeakMap<AppServerThreadSummary[], number>();
+  private readonly pendingOppositeMembership = new Map<boolean, Promise<ReadonlySet<string> | undefined>>();
+  private readonly latestCompleteCodexInventory = new Map<boolean, number>();
   private readonly threadListRowIndexes = new WeakMap<AppServerThreadSummary[], {
     visited: number;
     firstById: Map<string, AppServerThreadSummary>;
@@ -4285,7 +4302,7 @@ export class DesktopBackendRegistry {
     }
     // An event during the read must prevent publishing the old projection.
     // Do not share an in-flight request whose deadline belongs to another caller.
-    const pending: ThreadListCacheState = { archived: params.archived === true };
+    const pending: ThreadListCacheState = { archived: params.archived === true, observationSequence: this.reserveThreadInfoObservation() };
     this.threadListCache.set(cacheKey, pending);
     const threads: AppServerThreadSummary[] = [];
     let providerFailed = false;
@@ -4366,6 +4383,7 @@ export class DesktopBackendRegistry {
         this.threadListCache.set(cacheKey, {
           archived: params.archived === true,
           threads: result,
+          observationSequence: pending.observationSequence,
           expiresAt: Date.now() + THREAD_SEARCH_REUSE_WINDOW_MS,
         });
       }
@@ -4402,18 +4420,19 @@ export class DesktopBackendRegistry {
     return descendants.some((thread) => thread.id === threadId && thread.archivedAt === undefined);
   }
 
-  async listThreads(params: {
-    archived?: boolean;
-    backend?: AppServerBackendKind;
-    callerReason?: ThreadListCallerReason;
-    enrichDirectories?: boolean;
-    skipPendingDirectoryEnrichment?: boolean;
-    filter?: string;
-    forceRefresh?: boolean;
-    limit?: number;
-    maxPages?: number;
-    skipArchivedMetadataRefresh?: boolean;
-  } = {}): Promise<AppServerThreadSummary[]> {
+  listThreads(params: RegistryThreadListParams = {}): Promise<AppServerThreadSummary[]> {
+    return this.readThreadInventory(params);
+  }
+
+  private listThreadsForResolution(params: RegistryThreadListParams, lookupThreadId?: string): Promise<AppServerThreadSummary[]> {
+    return lookupThreadId ? this.readThreadInventory(params, true, lookupThreadId) : this.listThreads(params);
+  }
+
+  private async readThreadInventory(
+    params: RegistryThreadListParams,
+    nativeOnly = false,
+    lookupThreadId?: string,
+  ): Promise<AppServerThreadSummary[]> {
     await this.subAgentStartupReconciliation;
     // Hard gate: the bootstrap profile MUST NEVER serve thread data,
     // regardless of what the bootstrap config.toml's onboarding
@@ -4445,10 +4464,33 @@ export class DesktopBackendRegistry {
       enrichDirectories:
         params.enrichDirectories ?? shouldEnrichThreadDirectories(params.callerReason),
     };
+    // A new inventory replaces the previous observation of the same query.
+    // Point callers share provider rows, and keep retained hits separate from them.
     const cacheKey = this.buildThreadListCacheKey(normalizedParams);
+    const select = async (threads: AppServerThreadSummary[], state: ThreadListCacheState) => {
+      if (lookupThreadId === undefined) return threads;
+      const native = this.findThreadListRow(threads, lookupThreadId);
+      const includesCodex = this.codexInventorySequences.has(threads);
+      // A native Codex row settles the Codex half even when another backend
+      // owns the first matching row in the aggregate sort.
+      if (!includesCodex || native?.source === "codex" || (native && this.findThreadListRow(threads, lookupThreadId, "codex"))) {
+        return native ? [native] : [];
+      }
+      const rows = await this.withRetainedOwnerThreads([], normalizedParams, lookupThreadId);
+      const retained = rows[0];
+      if (retained && this.threadListCache.get(cacheKey) === state) {
+        (state.retainedById ??= new Map()).set(lookupThreadId, retained);
+        if (this.isIncompleteThreadList(rows)) state.expiresAt = Math.min(state.expiresAt!, Date.now() + this.threadListReuseWindowMs(rows));
+      }
+      const selected = this.preferRetainedLookupRow(native, retained);
+      return selected ? [selected] : [];
+    };
     const now = Date.now();
     const cached = this.findReusableThreadListCache(normalizedParams, cacheKey, now);
-    if (cached) {
+    const cachedState = cached && this.threadListCache.get(cached.cacheKey);
+    const latestCodex = this.latestCompleteCodexInventory.get(params.archived === true) ?? 0;
+    if (cached && cachedState && Boolean(cachedState.lookupOnly) === nativeOnly
+      && (!nativeOnly || (cachedState.observationSequence ?? 0) >= latestCodex)) {
       listingDiagnostics.link("registry", cached.pending ? "coalesced" : "cache-hit", cached.value, {
         caller: normalizedParams.callerReason,
         provider: normalizedParams.backend === "codex" ? "codex" : normalizedParams.backend ? "acp" : "all",
@@ -4469,7 +4511,7 @@ export class DesktopBackendRegistry {
         source: cached.source,
         threadCount: cached.threadCount,
       });
-      return await cached.value;
+      return select(await cached.value, cachedState);
     }
 
     const startedAt = Date.now();
@@ -4487,24 +4529,35 @@ export class DesktopBackendRegistry {
     });
     // An event can invalidate or replace this entry while the read awaits
     // enrichment. Only the promise that still owns the key may publish it.
-    const pendingState: ThreadListCacheState = { archived: normalizedParams.archived === true };
-    const displayMetadataObservationSequence =
-      this.reserveThreadInfoObservation();
+    const displayMetadataObservationSequence = this.reserveThreadInfoObservation();
+    const pendingState: ThreadListCacheState = {
+      archived: normalizedParams.archived === true,
+      observationSequence: displayMetadataObservationSequence,
+      lookupOnly: nativeOnly,
+    };
     const execution = listingDiagnostics.trace("registry", {
       caller: normalizedParams.callerReason,
       provider: normalizedParams.backend === "codex" ? "codex" : normalizedParams.backend ? "acp" : "all",
       archived: normalizedParams.archived === true,
-    }, () => this.readThreadList(normalizedParams, displayMetadataObservationSequence, { cacheKey, pendingState }));
+    }, () => this.readThreadList(normalizedParams, displayMetadataObservationSequence, { cacheKey, pendingState, nativeOnly }));
     const promise = execution
       .then((threads) => {
         if (this.threadListCache.get(cacheKey) === pendingState) {
           listingDiagnostics.remember(threads, execution);
           const reuseWindowMs = this.threadListReuseWindowMs(threads);
-          this.threadListCache.set(cacheKey, {
-            archived: normalizedParams.archived === true,
-            expiresAt: Date.now() + reuseWindowMs,
-            threads,
-          });
+          pendingState.threads = threads;
+          pendingState.expiresAt = Date.now() + reuseWindowMs;
+          delete pendingState.promise;
+          delete pendingState.providerRead;
+          if (params.backend === "codex" && !params.skipArchivedMetadataRefresh && !params.filter?.trim() && params.limit === undefined
+            && params.maxPages === undefined && !this.isIncompleteThreadList(threads)) {
+            const sequence = pendingState.observationSequence!;
+            const previous = this.latestCompleteCodexInventory.get(pendingState.archived) ?? 0;
+            if (sequence > previous) {
+              this.latestCompleteCodexInventory.set(pendingState.archived, sequence);
+              this.pendingOppositeMembership.delete(pendingState.archived);
+            }
+          }
           logDebug("threadListCache:store", {
             archived: normalizedParams.archived === true,
             backend: normalizedParams.backend ?? "all",
@@ -4546,7 +4599,7 @@ export class DesktopBackendRegistry {
     listingDiagnostics.remember(promise, execution);
     pendingState.promise = promise;
     this.threadListCache.set(cacheKey, pendingState);
-    return await promise;
+    return select(await promise, pendingState);
   }
 
   /** Provider membership for the known candidates in one local subthread group. */
@@ -4607,20 +4660,21 @@ export class DesktopBackendRegistry {
     if (cached) {
       return cached;
     }
-    const threads = await this.listThreads({
+    const lookupThreadId = this.retainedOwnerThreadStorage && (!params.backend || params.backend === "codex") ? threadId : undefined;
+    const threads = await this.listThreadsForResolution({
       backend: params.backend,
       archived: false,
       callerReason: "thread-id-lookup",
       enrichDirectories: false,
       forceRefresh: true,
-    });
+    }, lookupThreadId);
     const thread = this.findThreadListRow(threads, threadId);
     if (thread || (params.backend && params.backend !== "codex")
-      || !this.retainedOwnerThreadStorage?.list().some(row => row.id === threadId)) return thread;
+      || !this.retainedOwnerThreadStorage?.has(threadId)) return thread;
     // A retained identity can be archived. Consult native archive authority
     // through the same read policy rather than treating its metadata as active.
-    const archived = await this.listThreads({ backend: "codex", archived: true, enrichDirectories: false,
-      callerReason: "thread-id-lookup", forceRefresh: true });
+    const archived = await this.listThreadsForResolution({ backend: "codex", archived: true, enrichDirectories: false,
+      callerReason: "thread-id-lookup", forceRefresh: true }, lookupThreadId);
     return this.findThreadListRow(archived, threadId);
   }
 
@@ -4666,6 +4720,46 @@ export class DesktopBackendRegistry {
     return summary && session
       ? { ...summary, acpRuntime: session.acpRuntime, executionMode: session.executionMode ?? summary.executionMode }
       : summary;
+  }
+
+  /** A start is visible as soon as the owner has committed its workspace,
+   * including the interval before the provider's listing catches up. */
+  getCachedNavigationThread(ref: { backend: AppServerBackendKind; threadId: string }): AppServerThreadSummary | undefined {
+    const pending = this.pendingStartedThreads.get(buildThreadIdentityKey(ref.backend, ref.threadId));
+    const cached = this.getCachedThreadSummary(ref);
+    return pending && cached ? retainPendingStartedThreadWorkspace(cached, pending) : pending ?? cached;
+  }
+
+  async refreshNavigationThread(ref: { backend: AppServerBackendKind; threadId: string }, activity: boolean, workers: boolean) {
+    const observation = this.reserveThreadInfoObservation();
+    let summary = this.getCachedNavigationThread(ref);
+    if (activity) {
+      let native: AppServerThreadSummary | undefined;
+      if (ref.backend === "codex") {
+        native = await this.withCodexThreadClient(ref.threadId, async (client) => await client.readThreadSummary?.(ref.threadId))
+          .catch(() => undefined);
+      } else if (ref.backend === "claude") {
+        native = await this.claudeBackend.readThreadSummary(ref.threadId);
+      } else if (isAcpBackendId(ref.backend)) {
+        const session = this.acpBackend.getSession(ref.backend, ref.threadId);
+        if (session) native = this.acpBackend.sessionToThreadSummary(session);
+      }
+      if (native) {
+        // Point reads omit checkout and runtime facts supplied by discovery.
+        // Keep those facts and take the activity watermark and acknowledged title.
+        const { title, titleSource } = projectOwnerThreadTitle(native, await this.overlayStore.getThreadMetadata?.(ref));
+        summary = this.withObservedThreadName({ ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt });
+      }
+    }
+    if (!summary) return undefined;
+    if (workers && ref.backend === "codex") {
+      const cards = await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
+        backend: "codex", threadIds: [ref.threadId], monitorIdPrefix: CODEX_NATIVE_MONITOR_ID_PREFIX,
+      });
+      summary = { ...summary, ...this.subAgentMonitorService.persistedCodexNativeSubAgentDisclosure(summary, cards[ref.threadId]) };
+    }
+    this.threadInfoStore.observeSummary({ identity: ref, observationSequence: observation, enriched: false, summary });
+    return summary;
   }
 
   /** An explicit link hover needs display facts, without publishing provider
@@ -4753,6 +4847,15 @@ export class DesktopBackendRegistry {
     return undefined;
   }
 
+  private preferRetainedLookupRow(
+    native: AppServerThreadSummary | undefined,
+    retained: AppServerThreadSummary | undefined,
+  ): AppServerThreadSummary | undefined {
+    // Aggregate inventories put Codex before other backends on an updatedAt tie.
+    if (native && (!retained || native.source === "codex" || (native.updatedAt ?? 0) > (retained.updatedAt ?? 0))) return native;
+    return retained;
+  }
+
   private findThreadListCachedSummary(
     params: {
       backend?: AppServerBackendKind;
@@ -4768,7 +4871,13 @@ export class DesktopBackendRegistry {
       if (now !== undefined && (state.expiresAt ?? 0) <= now) {
         continue;
       }
-      const cached = state.threads && this.findThreadListRow(state.threads, params.threadId, params.backend);
+      // A newer complete Codex observation supersedes ownership evidence
+      // from older listing variants, even if they finish out of order.
+      const staleCodex = (state.observationSequence ?? 0) < (this.latestCompleteCodexInventory.get(state.archived) ?? 0);
+      if (staleCodex && params.backend === "codex") continue;
+      const retained = !staleCodex && (!params.backend || params.backend === "codex") ? state.retainedById?.get(params.threadId) : undefined;
+      const native = state.threads && this.findThreadListRow(state.threads, params.threadId, params.backend);
+      const cached = this.preferRetainedLookupRow(staleCodex && native?.source === "codex" ? undefined : native, retained);
       if (cached) {
         return cached;
       }
@@ -5073,20 +5182,9 @@ export class DesktopBackendRegistry {
   }
 
   private async readThreadList(
-    params: {
-      archived?: boolean;
-      backend?: AppServerBackendKind;
-      callerReason?: ThreadListCallerReason;
-      enrichDirectories: boolean;
-      skipPendingDirectoryEnrichment?: boolean;
-      filter?: string;
-      forceRefresh?: boolean;
-      limit?: number;
-      maxPages?: number;
-      skipArchivedMetadataRefresh?: boolean;
-    },
+    params: RegistryThreadListParams & { enrichDirectories: boolean },
     displayMetadataObservationSequence: number,
-    cache: { cacheKey: string; pendingState: ThreadListCacheState },
+    cache: { cacheKey: string; pendingState: ThreadListCacheState; nativeOnly: boolean },
   ): Promise<AppServerThreadSummary[]> {
     const durableThreads = await this.readDurableStartupThreads(
       params,
@@ -5138,21 +5236,23 @@ export class DesktopBackendRegistry {
         params.archived,
       );
       this.persistProviderThreadSnapshot(params.backend, threads, params);
-      return params.backend === "codex" ? await this.withRetainedOwnerThreads(threads, params) : threads;
+      if (params.backend !== "codex") return threads;
+      cache.pendingState.observationSequence = providerRead.observationSequence;
+      if (cache.nativeOnly) this.confirmRetainedNativeOwners(threads);
+      const inventory = cache.nativeOnly ? threads : await this.withRetainedOwnerThreads(threads, params);
+      this.codexInventorySequences.set(inventory, providerRead.observationSequence);
+      return inventory;
     }
 
+    const codexParams = { ...params, backend: "codex" as const };
+    const codexRead = cache.nativeOnly ? this.readThreadInventory(codexParams, true) : this.listThreads(codexParams);
     const [codexThreads, acpThreads, claudeThreads] = await Promise.all([
-      this.listThreads({
-        backend: "codex",
-        archived: params.archived,
-        callerReason: params.callerReason,
-        enrichDirectories: params.enrichDirectories,
-        skipPendingDirectoryEnrichment: params.skipPendingDirectoryEnrichment,
-        filter: params.filter,
-        forceRefresh: params.forceRefresh,
-        limit: params.limit,
-        maxPages: params.maxPages,
-        skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
+      codexRead.then(threads => {
+        // Joiners use the actual nested provider observation, even while ACP
+        // enrichment is still pending.
+        const sequence = this.codexInventorySequences.get(threads);
+        if (sequence !== undefined) cache.pendingState.observationSequence = sequence;
+        return threads;
       }),
       this.listAllInstalledAcpThreads(params.filter, params.archived)
         .then((threads) => enrichEnvironmentOptions
@@ -5179,6 +5279,8 @@ export class DesktopBackendRegistry {
       ),
       codexThreads,
     );
+    const codexSequence = this.codexInventorySequences.get(codexThreads);
+    if (codexSequence !== undefined) this.codexInventorySequences.set(threads, codexSequence);
     if ([acpThreads, claudeThreads].some((rows) => this.threadListsWithEnvironmentTimeouts.has(rows))) {
       this.threadListsWithEnvironmentTimeouts.add(threads);
     }
@@ -5330,10 +5432,32 @@ export class DesktopBackendRegistry {
     return this.inheritThreadListReadState(limited, rows);
   }
 
+  /** Display observation without consuming the provider listing's status fence. */
+  navigationThreadStatus(row: AppServerThreadSummary): AppServerThreadStatus | undefined {
+    if (this.threadHasActiveTurn(row.id, row.source)) return "active";
+    return row.source === "codex" ? this.context.turnState.statusObservation(row.id)?.status ?? row.threadStatus : row.threadStatus;
+  }
+
+  /** Refresh only SQLite-owned sessions and overlays after an external profile commit.
+   * The saved Codex discovery snapshot may predate an observed start or deletion. */
+  async reconcileSqliteNavigationThreads(threads: AppServerThreadSummary[], backend: AppServerBackendScope): Promise<AppServerThreadSummary[]> {
+    if (this.closed || this.isBootstrapModeFn()) return [];
+    const [codex, claude, acp] = await Promise.all([
+      this.applySavedCodexOverlays(threads.filter((row) => row.source === "codex")),
+      backend === "all" || backend === "claude" ? this.claudeBackend.listThreads() : [],
+      backend === "all" || isAcpBackendId(backend) ? this.readAcpThreadsForCache(true) : [],
+    ]);
+    return [...codex, ...claude, ...acp.filter((row) => backend === "all" || row.source === backend)];
+  }
+
   /** Complete available local membership while the owner checks its providers. */
   readStartupNavigationThreads(backend?: AppServerBackendKind): Promise<AppServerThreadSummary[]> | undefined {
-    if (!this.providerThreadSnapshotStore || this.closed || this.isBootstrapModeFn()
-      || this.isCodexBootstrapDeferredFn() || this.startupProviderRefreshStatus?.state !== "checking") return undefined;
+    if (this.startupProviderRefreshStatus?.state !== "checking") return undefined;
+    return this.readSavedNavigationThreads(backend);
+  }
+
+  readSavedNavigationThreads(backend?: AppServerBackendKind): Promise<AppServerThreadSummary[]> | undefined {
+    if (!this.providerThreadSnapshotStore || this.closed || this.isBootstrapModeFn() || this.isCodexBootstrapDeferredFn()) return undefined;
     return this.hydrateSavedStartupThreads().then((saved) => {
       const reviewParents = new Set<string>();
       for (const review of this.context.turnState.liveReviewRecords().values()) {
@@ -5555,7 +5679,7 @@ export class DesktopBackendRegistry {
       backend: "codex",
       notification: {
         method: "navigation/providerThreads/refreshed",
-        params: { failedProviders },
+        params: { failedProviders, backend: "codex" },
       },
     });
   }
@@ -5680,6 +5804,7 @@ export class DesktopBackendRegistry {
       archived: false,
       expiresAt: Date.now() + this.threadListReuseWindowMs(currentThreads),
       threads: currentThreads,
+      observationSequence,
     });
   }
 
@@ -9340,11 +9465,19 @@ export class DesktopBackendRegistry {
   }
 
   private async startThreadPrepared(params: Parameters<DesktopBackendRegistry["startThread"]>[0], pending?: PendingThreadStartReporter): Promise<StartThreadResponse> {
-    return await new ThreadCreationLifecycle().prepare(async (resources) => await this.prepareThreadCreation(params, resources, pending), (stage, error) => {
+    const created = await new ThreadCreationLifecycle().prepare(async (resources) => await this.prepareThreadCreation(params, resources, pending), (stage, error) => {
       backendRegistryLog.warn("thread creation preparation cleanup failed", {
         backend: params.backend, stage, error: error instanceof Error ? error.message : String(error),
       });
     });
+    if (created.backend === "codex") {
+      // The provider may announce the identity before the owner's workspace,
+      // parent and pin are committed. The prepared row is now discoverable.
+      await this.threadDirectoryService.emitCodexDirectoryRelationshipsUpdated({
+        reason: "thread-created", threadIds: [created.threadId],
+      }).catch((error: unknown) => backendRegistryLog.warn("created thread navigation publication failed", { threadId: created.threadId, error: String(error) }));
+    }
+    return created;
   }
 
   private async prepareThreadCreation(params: Parameters<DesktopBackendRegistry["startThread"]>[0], resources: ThreadCreationPreparation, pending?: PendingThreadStartReporter): Promise<PreparedThreadCreation<Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure">>> {
@@ -18804,6 +18937,7 @@ export class DesktopBackendRegistry {
   // Only actual workspace mutations may invalidate a removal's safety scan.
   private invalidateThreadListCache(backend?: AppServerBackendKind, workspaceChanged = false, threadId?: string, paths: readonly string[] = []): void {
     this.threadListCacheRevision++;
+    if (!backend || backend === "codex") this.pendingOppositeMembership.clear();
     if (workspaceChanged) {
       this.threadArchiveCoordinator.advanceArchiveWorkspaceRevision();
       if (backend) this.threadArchiveCoordinator.recordArchiveWorkspaceChange(threadId ? buildThreadIdentityKey(backend, threadId) : undefined, paths, paths.length > 0);
@@ -19090,19 +19224,26 @@ export class DesktopBackendRegistry {
   private retainedOwnerThreadsMissingFrom(
     threads: AppServerThreadSummary[],
     params: { archived?: boolean; filter?: string },
+    lookupThreadId?: string,
   ): AppServerThreadSummary[] {
     const present = new Set(threads.filter(thread => thread.source === "codex").map(thread => thread.id));
-    return this.retainedOwnerThreadStorage?.list().filter(thread => !present.has(thread.id)
+    const eligible = (thread: AppServerThreadSummary) => !present.has(thread.id)
       && (thread.archivedAt !== undefined) === (params.archived === true)
-      && pendingStartedThreadMatchesFilter(thread, params.filter)) ?? [];
+      && pendingStartedThreadMatchesFilter(thread, params.filter);
+    if (lookupThreadId) {
+      const target = this.retainedOwnerThreadStorage?.get(lookupThreadId, params.archived === true);
+      return target && eligible(target) ? [target] : [];
+    }
+    return this.retainedOwnerThreadStorage?.list().filter(eligible) ?? [];
   }
 
   private mergeRetainedOwnerThreads(
     threads: AppServerThreadSummary[],
     params: { archived?: boolean; filter?: string },
     oppositeNativeIds: ReadonlySet<string>,
+    lookupThreadId?: string,
   ): AppServerThreadSummary[] {
-    const retained = this.retainedOwnerThreadsMissingFrom(threads, params).filter(thread => !oppositeNativeIds.has(thread.id));
+    const retained = this.retainedOwnerThreadsMissingFrom(threads, params, lookupThreadId).filter(thread => !oppositeNativeIds.has(thread.id));
     if (!retained.length) return threads;
     return this.inheritThreadListReadState([...threads, ...retained]
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)), threads);
@@ -19111,21 +19252,34 @@ export class DesktopBackendRegistry {
   private async withRetainedOwnerThreads(
     threads: AppServerThreadSummary[],
     params: { archived?: boolean; filter?: string; deadlineAt?: number },
+    lookupThreadId?: string,
   ): Promise<AppServerThreadSummary[]> {
     this.confirmRetainedNativeOwners(threads);
-    if (!this.retainedOwnerThreadsMissingFrom(threads, params).length) return threads;
+    if (!this.retainedOwnerThreadsMissingFrom(threads, params, lookupThreadId).length) return threads;
     // A missing active row may be a native archived member (and vice versa).
     // Retained identity must not manufacture membership in the other collection.
-    const opposite = await this.codexClient.listThreads({ archived: params.archived !== true,
-      enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true, deadlineAt: params.deadlineAt },
-    { callerReason: "retained-owner-membership", ownerId: this.threadListCacheOwnerId }).catch(() => {
-      this.incompleteThreadLists.add(threads);
-      return [];
-    });
-    this.confirmRetainedNativeOwners(opposite);
+    const opposite = await this.readOppositeRetainedMembership(params.archived !== true, params.deadlineAt, lookupThreadId !== undefined);
+    if (!opposite) this.incompleteThreadLists.add(threads);
     // Read retention again after awaiting discovery: a publication or retirement
     // committed while this walk was pending remains authoritative.
-    return this.mergeRetainedOwnerThreads(threads, params, new Set(opposite.map(thread => thread.id)));
+    return this.mergeRetainedOwnerThreads(threads, params, opposite ?? new Set(), lookupThreadId);
+  }
+
+  private async readOppositeRetainedMembership(archived: boolean, deadlineAt: number | undefined, share: boolean) {
+    const pending = share && this.pendingOppositeMembership.get(archived);
+    if (pending) return pending;
+    const read = this.codexClient.listThreads({ archived, enrichDirectories: false,
+      skipArchivedMetadataRefresh: true, requireComplete: true, deadlineAt },
+    { callerReason: "retained-owner-membership", ownerId: this.threadListCacheOwnerId }).then(rows => {
+      this.confirmRetainedNativeOwners(rows);
+      return new Set(rows.map(row => row.id));
+    }, () => undefined);
+    if (!share) return read;
+    this.pendingOppositeMembership.set(archived, read);
+    try { return await read; }
+    finally {
+      if (this.pendingOppositeMembership.get(archived) === read) this.pendingOppositeMembership.delete(archived);
+    }
   }
 
   private confirmRetainedNativeOwners(threads: readonly AppServerThreadSummary[]): void {

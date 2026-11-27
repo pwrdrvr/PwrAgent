@@ -45,7 +45,7 @@ export function navigationRemoteOwnerBytes(page: NavigationQueryPage): number {
  */
 export function expandNavigationRemoteOwner(page: NavigationQueryPage): NavigationQueryPage {
   if (!page.remoteOwner || page.remoteOwner.ownerContentBytes !== undefined) return page;
-  const owner = { ...page.remoteOwner, ownerContentBytes: navigationQueryPageBudgetBytes(page) };
+  const owner = { ...page.remoteOwner, ownerContentBytes: page.windowPagePatch?.ownerContentBytes ?? navigationQueryPageBudgetBytes(page) };
   const collapsed = owner.directoryThreadsCollapsed;
   const disclose = <T extends { key: string; directoryThreadsCollapsed?: boolean }>(directory: T): T =>
     collapsed && Object.hasOwn(collapsed, directory.key)
