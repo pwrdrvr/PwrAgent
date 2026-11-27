@@ -48,7 +48,7 @@ function fixture(observe?: (event: AgentEvent) => void, durable = false,
   const lists: string[] = [];
   const live = new LiveNavigationIndex({
     backend: "all", version: () => String(version) + ":0", changedKeys: () => undefined,
-    sqlite: async () => { const result = structuredClone(rows()); await gate; return result; },
+    sqlite: async (known) => { const result = structuredClone(rows().filter((row) => known.some((old) => old.id === row.id))); await gate; return result; },
     list: async (scope) => {
       lists.push(scope);
       const captured = structuredClone(rows());
@@ -164,6 +164,35 @@ it("keeps the last page during a SQLite gap and applies a newer event over a del
     expect(next.threads.map((row) => row.title)).toEqual(["newer", "external rename", "c", "d"]);
     expect(old.threads.map((row) => row.title)).toEqual(["a", "b", "c", "d"]);
   } finally { gate.resolve(); f.close(); }
+});
+
+it("discovers a Codex identity absent from a shared-profile reader's SQLite seed", async () => {
+  const f = fixture();
+  try {
+    const old = await f.live.read();
+    const done = f.completion();
+    f.providers.set("other", { ...f.providers.get("a")!, id: "other" });
+    f.external();
+    expect(await f.live.read()).toBe(old);
+    await done;
+    expect((await f.live.read()).threads.map((row) => row.id)).toContain("other");
+    expect(f.lists).toEqual(["all", "codex"]);
+  } finally { f.close(); }
+});
+
+it("applies the acknowledged Claude mode and rewind watermark over older cached provider metadata", async () => {
+  const f = fixture();
+  try {
+    const row = f.providers.get("a")!;
+    Object.assign(row, { source: "claude", executionMode: "default", updatedAt: 9 });
+    await f.live.read();
+    f.live.event({ backend: "claude", notification: { method: "thread/executionMode/updated", params: { threadId: "a", executionMode: "full-access" } } });
+    f.live.event({ backend: "claude", notification: { method: "thread/rewound", params: { threadId: "a", updatedAt: 7 } } });
+    expect((await f.live.read()).threads.find((r) => r.id === "a")).toMatchObject({ executionMode: "full-access", updatedAt: 7 });
+    f.live.event({ backend: "claude", notification: { method: "navigation/thread/seen", params: { threadId: "a" } } });
+    expect((await f.live.read()).threads.find((r) => r.id === "a")?.updatedAt).toBe(7);
+    expect(f.lists).toEqual(["all"]);
+  } finally { f.close(); }
 });
 
 it("transmits one changed entry and recovers with a full page when the window loses its baseline", async () => {

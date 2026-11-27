@@ -3,8 +3,10 @@ import { normalizeRenamedTitleSource } from "@pwragent/shared/contracts/normaliz
 import type { AppServerBackendKind, AppServerBackendScope, AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildThreadIdentityKey, parseThreadIdentityKey, type NavigationThreadSummary, type NavigationIdentity } from "@pwragent/shared/contracts/navigation";
 import { NAVIGATION_LIVE_INDEX_RECONCILED_METHOD, navigationInvalidationMayChangeMembership, navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
+import { isThreadExecutionMode } from "@pwragent/shared/thread-execution-mode";
 import { compactNavigationProviderRow } from "@pwragent/shared/navigation-state";
-import { createNavigationQuerySnapshot, replaceNavigationQueryRows, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { createNavigationQuerySnapshot, replaceNavigationQueryRows, navigationQuerySnapshotAuxiliaryBytes, type NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
+import { retainedIndexBytes } from "./navigation-index-read-pool";
 import { nextNavigationObservation } from "./navigation-observation-clock";
 import { isDeepStrictEqual } from "node:util";
 
@@ -45,7 +47,8 @@ type Source = {
   version(): string;
   sqlite(rows: ProviderRow[]): Promise<ProviderRow[]>;
   changedKeys(before: string, after: string): string[] | undefined;
-  list(scope: AppServerBackendScope, saved: boolean): Promise<Listing>;
+  list(scope: AppServerBackendScope, saved: boolean, forceRefresh?: boolean): Promise<Listing>;
+  verifySeedDirectories?(index: NavigationQueryIndex): boolean;
   status?(row: ProviderRow): ProviderRow["threadStatus"];
   refresh?(backend: AppServerBackendKind, id: string, activity: boolean, workers: boolean): Promise<AppServerThreadSummary | undefined> | undefined;
   cached(backend: AppServerBackendKind, id: string): AppServerThreadSummary | undefined;
@@ -57,8 +60,13 @@ type Source = {
   directories(rows: NavigationThreadSummary[]): Promise<Pick<NavigationQueryIndex, "directories" | "directoryCaseAliases" | "worktreeProjectAliases" | "worktreeRepositorySources">>;
   inputKeys(): ReadonlySet<string>;
   notify(): void;
+  retentionChanged?(bytes: number): void;
   failed(error: unknown): void;
 };
+
+function jsonBytes(value: unknown): number {
+  return value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
+}
 
 function compact(row: ProviderRow): ProviderRow {
   return structuredClone({ ...compactNavigationProviderRow(row), nativeSubAgentCount: row.codexNativeSubAgents?.length ?? row.nativeSubAgentCount ?? 0 });
@@ -86,7 +94,7 @@ export class LiveNavigationIndex {
   private lastPatch?: { from: WeakRef<NavigationQueryIndex>; to: NavigationQueryIndex; rows: number[]; directories: number[] };
   private directoryPositions = new Map<string, number[]>();
   private changes = new Map<string, RowChange>();
-  private readonly gaps = new Set<AppServerBackendScope | "overlay" | "saved" | "checkout">();
+  private readonly gaps = new Set<AppServerBackendScope | "overlay" | "saved" | "checkout" | "geometry">();
   private pending?: Promise<void>;
   private reconciling = false;
   private background?: ReturnType<typeof Promise.withResolvers<void>>;
@@ -96,9 +104,40 @@ export class LiveNavigationIndex {
   private scheduled?: NodeJS.Immediate;
   private viewerEpoch = 0;
   private viewerGapEpoch = -1;
+  private seedCoverage?: NavigationQueryIndex["coverage"];
   private visibilityChanged = true;
   private lastDiscovery = 0;
-  private readonly viewers = new WeakMap<object, ViewerState>();
+  // The mounted remote cache is one source per host. Concurrent callers can
+  // finish an older preparation independently when the source is replaced.
+  private readonly viewers = new Map<object, ViewerState>();
+  private providerBytes = 0;
+  private ownerBytes = 0;
+  private viewerBytes = 0;
+  private readonly snapshotBytes = new WeakMap<NavigationQueryIndex, number>();
+
+  private charge(index: NavigationQueryIndex, previous?: NavigationQueryIndex,
+    changes?: { rows: number[]; directories: number[] }): number {
+    let bytes = this.snapshotBytes.get(index);
+    if (bytes === undefined) {
+      const before = previous && this.snapshotBytes.get(previous);
+      if (before !== undefined && previous && changes) {
+        bytes = before;
+        for (const i of changes.rows) bytes += jsonBytes(index.threads[i]) - jsonBytes(previous.threads[i]);
+        for (const i of changes.directories) bytes += jsonBytes(index.directories[i]) - jsonBytes(previous.directories[i]);
+        if (index.inputRequestThreadKeys !== previous.inputRequestThreadKeys) {
+          bytes += jsonBytes([...(index.inputRequestThreadKeys ?? [])]) - jsonBytes([...(previous.inputRequestThreadKeys ?? [])]);
+        }
+      } else bytes = retainedIndexBytes(index, 0, Infinity);
+      this.snapshotBytes.set(index, bytes);
+    }
+    return bytes + navigationQuerySnapshotAuxiliaryBytes(index);
+  }
+
+  private reportRetention(): void {
+    // Include the provider/checkout inputs, mutable and published owner rows,
+    // and the viewer's prepared pins and mounted projection.
+    this.source.retentionChanged?.(2 * (this.providerBytes + this.ownerBytes + this.viewerBytes));
+  }
 
   constructor(private readonly source: Source) {
     this.version = source.version();
@@ -179,6 +218,8 @@ export class LiveNavigationIndex {
           : n.method === "turn/started" ? "active"
           : ["turn/completed", "turn/failed", "turn/cancelled"].includes(n.method) ? "idle" : undefined;
         const provider: Partial<ProviderRow> = {};
+        if (n.method === "thread/executionMode/updated" && isThreadExecutionMode(n.params.executionMode)) provider.executionMode = n.params.executionMode;
+        if (n.method === "thread/rewound" && typeof n.params.updatedAt === "number" && Number.isFinite(n.params.updatedAt)) provider.updatedAt = n.params.updatedAt;
         if (status === "active" || status === "idle" || status === "unknown" || status === "notLoaded") provider.threadStatus = status;
         if (n.method === "thread/name/updated" && typeof n.params.threadName === "string" && n.params.threadName.trim()) {
           provider.title = n.params.threadName.trim();
@@ -228,6 +269,11 @@ export class LiveNavigationIndex {
     return this.snapshot!;
   }
 
+  isCurrent(index: NavigationQueryIndex): boolean {
+    return !this.disposed && !this.pending && !this.reconciling && !this.changes.size && !this.gaps.size
+      && this.version === this.source.version() && this.snapshot === index;
+  }
+
   attachments(ref: NavigationIdentity) {
     const position = this.publishedPositions.get(buildThreadIdentityKey(ref.backend, ref.threadId));
     return position === undefined ? [] : this.snapshot?.threads[position]?.prs ?? [];
@@ -241,11 +287,18 @@ export class LiveNavigationIndex {
       const previous = state;
       const serveStale = Boolean(state?.apply && ((state.epoch !== epoch && epoch === this.viewerGapEpoch) || externalChange));
       state = { epoch, version, serveStale, apply: state?.apply, page: state?.page };
+      this.viewers.clear();
       this.viewers.set(viewer.source, state);
       const observation = state;
       observation.prepare = viewer.prepare().then((apply) => {
         observation.apply = apply;
         observation.page = undefined;
+        if (serveStale && this.source.retentionChanged && this.viewers.get(viewer.source) === observation) {
+          const index = createNavigationQuerySnapshot(apply(owner), undefined, owner);
+          observation.page = { owner, index };
+          this.viewerBytes = index === owner ? 0 : this.charge(index);
+          this.reportRetention();
+        }
         if (serveStale && this.viewers.get(viewer.source) === observation && !this.disposed) this.source.notify();
       }).catch((error: unknown) => {
         if (this.viewers.get(viewer.source) === observation) {
@@ -272,6 +325,11 @@ export class LiveNavigationIndex {
       }));
       index = replaceNavigationQueryRows(page.index, rows, owner.inputRequestThreadKeys ?? new Set(), owner.observedAt!, counts);
     } else index = createNavigationQuerySnapshot(state.apply!(owner), undefined, owner);
+    if (this.source.retentionChanged && this.viewers.get(viewer.source) === state) {
+      const changed = viewer.appendsPins && page && patch?.to === owner && patch.from.deref() === page.owner ? patch : undefined;
+      this.viewerBytes = index === owner ? 0 : this.charge(index, page?.index, changed);
+      this.reportRetention();
+    }
     state.page = { owner, index };
     return index;
   }
@@ -306,9 +364,13 @@ export class LiveNavigationIndex {
     this.visibilityChanged = false;
     // A named provider can replace just its partition while every other
     // provider and its overlay rows stay mounted.
-    if (index && gaps.length && gaps.every((scope) => scope !== "checkout" && scope !== "saved" && scope !== "overlay" && scope !== this.source.backend)) {
+    if (index && gaps.length === 1 && gaps[0] === "geometry") {
+      index = createNavigationQuerySnapshot({ ...index, ...await this.source.directories(index.threads),
+        observedAt, coverage: this.seedCoverage ?? index.coverage }, undefined, undefined, index);
+      this.rememberDirectories(index);
+    } else if (index && gaps.length && gaps.every((scope) => scope !== "geometry" && scope !== "checkout" && scope !== "saved" && scope !== "overlay" && scope !== this.source.backend)) {
       for (const scope of gaps) {
-        if (scope === "checkout" || scope === "saved" || scope === "overlay") continue;
+        if (scope === "geometry" || scope === "checkout" || scope === "saved" || scope === "overlay") continue;
         const observed = await this.source.list(scope, false);
         const fresh = new Set<string>();
         const changes = new Map<string, RowChange>();
@@ -329,17 +391,24 @@ export class LiveNavigationIndex {
       }
     } else if (!index || gaps.length) {
       const scopes = !index || gaps.includes(this.source.backend) ? [this.source.backend] : gaps;
-      let coverage = index?.coverage;
+      let coverage = this.seedCoverage ?? index?.coverage;
       for (const scope of scopes) {
-        if (scope === "overlay" || scope === "checkout") continue;
+        if (scope === "geometry" || scope === "overlay" || scope === "checkout") continue;
         if (scope === "saved") {
-          const rows = await this.source.sqlite([...this.providers.values()]);
+          const includesCodex = this.source.backend === "all" || this.source.backend === "codex";
+          const [saved, codex] = await Promise.all([
+            this.source.sqlite([...this.providers.values()]),
+            includesCodex ? this.source.list("codex", false, true) : undefined,
+          ]);
+          const rows = codex?.coverage?.state === "complete" ? saved.filter((row) => row.source !== "codex") : saved;
           this.providers = new Map(rows.map((row) => [key(row), compact(row)]));
+          for (const row of codex?.rows ?? []) if (row.source === "codex") this.providers.set(key(row), compact(row));
+          if (codex && (this.source.backend === "codex" || codex.coverage?.state !== "complete")) coverage = codex.coverage;
           continue;
         }
         const providerScope = scope;
         this.lastDiscovery = Date.now();
-        const listing = await this.source.list(providerScope, !prior);
+        const listing = await this.source.list(providerScope, !prior, gaps.includes("saved"));
         if (this.disposed) throw new Error("Navigation source was replaced.");
         // A failed provider listing has no authority to remove its saved rows.
         if (listing.coverage?.state === "complete" || !prior) {
@@ -351,14 +420,26 @@ export class LiveNavigationIndex {
         if (!prior && listing.verifyAfterSeed) this.gaps.add(this.source.backend);
         else if (!prior && listing.checkoutsAfterSeed) this.gaps.add("checkout");
       }
+      if (this.source.retentionChanged) {
+        this.providerBytes = 0;
+        for (const row of this.providers.values()) this.providerBytes += jsonBytes(row);
+      }
       const joined = await this.source.join([...this.providers.values()], coverage, !prior ? "saved"
-        : gaps.every((scope) => scope === "overlay" || scope === "saved") ? "reuse" : "refresh");
+        : gaps.every((scope) => scope === "overlay" || (scope === "saved" && !(this.source.backend === "all" || this.source.backend === "codex"))) ? "reuse" : "refresh");
       if (this.disposed) throw new Error("Navigation source was replaced.");
-      index = createNavigationQuerySnapshot({ ...joined, observedAt }, undefined, undefined, prior);
+      if (!prior && coverage && coverage.state !== "checking") {
+        if (!this.gaps.size && this.source.verifySeedDirectories?.(joined)) this.gaps.add("geometry");
+        if (this.gaps.has("geometry") || this.gaps.has("checkout")) {
+          this.seedCoverage = coverage;
+          if (coverage.state === "complete") coverage = { state: "checking" };
+        }
+      }
+      index = createNavigationQuerySnapshot({ ...joined, coverage, observedAt }, undefined, undefined, prior);
       this.rememberDirectories(index);
       this.rows = new Map(index.threads.map((row) => [key(row), row]));
       this.positions = new Map(index.threads.map((row, i) => [key(row), i]));
     }
+    if (prior) this.seedCoverage = undefined;
     while (this.changes.size && !this.disposed) {
       const changes = this.changes;
       this.changes = new Map();
@@ -366,6 +447,14 @@ export class LiveNavigationIndex {
     }
     if (this.disposed) throw new Error("Navigation source was replaced.");
     if (this.lastPatch?.to !== index) this.lastPatch = undefined;
+    if (index && this.source.retentionChanged) {
+      const patch = this.lastPatch?.from.deref() === prior ? this.lastPatch : undefined;
+      this.ownerBytes = this.charge(index, prior, patch);
+      for (const viewer of this.viewers.values()) {
+        if (viewer.page && viewer.page.owner === viewer.page.index && viewer.page.owner !== index) viewer.page = undefined;
+      }
+      this.reportRetention();
+    }
     this.snapshot = index;
     this.publishedPositions = this.positions;
     if (index && !this.gaps.size && !this.visibilityChanged) visibility?.(index);
@@ -392,8 +481,14 @@ export class LiveNavigationIndex {
     const inputs: ProviderRow[] = [];
     for (const [id, change] of changes) {
       if (change.enrichment) continue;
-      if (change.removed) { this.providers.delete(id); this.source.forget?.(id); continue; }
       const previous = this.providers.get(id);
+      if (change.removed) {
+        if (previous?.source === "codex" && (previous.projectKey || previous.gitOriginUrl)) this.gaps.add("checkout");
+        if (this.source.retentionChanged) this.providerBytes -= jsonBytes(previous);
+        this.providers.delete(id);
+        this.source.forget?.(id);
+        continue;
+      }
       if (!previous && !change.discovered) continue;
       const refresh = (change.activity || change.workers)
         ? this.source.refresh?.(change.backend, change.id, Boolean(change.activity), Boolean(change.workers)) : undefined;
@@ -424,12 +519,15 @@ export class LiveNavigationIndex {
         provider.gitBranch = cached.gitBranch;
         provider.observedGitBranch = cached.observedGitBranch;
       }
-      if (cached?.updatedAt !== undefined && (provider.updatedAt ?? 0) < cached.updatedAt) provider.updatedAt = cached.updatedAt;
+      if (change.activity && change.provider?.updatedAt === undefined && cached?.updatedAt !== undefined
+        && (provider.updatedAt ?? 0) < cached.updatedAt) provider.updatedAt = cached.updatedAt;
       provider.threadStatus = this.source.status?.(provider) ?? provider.threadStatus;
       if (change.discovered) delete provider.archivedAt;
-      if (provider.source === "codex" && provider.projectKey && (previous?.projectKey !== provider.projectKey
-        || !isDeepStrictEqual(previous.linkedDirectories, provider.linkedDirectories))) this.gaps.add("checkout");
+      if (provider.source === "codex" && (previous?.projectKey || provider.projectKey || previous?.gitOriginUrl || provider.gitOriginUrl)
+        && (!previous || previous.projectKey !== provider.projectKey || previous.gitOriginUrl !== provider.gitOriginUrl
+          || !isDeepStrictEqual(previous.linkedDirectories, provider.linkedDirectories))) this.gaps.add("checkout");
       inputs.push(provider);
+      if (this.source.retentionChanged) this.providerBytes += jsonBytes(provider) - jsonBytes(previous);
       this.providers.set(id, provider);
     }
     const base = inputs.length ? await this.source.projectRows(inputs, (key) => this.providers.has(key)) : [];

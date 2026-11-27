@@ -103,7 +103,7 @@ import {
   FEDERATION_HEALTH_CHANGED_METHOD,
   FEDERATION_SHUTDOWN_CHANGED_METHOD,
 } from "@pwragent/shared/contracts/federation";
-import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD } from "@pwragent/shared/navigation-query-events";
+import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD, NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD } from "@pwragent/shared/navigation-query-events";
 import { THREAD_TODO_FEED_ACKNOWLEDGED_METHOD } from "@pwragent/shared/thread-todo-feed";
 import { mcpConnectionsForPeer } from "@pwragent/shared/contracts/mcp-connections";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
@@ -889,6 +889,8 @@ type RelayedEventSubscription = IncomingEventSubscription & {
 };
 
 const NAVIGATION_EVENT_METHODS = new Set<string>([
+  NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD,
+  "thread/rewound",
   "thread/dependencies/updated",
   "thread/scheduledAction/updated",
   "automation/run/transcript/updated",

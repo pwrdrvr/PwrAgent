@@ -57,6 +57,7 @@ import { loadLocalNavigationQueryIndex, loadSidebarNavigationQueryIndex, navigat
 import { StackReader, readStackClones } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
+import * as worktreeProjects from "../app-server/navigation-worktree-projects";
 import * as checkoutStore from "../git-info/directory-store";
 import { runGitCommand } from "../app-server/git-executable";
 import { configureBundledGit } from "../bundled-git";
@@ -151,6 +152,63 @@ it.each([8, 16, 32])("keeps a filter switch and %i row changes off inventory dis
     checkout.mockRestore();
     vi.useRealTimers();
   }
+});
+
+it("withdraws a sibling's inherited checkout after the only donor is archived", async () => {
+  const source = createSource();
+  const directory = { kind: "local" as const, id: "/example", label: "example", path: "/example" };
+  const base = { source: "codex" as const, title: "Example", titleSource: "explicit" as const, gitOriginUrl: "https://test/repo.git", inbox: { inInbox: false } };
+  source.listThreads.mockResolvedValue([{ ...base, id: "donor", projectKey: directory.path, linkedDirectories: [directory] },
+    { ...base, id: "child", linkedDirectories: [] }]);
+  const checkout = vi.spyOn(checkoutStore, "readNavigationCheckouts").mockResolvedValue([]);
+  const joined = mocks.store.readNavigationQueryIndex;
+  const original = joined.getMockImplementation()!;
+  joined.mockImplementation(({ threads }) => ({ ...mocks.store.readNavigationQueryThreads({ threads }), directories: [] }));
+  const read = () => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "donor-test" });
+  try {
+    await read();
+    await vi.waitFor(async () => expect((await read()).threads[1]?.linkedDirectories).toEqual([directory]));
+    for (const listener of source.listeners) listener({ backend: "codex", notification: { method: "thread/archived", params: { threadId: "donor" } } });
+    await vi.waitFor(async () => expect((await read()).threads.map((row) => [row.id, row.linkedDirectories])).toEqual([["child", []]]));
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+  } finally { joined.mockImplementation(original); checkout.mockRestore(); }
+});
+
+it("verifies a registered directory even when the seed contains no provider rows", async () => {
+  const source = createSource();
+  source.finish();
+  const directory: NavigationQueryIndex["directories"][number] = { key: "directory:/registered", kind: "directory",
+    path: "/registered", label: "Registered", threadKeys: [], needsAttentionCount: 0 };
+  const joined = mocks.store.readNavigationQueryIndex;
+  const original = joined.getMockImplementation()!;
+  joined.mockReturnValue({ threads: [], directories: [directory] });
+  const probe = vi.spyOn(worktreeProjects, "resolveNavigationWorktreeProjects").mockImplementation(async (directories) => ({ directories }));
+  try {
+    await loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "registered-directory" });
+    await vi.waitFor(() => expect(probe).toHaveBeenCalled());
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+  } finally { joined.mockImplementation(original); probe.mockRestore(); }
+});
+
+it("evicts an older live backend scope when several individually admissible inventories exceed the shared byte budget", async () => {
+  const source = createSource();
+  const rows = (["codex", "claude"] as const).map((source) => ({ id: source, source, title: "x".repeat(660_000),
+    titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } }));
+  source.listThreads.mockImplementation(async (params) =>
+    rows.filter((row) => !params || !("backend" in params) || !params.backend || row.source === params.backend));
+  const joined = mocks.store.readNavigationQueryIndex;
+  const original = joined.getMockImplementation()!;
+  joined.mockImplementation(({ threads }) => ({ ...mocks.store.readNavigationQueryThreads({ threads }), directories: [] }));
+  const read = (backend: AppServerBackendScope) => loadSidebarNavigationQueryIndex({ registry: source.registry, backend, callerReason: "budget" });
+  try {
+    await read("all");
+    await read("all");
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+    await read("codex");
+    await read("claude");
+    await read("all");
+    expect(source.listThreads).toHaveBeenCalledTimes(4);
+  } finally { joined.mockImplementation(original); }
 });
 
 it("drops a revoked named messaging binding from the next warm sidebar read", async () => {
@@ -1206,6 +1264,9 @@ it("keeps confirmed stack badges for unchanged rows while Git revalidates", asyn
   try {
     await read();
     await vi.waitFor(async () => expect(await badges()).toEqual([expect.objectContaining({ key: "stack" })]));
+    vi.mocked(getDesktopBackendRegistry).mockReturnValue(source.registry);
+    expect((await readNavigationStackLayers({ backend: "codex", threadId: "stacked" })).count).toBe(1);
+    expect(git).toHaveBeenCalledTimes(1);
     source.emit("turn/started");
     expect(await badges()).toEqual([expect.objectContaining({ key: "stack" })]);
     await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(2));
@@ -1213,10 +1274,64 @@ it("keeps confirmed stack badges for unchanged rows while Git revalidates", asyn
     await vi.waitFor(async () => expect(await badges()).toBeUndefined());
   } finally {
     nextScan.resolve();
+    vi.mocked(getDesktopBackendRegistry).mockReset();
     git.mockRestore();
     projection.mockImplementation(original);
     source.emit("thread/name/updated");
   }
+});
+
+it.each([8, 16, 32])("reuses checkout verdicts when one PR changes across %i mounted lists", async (count) => {
+  const source = createSource();
+  const verify = vi.fn<DesktopBackendRegistry["canonicalizeNavigationPullRequests"]>(async (prs) => prs);
+  source.registry.canonicalizeNavigationPullRequests = verify;
+  const batches = Array.from({ length: count }, (_, i): PrSummary[] => [{ number: i + 1, provider: "github.com", org: "fixture", repo: "project",
+    headRefName: "topic", linkedDirectoryPaths: ["/fixture"], state: "pending", url: "https://github.com/fixture/project/pull/" + (i + 1) }]);
+  const page = navigationPullRequestProjection({ kind: "directory", registry: source.registry, backgroundValidation: true });
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  await page.verify(batches);
+  await settle();
+  const pr: PrSummary = { ...batches[0]![0]!, state: "passing" };
+  verify.mockClear().mockImplementation(async (rows) => rows.map((row) => row.number === 1 ? pr : row));
+  for (const listener of source.listeners) listener({ backend: "codex", notification: {
+    method: "pullRequest/status/updated", params: { pr, prKey: buildPullRequestStatusKey(pr) },
+  } });
+  await page.verify(batches);
+  await settle();
+  expect((await page.verify(batches))[0]).toEqual([pr]);
+  expect(verify.mock.calls.map(([rows, , checkout]) => [rows[0]?.number, checkout])).toEqual([[1, false]]);
+  verify.mockClear();
+  await page.verify([[pr]]);
+  await settle();
+  expect((await page.verify([[pr]]))[0]).toEqual([pr]);
+  expect(verify.mock.calls.filter(([, , checkout]) => checkout !== false)).toHaveLength(0);
+  const moved = { ...pr, headRefName: "new-topic" };
+  verify.mockClear().mockImplementation(async (rows, _demand, checkout) => checkout === false ? rows : []);
+  await page.verify([[moved]]);
+  await settle();
+  expect((await page.verify([[moved]]))[0]).toEqual([]);
+  expect(verify.mock.calls.filter(([, , checkout]) => checkout !== false)).toHaveLength(1);
+});
+
+it.each(["owner", "viewer"] as const)("releases a cancelled sidebar %s waiter while another reader completes", async (stage) => {
+  const source = createSource();
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const prepare = vi.fn(async () => { entered.resolve(); await gate.promise; return (owner: NavigationQueryIndex) => owner; });
+  source.listThreads.mockImplementation(async () => { if (stage === "owner") { entered.resolve(); await gate.promise; } return []; });
+  const read = (signal?: AbortSignal) => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "cancelled-page",
+    viewerPins: { source, prepare }, signal });
+  const cancel = new AbortController();
+  const first = read(cancel.signal);
+  const second = read();
+  try {
+    await entered.promise;
+    cancel.abort(new Error("closed"));
+    const result = await Promise.race([first.catch((error: Error) => error.message), new Promise<void>((done) => setImmediate(done))]);
+    expect(result).toBe("closed");
+  } finally { gate.resolve(); await Promise.allSettled([first, second]); }
+  expect(source.listThreads).toHaveBeenCalledTimes(1);
+  expect(prepare).toHaveBeenCalledTimes(1);
 });
 
 it("keeps rejected automatic PRs hidden across sidebar cache pressure", async () => {

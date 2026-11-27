@@ -116,7 +116,11 @@ async function fixture(n: number) {
       threads: ownerRows, directories: [], inboxThreadKeys: [], launchpadDefaults: { backend: "codex", executionMode: "default" } };
     return ownerReadScheduler ? await ownerReadScheduler.schedule(Promise.resolve(snapshot), "owner snapshot") : snapshot;
   });
+  const geometryReady = Promise.withResolvers<void>();
   current.registry = {
+    publishLocalEvent: async (event: AgentEvent) => {
+      if (event.notification.method === "navigation/invalidated") geometryReady.resolve();
+    },
     listThreads: provider,
     onEvent: (listener: (event: AgentEvent) => void) => { listeners.add(listener); return () => listeners.delete(listener); },
     withNavigationPrimaryGitRepositories: (value: NavigationThreadSummary[]) => value,
@@ -150,7 +154,13 @@ async function fixture(n: number) {
   publish = () => emit({ backend: "codex", notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId: "peer" } } });
   const idle = () => [...queries.getSnapshot().resources.values()].every((r) => !r.loading);
   const reset = () => { read.mockClear(); resolve.mockClear(); snapshots.mockClear(); materialize.mockClear(); provider.mockClear(); hydrate.mockClear(); };
-  return { db, store, cache, resolve, snapshots, materialize, provider, hydrate, requests, queries, read, emit, idle, reset,
+  const mountVerified = async () => {
+    queries.setDemand(requests);
+    await geometryReady.promise;
+    await queries.refresh();
+    await until(idle);
+  };
+  return { db, store, cache, resolve, snapshots, materialize, provider, hydrate, requests, queries, read, emit, idle, reset, mountVerified,
     disconnect: () => {
       connected = false;
       cache.invalidate("peer");
@@ -206,8 +216,7 @@ it("admits births from a mounted owner outside the visible page and fences a new
   const birth = (instanceId: string): AgentEvent => ({ backend: "codex", federationTarget: { scope: "remote", instanceId },
     notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/started", threadId: "unseen-child" } } });
   try {
-    f.queries.setDemand(f.requests);
-    await until(f.idle);
+    await f.mountVerified();
     f.reset();
     const attempt = (instanceId: string) => f.queries.invalidate(undefined, undefined, birth(instanceId));
     attempt("other");
@@ -532,7 +541,7 @@ it.each([4, 8])("bounds an automatic completion overtaking a row update with %i 
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => { finish = resolve; });
   try {
-    f.queries.setDemand(f.requests); await until(f.idle); f.reset(); f.change(0);
+    await f.mountVerified(); f.reset(); f.change(0);
     f.hydrate.mockImplementationOnce(async (rows) => { await gate; return rows; });
     const { writes } = await measureSqliteWrites(async () => {
       f.emit({ backend: "codex", notification: { method: "thread/subAgents/updated", params: { threadId: "root-0", subAgents: [] } } } as AgentEvent);

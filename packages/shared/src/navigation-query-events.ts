@@ -69,7 +69,7 @@ export function navigationQueryEventRequiresRefresh(method: string, params?: unk
   return ROW_CHANGE_METHODS.has(method) || method.endsWith("/requestApproval");
 }
 
-function normalizedNavigationPullRequestKey(value: string): string | undefined {
+export function normalizedNavigationPullRequestKey(value: string): string | undefined {
   const match = /^([^/#]+)\/([^/#]+(?:\/[^/#]+)+)#(\d+)$/.exec(value.trim().toLowerCase());
   if (!match) return undefined;
   const [, provider, repository, number] = match;
