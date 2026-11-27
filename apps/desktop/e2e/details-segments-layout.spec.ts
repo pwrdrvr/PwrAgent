@@ -16,15 +16,27 @@ test("fits each Details segment inside its button at every rail width", async ()
     windowSize: { width: 1280, height: 820 },
   });
   try {
+    // Startup reconciliation marks running sub-agents orphaned; seed after
+    // it finishes (listThreads waits for it), each with its live monitor.
+    await app.window.evaluate(async () => {
+      const api = (window as unknown as {
+        pwragent: { listThreads?: (request: { backend: string }) => Promise<unknown> };
+      }).pwragent;
+      await api.listThreads?.({ backend: "codex" });
+    });
     // A two-digit Jobs count: the widest segment the fixture can draw.
+    const now = Date.now();
     seedThreadSubAgents({
       stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
       subAgents: Array.from({ length: 12 }, (_, index) => ({
         monitorId: `running-${index}`,
         task: `Running fixture task ${index}`,
         status: "running" as const,
-        createdAt: 1_800_000_000_000 + index,
-        updatedAt: 1_800_000_000_000 + index,
+        createdAt: now - 60_000 - index,
+        updatedAt: now - 60_000 - index,
+        backend: "codex",
+        monitorThreadId: `running-thread-${index}`,
+        monitorTurnId: `running-turn-${index}`,
       })),
       threadId: "thread-smoke",
     });
