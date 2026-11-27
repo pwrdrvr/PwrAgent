@@ -1396,25 +1396,61 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
+  it.each([8, 16, 32])("checks sidebar delta grants for %i owners without enumerating peers", count => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    const router = new FederationRouter({ localInstanceId: "viewer" });
+    harness.router = router;
+    const capability = "navigation_page_deltas_v1";
+    const getPeer = vi.fn((id: string) => id.endsWith("-enrolled")
+      ? { label: id, status: "connected" as const, capabilities: [] } : undefined);
+    const visible = vi.spyOn(harness, "visiblePeers").mockReturnValue([]);
+    const listPeers = vi.fn(() => []);
+    const listConnections = vi.spyOn(router, "listConnections");
+    harness.store = () => ({ getPeer, listPeers });
+    for (let i = 0; i < count; i++) {
+      const id = `owner-${i}`;
+      router.registerConnection({ peerId: id, capabilities: [capability], sendEnvelope() {} });
+      for (const suffix of ["-relayed", "-enrolled"]) {
+        harness.remotePeerDirectory.set(id + suffix, { id: id + suffix, capabilities: [capability] });
+      }
+    }
+    const supports = (instanceId: string) => runtime.remoteTargetSupportsCapability({ scope: "remote", instanceId }, capability);
+    for (let i = 0; i < count; i++) expect(supports(`owner-${i}`)).toBe(true);
+    expect(visible).not.toHaveBeenCalled();
+    expect(supports("")).toBe(false);
+    expect(getPeer).not.toHaveBeenCalled();
+    for (let i = 0; i < count; i++) {
+      expect(supports(`owner-${i}-relayed`)).toBe(true);
+      expect(supports(`owner-${i}-enrolled`)).toBe(false);
+    }
+    expect(visible).not.toHaveBeenCalled();
+    expect(getPeer).toHaveBeenCalledTimes(count * 2);
+    expect(listPeers).not.toHaveBeenCalled();
+    expect(listConnections).not.toHaveBeenCalled();
+  });
+
   it("distinguishes unavailable peers from a connected peer's negotiated navigation protocol", () => {
     const runtime = new DesktopFederationRuntime();
     const harness = runtime as unknown as RuntimeHarness;
     const target = { scope: "remote" as const, instanceId: "owner" };
-    const visible = vi.spyOn(harness, "visiblePeers").mockReturnValue([]);
+    harness.store = () => ({ getPeer: () => undefined, listPeers: () => [] });
     expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(FederationPeerUnavailableError);
-    visible.mockReturnValue([{ id: "owner", status: "disconnected" }]);
+    harness.remotePeerDirectory.set("owner", { status: "disconnected", label: "Owner", capabilities: [] });
     expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(FederationPeerUnavailableError);
-    visible.mockReturnValue([{ id: "owner", status: "connected" }]);
-    expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(/Upgrade/);
-    visible.mockReturnValue([Object.assign({ id: "owner", status: "connected" }, { navigationQueryProtocol: 2 })]);
+    harness.remotePeerDirectory.set("owner", { status: "connected", label: "Owner", capabilities: [], navigationQueryProtocol: 2 });
     expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).not.toThrow();
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    harness.router.registerConnection({ peerId: "owner", capabilities: [], sendEnvelope() {} });
+    expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(/Upgrade/);
   });
 
   it("never sends a viewer's owner-resolved read to a connected owner", async () => {
     const runtime = new DesktopFederationRuntime();
     const harness = runtime as unknown as RuntimeHarness;
     const target = { scope: "remote" as const, instanceId: "owner" };
-    vi.spyOn(harness, "visiblePeers").mockReturnValue([Object.assign({ id: "owner", status: "connected" }, { navigationQueryProtocol: 2 })]);
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    harness.router.registerConnection({ peerId: "owner", capabilities: [], navigationQueryProtocol: 2, sendEnvelope() {} });
     const remoteBackend = vi.spyOn(runtime, "remoteBackend");
     await expect(runtime.remoteNavigationQueryPage(target, { protocol: 2, consumer: "main-sidebar", inventory: "owner",
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "t", ownerInstanceId: "owner" }], resolveFromOwners: true },

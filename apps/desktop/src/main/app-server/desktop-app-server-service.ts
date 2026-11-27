@@ -2070,7 +2070,7 @@ class DesktopAppServerService {
         const result = await runtime.remoteNavigationOwnerQueryPage(target, ownerRequest, rpcOptions);
         rpcOptions?.signal.throwIfAborted();
         return result;
-      });
+      }, request.consumer === "main-sidebar" && runtime.remoteTargetSupportsCapability(target, "navigation_page_deltas_v1"));
       rpcOptions?.signal.throwIfAborted();
       // The owner's rows are returned untouched. Everything this viewer adds
       // goes in one block, so the page costs here what it cost its owner.

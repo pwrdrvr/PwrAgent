@@ -2045,6 +2045,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   remote_window: "open a remote workspace",
   thread_navigation: "browse and create threads",
   navigation_snapshot_deltas: "exchange compact navigation updates",
+  navigation_page_deltas_v1: "", // Wire encoding for an existing navigation grant.
   navigation_group_invalidations: "receive thread group membership changes",
   thread_grouping: "reorder and collapse sub-threads",
   // Owner-validated grouping negotiation; thread_grouping grants the action.

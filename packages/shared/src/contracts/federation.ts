@@ -14,6 +14,7 @@ export const FEDERATION_CAPABILITIES = [
   "remote_window",
   "thread_navigation",
   "navigation_snapshot_deltas",
+  "navigation_page_deltas_v1",
   "navigation_group_invalidations",
   "thread_grouping",
   "archive_subthread_promotion_v1",
@@ -1214,11 +1215,11 @@ export function formatFederationPeerShortDisplayLabel(
 /** A legacy destination can share a host label with the known default profile. */
 export function formatFederationPeerTargetLabels(
   peer: { label: string; profileName?: string; shortLabel?: string },
-  visiblePeers: readonly { label: string; profileName?: string }[],
+  visiblePeers: readonly { label: string; profileName?: string }[] | ((label: string) => boolean),
 ): { label: string; shortLabel?: string } {
-  const unknownProfile = !peer.profileName && visiblePeers.some(
-    (candidate) => candidate.label === peer.label && candidate.profileName === "default",
-  );
+  const unknownProfile = !peer.profileName && (typeof visiblePeers === "function"
+    ? visiblePeers(peer.label)
+    : visiblePeers.some(candidate => candidate.label === peer.label && candidate.profileName === "default"));
   const qualifier = unknownProfile ? " (profile unknown)" : "";
   return {
     label: `${formatFederationPeerDisplayLabel(peer)}${qualifier}`,

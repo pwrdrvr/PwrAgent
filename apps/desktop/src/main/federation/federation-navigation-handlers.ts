@@ -4,6 +4,7 @@ import type {
   NavigationLaunchpadConfigResponse,
   NavigationQueryPage,
   NavigationQueryRequest,
+  FederationNavigationPageRequest,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
   NavigationSelectedDetailRequest,
@@ -12,6 +13,7 @@ import type {
 import { FEDERATION_BACKEND_METHODS } from "@pwragent/federation/federation-backend-methods";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcRequestOptions } from "./federation-rpc";
+import { FederationNavigationPageDeltas } from "./federation-navigation-page-deltas";
 
 export type NavigationBackendRequestOptions = FederationRpcRequestOptions & {
   /** Native transport demand. Never read from a request's serialized params. */
@@ -40,10 +42,21 @@ export function registerNavigationBackendHandlers(params: {
     };
   };
   if (params.backend.getNavigationQueryPage) {
-    params.router.registerHandler(FEDERATION_BACKEND_METHODS.getNavigationQueryPage, async (envelope) => {
-      const request = envelope.params as NavigationQueryRequest;
+    const deltas = new FederationNavigationPageDeltas();
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.getNavigationQueryPage, async (envelope, sourcePeerId) => {
+      const { ownerPageBase, ...request } = envelope.params as FederationNavigationPageRequest;
       if (request.inventory === "viewer" && !params.localContext?.(envelope)) {
         throw new Error("Viewer navigation inventory is available only on its local machine.");
+      }
+      const connection = sourcePeerId && params.router.getConnection(sourcePeerId);
+      if (connection && !params.localContext && request.consumer === "main-sidebar" && typeof ownerPageBase === "string"
+        && ownerPageBase.length <= 128 && connection.capabilities.includes("navigation_page_deltas_v1")) {
+        // A viewer without a token may still hold a complete page that filled the byte budget.
+        const page = await params.backend.getNavigationQueryPage!({ ...request,
+          completeBaselineRevision: ownerPageBase === "" ? request.completeBaselineRevision : undefined,
+          retainedRange: undefined, windowPageBase: undefined }, options(envelope));
+        if (page.unchanged) return page;
+        return deltas.encode(envelope.sourceInstanceId, connection, { ...request, ownerPageBase }, page);
       }
       return params.backend.getNavigationQueryPage!(request, options(envelope));
     });

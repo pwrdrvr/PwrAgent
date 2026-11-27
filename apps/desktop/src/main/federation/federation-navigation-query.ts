@@ -6,6 +6,7 @@ import type {
 import type {
   NavigationQueryPage,
   NavigationQueryRequest,
+  FederationNavigationPageRequest,
   NavigationIdentity,
 } from "@pwragent/shared/contracts/navigation";
 import {
@@ -73,10 +74,10 @@ export function stampRemoteNavigationQueryPage(params: {
 }
 
 /** Only the serving owner's explicit identity becomes owner-local on the wire. */
-export function navigationRequestForOwner(request: NavigationQueryRequest, target: FederationRemoteTarget): NavigationQueryRequest {
+export function navigationRequestForOwner(request: FederationNavigationPageRequest, target: FederationRemoteTarget): FederationNavigationPageRequest {
   const localize = (ref: NavigationIdentity): NavigationIdentity => ref.ownerInstanceId === target.instanceId
     ? { backend: ref.backend, threadId: ref.threadId } : ref;
-  const { federationTarget: _target, ...ownerRequest } = request;
+  const { federationTarget: _target, windowPageBase: _window, ...ownerRequest } = request;
   const query = request.query.kind === "exact"
     ? { ...request.query, identities: request.query.identities.map(localize) }
     : request.query.kind === "group-members" ? { ...request.query, roots: request.query.roots.map(localize) }

@@ -6590,6 +6590,8 @@ describe("app server ipc", () => {
   it("overlays only a bounded remote page's viewer directory preferences without accepting owner-only unchanged proof", async () => {
     const { registerAppServerIpcHandlers } = await import("../shell/ipc/app-server");
     const federationTarget = { scope: "remote" as const, instanceId: "peer_v2_disclosure" };
+    // This peer advertises the legacy complete-page acknowledgment only.
+    federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(false);
     const directoryKey = "directory:/remote/project";
     readRemoteDirectoryOverlays.mockResolvedValueOnce({ [directoryKey]: { directoryKey, directoryThreadsCollapsed: true } });
     const counts = { total: 100, active: 0, unread: 0, review: 0 };
@@ -6652,11 +6654,11 @@ describe("app server ipc", () => {
         queueCount: 0, queueState: "ready",
       } }],
     };
-    const unchanged = { ...ownerPage, entries: [], unchanged: true };
-    federationMock.runtime.remoteNavigationQueryPage.mockClear()
-      .mockResolvedValueOnce(ownerPage)
-      .mockResolvedValueOnce(unchanged)
-      .mockResolvedValueOnce(unchanged);
+    const { FederationNavigationPageDeltas } = await import("../federation/federation-navigation-page-deltas");
+    const deltas = new FederationNavigationPageDeltas();
+    const connection = {};
+    federationMock.runtime.remoteNavigationQueryPage.mockClear().mockImplementation(async (_target, request) =>
+      deltas.encode("viewer", connection, request, ownerPage));
     registerAppServerIpcHandlers();
     const read = async () => navigationReadHandler("backend.getNavigationQueryPage")!({ sender: { id: 90205, once: vi.fn() } }, {
       protocol: 2, consumer: "main-sidebar", federationTarget: target, query: { kind: "lens", lens: "inbox" },
@@ -6676,10 +6678,11 @@ describe("app server ipc", () => {
     expect(first.entries[0]?.row.federation?.instanceLabel).toBe("Old label");
     expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenCalledTimes(3);
     for (const call of federationMock.runtime.remoteNavigationQueryPage.mock.calls.slice(1)) {
-      expect(call[1].completeBaselineRevision).toBe("stable");
+      expect(call[1].ownerPageBase).toEqual(expect.any(String));
+      expect(call[1].ownerPageBase).not.toBe("");
     }
-    expect(granted.unchanged).toBe(false);
-    expect(revoked.unchanged).toBe(false);
+    expect(granted).not.toHaveProperty("ownerPagePatch");
+    expect(revoked).not.toHaveProperty("ownerPagePatch");
   });
 
   it("shares exact owner reads across native windows and aborts only after the last window releases", async () => {

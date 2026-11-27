@@ -312,6 +312,8 @@ import {
   type ReorderThreadPinsRequest,
   type ReorderThreadPinsResponse,
   type NavigationQueryPage,
+  type FederationNavigationPageRequest,
+  type FederationNavigationPageResult,
   type NavigationQueryRequest,
   type NavigationQueueProjection,
   type NavigationQueueProjectionRequest,
@@ -749,6 +751,7 @@ function rewriteLiveTranscriptImagesForFederation(
 
 /** What this instance advertises to every peer it connects to. */
 export const DEFAULT_CAPABILITIES: FederationCapability[] = [
+  "navigation_page_deltas_v1",
   "navigation_group_invalidations",
   "remote_window",
   "thread_navigation",
@@ -1543,6 +1546,8 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     FederationPeerSummary
   >();
+  /** Connected default profiles that share a host label with a legacy peer. */
+  private connectedDefaultLabels?: { byPeer: Map<string, string>; counts: Map<string, number> };
   /**
    * The role each directly connected peer assigns this instance, as it last
    * said. Only the upstream gateway's entry decides containment
@@ -1939,11 +1944,12 @@ export class DesktopFederationRuntime {
     navigationQueryProtocol?: 2;
   }> {
     const peers = this.visiblePeers().filter((peer) => peer.status === "connected");
+    const defaults = new Set(peers.filter(peer => peer.profileName === "default").map(peer => peer.label));
     return peers.map((peer) => {
       const shortLabel = this.shortNames.shortLabelFor(peer.id, peer.label);
       return {
         target: { scope: "remote", instanceId: peer.id },
-        ...formatFederationPeerTargetLabels({ ...peer, shortLabel }, peers),
+        ...formatFederationPeerTargetLabels({ ...peer, shortLabel }, label => defaults.has(label)),
         capabilities: [...peer.capabilities],
         navigationQueryProtocol: peer.navigationQueryProtocol,
       };
@@ -1953,9 +1959,11 @@ export class DesktopFederationRuntime {
   assertRemoteNavigationQueryProtocol(
     target: FederationRemoteTarget,
   ): void {
-    const peer = this.visiblePeers().find(
-      (candidate) => candidate.id === target.instanceId,
-    );
+    const id = target.instanceId;
+    if (id === this.localInstanceId) throw new FederationPeerUnavailableError(id);
+    const direct = this.router?.getConnection(id);
+    const peer = direct ? { status: "connected", navigationQueryProtocol: direct.navigationQueryProtocol }
+      : this.navigationPeer(id);
     // Remembered metadata is not a protocol negotiation. During reconnect the
     // peer may still carry the previous process's capabilities.
     if (!peer || peer.status !== "connected") {
@@ -1970,13 +1978,13 @@ export class DesktopFederationRuntime {
     target: FederationRemoteTarget,
     capability: FederationCapability,
   ): boolean {
-    const visiblePeer = this.visiblePeers().find(
-      (peer) => peer.id === target.instanceId,
-    );
-    return this.viewerCapabilitiesFor(
-      target.instanceId,
-      visiblePeer,
-    ).includes(capability);
+    const id = target.instanceId;
+    const direct = this.router?.getConnection(id);
+    if (direct) return direct.capabilities.includes(capability);
+    // Match visiblePeers' precedence using only the requested peer's records.
+    if (id === this.localInstanceId || !isFederationInstanceId(id)) return false;
+    const peer = this.store().getPeer(id) ?? this.remotePeerDirectory.get(id);
+    return peer?.capabilities.includes(capability) ?? false;
   }
 
   /** A toolbar toggle belongs to this process, never the shared profile settings. */
@@ -2081,6 +2089,7 @@ export class DesktopFederationRuntime {
     this.configuredEndpoints = [];
     this.endpointStatuses.clear();
     this.rpcByPeer.clear();
+    this.connectedDefaultLabels = undefined;
     this.remotePeerDirectory.clear();
     this.assignedRoles.clear();
     invalidatePeerActiveDependencies(this);
@@ -3543,12 +3552,12 @@ export class DesktopFederationRuntime {
     return this.stampRemoteNavigationQueryPage(target, await this.remoteNavigationOwnerQueryPage(target, request, rpcOptions));
   }
 
-  /** The owner's page exactly as the owner selected it. */
+  /** Raw RPC result. A caller offering a peer token expands its patch before applying viewer state. */
   async remoteNavigationOwnerQueryPage(
     target: FederationRemoteTarget,
-    request: NavigationQueryRequest,
+    request: FederationNavigationPageRequest,
     rpcOptions?: FederationRpcRequestOptions,
-  ): Promise<NavigationQueryPage> {
+  ): Promise<FederationNavigationPageResult> {
     this.assertRemoteNavigationQueryProtocol(target);
     if (request.inventory === "viewer") throw new Error("Viewer navigation inventory is available only on its local machine.");
     // The viewer resolves owners itself. The flag never travels to an owner.
@@ -3560,7 +3569,7 @@ export class DesktopFederationRuntime {
       throw navigationUpgradeRequired(target.instanceId);
     }
     const ownerRequest = navigationRequestForOwner(request, target);
-    let page: NavigationQueryPage;
+    let page: FederationNavigationPageResult;
     try {
       page = await backend.getNavigationQueryPage(ownerRequest, rpcOptions);
     } catch (error) {
@@ -3572,15 +3581,73 @@ export class DesktopFederationRuntime {
     return page;
   }
 
-  /** What this viewer knows about an owner, read when a page is served. */
+  /** Resolve one owner with the same metadata precedence as visiblePeers(). */
+  private navigationPeer(id: FederationInstanceId) {
+    if (id === this.localInstanceId || !isFederationInstanceId(id)) return undefined;
+    const advertised = this.remotePeerDirectory.get(id);
+    const remembered = this.store().getPeer(id) ?? advertised;
+    const direct = this.router?.getConnection(id);
+    if (direct) {
+      return {
+        remembered,
+        label: remembered?.label ?? this.defaultPeerLabel(id),
+        profileName: remembered?.profileName,
+        status: "connected" as const,
+        navigationQueryProtocol: direct.navigationQueryProtocol,
+        celestialIcon: undefined,
+      };
+    }
+    if (!remembered) return undefined;
+    return {
+      remembered,
+      label: remembered.label,
+      profileName: remembered.profileName,
+      status: !advertised && remembered.status === "connected" ? "disconnected" as const : remembered.status,
+      navigationQueryProtocol: remembered.navigationQueryProtocol,
+      celestialIcon: remembered.celestialIcon,
+    };
+  }
+
+  private updateConnectedDefaultLabel(id: string, peer?: Pick<FederationPeerSummary, "status" | "profileName" | "label">): void {
+    const index = this.connectedDefaultLabels;
+    if (!index) return;
+    const previous = index.byPeer.get(id);
+    const label = peer?.status === "connected" && peer.profileName === "default" ? peer.label : undefined;
+    if (previous === label) return;
+    if (previous !== undefined) {
+      index.byPeer.delete(id);
+      const remaining = index.counts.get(previous)! - 1;
+      if (remaining) index.counts.set(previous, remaining);
+      else index.counts.delete(previous);
+    }
+    if (label !== undefined) {
+      index.byPeer.set(id, label);
+      index.counts.set(label, (index.counts.get(label) ?? 0) + 1);
+    }
+  }
+
+  private hasConnectedDefaultLabel(label: string): boolean {
+    if (!this.connectedDefaultLabels) {
+      const peers = this.visiblePeers();
+      this.connectedDefaultLabels = { byPeer: new Map(), counts: new Map() };
+      for (const peer of peers) this.updateConnectedDefaultLabel(peer.id, peer);
+    }
+    return this.connectedDefaultLabels.counts.has(label);
+  }
+
+  /** Read this viewer's current owner metadata after the page RPC settles. */
   remoteNavigationOwner(target: FederationRemoteTarget): NavigationRemoteOwner {
-    const instanceLabel = this.connectedPeerTargets().find(
-      (peer) => peer.target.instanceId === target.instanceId,
-    )?.label ?? target.instanceId;
-    const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
-    return { instanceId: target.instanceId, instanceLabel,
-      capabilities: this.viewerCapabilitiesFor(target.instanceId, peer), peerStatus: peer?.status ?? "connected",
-      celestialIcon: peer?.celestialIcon };
+    const id = target.instanceId;
+    const peer = this.navigationPeer(id);
+    const instanceLabel = peer?.status === "connected"
+      ? formatFederationPeerTargetLabels(peer, label => this.hasConnectedDefaultLabel(label)).label : id;
+    return {
+      instanceId: id,
+      instanceLabel,
+      capabilities: this.viewerCapabilitiesFor(id, peer?.remembered),
+      peerStatus: peer?.status ?? "connected",
+      celestialIcon: peer && (this.celestialIconFor(id) ?? peer.celestialIcon),
+    };
   }
 
   stampRemoteNavigationQueryPage(target: FederationRemoteTarget, page: NavigationQueryPage): NavigationQueryPage {
@@ -6031,6 +6098,7 @@ export class DesktopFederationRuntime {
       peers = complete;
     }
     const previousPeers = new Map(this.remotePeerDirectory);
+    this.connectedDefaultLabels = undefined;
     this.remotePeerDirectory.clear();
     for (const peer of peers) {
       if (peer.id !== this.ensureLocalInstanceId()) {
@@ -7324,6 +7392,8 @@ export class DesktopFederationRuntime {
     status: FederationConnectionState,
     unavailableReason?: string,
   ): void {
+    // A reconnect or directory replacement can rename an already connected peer.
+    if (this.connectedDefaultLabels) this.updateConnectedDefaultLabel(instanceId, this.navigationPeer(instanceId));
     if (status !== "connected") {
       this.services?.disconnect(instanceId);
       this.serviceForwarder.disconnectPeer(instanceId);
