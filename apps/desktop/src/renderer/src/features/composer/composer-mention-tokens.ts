@@ -11,7 +11,7 @@ import {
 import { findSharedSkillNames, isSharedSkillName } from "@pwragent/shared/skill-origin";
 import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
 import { resolvePullRequestIdentity } from "@pwragent/shared/contracts/navigation";
-import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
+import { buildDirectoryReferenceMarkdown, normalizeDirectoryReferencePath } from "../../lib/directory-references";
 import { buildInstanceReferenceMarkdown } from "../../lib/instance-references";
 import { composerThreadLabel } from "./composer-thread-references";
 import { buildSkillMentionMarkdown } from "../../lib/skill-mentions";
@@ -118,6 +118,37 @@ export function createComposerDirectoryToken(
     id: `${directory.path ?? directory.label}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     index,
   };
+}
+
+export function resolveComposerDirectoryTokens(
+  tokens: readonly ComposerSkillToken[] | undefined,
+  directories: readonly NavigationDirectorySummary[],
+  excluded: ReadonlySet<string>,
+): NavigationDirectorySummary[] {
+  const byPath = new Map<string, NavigationDirectorySummary>();
+  for (const token of tokens ?? []) {
+    if (token.kind !== "directory" || !token.path) continue;
+    const path = normalizeDirectoryReferencePath(token.path);
+    if (!path || byPath.has(path) || excluded.has(path)) continue;
+    byPath.set(path, {
+      key: `directory-reference:${path}`,
+      kind: "directory",
+      label: token.name,
+      path: token.path,
+    });
+  }
+
+  // Replace each fallback with the first loaded row for its path. Updating
+  // an existing map entry preserves the order in which tokens were picked.
+  const pending = new Set(byPath.keys());
+  for (const directory of directories) {
+    if (pending.size === 0) break;
+    const storedPath = directory.path;
+    if (!storedPath) continue;
+    const path = normalizeDirectoryReferencePath(storedPath);
+    if (pending.delete(path)) byPath.set(path, directory);
+  }
+  return [...byPath.values()];
 }
 
 /**
