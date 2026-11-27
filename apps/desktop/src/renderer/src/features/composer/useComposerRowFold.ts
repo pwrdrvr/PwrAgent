@@ -29,21 +29,31 @@ export function useComposerRowFold(): {
 
   useLayoutEffect(() => {
     if (!row || typeof ResizeObserver === "undefined") return undefined;
-    const measure = (from: "render" | "observer") => {
+    let frame: number | undefined;
+    const measure = (from: "render" | "mutation" | "resize") => {
       const next = measureComposerRowFold(row);
       const update = () => setFold((current) =>
         current.foldedTierCount === next.foldedTierCount && current.overflows === next.overflows
           ? current
           : next);
-      // An observer sees a change React has already committed and the
-      // browser is about to paint, so its fold must commit now, not in a
-      // later task, or that paint shows the unfolded row for a frame. A measure
-      // from this layout effect itself already runs before paint.
-      if (from === "observer") flushSync(update);
+      // A mutation is a control React has just committed, which the browser
+      // is about to paint, so its fold must commit now, not in a later task,
+      // or that paint shows the unfolded row for a frame. A measure from this
+      // layout effect already runs before paint, and a resize waits a frame
+      // (below), so both apply normally.
+      if (from === "mutation") flushSync(update);
       else update();
     };
-    const onChange = () => measure("observer");
-    const resizeObserver = new ResizeObserver(onChange);
+    // A resize is measured on the next frame. Folding inside the observer's
+    // own callback would resize the row's other items in the same pass,
+    // which the browser reports as an undelivered-notification loop error.
+    const resizeObserver = new ResizeObserver(() => {
+      if (frame !== undefined) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = undefined;
+        measure("resize");
+      });
+    });
     const observeItems = () => {
       resizeObserver.disconnect();
       resizeObserver.observe(row);
@@ -53,7 +63,7 @@ export function useComposerRowFold(): {
     // dictation), so the set of items to watch is re-read on each change.
     const mutationObserver = new MutationObserver(() => {
       observeItems();
-      onChange();
+      measure("mutation");
     });
     mutationObserver.observe(row, { childList: true, subtree: true, characterData: true });
     observeItems();
@@ -61,6 +71,7 @@ export function useComposerRowFold(): {
     return () => {
       resizeObserver.disconnect();
       mutationObserver.disconnect();
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
     };
   }, [row]);
 
@@ -150,8 +161,9 @@ export function measureComposerRowFold(row: HTMLElement): ComposerRowFoldState {
       ? Math.max(0, natural - labels.reduce((sum, label) => sum + label.scrollWidth, 0))
       : undefined;
     // The stylesheet cannot know that floor, so it reads it from here
-    // (`--composer-row-floor`). Setting a style attribute is not a change the
-    // observer above watches, so this does not schedule another measure.
+    // (`--composer-row-floor`). The mutation observer ignores style
+    // attributes; if the new floor resizes the pill, the resize observer
+    // measures once more on the next frame and finds the same plan.
     if (minWidth !== undefined) {
       const floor = `${Math.ceil(minWidth)}px`;
       if (element.style.getPropertyValue("--composer-row-floor") !== floor) {

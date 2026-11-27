@@ -11,6 +11,8 @@ import { useComposerRowFold } from "../useComposerRowFold";
  * environment ▶ (100) does not, so the row folds the details tier.
  */
 const ROW_WIDTH = 250;
+let rowWidth = ROW_WIDTH;
+let resized: (() => void) | undefined;
 
 type Control = { key: string; width: number; tier?: ComposerFoldTier };
 
@@ -41,11 +43,14 @@ describe("useComposerRowFold", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) {
+        resized = callback;
+      }
       observe() {}
       disconnect() {}
     });
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
-      return this.classList.contains("row") ? ROW_WIDTH : 0;
+      return this.classList.contains("row") ? rowWidth : 0;
     });
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       const width = Number(this.dataset.width ?? 0);
@@ -54,17 +59,27 @@ describe("useComposerRowFold", () => {
   });
 
   afterEach(() => {
+    rowWidth = ROW_WIDTH;
+    resized = undefined;
     cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
-  it("folds the first row it draws before the browser can paint it", () => {
+  it("folds after a resize on the next frame, not inside the observer's callback", async () => {
     const commits: number[] = [];
-    render(<Row commits={commits} controls={[PINNED, DETAILS, RUN]} />);
-    // The mount's own commit draws no fold yet, but the measure runs in a
-    // layout effect, so the folded commit follows before any paint.
+    render(<Row commits={commits} controls={[PINNED, DETAILS]} />);
+    expect(commits.at(-1)).toBe(0);
+
+    // Folding inside the callback would resize the row's other items in the
+    // same observation pass, which the browser reports as a loop error.
+    rowWidth = 150;
+    act(() => resized?.());
+    expect(commits.at(-1)).toBe(0);
+    await act(async () => {
+      vi.advanceTimersByTime(16);
+    });
     expect(commits.at(-1)).toBe(1);
   });
 
