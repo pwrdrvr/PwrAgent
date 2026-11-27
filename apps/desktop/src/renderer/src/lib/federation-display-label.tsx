@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
+import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import {
   formatFederationPeerDisplayLabel,
   formatFederationPeerShortDisplayLabel,
@@ -14,7 +15,7 @@ export function federationLocalDisplayLabel(health: FederationHealthStatus | und
   });
 }
 
-type FederationInstanceNames = { label: string; fullLabel: string };
+type FederationInstanceNames = { label: string; fullLabel: string; icon?: CelestialIconId };
 
 const FederationDisplayLabels = createContext<
   ReadonlyMap<string, FederationInstanceNames> | undefined
@@ -32,11 +33,19 @@ export function FederationDisplayLabelsProvider(props: {
     const health = props.health;
     if (!health) return undefined;
     const local = health.localLabel
-      ? { label: health.localLabel, profileName: health.localProfileName, shortLabel: health.localShortLabel }
+      ? {
+          label: health.localLabel,
+          profileName: health.localProfileName,
+          shortLabel: health.localShortLabel,
+          celestialIcon: health.localCelestialIcon,
+        }
       : undefined;
-    const names = (peer: Parameters<typeof formatFederationPeerShortDisplayLabel>[0]): FederationInstanceNames => ({
+    const names = (peer: Parameters<typeof formatFederationPeerShortDisplayLabel>[0] & {
+      celestialIcon?: CelestialIconId;
+    }): FederationInstanceNames => ({
       label: formatFederationPeerShortDisplayLabel(peer),
       fullLabel: formatFederationPeerDisplayLabel(peer),
+      icon: peer.celestialIcon,
     });
     return new Map([
       ...(local && health.instanceId ? [[health.instanceId, names(local)] as const] : []),
