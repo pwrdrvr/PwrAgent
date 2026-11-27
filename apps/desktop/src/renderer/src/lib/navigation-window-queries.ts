@@ -45,6 +45,7 @@ const OWNER_ROW_CHANGES = new Set([
   "thread/status/changed", "thread/subAgents/updated", "thread/name/updated", "thread/modelSettings/updated",
   "thread/backgroundTasks/updated", "thread/turnQueue/updated", "navigation/thread/seen", "federation/peerStatus/changed",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled", "navigation/directoryGitStatus/updated",
+  "navigation/threadDirectories/updated",
 ]);
 const MAX_CONCURRENT_READS = 4;
 const MAX_DEMAND_BYTES = 1024 * 1024;
