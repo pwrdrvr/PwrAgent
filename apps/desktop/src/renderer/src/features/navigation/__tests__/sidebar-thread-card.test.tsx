@@ -12,6 +12,7 @@ import {
 import { POINTER_AIM_SETTLE_MS } from "../../../lib/pointer-aim";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
+import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { PROJECT_CARD_HOVER_DELAY_MS } from "../ProjectHeaderCard";
 
@@ -627,7 +628,69 @@ describe("sidebar thread card", () => {
     expect(within(screen.getByRole("menu")).queryByRole("menuitem", { name: "Open in…" })).toBeNull();
   });
 
-  it("offers a peer's thread only what works on that peer", () => {
+  function peerThread(id: string, instanceId = "lab"): NavigationThreadSummary {
+    return thread(id, {
+      gitBranch: "docs/rewrite",
+      linkedDirectories: [{ id: "d", label: "mathathon", path: "/src/mathathon", worktreePath: "/wt/mathathon", kind: "worktree" }],
+      federation: {
+        ref: { target: { scope: "remote", instanceId }, backend: "codex", threadId: id },
+        instanceLabel: `${instanceId}-mini`,
+        peerStatus: "connected",
+        capabilities: ["remote_window"],
+      },
+    });
+  }
+
+  function projectedRow(summary: NavigationThreadSummary) {
+    return navigationQueryFixture(
+      { protocol: 2, query: { kind: "lens", lens: "inbox" }, consumer: "main-sidebar", pageSize: 10 },
+      { threads: [summary] },
+    ).entries[0]!.row;
+  }
+
+  it("offers a peer's thread only what works on that peer", async () => {
+    const openApplication = vi.fn(async () => ({}));
+    const terminal = { ...APPLICATIONS.terminals[0]!, id: "peer-terminal" };
+    const readApplications = vi.fn(async () => ({
+      applications: {
+        ...APPLICATIONS,
+        terminals: [...APPLICATIONS.terminals, terminal],
+        preferredTerminalId: { value: terminal.id, source: "config" },
+      },
+    }));
+    (window as { pwragent?: unknown }).pwragent = { openApplication, readApplications, applicationWorkspaceExists: async () => true };
+    const both = peerThread("b");
+    both.federation!.capabilities = ["remote_window", "remote_pty"];
+    renderSidebar({
+      applications: APPLICATIONS,
+      threads: [peerThread("a"), both],
+      onOpenThreadTerminal: vi.fn(),
+      onArchiveThread: async () => undefined,
+      onRevealPath: vi.fn(),
+    });
+    move(document.querySelector(".sidebar")!, screen.getByText("Thread a"));
+    expect(readApplications).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    const shown = card()!;
+    expect(shown).toHaveTextContent("lab-mini");
+    expect(shown).toHaveTextContent("peer");
+    expect(within(shown).queryByRole("button", { name: /Open in|Show in Finder|Choose an app/, hidden: true })).toBeNull();
+    expect(within(shown).queryByRole("button", { name: /Archive/, hidden: true })).toBeNull();
+    expect(within(shown).getByRole("button", { name: "Copy branch name docs/rewrite", hidden: true })).toBeInTheDocument();
+    fireEvent.click(within(shown).getByRole("button", { name: "Open terminal on lab-mini", hidden: true }));
+    const federationTarget = { scope: "remote", instanceId: "lab" };
+    expect(openApplication).toHaveBeenCalledWith({
+      applicationId: "peer-terminal", federationTarget, kind: "terminal", targetPath: "/wt/mathathon",
+    });
+
+    move(document.querySelector(".sidebar")!, screen.getByText("Thread b"));
+    await act(async () => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(within(card()!).getByRole("button", { name: "Open terminal on lab-mini", hidden: true })).toBeInTheDocument();
+    expect(within(card()!).getByRole("button", { name: "Open terminal here", hidden: true })).toBeInTheDocument();
+    expect(readApplications.mock.calls).toEqual([[{ federationTarget }]]);
+  });
+
+  it("gates the integrated peer terminal on remote_pty", () => {
     (window as { pwragent?: unknown }).pwragent = { openApplication: vi.fn() };
     const peerThread = (capabilities: string[]) => thread("a", {
       gitBranch: "docs/rewrite",
@@ -736,4 +799,142 @@ describe("sidebar thread card", () => {
       expect(open).toHaveBeenCalledWith(expect.stringMatching(/\/pull\/[78]$/), "_blank", "noopener,noreferrer");
     });
   });
+
+  it("ignores a late application list after moving to a peer with no usable terminal", async () => {
+    let resolveLab!: (result: { applications: DesktopApplicationsSnapshot }) => void;
+    const lab = new Promise<{ applications: DesktopApplicationsSnapshot }>((resolve) => { resolveLab = resolve; });
+    const readApplications = vi.fn()
+      .mockReturnValueOnce(lab)
+      .mockResolvedValueOnce({ applications: {
+        ...APPLICATIONS,
+        terminals: APPLICATIONS.terminals.map((terminal) => ({ ...terminal, canOpenWorkspace: false })),
+      } });
+    (window as { pwragent?: unknown }).pwragent = { openApplication: vi.fn(), readApplications, applicationWorkspaceExists: async () => true };
+    renderSidebar({ applications: APPLICATIONS, threads: [peerThread("a"), peerThread("b", "build")] });
+    const first = screen.getByText("Thread a");
+    move(document.querySelector(".sidebar")!, first);
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
+    await act(async () => move(first, screen.getByText("Thread b")));
+    await act(async () => resolveLab({ applications: APPLICATIONS }));
+    expect(card()).toHaveTextContent("build-mini");
+    expect(within(card()!).queryByRole("button", { name: /Open terminal|Open in/, hidden: true })).toBeNull();
+    expect(readApplications.mock.calls).toEqual([
+      [{ federationTarget: { scope: "remote", instanceId: "lab" } }],
+      [{ federationTarget: { scope: "remote", instanceId: "build" } }],
+    ]);
+  });
+
+  it("shares an in-flight discovery across a peer's cards and retries after failure", async () => {
+    let rejectRead!: (error: Error) => void;
+    const pending = new Promise((_, reject) => { rejectRead = reject; });
+    const readApplications = vi.fn().mockReturnValueOnce(pending).mockResolvedValue({
+      applications: { ...APPLICATIONS, preferredTerminalId: { value: "uninstalled", source: "config" } },
+    });
+    const openApplication = vi.fn(async () => ({}));
+    (window as { pwragent?: unknown }).pwragent = { readApplications, openApplication, applicationWorkspaceExists: async () => true };
+    const peers = [peerThread("a"), peerThread("b")];
+    const view = renderSidebar({ threads: peers });
+    const first = screen.getByText("Thread a");
+    const second = screen.getByText("Thread b");
+    move(document.querySelector(".sidebar")!, first);
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    move(first, second);
+    expect(readApplications).toHaveBeenCalledTimes(1);
+    await act(async () => rejectRead(new Error("Peer disconnected")));
+    expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
+    view.rerender(sidebarElement({ threads: [{ ...peers[0]!, title: "Thread a updated" }, peers[1]!] }));
+    expect(readApplications).toHaveBeenCalledTimes(1);
+    await act(async () => move(second, screen.getByText("Thread a updated")));
+    expect(readApplications).toHaveBeenCalledTimes(2);
+    fireEvent.click(within(card()!).getByRole("button", { name: "Open terminal on lab-mini", hidden: true }));
+    expect(openApplication).toHaveBeenCalledWith({
+      applicationId: "ghostty", kind: "terminal", targetPath: "/wt/mathathon",
+      federationTarget: { scope: "remote", instanceId: "lab" },
+    });
+  });
+
+  it("shares a pending folder check for the same peer and path, then checks again on the next visit", async () => {
+    let confirm!: (exists: boolean) => void;
+    const pending = new Promise<boolean>((resolve) => { confirm = resolve; });
+    const applicationWorkspaceExists = vi.fn()
+      .mockReturnValueOnce(pending)
+      .mockResolvedValue(false);
+    (window as { pwragent?: unknown }).pwragent = {
+      openApplication: vi.fn(), readApplications: async () => ({ applications: APPLICATIONS }), applicationWorkspaceExists,
+    };
+    const otherFolder = peerThread("d");
+    otherFolder.linkedDirectories = [{ ...otherFolder.linkedDirectories![0]!, worktreePath: "/wt/other" }];
+    renderSidebar({ threads: [peerThread("a"), peerThread("b"), peerThread("c", "build"), otherFolder] });
+    const a = screen.getByText("Thread a");
+    const b = screen.getByText("Thread b");
+    const c = screen.getByText("Thread c");
+    const d = screen.getByText("Thread d");
+    move(document.querySelector(".sidebar")!, a);
+    await act(async () => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    await act(async () => move(a, c));
+    expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
+    await act(async () => move(c, d));
+    expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
+    await act(async () => move(d, b));
+    await act(async () => confirm(true));
+    expect(within(card()!).getByRole("button", { name: "Open terminal on lab-mini", hidden: true })).toBeInTheDocument();
+    const check = (instanceId: string, targetPath: string) => [{ federationTarget: { scope: "remote", instanceId }, targetPath }];
+    expect(applicationWorkspaceExists.mock.calls).toEqual([
+      check("lab", "/wt/mathathon"), check("build", "/wt/mathathon"), check("lab", "/wt/other"),
+    ]);
+    await act(async () => move(b, a));
+    expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
+    expect(applicationWorkspaceExists).toHaveBeenCalledTimes(4);
+  });
+
+  it("requires the owner to confirm the projected row's primary folder still exists", async () => {
+    const applicationWorkspaceExists = vi.fn(async () => false);
+    (window as { pwragent?: unknown }).pwragent = {
+      openApplication: vi.fn(), readApplications: vi.fn(async () => ({ applications: APPLICATIONS })), applicationWorkspaceExists,
+    };
+    renderSidebar({ threads: [projectedRow(peerThread("a"))] });
+    move(document.querySelector(".sidebar")!, screen.getByText("Thread a"));
+    await act(async () => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(card()).toHaveTextContent("lab-mini");
+    expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
+    expect(applicationWorkspaceExists.mock.calls).toEqual([[
+      { federationTarget: { scope: "remote", instanceId: "lab" }, targetPath: "/wt/mathathon" },
+    ]]);
+  });
+
+  it("removes the terminal from an open card when the owner revokes remote_window", async () => {
+    const readApplications = vi.fn(async () => ({ applications: APPLICATIONS }));
+    (window as { pwragent?: unknown }).pwragent = { openApplication: vi.fn(), readApplications, applicationWorkspaceExists: async () => true };
+    const peer = peerThread("a");
+    const view = renderSidebar({ threads: [peer] });
+    move(document.querySelector(".sidebar")!, screen.getByText("Thread a"));
+    await act(async () => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(within(card()!).getByRole("button", { name: "Open terminal on lab-mini", hidden: true })).toBeInTheDocument();
+    view.rerender(sidebarElement({ threads: [{
+      ...peer, federation: { ...peer.federation!, capabilities: [] },
+    }] }));
+    expect(card()).toHaveTextContent("lab-mini");
+    expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
+    expect(readApplications).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["disconnected", "no grant", "hibernated checkout", "no folder"] as const)(
+    "skips peer application discovery for a thread with %s",
+    async (reason) => {
+      const readApplications = vi.fn(async () => ({ applications: APPLICATIONS }));
+      (window as { pwragent?: unknown }).pwragent = { openApplication: vi.fn(), readApplications, applicationWorkspaceExists: async () => true };
+      const peer = peerThread("a");
+      if (reason === "disconnected") peer.federation!.peerStatus = "disconnected";
+      if (reason === "no grant") peer.federation!.capabilities = ["turn_control"];
+      if (reason === "hibernated checkout") peer.checkoutHibernated = true;
+      if (reason === "no folder") peer.linkedDirectories = [];
+      renderSidebar({ applications: APPLICATIONS, threads: [projectedRow(peer)] });
+      move(document.querySelector(".sidebar")!, screen.getByText("Thread a"));
+      await act(async () => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+      expect(card()).toHaveTextContent("lab-mini");
+      expect(within(card()!).queryByRole("button", { name: /Open terminal|Open in/, hidden: true })).toBeNull();
+      expect(readApplications).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -9,6 +9,7 @@ import {
   type RefObject,
 } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
 import {
   ArchiveIcon,
   CheckIcon,
@@ -18,6 +19,8 @@ import {
   TerminalIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
+import { checkPeerApplicationWorkspace, readPeerApplications } from "../../lib/useDesktopApplications";
+import { useEventCallback } from "../../lib/useEventCallback";
 import { getDesktopApi } from "../../lib/desktop-api";
 import {
   POINTER_AIM_SETTLE_MS,
@@ -59,6 +62,7 @@ export type SidebarThreadCardActions = {
     targets: readonly ThreadCardOpenTarget[];
     run: (target: ThreadCardOpenTarget) => void;
   };
+  peerTerminal?: { instanceId: string; label: string; run: (applicationId: string) => void };
   copyBranch?: () => void;
   /**
    * Shows the row's own PR card: the PR's for one, the rollup for several.
@@ -151,19 +155,20 @@ export const SidebarThreadCardHost = forwardRef<
         facts={optionsRef.current.rowFacts(thread)}
         actions={optionsRef.current.actionsFor(thread, row)}
         onDone={hide}
+        onPeerApplicationsReady={redraw}
       />
     );
   };
 
-  // A live row (its PR, its Git state) redraws the open card in place;
-  // `update` re-measures it against the viewport.
-  useEffect(() => {
+  // A live row update or a newly available terminal may
+  // change the size. Keep the mounted card and re-measure its placement.
+  const redraw = useEventCallback(() => {
     if (!visible || !shown) return;
     const next = content(shown.threadKey, shown.row);
     if (next) update(next);
     else hide();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.options, visible]);
+  });
+  useEffect(redraw, [props.options, shown, visible, redraw]);
 
   // The row's card is its description while it is up.
   useEffect(() => {
@@ -370,6 +375,7 @@ export function useSidebarThreadCardTriggers(
 function SidebarThreadCardContent(props: {
   thread: NavigationThreadSummary;
   facts: ThreadInfoRowFacts;
+  onPeerApplicationsReady: () => void;
   actions: SidebarThreadCardActions;
   onDone: () => void;
 }): ReactElement {
@@ -383,6 +389,33 @@ function SidebarThreadCardContent(props: {
     title: thread.title,
     ...(instanceId ? { instanceId, ...(instanceLabel ? { instanceLabel } : {}) } : {}),
   }), [instanceId, instanceLabel, thread.id, thread.source, thread.title]);
+  const peerId = actions.peerTerminal?.instanceId;
+  const folderPath = props.facts.folders[0]?.path;
+  const api = getDesktopApi();
+  const [verified, setVerified] = useState<{
+    peerId: string;
+    folderPath: string;
+    terminal: DesktopApplicationDiscoveryCandidate;
+  }>();
+  const { onPeerApplicationsReady } = props;
+  useEffect(() => {
+    setVerified(undefined);
+    if (!peerId || !folderPath || !api?.applicationWorkspaceExists || !api.readApplications) return;
+    let current = true;
+    void Promise.all([
+      readPeerApplications(api.readApplications, peerId),
+      checkPeerApplicationWorkspace(api.applicationWorkspaceExists, peerId, folderPath),
+    ]).then(([applications, exists]) => {
+      if (!current || exists !== true) return;
+      const terminal = applications.terminals.find((app) => app.canOpenWorkspace && app.id === applications.preferredTerminalId.value)
+        ?? applications.terminals.find((app) => app.canOpenWorkspace);
+      if (terminal) {
+        setVerified({ peerId, folderPath, terminal });
+        onPeerApplicationsReady();
+      }
+    }, () => { /* An offline or older owner cannot confirm a usable launch target. */ });
+    return () => { current = false; };
+  }, [api, peerId, folderPath, onPeerApplicationsReady]);
   const cost = useThreadCardCost(thread);
   const info: ThreadInfo = { facts: threadInfoFacts(thread), factsState: "ready", cost };
   return (
@@ -403,6 +436,7 @@ function SidebarThreadCardContent(props: {
       actions={(
         <ThreadCardActions
           actions={actions}
+          terminal={verified && verified.peerId === peerId && verified.folderPath === folderPath ? verified.terminal : undefined}
           running={info.facts?.running === true}
           onDone={onDone}
         />
@@ -433,15 +467,28 @@ function useThreadCardCost(thread: NavigationThreadSummary): ThreadInfoCost | { 
 
 function ThreadCardActions(props: {
   actions: SidebarThreadCardActions;
+  terminal?: DesktopApplicationDiscoveryCandidate;
   running: boolean;
   onDone: () => void;
 }): ReactElement {
   const { actions, onDone } = props;
-  const open = actions.open;
+  const { open, peerTerminal } = actions;
+  const { terminal } = props;
   return (
     // Pointer shortcuts, out of the Tab order like the project card's: the
     // keyboard reaches each one from the row's own menu.
     <div className="sidebar-thread-card__actions" aria-hidden="true">
+      {peerTerminal && terminal ? (
+        <CardIconButton
+          label={peerTerminal.label}
+          onClick={() => {
+            onDone();
+            peerTerminal.run(terminal.id);
+          }}
+        >
+          <AppIcon application={terminal} className="sidebar-thread-card__app-icon" size={16} />
+        </CardIconButton>
+      ) : null}
       {open?.targets.map((target) => (
         <CardIconButton
           key={target.id}

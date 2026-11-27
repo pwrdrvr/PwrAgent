@@ -3852,18 +3852,26 @@ function SidebarContent(props: SidebarProps) {
 
   /**
    * The thread card's actions: the context menu's handlers and gates for one
-   * thread, plus the composer's open-in-app request for a thread on this
-   * machine. A peer's thread gets only what works on that peer.
+   * thread, plus the composer's open-in-app request for the owning machine.
    */
   function threadCardActionsFor(
     thread: NavigationThreadSummary,
     row: HTMLElement,
   ): SidebarThreadCardActions {
     const live = navigationThreadByKey.get(threadSummaryIdentityKey(thread)) ?? thread;
+    const peer = thread.federation;
+    const peerTarget = peer?.ref.target.scope === "remote"
+      && !thread.checkoutHibernated
+      && peer.peerStatus === "connected"
+      && peer.capabilities?.includes("remote_window")
+      ? peer.ref.target
+      : undefined;
+    const openApplication = getDesktopApi()?.openApplication;
     const branch = getThreadNamedBranch(thread);
     const facts = threadCardRowFacts(thread);
     const prUrl = facts.pr?.pr.url;
-    const open = threadCardOpen(thread, facts.folders[0]);
+    const folder = facts.folders[0];
+    const open = threadCardOpen(thread, folder);
     // The card's ⋯ holds both archives for a thread with sub-threads. Its
     // row's own count answers here, on every hover and update; the loaded
     // rows, which can run ahead of that count, are walked only on a click.
@@ -3879,6 +3887,18 @@ function SidebarContent(props: SidebarProps) {
       contextMenuOpenerRef.current = row.querySelector<HTMLElement>(".thread-row__open");
     };
     return {
+      ...(peerTarget && openApplication && folder && !thread.workspaceMissing ? {
+        peerTerminal: {
+          instanceId: peerTarget.instanceId,
+          label: `Open terminal on ${facts.machine.label}`,
+          run: (applicationId: string) => {
+            void openApplication({ applicationId, federationTarget: peerTarget, kind: "terminal", targetPath: folder.path })
+              .catch((error: unknown) => {
+                console.warn("[sidebar] Could not open the thread's folder", error);
+              });
+          },
+        },
+      } : {}),
       ...(open?.row.length ? { open: { targets: open.row, run: open.run } } : {}),
       ...(branch ? { copyBranch: () => copyFromContextMenu(branch) } : {}),
       ...(prUrl

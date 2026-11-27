@@ -522,6 +522,12 @@ export function resetDecodedApplicationIconsForTests(): void {
   decodedApplicationIcons.clear();
 }
 
+/** A terminal needs a directory on the machine that will launch it. */
+export async function applicationWorkspaceExists(targetPath: string): Promise<boolean> {
+  if (typeof targetPath !== "string" || !path.isAbsolute(targetPath)) return false;
+  return await stat(targetPath).then((entry) => entry.isDirectory(), () => false);
+}
+
 export async function openDesktopApplication(
   request: OpenDesktopApplicationRequest,
   params?: { env?: NodeJS.ProcessEnv },
