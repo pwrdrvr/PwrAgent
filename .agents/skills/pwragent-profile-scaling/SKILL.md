@@ -8,6 +8,7 @@ description: Replay the matched PwrAgent 1.5.x large-profile performance investi
 Run commands from the harness checkout. Use Node and pnpm from the target checkout's repository guidance, Python 3.9+, and a separate frozen pnpm install in each target. Reserve four local CPU slots following [local CPU checkout](../../../docs/local-cpu-checkout.md). The launcher runs one Vitest worker with the measured revision's native setup and fixtures. Every workload uses synthetic rows or an isolated store.
 
 ```sh
+python3 scripts/scaling-audit/run.py --suites pricing token-miser --output .local/pricing-miser
 python3 scripts/scaling-audit/run.py --suites live-threads --output .local/live-threads
 python3 scripts/scaling-audit/run.py --suites terminal reopen --output .local/terminal-reopen
 python3 scripts/scaling-audit/run.py --base /path/to/installed-base --output .local/base-head --cases 25
@@ -27,9 +28,12 @@ The PR label `ci:scaling-audit` compares the pinned base and head with 25 cases 
 | SQLite | Twelve status changes at 435, 869 and 1,738 live threads with 2,807 archived overlays. Vary archive pressure independently at 869 live rows with 0 and 5,614 archived. Count full joins, input rows, compact overlay rows and checkout paths. |
 | Turn lifecycle and held Auto-fix | Deliver ordinary completion or Stop for 1, 4 and 16 targets with 8–32 unrelated records per category. Count activity and review records visited. Deliver eight terminal or forge events with 0–64 held reviews and count review reads and stack-hold checks. |
 | Pricing | Start, meter and complete 64 turns while reading a four-row historical page after every completion. Sample cumulative publication rows/bytes, rows returned by SQL, full-ledger processing and page output at 8, 16, 32 and 64 turns. |
+| Token Miser and grouped Pricing | Vary 24/96 historical turns, 8/32 gates and 2/8 visible rows independently and at the joint maximum. Compare empty ACP and Codex controls with stored monitor cards, persisted Token Miser metadata alone and live gates backed by stored records. Count materialized usage, card and metadata rows, running-total folds and published Pricing rows. |
 | Federation | Vary 2–8 peers, queue depth 8–32 and 4–16 simultaneous redeliveries. Check admission and receipt identity, count warm label/ID/input accesses, queue copies and committed writes. |
 | Transcript | Cross 60–240 entries with 3–24 reviews, reopen 50–400 messages with legacy monitor attribution, and stream eight deltas across 8–64 historical edit turns. Count field reads and replaced edit objects. |
 | Live threads | Keep 1, 10 or 20 turns active in one renderer session cache with 8 or 64 prior messages each. Deliver four interleaved tool calls and assistant replies per thread, individually or in React batches. Check expanded output while it streams and reselect every thread to verify its completed transcript. |
+
+The Token Miser suite seeds isolated SQLite stores with generated records. It measures ordinary turns on the seeded thread and an unrelated thread before anyone opens Pricing. Separate cases read one completed turn's accounting, open Pricing, repeat an unchanged owner read, complete a turn, request the page locally and through Federation, redeliver identical gates and change a gate's parent. The metadata-only fixture starts without live gates or stored helper charges. The production owner can backfill charges on the first page read. The reporter compares every work counter separately, so a new targeted read can appear alongside a reduction in full-ledger folds.
 
 The live-thread suite models the renderer from its agent-event subscription through one visible transcript in jsdom. Each round sends nine events with three output chunks and three assistant deltas. A virtual frame per wave keeps the schedule reproducible. Each result includes its absolute budgets for retention and indicator visits, transcript builds and input rows, React commits, and owner reads. Background-only deliveries must cause zero visible transcript builds. The retention budget allows one scan of all active sessions per event, so doubling the number of equally active threads can quadruple this work. Compare both delivery modes to distinguish per-event work from per-batch work.
 
@@ -53,7 +57,7 @@ git worktree add --detach .local/v152 be957c66c90d74d759f04e34bc1aed70658b2257
 python3 scripts/scaling-audit/run.py --candidate .local/v152 --historical v152 --suites properties --output .local/v152-properties
 ```
 
-Omit `--suites` with `--historical` to select that revision's measured workloads. The manifest covers 1.5.0–1.5.2, three main snapshots and the Pricing, navigation and terminal PR heads. The 1.5 releases use the local owner navigation loader. The pinned #4590 heads enable the historical incremental oracle. Revisions with the live navigation index also count slot copies and lens predicate evaluations via a Vitest transform that verifies both instrumentation sites. Absent counters indicate missing instrumentation. The matched corpus uses repository model sources wherever they still match and retains three audit versions whose repository tests evolved.
+Omit `--suites` with `--historical` to select that revision's measured workloads. The manifest covers 1.5.0–1.5.2, three main snapshots and the Pricing, navigation and terminal PR heads. Select `--historical pr4612` on its pinned head to replay grouped Pricing and Token Miser. The 1.5 releases use the local owner navigation loader. The pinned #4590 heads enable the historical incremental oracle. Revisions with the live navigation index also count slot copies and lens predicate evaluations via a Vitest transform that verifies both instrumentation sites. Absent counters indicate missing instrumentation. The matched corpus uses repository model sources wherever they still match and retains three audit versions whose repository tests evolved.
 
 ## Native paint control
 

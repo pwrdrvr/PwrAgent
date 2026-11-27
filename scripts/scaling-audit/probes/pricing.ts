@@ -1,3 +1,4 @@
+import { countPricingRows } from "./scaling-audit-pricing-rows";
 import { record } from "./scaling-audit-results";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -50,21 +51,7 @@ it("measures owner notifications and a four-row historical page over a growing c
     if (measuring) fullPageRows += result.lines.length;
     return result;
   });
-  const prepare = stateDb.raw.prepare.bind(stateDb.raw);
-  vi.spyOn(stateDb.raw, "prepare").mockImplementation(sql => {
-    const statement = prepare(sql);
-    if (/SELECT/i.test(sql) && /thread_usage_lines/.test(sql)) for (const name of ["get","all"] as const) {
-      const read = statement[name].bind(statement);
-      Object.assign(statement, { [name]: (...args) => {
-        const value = read(...args);
-        if (measuring) for (const row of Array.isArray(value) ? value : [value]) {
-          if (row && typeof row === "object" && "usage_line_id" in row) readRows++;
-        }
-        return value;
-      }});
-    }
-    return statement;
-  });
+  const sqlRows = countPricingRows(stateDb);
   registry.onEvent(({ notification }) => {
     if (notification.method !== "thread/pricing/updated") return;
     events++;
@@ -79,9 +66,11 @@ it("measures owner notifications and a four-row historical page over a growing c
     await registry.publishLocalEvent({ backend, notification: {
       method: "turn/completed", params: { threadId: "thread-1", turnId: id, turn: { id, status: "completed", output: [] } },
     } });
+    const before = sqlRows.usageRows;
     measuring = true;
     const page = (await registry.readThread(request)).display?.pricingPage;
     measuring = false;
+    readRows += sqlRows.usageRows - before;
     expect(page?.totalRows).toBe(n);
     expect(page?.rows.map((row) => row.line.turnId)).toEqual(
       Array.from({ length: Math.min(n, 4) }, (_, i) => turnId(n - i)),

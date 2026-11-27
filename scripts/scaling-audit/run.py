@@ -17,12 +17,13 @@ PROPERTIES = json.loads((KIT / "properties.json").read_text())
 REVISIONS = json.loads((KIT / "revisions.json").read_text())
 MATCHED = ["navigation", "sqlite", "terminal", "held-auto-fix", "pricing", "federation", "reopen", "stream", "properties"]
 LIVE = "live-threads"
-CI = MATCHED + [LIVE]
+CI = MATCHED + [LIVE, "token-miser"]
 EXTRA = ["width", "pins", "git", "dispatcher", "incremental"]
 # Exact historical heads for workloads introduced during the investigation.
 HISTORICAL = {
     "main2": ["sqlite"], "pr4589": ["pricing"], "pr4593": ["pricing"], "pr4593new": ["pricing"],
     "pr4590": ["navigation", "incremental"], "pr4590b": ["navigation", "incremental", "sqlite"],
+    "pr4612": ["pricing", "token-miser"],
     "pr4605": ["terminal"], "pr4605new": ["terminal", "held-auto-fix"],
 }
 
@@ -93,6 +94,8 @@ def run(repo, output, suites, args):
             stage(folder / "scaling-audit-results.ts", (KIT / "results.ts").read_text())
             if "properties" in suites:
                 stage(folder / "scaling-audit-model.ts", (KIT / "matched-model.ts").read_text())
+        if "pricing" in suites or "token-miser" in suites:
+            stage(MAIN / "scaling-audit-pricing-rows.ts", (KIT / "pricing-rows.ts").read_text())
         if "navigation" in suites or "sqlite" in suites:
             stage(MAIN / "scaling-audit-navigation-fixture.ts", (KIT / "navigation-fixture.ts").read_text())
             stage(MAIN / "scaling-audit-generate.mjs", (KIT / "generate.mjs").read_text().replace("./shape.json", "./scaling-audit-shape.json"))
