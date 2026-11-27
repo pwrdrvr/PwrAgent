@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { windowsGitJobLauncher } from "../src/main/windows-job-launcher-path";
+import { windowsJobLauncherPath } from "../src/main/windows-job-launcher-path";
 import {
   DEV_SETUP_SCRIPTS,
   ELECTRON_DEV_ENV_KEYS,
@@ -93,7 +93,7 @@ describe("dev launch wrapper", () => {
     vi.mocked(existsSync).mockImplementation((file) => files.has(file));
     try {
       const moduleUrl = pathToFileURL(path.join(desktop, module)).href;
-      expect(windowsGitJobLauncher(moduleUrl)).toBe(path.join(desktop, ".local/windows-job-launcher", launcher));
+      expect(windowsJobLauncherPath(moduleUrl)).toBe(path.join(desktop, ".local/windows-job-launcher", launcher));
     } finally {
       vi.mocked(existsSync).mockRestore();
     }

@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDevelopmentRuntime, runtimeResourcesPath } from "./runtime-resources";
 
-export function windowsGitJobLauncher(moduleUrl = import.meta.url): string | undefined {
+export function windowsJobLauncherPath(moduleUrl = import.meta.url): string | undefined {
   const resources = runtimeResourcesPath();
   const development = isDevelopmentRuntime();
   // Electron Vite emits shared main modules in out/main/chunks.

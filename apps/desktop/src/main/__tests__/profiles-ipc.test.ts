@@ -409,7 +409,7 @@ describe("profile IPC helpers", () => {
     const { openDesktopPwrAgentProfile } = await import("../shell/ipc/profiles");
 
     try {
-      expect(openDesktopPwrAgentProfile({ profile: "scratch" })).toEqual({
+      expect(await openDesktopPwrAgentProfile({ profile: "scratch" })).toEqual({
         opened: false,
         profile: "scratch",
         reason: "focused",
@@ -488,7 +488,7 @@ describe("profile IPC helpers", () => {
     Object.defineProperty(process, "defaultApp", { configurable: true, value: true });
     let response;
     try {
-      response = openDesktopPwrAgentProfile({ profile: "My Work Profile" });
+      response = await openDesktopPwrAgentProfile({ profile: "My Work Profile" });
     } finally {
       process.argv = previousArgv;
       if (previousDefaultApp) {
@@ -523,7 +523,7 @@ describe("profile IPC helpers", () => {
     getAppStateModeMock.mockReturnValue("bootstrap");
     const { openDesktopPwrAgentProfile } = await import("../shell/ipc/profiles");
 
-    const response = openDesktopPwrAgentProfile({ profile: "test2" });
+    const response = await openDesktopPwrAgentProfile({ profile: "test2" });
 
     expect(response).toEqual({ opened: true, profile: "test2" });
     expect(spawnDetachedProcessMock).toHaveBeenCalledWith(
