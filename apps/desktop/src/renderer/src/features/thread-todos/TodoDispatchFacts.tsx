@@ -26,17 +26,21 @@ import {
 import { formatAcpRuntimeModeLabel } from "@pwragent/shared/acp-permission-mode";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
+  AccessShieldIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   FileCodeIcon,
   FolderIcon,
   ServerIcon,
-  ShieldIcon,
   SubthreadIcon,
   ThreadIcon,
   WorktreeIcon,
 } from "../../icons";
 import { TodoFactMenu, type TodoFactMenuEntry } from "./TodoFactMenu";
+import { todoAccessControl, type TodoAccessControl } from "./todo-access-control";
+import { AccessPicker } from "../composer/AccessPicker";
+import { accessShieldLevel, accessStops, describeAccessOption } from "../composer/access-picker-model";
+import { providerAccessOptionTier } from "@pwragent/shared/provider-access-levels";
 import { TodoModelPicker, TodoModelProvenance } from "./TodoModelPicker";
 import { todoDispatchPickKey, useTodoDispatchContext, useTodoMachineBackends } from "./TodoDispatchProvider";
 import {
@@ -100,6 +104,10 @@ export type TodoDispatchTarget = {
 /** The access a start-thread card starts with, and the operator's pick of it. */
 export type TodoDispatchAccess = {
   resolved: ThreadTodoStartAccess;
+  /** `resolved` as the access picker draws it. */
+  picker: TodoAccessControl;
+  /** The destination provider. */
+  backend: BackendSummary["kind"];
   /** The destination provider's name. */
   providerLabel: string;
   /** The operator can pick: the card is stored on an owner that applies the pick, and starts there. */
@@ -329,6 +337,8 @@ function useDispatchAccess(params: {
   const pendingHere = pending?.todoId === todo.id && pending.updatedAt === todo.updatedAt;
   return {
     resolved,
+    picker: todoAccessControl(resolved, ownerRules ? params.destination?.acp?.runtime : undefined),
+    backend: destinationBackend,
     providerLabel,
     editable,
     ...(lockedReason && stored ? { lockedReason } : {}),
@@ -686,20 +696,7 @@ export function TodoDispatchFacts(props: {
     : resolvedAccess.status === "refused" ? "Choose access"
     : selectedAccess ? todoAccessOptionLabel(selectedAccess) : "Agent default";
   const threadMode = todo.dispatchDefaults?.threadExecutionMode;
-  const accessEntries: TodoFactMenuEntry[] = (resolvedAccess?.options ?? []).map((option) => {
-    const level = option.kind === "mode" ? option.mode : option.executionMode;
-    const detail = level === "full-access" ? "Asks to confirm"
-      : option.kind === "mode" && option.mode === threadMode && target.model?.settings.backend === todo.backend ? "This thread"
-      : undefined;
-    return {
-      kind: "item",
-      key: option.kind === "mode" ? `mode:${option.mode}` : `native:${option.id}`,
-      label: todoAccessOptionLabel(option),
-      ...(detail ? { detail } : {}),
-      checked: sameThreadTodoAccessOption(selectedAccess, option),
-      onSelect: () => access?.pick(option),
-    };
-  });
+  const sameProvider = target.model?.settings.backend === todo.backend;
   const selectedLabel = selectedAccess ? todoAccessOptionLabel(selectedAccess) : undefined;
   const accessNote = !access || !resolvedAccess ? undefined
     : resolvedAccess.status === "refused" ? resolvedAccess.message
@@ -708,17 +705,46 @@ export function TodoDispatchFacts(props: {
     : resolvedAccess.source === "agent"
       ? `${access.providerLabel} has no mode at or below ${wantedAccess}, so it starts in its own default. Choose one of its modes to set it.`
     : undefined;
-  const accessTooltip = access?.lockedReason ?? (accessValue ? `Access: ${accessValue}` : undefined);
-  const accessChip = !accessValue ? null : access?.editable ? (
-    <TodoFactMenu
-      label="Access for the new thread"
-      value={access.pending ? "Saving…" : accessValue}
-      entries={accessEntries}
+  const accessPicker = access?.picker;
+  const accessShield = accessPicker
+    ? accessShieldLevel(accessStops(accessPicker.control), accessPicker.control.selectedOption)
+    : "low";
+  const accessPlan = accessPicker?.control.selectedOption
+    ? providerAccessOptionTier(accessPicker.control.selectedOption) === "plan"
+    : false;
+  const accessChip = !accessValue ? null : access?.editable && accessPicker ? (
+    <AccessPicker
+      ariaLabel="Access for the new thread"
+      backend={access.backend}
+      control={accessPicker.control}
+      // Choosing a level only stores it on the card. Starting the card is
+      // the escalation: it passes the Full Access gate
+      // (`useThreadTodoFullAccessGate`) on the stored level, so nothing
+      // here asks first.
+      needsConfirmation={() => false}
+      describe={(option) => {
+        const level = option.executionMode;
+        const sentence = describeAccessOption(option, access.backend);
+        const note = level === "full-access" && option.requiresFullAccessConfirmation
+          ? "Starting the thread asks you to confirm it."
+          : option.kind === "execution" && level === threadMode && sameProvider
+            ? "This thread runs at it now."
+            : undefined;
+        return [sentence, note].filter(Boolean).join(" ") || undefined;
+      }}
       disabled={props.disabled || access.pending}
-      testId="todo-dispatch-access"
-      {...(compact
-        ? { icon: ShieldIcon, ...(accessTooltip ? { tooltip: accessTooltip } : {}) }
+      // A pick being saved, or a value that is not a stop: the agent's own
+      // default, or a refused mode waiting for a choice.
+      {...(access.pending || !accessPicker.control.selectedOption
+        ? { label: access.pending ? "Saving…" : accessValue }
         : {})}
+      scope="new thread"
+      size="card"
+      testId="todo-dispatch-access"
+      onCommit={(option) => {
+        const picked = accessPicker.optionFor(option.value);
+        if (picked) access.pick(picked);
+      }}
     />
   ) : compact ? (
     <span
@@ -728,7 +754,7 @@ export function TodoDispatchFacts(props: {
       role="img"
       data-testid="todo-dispatch-access"
     >
-      <ShieldIcon size={12} aria-hidden="true" />
+      <AccessShieldIcon level={accessShield} mark={accessPlan} size={12} />
       <span className="todo-dispatch-chips__static-label">{accessValue}</span>
     </span>
   ) : accessValue;

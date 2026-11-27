@@ -731,7 +731,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     pickOwnerModel: pickModel,
   });
   // The destination offers neither the card's access nor a fallback: the
-  // card says so beside its Access menu, and starts once one is chosen.
+  // card says so beside its access picker, and starts once one is chosen.
   const accessBlocksStart = startsThread
     && (target.access?.resolved.status === "refused" || target.access?.pending === true);
   const [confirmingMerge, setConfirmingMerge] = useState<MergeConfirmation>();
