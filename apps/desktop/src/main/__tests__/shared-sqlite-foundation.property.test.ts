@@ -60,6 +60,7 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_spend_parent"
     && row.name !== "idx_thread_usage_turns_pending_acp_compaction"
     && row.name !== "idx_thread_usage_turns_acp_context"
+    && row.name !== "idx_thread_usage_turns_navigation_context"
     && row.name !== "idx_automation_runs_backend_turn"
     && row.tbl_name !== "automation_pruned_run_costs"
     && row.name !== "idx_pr_status_watches_retry"
