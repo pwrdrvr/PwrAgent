@@ -472,8 +472,9 @@ describe("DesktopFederationRuntime", () => {
       inputTokens: 0, cachedInputTokens: 0, uncachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0,
     }));
     const readSummaries = vi.fn(async (_threads: Array<{ backend: string; threadId: string }>) => summaries);
+    const repairTokenMiserFamilyCharges = vi.fn(async () => undefined);
     const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
-      .mockReturnValue({} as never);
+      .mockReturnValue({ repairTokenMiserFamilyCharges } as never);
     setDesktopOverlayStoreForTests({ readThreadPricingSummaries: readSummaries } as never);
     try {
       // An inbound routing field must not turn an owner read into another peer read.
@@ -484,6 +485,8 @@ describe("DesktopFederationRuntime", () => {
       expect(readSummaries).toHaveBeenCalledOnce();
       expect(readSummaries.mock.calls[0]![0].map(({ backend, threadId }) => `${backend}:${threadId}`).sort())
         .toEqual(["codex:child", "codex:grandchild", "codex:parent"]);
+      expect(repairTokenMiserFamilyCharges).toHaveBeenCalledExactlyOnceWith(readSummaries.mock.calls[0]![0]);
+      expect(repairTokenMiserFamilyCharges).toHaveBeenCalledBefore(readSummaries);
       expect(family.members.map(({ threadId, self, active, totalCostMicros }) => ({ threadId, self, active, totalCostMicros })))
         .toEqual([
           { threadId: "parent", self: true, active: false, totalCostMicros: 1_000_000 },

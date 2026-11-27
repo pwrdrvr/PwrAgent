@@ -2,8 +2,8 @@ import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { StateDb } from "./state-db.js";
 import {
-  claimStorageMaintenance, compactStorage, eligibleStorageThreads, fenceStorageRetention, observeStorageArchive, readStorageMaintenance,
-  storageDetailStatements, writeStorageMaintenance,
+  claimStorageMaintenance, compactStorage, createStorageArchiveGraceReader, eligibleStorageThreads, fenceStorageRetention,
+  observeStorageArchive, readStorageMaintenance, storageDetailSlices, writeStorageMaintenance,
   type StorageThreadIdentity,
 } from "./storage-maintenance.js";
 import type { StorageMaintenanceStatus } from "../../shared/storage-maintenance.js";
@@ -57,23 +57,25 @@ async function run(request: Request): Promise<void> {
     send({ eligibleThreads: eligible.length });
     for (const identity of eligible) {
       let fenced = false;
-      for (const operation of storageDetailStatements(db, identity)) {
+      const archiveStillEligible = createStorageArchiveGraceReader(db, identity);
+      for (const operation of storageDetailSlices(db, identity)) {
+        let limit = 128;
         while (true) {
           const walPath = request.dbPath + "-wal";
           const bytesBefore = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0;
           const startedAt = performance.now();
-          const changes = db.transaction(() => {
+          const slice = db.transaction(() => {
             // An observed unarchive from another connection cancels this thread.
-            if (!eligibleStorageThreads(db, [identity], Date.now()).length) return 0;
+            if (!archiveStillEligible(Date.now())) return undefined;
             if (!fenced) fenceStorageRetention(db, identity);
-            return operation.statement.run(...operation.parameters).changes;
+            return operation.run(limit);
           }).immediate();
+          if (!slice) break;
           fenced = true;
-          if (!changes) break;
-          const bytesWritten = fs.statSync(walPath).size - bytesBefore;
+          if (!slice.changes && !slice.more) break;
+          const bytesWritten = (fs.existsSync(walPath) ? fs.statSync(walPath).size : 0) - bytesBefore;
           if (performance.now() - startedAt > 8 || bytesWritten > 1024 * 1024) {
-            const limitIndex = operation.parameters.length - 1;
-            operation.parameters[limitIndex] = Math.max(1, Math.floor(Number(operation.parameters[limitIndex]) / 2));
+            limit = Math.max(1, Math.floor(limit / 2));
           }
           await sleep();
           // Avoid building an unbounded WAL behind a pinned reader.
@@ -85,6 +87,7 @@ async function run(request: Request): Promise<void> {
             }
             db.pragma("wal_checkpoint(TRUNCATE)");
           }
+          if (!slice.more) break;
         }
       }
       send({ completedThreads: status.completedThreads + 1 });

@@ -9,6 +9,7 @@ export type { StorageMaintenanceRecord, StorageThreadIdentity } from "@pwragent/
 export const STORAGE_GRACE_MS = 7 * STORAGE_INTERVAL_MS;
 export const STORAGE_MAINTENANCE_KEY = "storage_maintenance_v1";
 export { STORAGE_RETENTION_SCHEMA } from "@pwragent/sqlite-storage/state-schema";
+
 export function readStorageMaintenance(db: Database.Database): StorageMaintenanceRecord {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(STORAGE_MAINTENANCE_KEY) as { value: string } | undefined;
   try {
@@ -85,6 +86,8 @@ export function eligibleStorageThreads(db: Database.Database, archived: StorageT
   // Archive receipts preserve the grace period, not a permanent cleanup queue.
   // Probe the detail indexes without loading payloads; completed archives drop
   // out naturally, and interrupted cleanup or late writes remain discoverable.
+  // Keep the gate predicate in sync with the deletion query. A preserved
+  // helper charge alone does not make a thread eligible for cleanup.
   const lookup = db.prepare(`SELECT 1 FROM thread_storage_retention
     WHERE backend=@backend AND thread_id=@threadId AND archived_at<=@cutoff
       AND (
@@ -92,16 +95,94 @@ export function eligibleStorageThreads(db: Database.Database, archived: StorageT
         OR EXISTS (SELECT 1 FROM thread_tool_invocations WHERE backend=@backend AND thread_id=@threadId)
         OR EXISTS (SELECT 1 FROM thread_tool_analysis WHERE backend=@backend AND thread_id=@threadId)
         OR (@backend='codex' AND (
-          EXISTS (SELECT 1 FROM token_miser_objects WHERE thread_id=@threadId)
+          EXISTS (SELECT 1 FROM token_miser_objects AS gate WHERE gate.thread_id=@threadId AND (
+            CASE WHEN json_valid(gate.payload) THEN json_type(gate.payload, '$.helperUsage.tokenUsage') IS NOT 'object' ELSE 1 END
+            OR EXISTS (SELECT 1 FROM thread_usage_lines AS line
+              WHERE line.backend='codex' AND line.thread_id=gate.thread_id AND line.status!='superseded'
+                AND line.source_item_id='system:token-miser:' || gate.object_id)
+            OR EXISTS (SELECT 1 FROM thread_usage_lines AS line
+              WHERE line.backend='codex' AND line.parent_thread_id=gate.thread_id AND line.status!='superseded'
+                AND line.source_item_id='system:token-miser:' || gate.object_id)
+          ))
           OR EXISTS (SELECT 1 FROM token_miser_observations WHERE thread_id=@threadId)
         ))
       )`);
   return archived.filter((identity) => lookup.get({ backend: identity.backend, threadId: identity.threadId, cutoff: now - STORAGE_GRACE_MS }) !== undefined);
 }
 
+export function createStorageArchiveGraceReader(db: Database.Database, identity: StorageThreadIdentity): (now: number) => boolean {
+  const receipt = db.prepare("SELECT 1 FROM thread_storage_retention WHERE backend=? AND thread_id=? AND archived_at<=?");
+  return (now) => receipt.get(identity.backend, identity.threadId, now - STORAGE_GRACE_MS) !== undefined;
+}
+
+type StorageDetailSlice = {
+  run(limit?: number): { changes: number; more: boolean };
+};
+
+export function createTokenMiserGateSlice(db: Database.Database, threadId: string): StorageDetailSlice {
+  type Candidate = { rowid: number; created_at: number };
+  const first = db.prepare(`SELECT rowid, created_at FROM token_miser_objects
+    WHERE thread_id=? ORDER BY created_at, rowid LIMIT ?`);
+  // The time index orders equal timestamps by rowid. Seek both explicitly
+  // so even a large group of tied timestamps fits the candidate bound.
+  const tied = db.prepare(`SELECT rowid, created_at FROM token_miser_objects
+    WHERE thread_id=? AND created_at=? AND rowid>? ORDER BY rowid LIMIT ?`);
+  const later = db.prepare(`SELECT rowid, created_at FROM token_miser_objects
+    WHERE thread_id=? AND created_at>? ORDER BY created_at, rowid LIMIT ?`);
+  const inspect = db.prepare(`SELECT gate.rowid, 192
+      + length(CAST(gate.object_id AS BLOB))
+      + length(CAST(gate.thread_id AS BLOB))
+      + length(CAST(gate.payload AS BLOB)) AS bytes,
+    CASE WHEN json_valid(gate.payload) THEN json_type(gate.payload, '$.helperUsage.tokenUsage') IS NOT 'object' ELSE 1 END
+      OR EXISTS (SELECT 1 FROM thread_usage_lines AS line
+        WHERE line.backend='codex' AND line.thread_id=gate.thread_id AND line.status!='superseded'
+          AND line.source_item_id='system:token-miser:' || gate.object_id)
+      OR EXISTS (SELECT 1 FROM thread_usage_lines AS line
+        WHERE line.backend='codex' AND line.parent_thread_id=gate.thread_id AND line.status!='superseded'
+          AND line.source_item_id='system:token-miser:' || gate.object_id) AS removable
+    FROM json_each(?) AS requested
+    CROSS JOIN token_miser_objects AS gate ON gate.rowid=requested.value`);
+  const remove = db.prepare("DELETE FROM token_miser_objects WHERE rowid IN (SELECT value FROM json_each(?))");
+  let after: Candidate | undefined;
+  return {
+    run(limit = 128) {
+      const candidates = (after
+        ? tied.all(threadId, after.created_at, after.rowid, limit)
+        : first.all(threadId, limit)) as Candidate[];
+      if (after && candidates.length < limit) {
+        candidates.push(...later.all(threadId, after.created_at, limit - candidates.length) as Candidate[]);
+      }
+      const rows = inspect.all(JSON.stringify(candidates.map((row) => row.rowid))) as Array<{
+        rowid: number; removable: number; bytes: number;
+      }>;
+      const byId = new Map(rows.map((row) => [row.rowid, row]));
+      const deletions: number[] = [];
+      const maxBytes = 262144;
+      let bytes = 0;
+      let more = candidates.length === limit;
+      for (const candidate of candidates) {
+        const row = byId.get(candidate.rowid)!;
+        if (row.removable && row.bytes <= maxBytes) {
+          if (bytes + row.bytes > maxBytes) {
+            more = true;
+            break;
+          }
+          bytes += row.bytes;
+          deletions.push(candidate.rowid);
+        }
+        // Protected and oversized gates count against this slice and don't
+        // prevent the next slice from reaching later candidates.
+        after = candidate;
+      }
+      const changes = deletions.length ? remove.run(JSON.stringify(deletions)).changes : 0;
+      return { changes, more };
+    },
+  };
+}
+
 // Slice indexed candidates by rows and bytes. Keep oversized records intact.
 // These explicit column lists must track schema changes; metadata is never deleted.
-export function storageDetailStatements(db: Database.Database, identity: StorageThreadIdentity) {
+export function storageDetailSlices(db: Database.Database, identity: StorageThreadIdentity): StorageDetailSlice[] {
   const operations = [
     {
       codexOnly: false,
@@ -173,20 +254,6 @@ export function storageDetailStatements(db: Database.Database, identity: Storage
     },
     {
       codexOnly: true,
-      sql: `DELETE FROM token_miser_objects WHERE rowid IN (
-        SELECT rowid FROM (
-          SELECT rowid, SUM(bytes) OVER (ORDER BY rowid) AS total_bytes FROM (
-            SELECT rowid, 192
-              + COALESCE(length(CAST(object_id AS BLOB)),0)
-              + COALESCE(length(CAST(thread_id AS BLOB)),0)
-              + COALESCE(length(CAST(payload AS BLOB)),0) AS bytes
-            FROM token_miser_objects WHERE thread_id=? LIMIT ?
-          ) WHERE bytes <= 262144
-        ) WHERE total_bytes <= 262144
-      )`,
-    },
-    {
-      codexOnly: true,
       sql: `DELETE FROM token_miser_observations WHERE rowid IN (
         SELECT rowid FROM (
           SELECT rowid, SUM(bytes) OVER (ORDER BY rowid) AS total_bytes FROM (
@@ -200,8 +267,14 @@ export function storageDetailStatements(db: Database.Database, identity: Storage
       )`,
     },
   ];
-  return operations.filter((operation) => !operation.codexOnly || identity.backend === "codex").map((operation) => ({
-    statement: db.prepare(operation.sql),
-    parameters: (operation.codexOnly ? [identity.threadId, 128] : [identity.backend, identity.threadId, 128]) as Array<string | number>,
-  }));
+  const slices: StorageDetailSlice[] = operations.filter((operation) => !operation.codexOnly || identity.backend === "codex").map((operation) => {
+    const statement = db.prepare(operation.sql);
+    const keys = operation.codexOnly ? [identity.threadId] : [identity.backend, identity.threadId];
+    return { run(limit = 128) {
+      const { changes } = statement.run(...keys, limit);
+      return { changes, more: changes > 0 };
+    } };
+  });
+  if (identity.backend === "codex") slices.push(createTokenMiserGateSlice(db, identity.threadId));
+  return slices;
 }

@@ -223,7 +223,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   // unavailable for the whole session.
   //
   // It queues behind the provider refresh rather than beside it: preparation
-  // spawns `codex plugin marketplace` subprocesses and a full retention prune,
+  // can spawn `codex plugin marketplace` subprocesses,
   // and the refresh above owns the event that releases the renderer's startup
   // hold. Contending with it would delay first paint to no purpose.
   // Its own chain, so an archive sweeper failure cannot leave idle Codex
@@ -952,6 +952,8 @@ wireOwnerRendererEvents();
         });
       });
   }
+
+  if (bootMode === "active-profile") registry.scheduleTokenMiserLegacyCleanup();
 
   return {
     registry, service, config, settings, federationRuntime, messagingRuntime,

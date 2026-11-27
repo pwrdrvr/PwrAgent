@@ -45,7 +45,6 @@ function supervisor(params: {
   });
   const host = params.host;
   return new CodexRuntimeSupervisor(context, {
-    threadUsageLedger: { initializeTokenMiserLedger: async () => {} } as never,
     threadArchiveCoordinator: { threadLifecycleMutationCountRecords: new Map() } as never,
     threadWorkspaceService: { threadHandoffReservationRecords: new Set() } as never,
     resolveCodexAppServerRecycleSettingsFn: () => ({ ...DEFAULT_CODEX_APP_SERVER_RECYCLE_SETTINGS }),
@@ -97,7 +96,6 @@ describe("managed runtime restart admission", () => {
           const close = vi.fn(async () => {});
           const reset = vi.fn();
           const complete = vi.fn();
-          const ledger = vi.fn(async () => {});
           const prepare = vi.fn(async () => {});
           const client = { close, resetAppServerRestarts: reset };
           const turnState = new RegistryTurnState();
@@ -113,13 +111,11 @@ describe("managed runtime restart admission", () => {
             tokenMiserCodeModeGroupingVersion: 1,
             tokenMiserPostToolUseExactOutputVersion: 1,
             tokenMiserRuntimePreparationFailure: "old runtime",
-            tokenMiserStore: {},
             resolveTokenMiserEnabledFn: () => true,
             prepareTokenMiserRuntime: prepare,
           };
           const service = supervisor({ host, turnState, codex: client, lifecycle: { closed: admission === "closed" }, dependencies: {
             markManagedCodexRuntimeSwitchCompleteFn: complete,
-            threadUsageLedger: { initializeTokenMiserLedger: ledger } as never,
           } });
           if (busy.includes("terminal")) internals(service).codexBackgroundTerminals.set("t", [terminal("cmd")]);
           if (busy.includes("tool")) internals(service).liveCodexToolItemsByThread.set("t", new Map());
@@ -130,7 +126,6 @@ describe("managed runtime restart admission", () => {
           expect(close).toHaveBeenCalledTimes(allowed ? 1 : 0);
           expect(reset).toHaveBeenCalledTimes(allowed ? 1 : 0);
           expect(complete).toHaveBeenCalledTimes(allowed && managed ? 1 : 0);
-          expect(ledger).toHaveBeenCalledTimes(allowed ? 1 : 0);
           expect(prepare).toHaveBeenCalledTimes(allowed ? 1 : 0);
           expect(service.runtimeRestartPending).toBe(admission !== "unrequested" && !allowed);
           expect(service.managedRuntimeSwitchPending).toBe(managed && !allowed);
@@ -351,7 +346,6 @@ describe("Codex selection changes with app server generations", () => {
       const rolloverAppServer = vi.fn(() => new Promise<typeof outcome>((resolve) => { finish = resolve; }));
       const lifecycle = { closed: false };
       const prepare = vi.fn(async () => {});
-      const ledger = vi.fn(async () => {});
       const complete = vi.fn();
       const service = supervisor({
         lifecycle,
@@ -359,13 +353,11 @@ describe("Codex selection changes with app server generations", () => {
         host: {
           nativeVoiceLeases: 0,
           tokenMiserServerCapabilities: new WeakMap(),
-          tokenMiserStore: {},
           resolveTokenMiserEnabledFn: () => true,
           prepareTokenMiserRuntime: prepare,
         },
         dependencies: {
           markManagedCodexRuntimeSwitchCompleteFn: complete,
-          threadUsageLedger: { initializeTokenMiserLedger: ledger } as never,
         },
       });
       service.setRuntimeRestartPending(true);
@@ -375,7 +367,6 @@ describe("Codex selection changes with app server generations", () => {
       finish(outcome);
       expect(await switching).toBe(false);
       expect(prepare).not.toHaveBeenCalled();
-      expect(ledger).not.toHaveBeenCalled();
       expect(complete).not.toHaveBeenCalled();
       // Nothing is left requested for a registry that is gone.
       expect(service.runtimeRestartPending).toBe(false);
@@ -444,20 +435,17 @@ describe("Codex selection changes with app server generations", () => {
     const close = vi.fn(async () => {});
     const reset = vi.fn();
     const complete = vi.fn();
-    const ledger = vi.fn(async () => {});
     const prepare = vi.fn(async () => {});
     const client = { close, resetAppServerRestarts: reset, rolloverAppServer };
     const host = {
       nativeVoiceLeases: 0,
       tokenMiserServerCapabilities: new WeakMap([[client, Promise.resolve(undefined)]]),
       tokenMiserReducerCapabilityState: "supported",
-      tokenMiserStore: {},
       resolveTokenMiserEnabledFn: () => true,
       prepareTokenMiserRuntime: prepare,
     };
     const service = supervisor({ host, turnState, codex: client, dependencies: {
       markManagedCodexRuntimeSwitchCompleteFn: complete,
-      threadUsageLedger: { initializeTokenMiserLedger: ledger } as never,
     } });
     service.setRuntimeRestartPending(true);
     service.setManagedRuntimeSwitchPending(true);
@@ -475,7 +463,6 @@ describe("Codex selection changes with app server generations", () => {
     expect(rolloverAppServer.mock.calls).toEqual([[{ selection: 1 }], [{ selection: 1 }], [{ selection: 1 }]]);
     expect(close).not.toHaveBeenCalled();
     expect(reset).toHaveBeenCalledOnce();
-    expect(ledger).toHaveBeenCalledOnce();
     expect(prepare).toHaveBeenCalledOnce();
     expect(complete).toHaveBeenCalledOnce();
     expect(host.tokenMiserServerCapabilities.has(client)).toBe(false);

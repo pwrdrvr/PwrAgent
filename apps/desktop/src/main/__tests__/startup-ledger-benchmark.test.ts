@@ -325,19 +325,22 @@ async function runFleet(): Promise<void> {
         marker.run(`historical-${index}`, `fleet-${(index % 8) * 4}`, AT - 1 - index, AT - 1 - index);
       }
     })();
-    await seed.ledger.initializeTokenMiserLedger();
+    await seed.ledger.repairTokenMiserHistory();
     db.raw.pragma("wal_checkpoint(TRUNCATE)");
     if (profileDir) db.raw.prepare("VACUUM INTO ?").run(path.join(profileDir, "reconciled-fixture.db"));
     db.close();
     db = StateDb.open(dbPath);
-    const { ledger, storage, store } = fleetLedger(db, root);
+    const cold = fleetLedger(db, root);
+    const warm = fleetLedger(db, root);
+    const mixed = fleetLedger(db, root);
+    const { storage, store } = mixed;
     const probe = instrumentFleet(db);
-    await measureFleet(probe, "cold", () => ledger.initializeTokenMiserLedger(), profileDir);
-    await measureFleet(probe, "warm", () => ledger.initializeTokenMiserLedger(), profileDir);
+    await measureFleet(probe, "cold", () => cold.ledger.repairTokenMiserHistory(), profileDir);
+    await measureFleet(probe, "warm", () => warm.ledger.repairTokenMiserHistory(), profileDir);
 
     const missing = gates[1]!;
     const stale = { ...gates[2]!, retrievedCharacters: 400 };
-    const changedByPeer = { ...gates[129]!, retrievedCharacters: 800 };
+    const changedByPeer = { ...gates.at(-1)!, retrievedCharacters: 800 };
     const needsReprice = gates[4]!;
     db.raw.prepare("DELETE FROM thread_sub_agents WHERE thread_id = ? AND monitor_id = ?")
       .run(`codex:${missing.threadId}`, `system:token-miser:${missing.objectId}`);
@@ -350,11 +353,15 @@ async function runFleet(): Promise<void> {
     try {
       const peerStorage = fleetLedger(peer, root).storage;
       const readPage = storage.readMetadataPage.bind(storage);
-      vi.spyOn(storage, "readMetadataPage").mockImplementation((after, limit) => {
-        if (after === gates[63]!.objectId) peerStorage.writeMetadata(changedByPeer);
-        return readPage(after, limit);
+      let peerChanged = false;
+      vi.spyOn(storage, "readMetadataPage").mockImplementation((after, limit, threadId) => {
+        if (after && !peerChanged) {
+          peerChanged = true;
+          peerStorage.writeMetadata(changedByPeer);
+        }
+        return readPage(after, limit, threadId);
       });
-      await measureFleet(probe, "mixed", () => ledger.initializeTokenMiserLedger(), profileDir);
+      await measureFleet(probe, "mixed", () => mixed.ledger.repairTokenMiserHistory(), profileDir);
     } finally {
       probe.finish();
       peer.close();
@@ -373,7 +380,7 @@ async function runFleet(): Promise<void> {
 }
 
 it.skipIf(process.env.PWRAGENT_BENCH_STARTUP_LEDGER !== "1")(
-  "profiles reconciled Token Miser fleet startup, repeat, and mixed peer repair",
+  "profiles cold and warm Token Miser history reads and mixed peer repair",
   { timeout: 120_000 },
   runFleet,
 );

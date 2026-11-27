@@ -38,7 +38,7 @@ export const THREAD_FAMILY_PRICING_PEER_BUDGET_MS = 10_000;
  * The root may itself live on another instance: this machine can still keep
  * sub-threads under it. It is then not a member here.
  *
- * This reads stored totals once when the Pricing tab opens. It writes nothing.
+ * The owner supplies totals for the local members in one request.
  */
 export async function readThreadFamilyPricing(params: {
   root: NavigationIdentity;
