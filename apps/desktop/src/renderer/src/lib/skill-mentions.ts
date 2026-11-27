@@ -179,23 +179,42 @@ export function hydrateSkillLabelsWithMarkdown(
   text: string,
   skills: AppServerSkillSummary[]
 ): string {
+  if (skills.length === 0) {
+    return text;
+  }
+
   let output = text;
+  const markdownByName = new Map<string, string>();
+  const flush = () => {
+    if (markdownByName.size === 0) {
+      return;
+    }
+    // Insertion order decides which alternative wins for e.g. $ce vs $ce:plan.
+    const pattern = skillLabelMatcher([...markdownByName.keys()]);
+    output = output.replace(pattern, (_, prefix: string, label: string) =>
+      prefix + markdownByName.get(label.slice(1))!
+    );
+    markdownByName.clear();
+  };
 
   for (const skill of skills) {
-    if (!skill.path) {
+    if (!skill.path || markdownByName.has(skill.name)) {
       continue;
     }
 
-    const token = buildSkillLabelToken(skill);
-    const pattern = new RegExp(
-      `(^|\\s)${escapeRegExp(token)}${SKILL_TOKEN_BOUNDARY}`,
-      "g"
-    );
-    output = output.replace(pattern, (_match, prefix: string) => {
-      return `${prefix}${buildSkillMentionMarkdown(skill)}`;
-    });
+    // A multi-word name can span a different label or its inserted Markdown.
+    const spansWhitespace = /\s/.test(skill.name);
+    if (spansWhitespace) {
+      flush();
+    }
+    markdownByName.set(skill.name, buildSkillMentionMarkdown(skill));
+    // A later entry can match a fresh label inside this replacement.
+    if (spansWhitespace || /\s\$/.test(skill.path)) {
+      flush();
+    }
   }
 
+  flush();
   return output;
 }
 
