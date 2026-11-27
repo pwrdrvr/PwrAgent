@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Profiler } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AutomationDetail, AutomationMessagingConversationSnapshot } from "@pwragent/shared/contracts/automations";
 import type {
@@ -99,7 +100,7 @@ function botApi(connections: TelegramConnectionStatus[] = bots(), originalOn = t
       }
     });
   };
-  return { api, desktopApi: api as unknown as DesktopApi, emitPairing };
+  return { api, desktopApi: api as unknown as DesktopApi, emitPairing, listenerCount: () => pairingListeners.length };
 }
 
 async function pickConversation(field: string, option: RegExp): Promise<void> {
@@ -282,20 +283,30 @@ describe("AutomationEditor Telegram bots", () => {
   });
 
   it("lists topics and registers a group with the selected bot only", async () => {
-    const { api, desktopApi, emitPairing } = botApi();
+    const { api, desktopApi, emitPairing, listenerCount } = botApi();
+    // Sample the first commit showing the code, before React flushes passive effects.
+    let listenersWhenCodeAppeared: number | undefined;
+    const recordPairingReadiness = () => {
+      if (listenersWhenCodeAppeared === undefined && screen.queryByText("/pair ORCHARD-7")) {
+        listenersWhenCodeAppeared = listenerCount();
+      }
+    };
     render(
-      <AutomationEditor
-        desktopApi={desktopApi}
-        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
-        onCancel={() => undefined}
-        onSubmit={vi.fn(async () => undefined)}
-      />,
+      <Profiler id="pairing" onRender={recordPairingReadiness}>
+        <AutomationEditor
+          desktopApi={desktopApi}
+          mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+          onCancel={() => undefined}
+          onSubmit={vi.fn(async () => undefined)}
+        />
+      </Profiler>,
     );
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     await chooseBot("Bot", "Orchard bot");
 
     fireEvent.click(screen.getByRole("button", { name: "Not sure of the ID? Register with a code" }));
     expect(await screen.findByText("/pair ORCHARD-7")).toBeInTheDocument();
+    expect(listenersWhenCodeAppeared).toBe(1);
     expect(api.generateMessagingPairingToken).toHaveBeenCalledWith({
       platform: "telegram", connectionId: ORCHARD, scope: "bucket",
     });

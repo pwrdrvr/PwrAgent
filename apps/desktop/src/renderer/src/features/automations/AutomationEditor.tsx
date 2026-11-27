@@ -1,6 +1,6 @@
 import { matchesAutomationConversation } from "@pwragent/shared/contracts/automations";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   ThreadExecutionMode,
@@ -933,7 +933,8 @@ export function AutomationEditor(props: AutomationEditorProps) {
     setGroupSelection(MANUAL_GROUP_VALUE);
   };
 
-  useEffect(() => {
+  // Pairing IPC has no replay. Subscribe in the commit that exposes the code.
+  useLayoutEffect(() => {
     if (!captureEntry) return;
     const { id: captureEntryId, connectionId: captureConnectionId } = captureEntry;
     const subscribe = props.desktopApi?.onMessagingPairingChanged;
