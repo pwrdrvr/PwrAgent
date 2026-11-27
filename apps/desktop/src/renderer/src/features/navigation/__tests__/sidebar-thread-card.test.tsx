@@ -348,7 +348,7 @@ describe("sidebar thread card", () => {
     let shown = hoverOpen("a");
     fireEvent.click(within(shown).getByRole("button", { name: "Pin thread", hidden: true }));
     expect(onSetThreadPin).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), true);
-    fireEvent.click(within(shown).getByRole("button", { name: /Settle/, hidden: true }));
+    fireEvent.click(within(shown).getByRole("button", { name: "Mark read", hidden: true }));
     await act(async () => undefined);
     expect(onMarkThreadsSeen).toHaveBeenCalledWith([expect.objectContaining({ id: "a" })]);
     expect(card()).toBeNull();
@@ -364,7 +364,7 @@ describe("sidebar thread card", () => {
     expect(card()).toBeNull();
   });
 
-  it("swaps Settle and Archive out while the thread runs", () => {
+  it("swaps Mark read and Archive out while the thread runs", () => {
     renderSidebar({
       threads: [thread("a", { threadStatus: "active", inbox: { inInbox: true, reason: "new-thread" } })],
       onMarkThreadsSeen: async () => undefined,
@@ -372,7 +372,7 @@ describe("sidebar thread card", () => {
     });
     const shown = hoverOpen("a");
     expect(shown).toHaveTextContent("Running · Codex");
-    expect(within(shown).queryByRole("button", { name: /Settle/, hidden: true })).toBeNull();
+    expect(within(shown).queryByRole("button", { name: "Mark read", hidden: true })).toBeNull();
     expect(within(shown).queryByRole("button", { name: /Archive/, hidden: true })).toBeNull();
   });
 

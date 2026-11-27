@@ -3842,7 +3842,7 @@ function SidebarContent(props: SidebarProps) {
       ...(!thread.parentThreadId && props.onSetThreadPin
         ? { pin: { pinned: Boolean(live.pinnedRank), toggle: () => togglePinFromContextMenu(live) } }
         : {}),
-      ...(threadCanMarkRead(thread) ? { settle: () => markReadFromContextMenu([thread]) } : {}),
+      ...(threadCanMarkRead(thread) ? { markRead: () => markReadFromContextMenu([thread]) } : {}),
       ...(!hasChildThreads && canArchiveThread(thread) && threadCanRouteRemoteCapability(thread, "turn_control")
         ? { archive: () => archiveFromContextMenu(thread) }
         : {}),

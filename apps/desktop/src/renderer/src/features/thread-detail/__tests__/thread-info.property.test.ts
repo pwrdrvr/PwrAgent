@@ -6,7 +6,7 @@ import type {
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { readThreadInfoRow, threadInfoFacts } from "../thread-info";
+import { formatCompactTokens, readThreadInfoRow, threadInfoFacts } from "../thread-info";
 import { observeThreadLinkRows, readThreadLinkRow } from "../../../lib/thread-link-rows";
 
 it("uses the same owner's archive identity as the viewer, even without an archive timestamp", async () => {
@@ -152,4 +152,11 @@ it("uses the latest navigation observation even when an earlier encounter finish
     expect(await readThreadInfoRow(api, target, undefined)).toBe(snapshots.at(-1));
     expect(api.getNavigationQueryPage).toHaveBeenCalledTimes(1);
   }), { numRuns: 25 });
+});
+
+// Rule: a compact count never reads as a thousand of its own unit ("1000k").
+it("rounds a count up into the next unit instead of writing 1000k", () => {
+  fc.assert(fc.property(fc.integer({ min: 0, max: 5_000_000 }), (value) => {
+    expect(formatCompactTokens(value)).toMatch(/^(\d{1,3}|\d{1,3}k|\d+(\.\d)?M)$/);
+  }), { examples: [[999_600]] });
 });

@@ -70,8 +70,8 @@ export type SidebarThreadCardActions = {
   showPullRequest?: () => void;
   openPullRequest?: () => void;
   pin?: { pinned: boolean; toggle: () => void };
-  /** Mark Read: the thread leaves Attention. */
-  settle?: () => void;
+  /** Mark read: the thread leaves Attention. */
+  markRead?: () => void;
   archive?: () => void;
   /** The row's own context menu, anchored to the card's ⋯. */
   openMenu: (anchor: HTMLElement) => void;
@@ -598,20 +598,20 @@ function ThreadCardActions(props: {
             <PinIcon size={13} aria-hidden="true" />
           </button>
         ) : null}
-        {/* A running thread has no Stop here yet; Settle and Archive wait
+        {/* A running thread has no Stop here yet; Mark read and Archive wait
             until it is idle, as the design swaps them out while it runs. */}
-        {!props.running && actions.settle ? (
+        {!props.running && actions.markRead ? (
           <button
             className="sidebar-thread-card__button"
             tabIndex={-1}
             type="button"
             onClick={() => {
               onDone();
-              actions.settle?.();
+              actions.markRead?.();
             }}
           >
             <CheckIcon size={12} aria-hidden="true" />
-            Settle
+            Mark read
           </button>
         ) : null}
         {!props.running && actions.archive ? (

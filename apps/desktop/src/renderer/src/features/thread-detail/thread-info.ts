@@ -196,7 +196,8 @@ export function threadInfoRowFacts(
 
 /** Token counts at card density: 212k, 1.2M. */
 export function formatCompactTokens(value: number): string {
-  if (value >= 1_000_000) return `${Math.round(value / 100_000) / 10}M`;
+  // 999,600 rounds to a thousand thousands: that is 1M, not 1000k.
+  if (value >= 999_500) return `${Math.round(value / 100_000) / 10}M`;
   if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
   return String(value);
 }
