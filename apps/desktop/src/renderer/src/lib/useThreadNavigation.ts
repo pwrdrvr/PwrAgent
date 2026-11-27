@@ -93,6 +93,7 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
+  applyLaunchpadDraftSettingsPatch,
   applyNavigationLaunchpadProviderExecutionModeDefaults,
   applyNavigationLaunchpadProviderModelDefaults,
   changedProviderExecutionModeDefaultBackends,
@@ -2767,6 +2768,7 @@ function mergeLaunchpadUpdateResponse(
   }
 
   const merged: NavigationLaunchpadDraft = { ...next };
+  merged.pendingModelPreference = current.pendingModelPreference;
   const backendChanged = "backend" in patch;
   const environmentChanged = "codexEnvironmentId" in patch;
   const preserveSetting = <Key extends keyof NavigationLaunchpadDraft>(
@@ -8229,15 +8231,16 @@ export function useThreadNavigation(
       const revision =
         (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) ?? 0) + 1;
       launchpadUpdateRevisionRef.current.set(launchpadUpdateKey, revision);
+      const rememberModelSettings = options?.stickySettingsChanged
+        && Boolean(federatedSelection || isRendererFederationWindow);
+      const applyDraftPatch = (launchpad: NavigationLaunchpadDraft) =>
+        applyLaunchpadDraftSettingsPatch(launchpad, patch, rememberModelSettings);
 
       if (federatedSelection) {
         const applyFederatedPatch = (
           launchpad: NavigationLaunchpadDraft,
         ): NavigationLaunchpadDraft => ({
-          ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-            launchpad,
-            patch,
-          ),
+          ...applyDraftPatch(launchpad),
           directoryKey,
           federationTarget: federatedSelection.target,
           updatedAt: Date.now(),
@@ -8306,10 +8309,7 @@ export function useThreadNavigation(
           rows: applyLaunchpadUpdate(
             currentResponse,
             {
-              ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-                currentLaunchpad,
-                patch,
-              ),
+              ...applyDraftPatch(currentLaunchpad),
               directoryKey,
               updatedAt: Date.now(),
             },
@@ -8325,10 +8325,7 @@ export function useThreadNavigation(
         return {
           ...current,
           [directoryKey]: {
-            ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-              currentLaunchpad,
-              patch,
-            ),
+            ...applyDraftPatch(currentLaunchpad),
             directoryKey,
             updatedAt: Date.now(),
           },
@@ -8337,10 +8334,7 @@ export function useThreadNavigation(
       const pendingPickedLaunchpad = pendingPickedLaunchpadRef.current.get(directoryKey);
       if (pendingPickedLaunchpad) {
         pendingPickedLaunchpadRef.current.set(directoryKey, {
-          ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
-            pendingPickedLaunchpad,
-            patch,
-          ),
+          ...applyDraftPatch(pendingPickedLaunchpad),
           directoryKey,
           updatedAt: Date.now(),
         });
@@ -8973,11 +8967,8 @@ export function useThreadNavigation(
         let remotePinFailure: string | undefined;
         if (federationTarget && desktopApi.resetDirectoryLaunchpad) {
           try {
-            // Remote launchpads are composed and persisted on the viewer, then
-            // sent in full to the owning instance for materialization. The owner
-            // clears its overlay row as part of that operation, but it cannot
-            // clear the viewer's local copy. Clear its submitted input after
-            // success while retaining the project's environment selection.
+            // The viewer owns this draft. Clear its submitted input after the
+            // owner creates the thread, retaining the project's environment.
             await desktopApi.resetDirectoryLaunchpad({
               federationTarget,
               directoryKey,
