@@ -911,6 +911,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   };
 
   private readonly knownNavigationKeys = new WeakMap<string[], ReadonlySet<string>>();
+  private readonly navigationContextHashes = new Map<AppServerBackendScope, string>();
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   private readonly directoryLaunchpadListeners = new Set<() => void>();
   private transactionNavigationRead = 0;
@@ -1149,6 +1150,33 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return this.navigationUnreadBaseline;
   }
 
+  /** Seek one observed turn per requested identity. Turns without a fill and
+   * pricing updates for older turns cannot displace the last reading. */
+  private withNavigationContextWindows(threads: AppServerThreadSummary[], measure?: (row: AppServerThreadSummary, bytes: number) => void): AppServerThreadSummary[] {
+    const requested = threads.flatMap((thread, index) =>
+      thread.contextWindow ? [] : [[index, thread.source, thread.id]]);
+    if (!requested.length) return threads;
+    const rows = this.stateDb.raw.prepare(`
+      SELECT json_extract(requested.value, '$[0]') AS position,
+             turn.final_context_tokens AS totalTokens, turn.model_context_window AS modelContextWindow
+      FROM json_each(?) AS requested
+      CROSS JOIN thread_usage_turns AS turn ON turn.rowid = (
+        SELECT rowid FROM thread_usage_turns
+        WHERE backend = json_extract(requested.value, '$[1]') AND thread_id = json_extract(requested.value, '$[2]')
+          AND final_context_tokens >= 0 AND model_context_window > 0
+        ORDER BY observed_at DESC, rowid DESC LIMIT 1
+      )
+    `).all(JSON.stringify(requested)) as Array<{ position: number; totalTokens: number; modelContextWindow: number }>;
+    if (!rows.length) return threads;
+    const projected = threads.slice();
+    for (const { position, totalTokens, modelContextWindow } of rows) {
+      const contextWindow = { totalTokens, modelContextWindow };
+      measure?.(threads[position]!, ',"contextWindow":'.length + JSON.stringify(contextWindow).length);
+      projected[position] = { ...threads[position]!, contextWindow };
+    }
+    return projected;
+  }
+
   /** Complete owner index inputs. Selected configuration and payload collections never enter this read. */
   readNavigationQueryIndex(params: NavigationThreadInputs): { threads: NavigationThreadSummary[]; directories: NavigationDirectorySummary[]; directoryOverlays: Record<string, DirectoryOverlayState> } {
     const { threads, inputBytes } = this.readNavigationQueryThreads(params);
@@ -1240,7 +1268,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const knownKeys = baseline?.knownThreadKeys ?? backendState?.knownThreadKeys;
     let previousKnownThreadKeys = knownKeys && this.knownNavigationKeys.get(knownKeys);
     if (knownKeys && !previousKnownThreadKeys) this.knownNavigationKeys.set(knownKeys, previousKnownThreadKeys = new Set(knownKeys));
-    const threads = materializeNavigationThreads({ threads: providerRows, overlayByThreadKey: overlays, workspaceRoots: params.workspaceRoots,
+    const withContext = this.withNavigationContextWindows(providerRows, (thread, bytes) => {
+      inputBytes += bytes;
+      if (inputBytes > NAVIGATION_INDEX_MAX_INPUT_BYTES) throw new Error("Owner navigation context readings exceed the metadata admission budget.");
+      if (measured) {
+        const key = buildThreadIdentityKey(thread.source, thread.id);
+        measured.set(key, (measured.get(key) ?? 0) + bytes);
+      }
+    });
+    const threads = materializeNavigationThreads({ threads: withContext, overlayByThreadKey: overlays, workspaceRoots: params.workspaceRoots,
       firstSnapshot: !baseline && !backendState?.lastSnapshotHash,
       previousKnownThreadKeys: previousKnownThreadKeys ?? [] }).map((thread) => {
         const key = buildThreadIdentityKey(thread.source, thread.id);
@@ -1609,7 +1645,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
       overlayByThreadKey,
       previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
-      threads,
+      threads: this.withNavigationContextWindows(threads),
       unchanged: false,
       workspaceRoots: params.workspaceRoots,
     });
@@ -1633,11 +1669,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           threads: snapshot.threads,
         })).digest("hex")
       : undefined;
-    const unchanged =
+    const durableStateUnchanged =
       persistReconciliation
       && backendState?.lastSnapshotHash === nextHash;
 
-    if (persistReconciliation && !unchanged) {
+    if (persistReconciliation && !durableStateUnchanged) {
       this.putBackend(params.backend, {
         knownThreadKeys: threads.map((thread) =>
           buildThreadIdentityKey(thread.source, thread.id),
@@ -1646,6 +1682,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       });
     }
 
+    // Legacy snapshots keep a durable membership baseline. Context-only
+    // changes must reach those clients without writing the baseline again.
+    let unchanged = durableStateUnchanged;
+    if (persistReconciliation) {
+      const readings = snapshot.threads.flatMap((thread) => thread.contextWindow
+        ? [[thread.source, thread.id, thread.contextWindow.totalTokens, thread.contextWindow.modelContextWindow]] : []);
+      const contextHash = readings.length ? createHash("sha256").update(JSON.stringify(readings)).digest("hex") : undefined;
+      unchanged &&= this.navigationContextHashes.get(params.backend) === contextHash;
+      if (contextHash) this.navigationContextHashes.set(params.backend, contextHash);
+      else this.navigationContextHashes.delete(params.backend);
+    }
     return { ...snapshot, unchanged };
   }
 
@@ -1704,7 +1751,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         executionMode: thread.executionMode ?? "default", extraLinkedDirectories: [],
         ...overlay, queuedExecutionMode: queue.mode, queuedNativeMode: queue.nativeMode, queuedExecutionModeAt: queue.queuedAt,
       } : overlay },
-      threads: [thread],
+      threads: this.withNavigationContextWindows([thread]),
       workspaceRoots: params.workspaceRoots,
     })[0]!;
   }

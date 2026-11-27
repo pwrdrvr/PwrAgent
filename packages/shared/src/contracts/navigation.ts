@@ -2435,6 +2435,7 @@ export type NavigationRowAgent = {
  * durable protocol identity; consumers must use it for owner-routed reads.
  */
 export type NavigationRow = {
+  contextWindow?: NavigationThreadSummary["contextWindow"];
   /** Read compatibility for owners that still include full stacks on rows. */
   stacks?: NavigationThreadSummary["stacks"];
   stackMemberships?: NavigationThreadSummary["stackMemberships"];

@@ -203,6 +203,7 @@ export function navigationQueryFixture(
       const row: NavigationRow = {
         ref: { backend: thread.source, threadId: thread.id, ownerInstanceId: owner?.scope === "remote" ? owner.instanceId : undefined },
         rowRevision: "fixture", id: thread.id, source: thread.source, title: thread.title, titleSource: thread.titleSource,
+        ...(thread.contextWindow ? { contextWindow: thread.contextWindow } : {}),
         createdAt: thread.createdAt, updatedAt: thread.updatedAt, threadStatus: thread.threadStatus,
         checkoutHibernated: thread.checkoutHibernated,
         linkedDirectories: thread.linkedDirectories, inbox: thread.inbox, prs: thread.prs, gitBranch: thread.gitBranch,

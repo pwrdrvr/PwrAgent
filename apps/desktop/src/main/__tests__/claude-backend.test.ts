@@ -1156,6 +1156,8 @@ describe("Claude SDK backend", () => {
     const windows = f.events.flatMap((event) => event.notification.method === "thread/contextWindow/updated"
       ? [event.notification.params.usedTokens] : []);
     expect(windows).toEqual([500, 900]);
+    expect((await f.backend.listThreads()).find((row) => row.id === threadId)?.contextWindow)
+      .toEqual({ totalTokens: windows.at(-1), modelContextWindow: 200_000 });
   });
 
   it.each([true, false])("handles a legacy resumed session with baseline probe available=%s", async (available) => {

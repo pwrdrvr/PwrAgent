@@ -228,6 +228,7 @@ VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
     try {
       raw.exec(`
         DROP TABLE thread_compactions;
+        DROP INDEX idx_thread_usage_turns_navigation_context;
         DROP INDEX idx_thread_usage_turns_acp_context;
         DROP INDEX idx_thread_usage_turns_pending_acp_compaction;
         ALTER TABLE thread_usage_turns DROP COLUMN acp_compaction_before_tokens;
@@ -268,6 +269,7 @@ VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
         .all() as Array<{ name: string }>;
       expect(usageIndexes.map((index) => index.name)).toEqual(
         expect.arrayContaining([
+          "idx_thread_usage_turns_navigation_context",
           "idx_thread_usage_turns_acp_context",
           "idx_thread_usage_turns_pending_acp_compaction",
         ]),

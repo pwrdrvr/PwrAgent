@@ -1,3 +1,4 @@
+import { threadContextWindowReading } from "@pwragent/shared/thread-context-window";
 import { sortSubthreadSummaries } from "@pwragent/shared/subthreads";
 import { threadProviderIdentity } from "@pwragent/shared/provider-picker";
 import { createHash } from "node:crypto";
@@ -766,6 +767,7 @@ function projectNavigationRow(params: {
   const messagingBindings = limitRecords(thread.messagingBindings);
   const prCiWatches = limitRecords(thread.prCiWatches);
   const nativeSubAgentCount = thread.nativeSubAgentCount ?? thread.codexNativeSubAgents?.length ?? 0;
+  const contextWindow = threadContextWindowReading(thread.contextWindow?.totalTokens, thread.contextWindow?.modelContextWindow);
   const projected = {
     ref: navigationIdentity(thread),
     id: thread.id,
@@ -869,6 +871,7 @@ function projectNavigationRow(params: {
       : {}),
     ...(thread.executionMode ? { executionMode: thread.executionMode } : {}),
     ...(thread.model ? { model: thread.model } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
     ...(thread.serviceTier ? { serviceTier: thread.serviceTier } : {}),
     ...(thread.reasoningEffort
       ? { reasoningEffort: thread.reasoningEffort }

@@ -72,7 +72,7 @@ function summaryMembership(thread: NavigationThreadSummary): string {
   // other fields, including future fields, directory links and parentage.
   const { title: _title, titleSource: _titleSource, updatedAt: _updatedAt,
     threadStatus: _threadStatus, model: _model, reasoningEffort: _reasoningEffort,
-    serviceTier: _serviceTier, fastMode: _fastMode, executionMode: _executionMode,
+    contextWindow: _contextWindow, serviceTier: _serviceTier, fastMode: _fastMode, executionMode: _executionMode,
     prs: _prs, inbox: _inbox, reactions: _reactions, ...membership } = thread;
   return JSON.stringify(membership);
 }

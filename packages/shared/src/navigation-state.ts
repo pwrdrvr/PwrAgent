@@ -272,6 +272,7 @@ export function compactNavigationProviderRow(thread: AppServerThreadSummary): Ap
     gitWorkingState: thread.gitWorkingState, executionMode: thread.executionMode, model: thread.model,
     serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort, fastMode: thread.fastMode,
     workspaceHandoff: thread.workspaceHandoff, codexNativeSubAgent: thread.codexNativeSubAgent,
+    ...(thread.contextWindow ? { contextWindow: thread.contextWindow } : {}),
   };
 }
 

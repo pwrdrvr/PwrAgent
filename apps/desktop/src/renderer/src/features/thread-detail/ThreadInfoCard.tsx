@@ -319,6 +319,9 @@ function ThreadInfoRowLayout(props: {
   const costLabel = cost.state === "ready"
     ? `${formatTokenUsageMicrosAsUsd(cost.ownMicros)}${cost.partial ? "+" : ""}`
     : undefined;
+  const contextPercent = row.context
+    ? Math.min(100, Math.max(0, row.context.totalTokens / row.context.modelContextWindow * 100))
+    : 0;
   return (
     <>
       <div className="pr-status-card__header">
@@ -427,11 +430,11 @@ function ThreadInfoRowLayout(props: {
               <span aria-hidden="true" className="thread-info-card__share thread-info-card__context">
                 <span
                   className="thread-info-card__context-used"
-                  style={{ width: `${Math.max(0, Math.min(100, row.context.usedPercent))}%` }}
+                  style={{ width: `${contextPercent}%` }}
                 />
               </span>
             </span>
-            <span className="thread-info-card__fact-meta">{Math.round(row.context.usedPercent)}%</span>
+            <span className="thread-info-card__fact-meta">{Math.round(contextPercent)}%</span>
           </div>
         ) : null}
       </div>

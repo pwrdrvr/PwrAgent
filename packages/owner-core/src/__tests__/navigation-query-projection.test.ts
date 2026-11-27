@@ -74,6 +74,15 @@ describe("navigation query projection", () => {
     expect(statusReads).toBe(0);
   });
 
+  it("carries the owner's context reading through a compact row and its revision", () => {
+    const project = (totalTokens: number) => projectNavigationQuery({
+      index: snapshot([thread("root", { contextWindow: { totalTokens, modelContextWindow: 1_000 } })]),
+      request: request({ kind: "exact", identities: [{ backend: "codex", threadId: "root" }] }),
+    }).entries[0]!.row;
+    expect(project(250).contextWindow).toEqual({ totalTokens: 250, modelContextWindow: 1_000 });
+    expect(project(250).rowRevision).not.toBe(project(500).rowRevision);
+  });
+
   it("certifies raw PR keys only for locally owned viewer rows and never exposes them in owner pages", () => {
     const requestFor = (inventory: "owner" | "viewer", ownerInstanceId?: string) => ({ ...request({
       kind: "exact", identities: [{ backend: "codex", threadId: "root", ownerInstanceId }],
