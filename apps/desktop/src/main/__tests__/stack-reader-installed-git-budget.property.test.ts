@@ -220,10 +220,20 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       ],
     });
     starts.mockClear();
-    expect((await readAdvertised()).stacks.map((stack) => stack.githubStack)).toEqual([3]);
-    expect(checkoutStarts()).toContain(lower);
-    const forge = await readForPublication(reader, rows);
+    expect((await readAdvertised()).stacks).toEqual([]);
+    expect(checkoutStarts()).toEqual([upper]);
+    const forge = await advertisedReader.read(advertisedRows, [], [upper]);
     expect(forge.stacks.map((stack) => stack.githubStack)).toEqual([3]);
+
+    // A separate local publishing target must not admit the forge-only stack.
+    await writeFile(catalog, JSON.stringify({
+      schemaVersion: 1, repository, stacks: [{
+        trunk: { branch: "main", head },
+        branches: [{ branch: "unrelated", head, base: head, pullRequest: { number: unrelated.number } }],
+      }],
+    }));
+    const mixed = await advertisedReader.read(advertisedRows, [], [upper], undefined, undefined, undefined, [unrelated, advertised]);
+    expect(mixed.stacks.map((stack) => stack.name)).toEqual(["unrelated"]);
 
     forgetGithubForgeStacks();
     await mkdir(redirected);

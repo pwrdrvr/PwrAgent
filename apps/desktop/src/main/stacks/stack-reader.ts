@@ -14,7 +14,7 @@ import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
 import { PR_METADATA_PRIORITY, runPrMetadataFileProbe, runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { createStoredAttachmentObservation, type PrAttachmentDemand } from "../pr-status/pr-detection";
 import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-info/stack-checkout-store";
-import { confirmedGithubStackPullRequests, githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } from "./github-forge-stacks";
+import { githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } from "./github-forge-stacks";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 
@@ -1050,9 +1050,10 @@ async function projectClone(
   clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[], memo: CommitGraphMemo,
   readStatus: (clone: Checkout, demand?: PrMetadataDemand) => Promise<CloneGitStatus>,
   demand?: PrMetadataDemand,
+  localCatalogOnly = false,
 ): Promise<{ stacks: StackSummary[]; worktrees: StackWorktree[]; observed: Map<string, PrSummary> }> {
   const catalog = clone.catalog.status === "ok" ? clone.catalog.catalog : undefined;
-  const repositories = new Set(threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
+  const repositories = new Set(localCatalogOnly ? [] : threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
   if (catalog?.stacks.length) repositories.add(catalog.repository.toLowerCase());
   const stacks: StackSummary[] = [];
   const observed = new Map<string, PrSummary>();
@@ -1070,7 +1071,7 @@ async function projectClone(
     // A stack that exists on GitHub and holds one of this clone's PRs, unless
     // a local catalog already records it.
     const localBranches = new Set(localStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
-    const forgeStacks = githubForgeStacksIn(repository).filter((stack) => stack.layers.some((layer) => attached.has(layer.number))
+    const forgeStacks = localCatalogOnly ? [] : githubForgeStacksIn(repository).filter((stack) => stack.layers.some((layer) => attached.has(layer.number))
       && !localStacks.some((local) => local.number === stack.number)
       && !stack.layers.some((layer) => localBranches.has(layer.branch)));
     const forgeNumbers = new Map(forgeStacks.map((stack) => [stack.number, stack] as const));
@@ -1078,7 +1079,7 @@ async function projectClone(
     const catalogBranches = new Set(catalogStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
     // Infer from this clone's attachments. The registry is repository-wide and
     // can include PRs observed through a different clone.
-    const inferred = inferPullRequestStacks(prs.filter((pr) => attached.has(pr.number) && sameRepositoryHead(pr)), catalogBranches);
+    const inferred = localCatalogOnly ? [] : inferPullRequestStacks(prs.filter((pr) => attached.has(pr.number) && sameRepositoryHead(pr)), catalogBranches);
     return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, forgeNumbers, prs, bindings, inferred }] : [];
   });
   if (!plans.length) return { stacks, worktrees: [], observed };
@@ -1471,31 +1472,23 @@ export class StackReader {
     };
 
     const wanted = new Set<string>();
+    const publicationTargets = publishingPrs && publicationTargetsByRepository(publishingPrs);
     // Read explicitly requested catalogs even when there is nothing to bind.
     const scopedCatalogs = await Promise.all(scopedCommonDirs.map(async (commonDir) => {
       const catalog = await observation.catalog(commonDir);
-      if (catalog.status === "ok" && catalog.catalog.stacks.length) wanted.add(commonDir);
+      if (publicationTargets ? catalogTracksPublication(catalog, publicationTargets)
+        : catalog.status === "ok" && catalog.catalog.stacks.length) wanted.add(commonDir);
       return catalog;
     }));
-    const publicationTargets = publishingPrs && publicationTargetsByRepository(publishingPrs);
-    let confirmed = publishingPrs ? confirmedGithubStackPullRequests(publishingPrs) : [];
-    // Only a tracked layer in this observation can publish. An unrelated
-    // catalog in the same clone does not need the fleet's checkout inventory.
-    if (directories && publishingPrs && publicationTargets && !unavailable.length
-      && scopedCatalogs.every((catalog) => (catalog.status === "missing" || catalog.status === "ok")
-        && !catalogTracksPublication(catalog, publicationTargets))) {
+    // Only a matching local catalog can make the publisher act on a layer.
+    // Recheck the scoped evidence in case a catalog appeared during admission.
+    if (directories && publicationTargets && !wanted.size) {
       const changed = await scopedCatalogsChanged();
       demand.signal?.throwIfAborted();
       if (changed) return await retryProjection();
-      // A poll can name a stack before GitHub supplies its member list.
-      // Check again after the catalog reads, then let the next poll retry.
-      confirmed = confirmedGithubStackPullRequests(publishingPrs);
-      if (!confirmed.length) {
-        return { stacks: [], catalogs: scopedCatalogs };
-      }
+      return { stacks: [], catalogs: [...scopedCatalogs, ...unavailable] };
     }
-    const eligible = possibleInferredLayers(local, knownPrs);
-    for (const pr of confirmed) eligible.add(prIdentity(pr));
+    const eligible = publicationTargets ? new Set<string>() : possibleInferredLayers(local, knownPrs);
     const inferredRows = local.filter((row) => row.prs?.some((pr) => eligible.has(prIdentity(pr))));
     const inferredPaths = new Set(inferredRows.flatMap(threadDirectories));
     const paths = !directories || wanted.size || eligible.size
@@ -1658,7 +1651,7 @@ export class StackReader {
       const checkout = verified.get(cwd);
       if (checkout) checkouts.set(cwd, checkout);
     }
-    const cloneCheckouts = directories ? scopedClones : new Map([...checkouts.values()]
+    const cloneCheckouts = directories && !publicationTargets ? scopedClones : new Map([...(directories ? scopedClones : checkouts).values()]
       .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
     const attachments = validateAttachments && observeStackAttachments(checkouts, observation, retried);
     const attachmentWitnesses = new Set<Checkout>();
@@ -1736,6 +1729,7 @@ export class StackReader {
           this.commitGraph,
           (clone, cloneDemand) => this.readCloneGitStatus(clone, observation, backgroundNavigation, cloneDemand),
           demand,
+          publicationTargets !== undefined,
         ),
       };
     }));
@@ -1812,7 +1806,7 @@ export class StackReader {
         };
       }));
       return { ...stack, layers: layers.map((layer, index) => ({ ...layer, ...gates[index] })) };
-    }), catalogs: [...results.map(({ catalog }) => catalog), ...unavailable] };
+    }), catalogs: [...(directories && publicationTargets ? scopedCatalogs : results.map(({ catalog }) => catalog)), ...unavailable] };
   }
 }
 

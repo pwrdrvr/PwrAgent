@@ -111,16 +111,6 @@ export function githubForgeStacksIn(repository: string): GithubForgeStack[] {
   return [...stacks.entries()].filter(([key]) => key.startsWith(prefix)).map(([, stack]) => stack);
 }
 
-export function confirmedGithubStackPullRequests(prs: readonly PrSummary[]): PrSummary[] {
-  const members = new Set<string>();
-  for (const stack of stacks.values()) {
-    for (const layer of stack.layers) members.add(stackKey(stack.repository, layer.number));
-  }
-  return prs.filter((pr) => members.has(stackKey(
-    githubForgeStackRepository({ host: pr.provider, owner: pr.org, repo: pr.repo }), pr.number,
-  )));
-}
-
 /** For tests: start from a process that has read no stack. */
 export function forgetGithubForgeStacks(): void {
   stacks.clear();

@@ -43,7 +43,7 @@ import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 import { getDesktopStackReader, StackReadObservation, stackMemberships, type StackReader, type StackThreadActivity } from "../stacks/stack-reader";
-import { confirmedGithubStackPullRequests, GithubForgeStackDiscovery, githubForgeStackRepository, type GithubForgeStack } from "../stacks/github-forge-stacks";
+import { GithubForgeStackDiscovery, githubForgeStackRepository, type GithubForgeStack } from "../stacks/github-forge-stacks";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
@@ -4086,19 +4086,9 @@ class DesktopAppServerService {
 
   private async advanceObservedStacks(open: readonly PrSummary[]): Promise<void> {
     const byLayer = new Map(open.map((pr) => [`${pr.provider}:${pr.org}/${pr.repo}#${pr.number}`.toLowerCase(), pr]));
-    // Inferred stacks can hold dispatch but cannot publish automatically.
+    // Publication requires a checkout with a local stack catalog.
     const observation = new StackReadObservation();
-    const confirmed = new Set(confirmedGithubStackPullRequests(open));
-    const advertised = new Set<string>();
-    const paths = new Set<string>();
-    for (const pr of open) {
-      for (const cwd of this.prStackDirectories(pr)) {
-        paths.add(cwd);
-        if (pr.githubStack || confirmed.has(pr)) advertised.add(cwd);
-      }
-    }
-    const marked = new Set(await observation.hints.markerCandidates([...paths].filter((cwd) => !advertised.has(cwd))));
-    const directories = [...paths].filter((cwd) => advertised.has(cwd) || marked.has(cwd));
+    const directories = await observation.hints.markerCandidates(open.flatMap((pr) => this.prStackDirectories(pr)));
     if (!directories.length) return;
     const { stacks } = await this.readScopedStacks(directories, undefined, observation, open);
     await Promise.all(stacks.flatMap((stack) => {
