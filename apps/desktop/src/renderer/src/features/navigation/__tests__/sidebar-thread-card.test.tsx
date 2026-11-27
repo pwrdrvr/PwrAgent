@@ -234,10 +234,19 @@ describe("sidebar thread card", () => {
         }
       },
     ), {
-      numRuns: 30,
-      // Found without `HoverCardBridge.holds`: crossing the row's own PR chip
-      // swapped the thread card for the PR card on the way to it.
-      examples: [[[], true, [0, 0, 0, 0, 0, 0, 0, 0]]],
+      // A rendered fixture: the budget is 5 generated routes plus the named
+      // ones below. The bridge rule itself is a pure property in
+      // hover-card-bridge.holds.test.ts.
+      numRuns: 5,
+      examples: [
+        // Found without `HoverCardBridge.holds`: crossing the row's own PR
+        // chip swapped the thread card for the PR card on the way to it.
+        [[], true, [0, 0, 0, 0, 0, 0, 0, 0]],
+        // Every row below, each dwelt on, then the gap.
+        [[1, 2, 3], false, [60, 60, 60, 60, 60, 60, 60, 60]],
+        // The chip, then the next row, with no dwell anywhere.
+        [[1], true, [0, 0, 0, 0, 0, 0, 0, 0]],
+      ],
     });
   });
 
