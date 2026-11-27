@@ -66,13 +66,13 @@ function mockLayout(): void {
   });
 }
 
-function renderPanel(onActiveTabChange = vi.fn()) {
+function renderPanel(onActiveTabChange = vi.fn(), pinned = false) {
   mockLayout();
   render(
     <ThreadContextPanel
       activeTab="info"
       backends={BACKENDS}
-      pinned={false}
+      pinned={pinned}
       thread={thread}
       onActiveTabChange={onActiveTabChange}
     />,
@@ -124,6 +124,16 @@ describe("AI provider gauge peek", () => {
     });
     // The hover reveal never fired: no panel opened behind the peek.
     expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
+  });
+
+  it("keeps the tab tooltip, not the peek, while the rail is open", async () => {
+    renderPanel(vi.fn(), true);
+    move(document.body, gauge());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TOOLTIP_HOVER_DELAY_MS);
+    });
+    expect(peek()).toBeNull();
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/AI provider info/);
   });
 
   it("stays open across the bridge and on the card", async () => {

@@ -134,7 +134,19 @@ export const SidebarThreadCardHost = forwardRef<
       bridge: true,
     },
   });
-  const { getElement, hide, show, showAfterDelay, tooltipId, update, visible } = tooltip;
+  const { getElement, show, tooltipId, update, visible } = tooltip;
+  // The hover delay is the card's own, not the tooltip's: when it ends, a
+  // card a chip on the row opened meanwhile is where the pointer rests.
+  const delayTimerRef = useRef<number | undefined>(undefined);
+  const cancelDelay = (): void => {
+    window.clearTimeout(delayTimerRef.current);
+    delayTimerRef.current = undefined;
+  };
+  const hide = (): void => {
+    cancelDelay();
+    tooltip.hide();
+  };
+  useEffect(() => () => window.clearTimeout(delayTimerRef.current), []);
   bridgeCardRef.current.hide = hide;
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
@@ -201,11 +213,17 @@ export const SidebarThreadCardHost = forwardRef<
       setExpanded(undefined);
       // Focus opens at once; a pointer swaps at once while any sidebar card is up.
       const swap = sidebarPrCardBridge.enterTrigger(bridgeCardRef.current);
+      cancelDelay();
       if (!delayed || swap) {
         show(target, node);
         return;
       }
-      showAfterDelay(target, () => content(threadKey, target, undefined), PROJECT_CARD_HOVER_DELAY_MS);
+      delayTimerRef.current = window.setTimeout(() => {
+        delayTimerRef.current = undefined;
+        if (sidebarPrCardBridge.showsOther(bridgeCardRef.current)) return;
+        const next = content(threadKey, target, undefined);
+        if (next) show(target, next);
+      }, PROJECT_CARD_HOVER_DELAY_MS);
     };
     return {
       enter: (target, threadKey) => open(target, threadKey, true),
@@ -225,7 +243,7 @@ export const SidebarThreadCardHost = forwardRef<
       getElement,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getElement, hide, show, showAfterDelay]);
+  }, [getElement, tooltip.hide, show]);
 
   return <>{tooltip.tooltipNode}</>;
 });

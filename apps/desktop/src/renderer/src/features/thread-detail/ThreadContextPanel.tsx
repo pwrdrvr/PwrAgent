@@ -723,13 +723,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     desktopApi: props.desktopApi,
     onOpenPanel: () => selectTab("providers"),
   });
-  // On the gauge the peek stands in for the collapsed rail's hover reveal,
-  // which resumes if the pointer moves on up the spine.
-  const enterGauge = (event: MouseEvent<HTMLElement>): void => {
-    if (!open) clearRevealTimer();
+  // On the collapsed rail's gauge the peek stands in for the hover reveal,
+  // which resumes if the pointer moves on up the spine. An open rail keeps
+  // the gauge's tab tooltip: the peek would cover the panel being read.
+  const enterGauge = (event: MouseEvent<HTMLElement>, tooltipText: string): void => {
+    if (open) {
+      railTooltip.showAfterDelay(event.currentTarget, tooltipText);
+      return;
+    }
+    clearRevealTimer();
     providerPeek.enter(event.currentTarget);
   };
   const leaveGauge = (event: MouseEvent<HTMLElement>): void => {
+    railTooltip.hide();
     providerPeek.leave();
     if (!open && railRef.current?.contains(event.relatedTarget as Node | null)) {
       revealRailAfterHoverIntent({ x: event.clientX, y: event.clientY });
@@ -914,7 +920,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         // The rail's one tooltip, shared with its panels' controls: a tab's
         // explanation is replaced, never joined, when a panel control raises
         // its own. A second tooltip system here left both on screen.
-        onMouseEnter={(event) => tab.id === "providers" ? enterGauge(event) : railTooltip.showAfterDelay(event.currentTarget, tooltipText)}
+        onMouseEnter={(event) => tab.id === "providers" ? enterGauge(event, tooltipText) : railTooltip.showAfterDelay(event.currentTarget, tooltipText)}
         onMouseLeave={(event) => tab.id === "providers" ? leaveGauge(event) : railTooltip.hide()}
         onFocus={(event) => railTooltip.show(event.currentTarget, tooltipText)}
         onBlur={railTooltip.hide}

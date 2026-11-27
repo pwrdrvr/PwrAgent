@@ -60,6 +60,11 @@ export class HoverCardBridge {
     return true;
   }
 
+  /** Whether a card other than `card` is up. */
+  showsOther(card: BridgedHoverCard): boolean {
+    return this.visible !== undefined && this.visible !== card;
+  }
+
   hasPinnedCard(): boolean {
     return this.visible?.isPinned?.() === true;
   }

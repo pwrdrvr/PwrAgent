@@ -322,6 +322,19 @@ describe("sidebar thread card", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#7");
   });
 
+  // Found in a real layout: a pointer that lands on the chip from outside
+  // got the PR card at 250 ms, then lost it to the row's card at 600 ms.
+  it("leaves the PR card up for a pointer that came straight to the chip", () => {
+    renderSidebar({ threads: [thread("a", { prs: [pr(7)] })] });
+    const chip = row("a").querySelector("[data-pr-chip]")!;
+    move(document.querySelector(".sidebar")!, chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#7");
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(card()).toBeNull();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#7");
+  });
+
   it("calls the row menu's handlers from its buttons", async () => {
     const onMarkThreadsSeen = vi.fn(async () => undefined);
     const onArchiveThread = vi.fn(async () => undefined);
