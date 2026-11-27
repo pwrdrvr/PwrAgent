@@ -195,7 +195,7 @@ function loadedRows(page: NavigationQueryPage | undefined): number {
 /** Semantic demand ignores object insertion order and identity-set ordering. */
 export function navigationDemandKey(request: NavigationQueryRequest): string {
   return JSON.stringify(request, (key, value: unknown) => {
-    if (key === "readReason" || key === "deadlineAt" || key === "diagnostic") return undefined;
+    if (key === "readReason" || key === "deadlineAt" || key === "diagnostic" || key === "windowPageBase") return undefined;
     if (Array.isArray(value) && ["identities", "roots", "keys"].includes(key)) {
       return [...value].sort((a, b) => JSON.stringify(a, Object.keys(a ?? {}).sort()).localeCompare(JSON.stringify(b, Object.keys(b ?? {}).sort())));
     }

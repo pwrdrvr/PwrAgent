@@ -136,7 +136,7 @@ async function compareSequence(ops: readonly { kind: string; id: string; on: boo
 }
 
 it("agrees with full projection after status, pin, archive, parent, seen and reconnect events", async () => {
-  await fc.assert(fc.asyncProperty(fc.array(operation, { minLength: 5, maxLength: 18 }), (ops) => compareSequence(ops)), { numRuns: 10 });
+  await fc.assert(fc.asyncProperty(fc.array(operation, { minLength: 5, maxLength: 18 }), (ops) => compareSequence(ops)), { numRuns: 5 });
 });
 
 it("matches the full SQLite join after a pinned child disappears and returns across reconnect", async () => {

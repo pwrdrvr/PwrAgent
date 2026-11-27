@@ -1224,7 +1224,8 @@ function liveOwnerIndex(registry: DesktopBackendRegistry, backend: AppServerBack
         checkoutsAfterSeed: seed && !saved && !checking && rows.some((row) => row.source === "codex" && row.projectKey), coverage: checking || saved ? { state: "checking" }
         : registry.isIncompleteThreadList?.(rows) ? { state: "degraded", failedProviders: 1 } : { state: "complete" } };
     },
-    cached: (provider, threadId) => registry.getCachedThreadSummary?.({ backend: provider, threadId }),
+    cached: (provider, threadId) => registry.getCachedNavigationThread?.({ backend: provider, threadId }) ?? registry.getCachedThreadSummary?.({ backend: provider, threadId }),
+    refresh: (backend, threadId, activity, workers) => registry.refreshNavigationThread?.({ backend, threadId }, activity, workers),
     status: (row) => registry.navigationThreadStatus?.(row),
     join: (rows, coverage, mode) => listingDiagnostics.trace("index", {}, async () => {
       const enrich = mode !== "saved";

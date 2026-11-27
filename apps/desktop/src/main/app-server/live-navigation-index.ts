@@ -19,7 +19,7 @@ export type NavigationViewerProjection = {
 type ViewerState = {
   epoch: number;
   version: string;
-  requestedVersion: string;
+  serveStale: boolean;
   prepare?: Promise<void>;
   apply?: ApplyViewer;
   page?: { owner: NavigationQueryIndex; index: NavigationQueryIndex };
@@ -34,6 +34,8 @@ type RowChange = {
   discovered?: boolean;
   listing?: ProviderRow;
   directoriesChanged?: boolean;
+  activity?: boolean;
+  workers?: boolean;
   provider?: Partial<ProviderRow>;
 };
 type Source = {
@@ -45,6 +47,7 @@ type Source = {
   changedKeys(before: string, after: string): string[] | undefined;
   list(scope: AppServerBackendScope, saved: boolean): Promise<Listing>;
   status?(row: ProviderRow): ProviderRow["threadStatus"];
+  refresh?(backend: AppServerBackendKind, id: string, activity: boolean, workers: boolean): Promise<AppServerThreadSummary | undefined> | undefined;
   cached(backend: AppServerBackendKind, id: string): AppServerThreadSummary | undefined;
   join(rows: ProviderRow[], coverage: NavigationQueryIndex["coverage"], checkouts: "saved" | "reuse" | "refresh"): Promise<NavigationQueryIndex>;
   decorate?(rows: NavigationThreadSummary[]): NavigationThreadSummary[];
@@ -92,6 +95,7 @@ export class LiveNavigationIndex {
   private needsRetry = false;
   private scheduled?: NodeJS.Immediate;
   private viewerEpoch = 0;
+  private viewerGapEpoch = -1;
   private visibilityChanged = true;
   private lastDiscovery = 0;
   private readonly viewers = new WeakMap<object, ViewerState>();
@@ -120,6 +124,8 @@ export class LiveNavigationIndex {
     this.changes.set(id, {
       ...previous, ...change,
       enrichment: change.enrichment === true && (!previous || previous.enrichment === true),
+      activity: change.activity || previous?.activity,
+      workers: change.workers || previous?.workers,
       directoriesChanged: change.directoriesChanged || previous?.directoriesChanged,
       removed: change.discovered ? false : change.removed || previous?.removed,
       discovered: change.discovered || previous?.discovered,
@@ -142,7 +148,12 @@ export class LiveNavigationIndex {
     if (n.method === "navigation/invalidated" && n.params.sourceMethod === NAVIGATION_LIVE_INDEX_RECONCILED_METHOD) return;
     if (n.method === "navigation/remoteThreadPins/changed" || n.method === "federation/peerStatus/changed"
       || n.method === "federation/eventStream/changed" || event.federationTarget?.scope === "remote") {
-      if (n.method === "federation/peerStatus/changed" || navigationQueryEventRequiresRefresh(n.method, n.params)) this.viewerEpoch++;
+      if (n.method === "federation/peerStatus/changed" || navigationQueryEventRequiresRefresh(n.method, n.params)) {
+        this.viewerEpoch++;
+        if (n.method === "federation/eventStream/changed" || (n.method === "federation/peerStatus/changed" && n.params.status === "connected")) {
+          this.viewerGapEpoch = this.viewerEpoch;
+        }
+      }
       return;
     }
     if (n.method === "navigation/sidebarEnrichment/updated" || n.method === "pullRequest/status/updated"
@@ -173,7 +184,9 @@ export class LiveNavigationIndex {
           provider.title = n.params.threadName.trim();
           provider.titleSource = normalizeRenamedTitleSource(n.params.titleSource);
         }
-        this.mark({ backend: event.backend, id, provider, directoriesChanged: n.method === "navigation/threadDirectories/updated",
+        this.mark({ backend: event.backend, id, provider, activity: n.method === "thread/started" || n.method === "thread/unarchived"
+          || n.method === "turn/completed" || n.method === "turn/failed" || n.method === "turn/cancelled",
+          workers: n.method === "thread/subAgents/updated", directoriesChanged: n.method === "navigation/threadDirectories/updated",
           discovered: n.method === "thread/started" || n.method === "thread/unarchived", removed: n.method === "thread/archived" || n.method === "thread/deleted" });
       }
     }
@@ -220,24 +233,24 @@ export class LiveNavigationIndex {
 
   async viewer(owner: NavigationQueryIndex, viewer: NavigationViewerProjection, version: string): Promise<NavigationQueryIndex> {
     let state = this.viewers.get(viewer.source);
-    if (!state) this.viewers.set(viewer.source, state = { epoch: -1, version: "", requestedVersion: version });
-    state.requestedVersion = version;
     const epoch = this.viewerEpoch;
-    if (!state.prepare && (state.epoch !== epoch || state.version !== version)) {
-      const cached = state.apply;
-      state.prepare = viewer.prepare().then((apply) => {
-        const current = epoch === this.viewerEpoch && state.requestedVersion === version;
-        if (current || !cached) {
-          state.apply = apply;
-          state.page = undefined;
-          state.version = version;
-          state.epoch = epoch;
-        }
-        if ((cached || !current) && !this.disposed) this.source.notify();
-      }).finally(() => { state.prepare = undefined; });
-      if (cached) void state.prepare.catch((error: unknown) => this.source.failed(error));
+    if (!state || state.epoch !== epoch || state.version !== version) {
+      const externalChange = state && state.version.split(":", 1)[0] !== version.split(":", 1)[0];
+      const serveStale = Boolean(state?.apply && (epoch === this.viewerGapEpoch || externalChange));
+      state = { epoch, version, serveStale, apply: state?.apply, page: state?.page };
+      this.viewers.set(viewer.source, state);
+      const observation = state;
+      observation.prepare = viewer.prepare().then((apply) => {
+        observation.apply = apply;
+        observation.page = undefined;
+        if (serveStale && this.viewers.get(viewer.source) === observation && !this.disposed) this.source.notify();
+      }).catch((error: unknown) => {
+        if (this.viewers.get(viewer.source) === observation) this.viewers.delete(viewer.source);
+        throw error;
+      });
+      if (serveStale) void observation.prepare.catch((error: unknown) => this.source.failed(error));
     }
-    if (!state.apply) await state.prepare;
+    if (!state.serveStale) await state.prepare;
     if (state.page?.owner === owner) return state.page.index;
     const page = state.page;
     const patch = this.lastPatch;
@@ -376,13 +389,28 @@ export class LiveNavigationIndex {
       if (change.removed) { this.providers.delete(id); this.source.forget?.(id); continue; }
       const previous = this.providers.get(id);
       if (!previous && !change.discovered) continue;
-      const cached = change.listing ?? this.source.cached(change.backend, change.id);
+      const refresh = (change.activity || change.workers)
+        ? this.source.refresh?.(change.backend, change.id, Boolean(change.activity), Boolean(change.workers)) : undefined;
+      let fresh: AppServerThreadSummary | undefined;
+      if (refresh) {
+        const release = setImmediate(() => {
+          this.reconciling = true;
+          this.background?.resolve();
+        });
+        try { fresh = await refresh; } catch (error) { this.source.failed(error); } finally { clearImmediate(release); }
+      }
+      const cached = change.listing ?? fresh ?? this.source.cached(change.backend, change.id);
       if (!previous && !cached) {
         this.gaps.add(change.backend);
         continue;
       }
       const base = change.listing ?? (cached && (!previous || change.discovered) ? compact(cached) : previous!);
       const provider = { ...base, ...change.provider };
+      if (fresh && change.activity && !change.provider?.title) {
+        provider.title = fresh.title;
+        provider.titleSource = fresh.titleSource;
+      }
+      if (fresh && change.workers) provider.nativeSubAgentCount = fresh.codexNativeSubAgents?.length ?? 0;
       if (change.directoriesChanged && cached) {
         provider.projectKey = cached.projectKey;
         provider.linkedDirectories = structuredClone(cached.linkedDirectories);

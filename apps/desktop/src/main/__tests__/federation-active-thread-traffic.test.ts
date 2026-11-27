@@ -61,7 +61,7 @@ it.each(["separate", "shared"])("budgets pin and renderer reads with four viewer
         return page;
       };
       const baselines = new RemoteNavigationPageBaselines();
-      const window = new NavigationWindowQueries({ getNavigationQueryPage: async (request) => {
+      const window = new NavigationWindowQueries({ getNavigationQueryPage: async ({ windowPageBase: _base, ...request }) => {
         const page = await baselines.read(request, (next) => read("renderer", next));
         // Budget the owner's wire page above, then expand it as the renderer's API does.
         return expandNavigationRemoteOwner({ ...page, remoteOwner: { instanceId: target.instanceId, instanceLabel: "Owner" } });

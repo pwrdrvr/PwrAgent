@@ -4668,6 +4668,46 @@ export class DesktopBackendRegistry {
       : summary;
   }
 
+  /** A start is visible as soon as the owner has committed its workspace,
+   * including the interval before the provider's listing catches up. */
+  getCachedNavigationThread(ref: { backend: AppServerBackendKind; threadId: string }): AppServerThreadSummary | undefined {
+    const pending = this.pendingStartedThreads.get(buildThreadIdentityKey(ref.backend, ref.threadId));
+    const cached = this.getCachedThreadSummary(ref);
+    return pending && cached ? retainPendingStartedThreadWorkspace(cached, pending) : pending ?? cached;
+  }
+
+  async refreshNavigationThread(ref: { backend: AppServerBackendKind; threadId: string }, activity: boolean, workers: boolean) {
+    const observation = this.reserveThreadInfoObservation();
+    let summary = this.getCachedNavigationThread(ref);
+    if (activity) {
+      let native: AppServerThreadSummary | undefined;
+      if (ref.backend === "codex") {
+        native = await this.withCodexThreadClient(ref.threadId, async (client) => await client.readThreadSummary?.(ref.threadId))
+          .catch(() => undefined);
+      } else if (ref.backend === "claude") {
+        native = await this.claudeBackend.readThreadSummary(ref.threadId);
+      } else if (isAcpBackendId(ref.backend)) {
+        const session = this.acpBackend.getSession(ref.backend, ref.threadId);
+        if (session) native = this.acpBackend.sessionToThreadSummary(session);
+      }
+      if (native) {
+        // Point reads omit checkout and runtime facts supplied by discovery.
+        // Keep those facts and take the activity watermark and acknowledged title.
+        const { title, titleSource } = projectOwnerThreadTitle(native, await this.overlayStore.getThreadMetadata?.(ref));
+        summary = this.withObservedThreadName({ ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt });
+      }
+    }
+    if (!summary) return undefined;
+    if (workers && ref.backend === "codex") {
+      const cards = await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
+        backend: "codex", threadIds: [ref.threadId], monitorIdPrefix: CODEX_NATIVE_MONITOR_ID_PREFIX,
+      });
+      summary = { ...summary, ...this.subAgentMonitorService.persistedCodexNativeSubAgentDisclosure(summary, cards[ref.threadId]) };
+    }
+    this.threadInfoStore.observeSummary({ identity: ref, observationSequence: observation, enriched: false, summary });
+    return summary;
+  }
+
   /** An explicit link hover needs display facts, without publishing provider
    * observations or invoking the maintenance-bearing thread list. */
   async readNavigationThreadLink(ref: { backend: AppServerBackendKind; threadId: string }): Promise<{
