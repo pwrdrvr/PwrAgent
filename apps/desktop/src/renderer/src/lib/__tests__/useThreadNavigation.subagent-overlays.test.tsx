@@ -247,3 +247,23 @@ it("visits no navigation rows and preserves the thread list across a burst of me
   expect(visits.rows).toBe(0);
   expect(result.current.threads).toBe(before);
 });
+
+it("a cursor extension neither revisits a retained range for context nor acknowledges a newer repeat", async () => {
+  const f = fixture(21);
+  const thread = f.threads[0]!;
+  thread.contextWindow = fill(25);
+  const { result } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.threads).toHaveLength(10));
+  await act(async () => f.send(contextEvent(thread, 25)));
+  const confirmation = vi.spyOn(result.current.contextWindows, "observePage");
+  await act(async () => result.current.pagedNavigation.loadMore("lens"));
+  expect(result.current.threads).toHaveLength(24);
+  expect(confirmation).not.toHaveBeenCalled();
+
+  thread.contextWindow = fill(10);
+  await act(async () => result.current.pagedNavigation.restart("lens"));
+  const key = threadSummaryIdentityKey(thread);
+  const row = result.current.threads.find((entry) => threadSummaryIdentityKey(entry) === key)!;
+  expect(row.contextWindow).toEqual(fill(10));
+  expect(result.current.contextWindows.read(key, row.contextWindow)).toEqual(fill(25));
+});

@@ -4226,7 +4226,11 @@ export function useThreadNavigation(
       const changedPages = [...pages].filter(([id, page]) => acceptedPages.get(id) !== page);
       for (const [id, page] of changedPages) {
         const resource = boundedNavigation.resources.get(id);
-        if (!resource?.restoredFromCache && !resource?.state.stale) contextWindows.observePage(page);
+        // A cursor extends the same immutable owner observation. Its retained
+        // prefix cannot confirm a live fill received after that observation.
+        if (resource && !resource.restoredFromCache && !resource.extendedFromCursor && !resource.state.stale) {
+          contextWindows.observePage(page);
+        }
       }
       for (const [key, pending] of deferredArchiveRemovalsRef.current) {
         const resource = boundedNavigation.resources.get(pending.resourceId);

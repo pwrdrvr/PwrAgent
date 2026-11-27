@@ -73,6 +73,8 @@ export type NavigationWindowResource = {
   loading: boolean;
   /** Cached membership awaiting a fresh owner read; existing row metadata wins. */
   restoredFromCache?: boolean;
+  /** Latest publication extends a previously accepted immutable owner generation. */
+  extendedFromCursor?: boolean;
 };
 export type NavigationWindowQueriesState = {
   resources: ReadonlyMap<string, NavigationWindowResource>;
@@ -416,7 +418,7 @@ export class NavigationWindowQueries {
     this.ownerProofBytes -= proof.bytes;
   }
 
-  private acceptState(resource: Resource, { state, ownerProof }: RetainableState): void {
+  private acceptState(resource: Resource, { state, ownerProof }: RetainableState, extendedFromCursor: boolean): void {
     const previous = resource.value.state.page;
     const bytes = this.activePageBytes + this.pageBytes(state.page) - this.pageBytes(previous);
     if (bytes > MAX_RETAINED_BYTES) throw new Error("Navigation retained-page budget reached. Collapse a directory or change lens to release pages.");
@@ -430,7 +432,7 @@ export class NavigationWindowQueries {
       this.ownerProofBytes += ownerProof.bytes;
     }
     this.activePageBytes = bytes;
-    resource.value = { ...resource.value, state, restoredFromCache: false };
+    resource.value = { ...resource.value, state, restoredFromCache: false, extendedFromCursor };
   }
 
   private withoutGitProof(proof: OwnerPageProof): OwnerPageProof | undefined {
@@ -1249,7 +1251,7 @@ export class NavigationWindowQueries {
       };
       const acceptReply = (next: RetainableState, reply: ReplyDiagnostic | undefined) => {
         const before = resource.value.state.page;
-        this.acceptState(resource, next);
+        this.acceptState(resource, next, Boolean(cursor));
         if (explicitLoadMore) this.sessionExpandedQueries.add(queryKey);
         if (reply === lastReply) lastReply = undefined;
         if (!reply || !navigationListingDiagnostics.isRecording(reply.generation)) return;
@@ -1404,7 +1406,6 @@ export class NavigationWindowQueries {
           throw new Error("Navigation anchor fallback did not reach the top of its list.");
         };
         let page: NavigationQueryPage;
-        let pageCursor = cursor;
         // Only displayed rows bypass continuation limits. A persisted target
         // is expansion demand, and may exceed what the previous owner served.
         const restoring = explicitAnchor || fromStart ? 0 : loadedRows(started.page);
@@ -1440,7 +1441,7 @@ export class NavigationWindowQueries {
         );
         const rebuildForLoadMore = async (): Promise<NavigationQueryPage> => {
           resource.membershipUncertain = true;
-          pageCursor = undefined;
+          cursor = undefined;
           const previous = started.page;
           const firstDirectory = previous?.directories?.[0];
           const firstThread = previous?.entries[0]?.row.ref;
@@ -1464,10 +1465,10 @@ export class NavigationWindowQueries {
           });
           if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
           const priorState = resource.value.state;
-          next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor: pageCursor }));
+          next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor }));
           nextReply = lastReply;
         } catch (error) {
-          if (!pageCursor || !isRecoverableCursorError(error)) throw error;
+          if (!cursor || !isRecoverableCursorError(error)) throw error;
           navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "cursor-expired" });
           // Cursor eviction or generation/lease mismatch is recoverable, not a
           // permanently dead Load more button. Rebuild the displayed range plus
@@ -1475,7 +1476,7 @@ export class NavigationWindowQueries {
           page = await rebuildForLoadMore();
           if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
           const priorState = resource.value.state;
-          next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor: pageCursor }));
+          next = this.retainableState(applyNavigationPage({ state: priorState, sequence: started.pendingSequence, page, cursor }));
           nextReply = lastReply;
         }
         const priorState = resource.value.state;
@@ -1526,7 +1527,7 @@ export class NavigationWindowQueries {
             // Once restored, commit refreshed membership and metadata plus
             // any growth delivered before the failure. Continuations also
             // retain their progress; both paths still report the error.
-            if (!pageCursor && loadedRows(next.state.page) < restoring) throw error;
+            if (!cursor && loadedRows(next.state.page) < restoring) throw error;
             if (!this.needsSeenReplacement(resource, next) && !this.needsWorkingStateReplacement(resource, next)) acceptReply(next, nextReply);
             throw error;
           }

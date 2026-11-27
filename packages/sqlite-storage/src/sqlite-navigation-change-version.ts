@@ -34,22 +34,46 @@ function ensureNavigationVersion(db: Database.Database): { owner: number; viewer
           AFTER ${operation} ON main.${table} BEGIN SELECT pwragent_viewer_navigation_changed(); END`);
       }
     }
-    // The usage ledger contributes just the latest observed fill to navigation.
-    // Pricing-only upserts must leave a reusable owner listing alone.
+    // Only a turn that beats the best other eligible turn and supplies a
+    // different fill contributes to navigation. Each lookup seeks one rival
+    // with the same partial index and tie-break as the owner projection.
     db.exec(`
       CREATE TEMP TRIGGER pwragent_context_insert AFTER INSERT ON main.thread_usage_turns
-        WHEN NEW.final_context_tokens >= 0 AND NEW.model_context_window > 0
-        BEGIN SELECT pwragent_navigation_changed(); END;
+        WHEN NEW.final_context_tokens >= 0 AND NEW.model_context_window > 0 AND COALESCE((
+          SELECT (NEW.observed_at, NEW.rowid) > (observed_at, rowid)
+            AND (NEW.final_context_tokens, NEW.model_context_window) IS NOT (final_context_tokens, model_context_window)
+          FROM thread_usage_turns WHERE backend = NEW.backend AND thread_id = NEW.thread_id AND rowid != NEW.rowid
+            AND final_context_tokens >= 0 AND model_context_window > 0
+          ORDER BY observed_at DESC, rowid DESC LIMIT 1
+        ), 1) BEGIN SELECT pwragent_navigation_changed(); END;
       CREATE TEMP TRIGGER pwragent_context_delete AFTER DELETE ON main.thread_usage_turns
-        WHEN OLD.final_context_tokens >= 0 AND OLD.model_context_window > 0
-        BEGIN SELECT pwragent_navigation_changed(); END;
+        WHEN OLD.final_context_tokens >= 0 AND OLD.model_context_window > 0 AND COALESCE((
+          SELECT (OLD.observed_at, OLD.rowid) > (observed_at, rowid)
+            AND (OLD.final_context_tokens, OLD.model_context_window) IS NOT (final_context_tokens, model_context_window)
+          FROM thread_usage_turns WHERE backend = OLD.backend AND thread_id = OLD.thread_id
+            AND final_context_tokens >= 0 AND model_context_window > 0
+          ORDER BY observed_at DESC, rowid DESC LIMIT 1
+        ), 1) BEGIN SELECT pwragent_navigation_changed(); END;
       CREATE TEMP TRIGGER pwragent_context_update AFTER UPDATE ON main.thread_usage_turns
-        WHEN ((NEW.final_context_tokens >= 0 AND NEW.model_context_window > 0)
-           OR (OLD.final_context_tokens >= 0 AND OLD.model_context_window > 0))
-          AND (NEW.final_context_tokens IS NOT OLD.final_context_tokens OR NEW.model_context_window IS NOT OLD.model_context_window
-            OR NEW.observed_at != OLD.observed_at OR NEW.backend != OLD.backend OR NEW.thread_id != OLD.thread_id
-            OR NEW.rowid != OLD.rowid)
-        BEGIN SELECT pwragent_navigation_changed(); END;
+        WHEN (NEW.final_context_tokens, NEW.model_context_window, NEW.observed_at, NEW.backend, NEW.thread_id, NEW.rowid)
+          IS NOT (OLD.final_context_tokens, OLD.model_context_window, OLD.observed_at, OLD.backend, OLD.thread_id, OLD.rowid)
+        BEGIN
+          -- Compare the two candidate contributions against the unchanged
+          -- ledger (exclude NEW). Identical contributions cancel in pairs.
+          SELECT pwragent_navigation_changed() FROM (
+            SELECT OLD.backend AS owner, OLD.thread_id AS thread, OLD.observed_at AS observed,
+              OLD.rowid AS id, OLD.final_context_tokens AS used, OLD.model_context_window AS capacity
+            UNION ALL SELECT NEW.backend, NEW.thread_id, NEW.observed_at, NEW.rowid, NEW.final_context_tokens, NEW.model_context_window
+          ) AS candidate
+          WHERE used >= 0 AND capacity > 0 AND COALESCE((
+            SELECT (candidate.observed, candidate.id) > (observed_at, rowid)
+              AND (candidate.used, candidate.capacity) IS NOT (final_context_tokens, model_context_window)
+            FROM thread_usage_turns WHERE backend = candidate.owner AND thread_id = candidate.thread AND rowid != NEW.rowid
+              AND final_context_tokens >= 0 AND model_context_window > 0
+            ORDER BY observed_at DESC, rowid DESC LIMIT 1
+          ), 1)
+          GROUP BY owner, thread, used, capacity HAVING count(*) = 1 LIMIT 1;
+        END;
     `);
     // Only metadata that enters the owner navigation index.
     for (const operation of ["INSERT", "UPDATE", "DELETE"]) {

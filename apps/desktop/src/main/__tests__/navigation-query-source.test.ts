@@ -1891,3 +1891,52 @@ it.each([true, false])("bounds cold and repeated navigation stack discovery with
     await rm(root, { recursive: true, force: true });
   }
 }, 60_000);
+
+it("reuses the warm sidebar index across historical fill corrections and rereads when the winner moves", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const db = StateDb.open(":memory:");
+  const source = createSource();
+  try {
+    const overlay = new SqliteOverlayStore(db);
+    mocks.profileStore = overlay;
+    const threads = Array.from({ length: 32 }, (_, i): NavigationThreadSummary => ({
+      id: `thread-${i}`, source: "codex", title: "Fixture", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: true },
+    }));
+    source.listThreads.mockResolvedValue(threads);
+    source.finish();
+    const insert = db.raw.prepare(`INSERT INTO thread_usage_turns
+      (usage_turn_id, provider, backend, thread_id, observed_at, updated_at, final_context_tokens, model_context_window)
+      VALUES (?, 'openai', 'codex', 'thread-0', ?, 1, ?, 1000)`);
+    insert.run("current", 100, 60);
+    const store = new NavigationQueryStore();
+    const read = async () => (await store.readPage({ scopeKey: "fixture",
+      request: { protocol: 2, consumer: "main-sidebar", query: { kind: "exact", identities: [{ backend: "codex", threadId: "thread-0" }] } },
+      loadIndex: () => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query" }),
+    })).entries[0]?.row.contextWindow?.totalTokens;
+    const projection = vi.spyOn(overlay, "readNavigationQueryIndex");
+    expect(await read()).toBe(60);
+    // A later rowid wins a time tie, but an identical fill still reuses the page.
+    insert.run("repeat", 100, 60);
+    expect(await read()).toBe(60);
+    db.raw.exec("DELETE FROM thread_usage_turns WHERE usage_turn_id = 'repeat'");
+    expect(await read()).toBe(60);
+    insert.run("backfill", 80, 10);
+    expect(await read()).toBe(60);
+    db.raw.exec("UPDATE thread_usage_turns SET final_context_tokens = 35 WHERE usage_turn_id = 'backfill'");
+    expect(await read()).toBe(60);
+    insert.run("obsolete", 75, 30);
+    db.raw.exec("DELETE FROM thread_usage_turns WHERE usage_turn_id = 'obsolete'");
+    expect(await read()).toBe(60);
+    expect(projection).toHaveBeenCalledTimes(1);
+    // Backdating the leader reveals the previously corrected reading.
+    db.raw.exec("UPDATE thread_usage_turns SET observed_at = 50 WHERE usage_turn_id = 'current'");
+    expect(await read()).toBe(35);
+    expect(projection).toHaveBeenCalledTimes(2);
+  } finally {
+    source.emit("thread/name/updated");
+    mocks.profileStore = undefined;
+    db.close();
+    vi.useRealTimers();
+  }
+});
