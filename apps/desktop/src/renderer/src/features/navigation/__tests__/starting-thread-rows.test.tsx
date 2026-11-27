@@ -1,11 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FederationHealthStatus } from "@pwragent/shared/contracts/federation";
 import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
+import { FederationDisplayLabelsProvider } from "../../../lib/federation-display-label";
 import type {
   PendingLaunchpadCreation,
   SubthreadLaunchpadDraft,
@@ -13,6 +15,7 @@ import type {
 import {
   interleaveStartingSubthreads,
   pendingThreadTitleLine,
+  StartingThreadRow,
   type PendingSidebarRow,
 } from "../StartingThreadRow";
 import { buildSubthreadLaunchpadKey } from "../../../lib/subthread-launchpads";
@@ -20,10 +23,28 @@ import type { AppServerPendingThreadStart } from "@pwragent/shared/contracts/nor
 import { applyPendingThreadStartReport, pendingThreadStartRows } from "../pending-thread-starts";
 import { startingThreadHomeDirectoryKey } from "../starting-thread-home";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const PROJECT_PATH = "/Users/fixture-user/pwrdrvr/PwrSnap";
 const PROJECT_KEY = `directory:${PROJECT_PATH}`;
+const PEER_TARGET = { scope: "remote", instanceId: "fixture-peer" } as const;
+const PEER_HEALTH: FederationHealthStatus = {
+  enabled: true,
+  role: "gateway",
+  status: "listening",
+  peers: [{
+    id: PEER_TARGET.instanceId,
+    label: "Fixture Studio",
+    shortLabel: "Studio",
+    celestialIcon: "ringed-planet",
+    role: "client",
+    status: "connected",
+    capabilities: [],
+  }],
+};
 
 function thread(id: string, patch: Partial<NavigationThreadSummary> = {}): NavigationThreadSummary {
   return {
@@ -142,6 +163,36 @@ function rowNames(list: HTMLElement): string[] {
 }
 
 describe("a thread that is still starting", () => {
+  it.each(["kind", "label"] as const)("identifies the remote owner with %s location chips", (locationMode) => {
+    const starting = creation({ target: PEER_TARGET });
+    const pendingRow = (health?: FederationHealthStatus) => (
+      <FederationDisplayLabelsProvider health={health}>
+        <StartingThreadRow creation={starting} locationMode={locationMode} selected={false} />
+      </FederationDisplayLabelsProvider>
+    );
+    const { rerender } = render(pendingRow());
+    expect(screen.getByLabelText("Runs on fixture-peer")).toHaveClass("chip--instance");
+
+    rerender(pendingRow(PEER_HEALTH));
+    const chip = screen.getByLabelText("Runs on Studio (Fixture Studio)");
+    expect(chip).toHaveTextContent(/^Studio$/);
+    expect(chip.querySelector("svg")).not.toHaveClass("instance-glyph");
+  });
+
+  it("keeps machine chips out of local starts and dedicated Federation windows", () => {
+    const pendingRow = (starting: PendingLaunchpadCreation) => (
+      <FederationDisplayLabelsProvider health={PEER_HEALTH}>
+        <StartingThreadRow creation={starting} locationMode="kind" selected={false} />
+      </FederationDisplayLabelsProvider>
+    );
+    const { rerender } = render(pendingRow(creation({ target: { scope: "local" } })));
+    expect(screen.queryByLabelText(/^Runs on /)).not.toBeInTheDocument();
+
+    vi.stubGlobal("__pwragentFederationTarget", PEER_TARGET);
+    rerender(pendingRow(creation({ target: PEER_TARGET })));
+    expect(screen.queryByLabelText(/^Runs on /)).not.toBeInTheDocument();
+  });
+
   it("takes the top unpinned slot in its project, as a thread row", () => {
     const onSelectPendingLaunchpad = vi.fn();
     const starting = creation();

@@ -94,17 +94,19 @@ export function InstanceChip(props: {
   icon?: CelestialIconId;
 }): ReactElement {
   // `props.label` may itself be a short name (an `@` mention), so the full
-  // name comes from live health when the instance is known.
-  const { label, fullLabel } = useFederationInstanceNames(props.instanceId, props.label);
+  // name comes from live health when the instance is known. Pending rows
+  // also use live health for the icon until the owner stamps the thread.
+  const { label, fullLabel, icon: liveIcon } = useFederationInstanceNames(props.instanceId, props.label);
   const name = label === fullLabel ? label : `${label} (${fullLabel})`;
+  const icon = props.icon ?? liveIcon;
   return (
     <span
       aria-label={`Runs on ${name}`}
       className="chip chip--instance"
       title={`${fullLabel} · ${props.instanceId}`}
     >
-      {props.icon ? (
-        <CelestialIcon icon={props.icon} size={12} />
+      {icon ? (
+        <CelestialIcon icon={icon} size={12} />
       ) : (
         <InstanceGlyph instanceId={props.instanceId} size={12} />
       )}
