@@ -509,6 +509,63 @@ describe("SubAgentsPanel", () => {
     }
   });
 
+  it("renders Antigravity and Grok ACP native sub-agents in the Harness lens without Stop or transcript buttons", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true as const }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: { openSubAgentTranscriptWindow },
+    });
+    try {
+      render(
+        <SubAgentsPanel
+          desktopApi={{ stopSubAgent: vi.fn() } as unknown as DesktopApi}
+          thread={{
+            ...thread,
+            id: "acp-parent",
+            source: "acp:antigravity",
+            subAgents: [
+              {
+                monitorId: "acp-native:call_1",
+                task: "Audit PwrAgent transcript UX",
+                displayTitle: "PwrAgent Transcript Auditor",
+                status: "running",
+                createdAt: 1_800_000_000_000,
+                updatedAt: 1_800_000_000_000,
+                backend: "acp:antigravity",
+                agentName: "PwrAgent Transcript Auditor",
+                agentRole: "research",
+              },
+              {
+                monitorId: "acp-native:sub_2",
+                task: "[reviewer] pr #1644",
+                status: "success",
+                outcome: "success",
+                createdAt: 1_800_000_000_100,
+                updatedAt: 1_800_000_000_200,
+                completedAt: 1_800_000_000_200,
+                backend: "acp:grok",
+                preferredModel: "grok-4.7",
+              },
+            ],
+          }}
+        />,
+      );
+
+      expect(screen.getByText("PwrAgent Transcript Auditor")).toBeInTheDocument();
+      expect(screen.getByText("Spawned by Antigravity.")).toBeInTheDocument();
+      expect(screen.getByText("[reviewer] pr #1644")).toBeInTheDocument();
+      expect(screen.getByText("Spawned by Grok.")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Details" })[1]!);
+      const dialog = screen.getByRole("dialog");
+      expect(dialog).toHaveTextContent("PwrAgent Transcript Auditor");
+      expect(within(dialog).queryByRole("button", { name: "Open transcript" })).not.toBeInTheDocument();
+    } finally {
+      delete (window as Window & { pwragent?: unknown }).pwragent;
+    }
+  });
+
   it("keeps an open details dialog on the live sub-agent record", () => {
     const { rerender } = render(<SubAgentsPanel thread={thread} />);
 

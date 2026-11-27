@@ -55,6 +55,11 @@ import {
 } from "./acp-file-read.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 import { extractAcpContentImageParts, extractAcpToolImageParts } from "./acp-tool-images.js";
+import {
+  formatAcpInvokeSubAgentLabel,
+  readAcpInvokeSubAgentDetails,
+  type AcpInvokeSubAgentDetails,
+} from "./acp-subagents.js";
 import { reduceNormalizedThread } from "./normalized-thread-reducer.js";
 import { normalizedThreadToReplay, normalizedToolCallToReplayDetail } from "./normalized-thread-to-replay.js";
 
@@ -335,6 +340,7 @@ export class AcpSessionReplayNormalizer {
   private readonly messageIndexes = new Map<string, number>();
   private readonly entryIndexes = new Map<string, number>();
   private readonly typedEntryIndexes = new Map<string, number>();
+  private readonly turnEntryIndexes = new Map<string, number[]>();
   private lastUserMessageIndex?: number;
   private lastAssistantMessageIndex?: number;
   private status: AppServerThreadStatus = "idle";
@@ -356,6 +362,7 @@ export class AcpSessionReplayNormalizer {
    * can drop the input that names it, and its title is the absolute path.
    */
   private readonly fileReads = new Map<string, AcpFileRead>();
+  private readonly invokeSubAgents = new Map<string, AcpInvokeSubAgentDetails>();
   /** The retry run whose row is still in progress, if any. */
   private openRetry?: { id: string; attempts: number };
   /** The automatic compaction whose row is still in progress, if any. */
@@ -442,6 +449,7 @@ export class AcpSessionReplayNormalizer {
     const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
     this.settleOpenRetry("completed");
     this.settleOpenCompaction("cancelled");
+    this.removeCurrentAgentWaitingActivity();
     this.currentTurnId = params.turnId;
     this.currentTurnStartedAt = createdAt;
     this.activeAssistantMessageId = undefined;
@@ -452,6 +460,7 @@ export class AcpSessionReplayNormalizer {
     // call's for the whole session would grow without bound.
     this.providerTools.clear();
     this.fileReads.clear();
+    this.invokeSubAgents.clear();
     this.upsertMessage({
       id,
       role: "user",
@@ -618,6 +627,7 @@ export class AcpSessionReplayNormalizer {
     this.activeAssistantMessagePhase = undefined;
     this.assistantMessageSequence = 0;
     this.knownToolCallIds.clear();
+    this.invokeSubAgents.clear();
     this.openRetry = undefined;
     this.openCompactionId = undefined;
     this.subAgents.clear();
@@ -701,16 +711,19 @@ export class AcpSessionReplayNormalizer {
       // for an unrecognized kind.
       this.upsertRetryActivity(update, createdAt);
     } else if (kind === "image_dropped") {
+      this.removeCurrentAgentWaitingActivity();
       this.upsertActivity(imageDroppedActivity(update, createdAt));
     } else if (
       kind === "auto_compact_started" || kind === "auto_compact_completed"
     ) {
+      this.removeCurrentAgentWaitingActivity();
       this.upsertCompactionActivity(update, kind, createdAt);
     } else if (
       kind === "subagent_spawned"
       || kind === "subagent_progress"
       || kind === "subagent_finished"
     ) {
+      this.removeCurrentAgentWaitingActivity();
       this.upsertSubAgentActivity(update, kind, createdAt);
     } else if (kind === "turn_completed" || kind === "turn_finished") {
       // Some agents persist a durable replay terminal before the live
@@ -1560,6 +1573,14 @@ export class AcpSessionReplayNormalizer {
     const preferredMcpLabel = mcpToolLabel && mcpToolLabel !== mcpToolName
       ? mcpToolLabel
       : undefined;
+    const previousInvokeSubAgent = toolCallId ? this.invokeSubAgents.get(toolCallId) : undefined;
+    const parsedInvokeSubAgent = readAcpInvokeSubAgentDetails(update.update);
+    const invokeSubAgent = parsedInvokeSubAgent
+      ? { ...previousInvokeSubAgent, ...parsedInvokeSubAgent }
+      : previousInvokeSubAgent;
+    if (toolCallId && invokeSubAgent) {
+      this.invokeSubAgents.set(toolCallId, invokeSubAgent);
+    }
     this.upsertActivity(
       toolActivity(
         update,
@@ -1570,6 +1591,7 @@ export class AcpSessionReplayNormalizer {
         this.fileEditOptions,
         followsTitleScript,
         this.options.replayKit,
+        invokeSubAgent,
       ),
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
@@ -1628,10 +1650,29 @@ export class AcpSessionReplayNormalizer {
 
   private removeAgentWaitingActivity(turnId: string): void {
     const id = agentWaitingActivityId(turnId);
-    if (!this.entryIndexes.has(id)) {
+    const index = this.entryIndexes.get(id);
+    if (index === undefined) {
       return;
     }
-    this.entries = this.entries.filter((entry) => entry.id !== id);
+    const entry = this.entries[index];
+    if (
+      index === this.entries.length - 1
+      && entry?.id === id
+      && this.typedEntryIndexes.get(`${entry.type}:${id}`) === index
+    ) {
+      // Fast O(1) path: waiting rows are appended at turn start and removed
+      // before any later entry arrives in the common case, avoiding O(n²)
+      // full-history rebuilds across multi-turn rollouts.
+      this.entries.pop();
+      this.entryIndexes.delete(id);
+      this.typedEntryIndexes.delete(`${entry.type}:${id}`);
+      const turnIndexes = entry.turn?.id ? this.turnEntryIndexes.get(entry.turn.id) : undefined;
+      if (turnIndexes && turnIndexes[turnIndexes.length - 1] === index) {
+        turnIndexes.pop();
+      }
+      return;
+    }
+    this.entries = this.entries.filter((candidate) => candidate.id !== id);
     this.rebuildEntryIndexes();
   }
 
@@ -1829,10 +1870,23 @@ export class AcpSessionReplayNormalizer {
       this.appendEntry(entryWithTurn);
       return;
     }
-    const previousType = this.entries[index]?.type;
+    const previous = this.entries[index];
+    const previousType = previous?.type;
+    const previousTurnId = previous?.turn?.id;
     this.entries[index] = entryWithTurn;
     if (previousType !== entryWithTurn.type) {
       this.rebuildEntryIndexes();
+    } else if (entryWithTurn.turn?.id && entryWithTurn.turn.id !== previousTurnId) {
+      this.indexTurnEntry(entryWithTurn.turn.id, index);
+    }
+  }
+
+  private indexTurnEntry(turnId: string, index: number): void {
+    const turnIndexes = this.turnEntryIndexes.get(turnId);
+    if (turnIndexes) {
+      turnIndexes.push(index);
+    } else {
+      this.turnEntryIndexes.set(turnId, [index]);
     }
   }
 
@@ -1852,11 +1906,15 @@ export class AcpSessionReplayNormalizer {
     if (!this.typedEntryIndexes.has(key)) {
       this.typedEntryIndexes.set(key, index);
     }
+    if (entry.turn?.id) {
+      this.indexTurnEntry(entry.turn.id, index);
+    }
   }
 
   private rebuildEntryIndexes(): void {
     this.entryIndexes.clear();
     this.typedEntryIndexes.clear();
+    this.turnEntryIndexes.clear();
     this.entries.forEach((entry, index) => this.indexEntry(entry, index));
   }
 
@@ -1985,12 +2043,17 @@ export class AcpSessionReplayNormalizer {
     status: "completed" | "failed" | "interrupted",
     completedAt: number,
   ): void {
-    this.entries = this.entries.map((entry) => {
-      if (entry.turn?.id !== turnId) {
-        return entry;
+    const indexes = this.turnEntryIndexes.get(turnId);
+    if (!indexes || indexes.length === 0) {
+      return;
+    }
+    for (const index of indexes) {
+      const entry = this.entries[index];
+      if (!entry || entry.turn?.id !== turnId) {
+        continue;
       }
       const startedAt = entry.turn.startedAt ?? this.currentTurnStartedAt;
-      return {
+      this.entries[index] = {
         ...entry,
         turn: {
           ...entry.turn,
@@ -2004,7 +2067,7 @@ export class AcpSessionReplayNormalizer {
             : {}),
         },
       };
-    });
+    }
   }
 }
 
@@ -2496,6 +2559,7 @@ function toolActivity(
   fileEditOptions?: ReadAcpFileEditOptions,
   followsTitleScript = false,
   replayKit?: AcpReplayKit,
+  trackedInvokeSubAgent?: AcpInvokeSubAgentDetails,
 ): AppServerThreadActivityEntry {
   const id =
     readAcpToolCallId(update.update) ??
@@ -2540,6 +2604,42 @@ function toolActivity(
               }),
             ]
           : [],
+    };
+  }
+
+  const invokeSubAgent = trackedInvokeSubAgent ?? readAcpInvokeSubAgentDetails(update.update);
+  if (invokeSubAgent) {
+    const status = readToolActivityStatus(update.update) ?? "in_progress";
+    const summary = formatAcpInvokeSubAgentLabel(invokeSubAgent, status);
+    const metaLabel = [
+      invokeSubAgent.typeName,
+      invokeSubAgent.model,
+    ].filter(Boolean).join(" · ");
+    const output = readToolOutput(update.update);
+    return {
+      type: "activity",
+      id,
+      createdAt,
+      summary,
+      status,
+      details: [
+        {
+          id: detailId,
+          kind: "read",
+          label: metaLabel ? `${summary} (${metaLabel})` : summary,
+          status,
+          ...(invokeSubAgent.prompt || output
+            ? {
+                command: {
+                  displayCommand: invokeSubAgent.prompt ?? summary,
+                  rawCommand: "invoke_subagent",
+                  source: "tool" as const,
+                  ...(output ? { output } : {}),
+                },
+              }
+            : {}),
+        },
+      ],
     };
   }
 
@@ -2779,6 +2879,22 @@ function settledSearchLabel(
 ): string {
   if (status === "in_progress" || status === undefined) {
     return label;
+  }
+  if (
+    status === "failed"
+    && /^Sub-agent(?::|\b)/u.test(label)
+    && !label.startsWith("Sub-agent failed")
+    && !label.startsWith("Sub-agent cancelled")
+  ) {
+    return label.replace(/^Sub-agent\b/u, "Sub-agent failed");
+  }
+  if (
+    status === "cancelled"
+    && /^Sub-agent(?::|\b)/u.test(label)
+    && !label.startsWith("Sub-agent failed")
+    && !label.startsWith("Sub-agent cancelled")
+  ) {
+    return label.replace(/^Sub-agent\b/u, "Sub-agent cancelled");
   }
   return label
     .replace(/^Searching code\b/u, "Searched code")

@@ -85,6 +85,7 @@ export function mockSubAgentReads(read: ReadOverlay) {
       backend: AppServerBackendKind;
       threadIds: readonly string[];
       monitorIdPrefix: string;
+      visibleSince?: number;
     }) => {
       const result: Record<string, ThreadSubAgentSummary[]> = {};
       for (const threadId of new Set(params.threadIds)) {

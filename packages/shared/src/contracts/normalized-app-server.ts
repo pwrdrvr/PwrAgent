@@ -2889,6 +2889,10 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "navigation/sidebarEnrichment/updated";
+      params: Record<string, never>;
+    }
+  | {
       method: "navigation/providerThreads/refreshed";
       params: {
         failedProviders: number;

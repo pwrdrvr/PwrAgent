@@ -10,6 +10,7 @@ import {
 import { navigationQueryPageBudgetBytes } from "@pwragent/shared/navigation-remote-owner";
 import {
   navigationInvalidationMayChangeMembership,
+  NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD,
   navigationPullRequestKeysMayMatch,
   navigationQueryEventRequiresRefresh,
   navigationWorkingStatePath,
@@ -816,6 +817,7 @@ export class NavigationWindowQueries {
     const page = resource.value.state.page;
     const workingState = method === "navigation/threadGitWorkingState/updated";
     const seen = method === "navigation/thread/seen";
+    if (method === NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD && request.query.kind === "directory-index") return false;
     // Working-state probes cannot change any directory descriptor or count.
     if (workingState && request.query.kind === "directory-index") return false;
     // A navigation gap needs a new direct owner baseline. Viewer membership

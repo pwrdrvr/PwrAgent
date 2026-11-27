@@ -114,6 +114,14 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
         };
       case "idx_thread_usage_lines_read_parent":
         return { ...row, sql: row.sql?.replace("parent_thread_id IS NOT NULL AND ", "") };
+      case "thread_sub_agents_by_lens_v3":
+        return {
+          ...row,
+          name: "thread_sub_agents_by_lens_v2",
+          sql: row.sql
+            ?.replace("thread_sub_agents_by_lens_v3", "thread_sub_agents_by_lens_v2")
+            .replace("\n  WHEN substr(monitor_id, 1, 11) = 'acp-native:' THEN 'harness'", ""),
+        };
       default:
         return row;
     }

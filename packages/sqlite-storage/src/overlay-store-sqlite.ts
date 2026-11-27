@@ -4741,6 +4741,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: ThreadOverlayState["backend"];
     threadIds: readonly string[];
     monitorIdPrefix: string;
+    visibleSince?: number;
   }): Promise<Record<string, ThreadSubAgentSummary[]>> {
     const keys = [...new Set(params.threadIds)].map((threadId) => ({
       threadId,
@@ -4749,6 +4750,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const cards = this.subAgentTable.listByMonitorIdPrefix(
       keys.map((key) => key.storageKey),
       params.monitorIdPrefix,
+      params.visibleSince !== undefined ? { visibleSince: params.visibleSince } : undefined,
     );
     const result: Record<string, ThreadSubAgentSummary[]> = {};
     for (const { threadId, storageKey } of keys) {

@@ -28,6 +28,10 @@ import { extractAcpToolImageParts } from "./acp-tool-images.js";
 import { type ReadAcpFileEditOptions, readAcpFileEdit } from "./acp-file-edit.js";
 import { type AcpFileRead, fileBaseName, readAcpFileRead } from "./acp-file-read.js";
 import {
+  formatAcpInvokeSubAgentLabel,
+  readAcpInvokeSubAgentDetails,
+} from "./acp-subagents.js";
+import {
   foldAcpTurnUsage,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
@@ -565,6 +569,22 @@ function liveItemForAcpToolUpdate(
         ? { arguments: { query: webSearch.query } }
         : {}),
       ...(webSearch.sources.length ? { sources: webSearch.sources } : {}),
+    };
+  }
+
+  const invokeSubAgent = readAcpInvokeSubAgentDetails(update);
+  if (invokeSubAgent) {
+    const subAgentLabel = formatAcpInvokeSubAgentLabel(invokeSubAgent, status);
+    return {
+      id: id ?? `invoke_subagent:${subAgentLabel}`,
+      type: "commandExecution",
+      toolName: "invoke_subagent",
+      status,
+      command: subAgentLabel,
+      commandSource: "tool",
+      commandToolName: "invoke_subagent",
+      commandActions: [{ type: "unknown", name: subAgentLabel }],
+      ...(output ? { data: { output } } : {}),
     };
   }
 
