@@ -1,5 +1,6 @@
 import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { scanSkillMentionLinks } from "@pwragent/shared/skill-mention-links";
+import { bareMentionedSkills } from "./bare-skill-mentions";
 
 export type SkillMentionPart =
   | {
@@ -89,8 +90,18 @@ export function parseSkillMentionParts(text: string, work?: { chars: number }): 
   return output;
 }
 
+type MentionSkillIndex = {
+  byPath: ReadonlyMap<string, AppServerSkillSummary>;
+  byName: ReadonlyMap<string, AppServerSkillSummary>;
+};
+
+const mentionSkillIndexes = new WeakMap<readonly AppServerSkillSummary[], MentionSkillIndex>();
+
 /** Keep the first catalog row for each key, matching Array.find on duplicate paths or names. */
-export function indexMentionSkills(skills: readonly AppServerSkillSummary[]) {
+export function indexMentionSkills(skills: readonly AppServerSkillSummary[]): MentionSkillIndex {
+  const cached = mentionSkillIndexes.get(skills);
+  if (cached) return cached;
+
   const byPath = new Map<string, AppServerSkillSummary>();
   const byName = new Map<string, AppServerSkillSummary>();
   for (const skill of skills) {
@@ -98,49 +109,15 @@ export function indexMentionSkills(skills: readonly AppServerSkillSummary[]) {
     if (path && !byPath.has(path)) byPath.set(path, skill);
     if (!byName.has(skill.name)) byName.set(skill.name, skill);
   }
-  return { byPath, byName };
-}
-
-type SkillNameNode = { children: Map<string, SkillNameNode>; name?: string };
-
-function* bareMentionedSkills(text: string, skills: readonly AppServerSkillSummary[]): Generator<AppServerSkillSummary> {
-  const starts = /(?:^|\s)\$/g;
-  if (!skills.length || !starts.exec(text)) return;
-
-  // Names are literal and may contain punctuation or spaces. A single occurrence
-  // of "$build.all" can match both "build" and "build.all" at valid boundaries.
-  const root: SkillNameNode = { children: new Map() };
-  for (const { name } of skills) {
-    let node = root;
-    for (let i = 0; i < name.length; i += 1) {
-      const char = name.charAt(i);
-      let child = node.children.get(char);
-      if (!child) {
-        child = { children: new Map() };
-        node.children.set(char, child);
-      }
-      node = child;
-    }
-    node.name = name;
-  }
-
-  const found = new Set<string>();
-  do {
-    let node: SkillNameNode | undefined = root;
-    for (let i = starts.lastIndex; node; i += 1) {
-      const char = text.charAt(i);
-      if (node.name !== undefined && (!char || /[\s.,!?;:]/.test(char))) found.add(node.name);
-      node = node.children.get(char);
-    }
-  } while (starts.exec(text));
-  for (const skill of skills) {
-    if (found.has(skill.name)) yield skill;
-  }
+  const index = { byPath, byName };
+  mentionSkillIndexes.set(skills, index);
+  return index;
 }
 
 export function listMentionedSkills(
   text: string,
-  skills: AppServerSkillSummary[]
+  skills: AppServerSkillSummary[],
+  work?: { transitions: number },
 ): AppServerSkillSummary[] {
   const mentioned = new Map<string, AppServerSkillSummary>();
   let index: ReturnType<typeof indexMentionSkills> | undefined;
@@ -161,7 +138,7 @@ export function listMentionedSkills(
     );
   }
 
-  for (const skill of bareMentionedSkills(text, skills)) {
+  for (const skill of bareMentionedSkills(text, skills, work)) {
     mentioned.set(skill.path ?? skill.name, skill);
   }
 

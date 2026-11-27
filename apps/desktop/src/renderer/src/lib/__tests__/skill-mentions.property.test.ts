@@ -68,7 +68,7 @@ describe("parseSkillMentionParts", () => {
 });
 
 describe("listMentionedSkills", () => {
-  const name = fc.constantFrom("a", "a.b", "a b", "a $b", "b", "[", "?", "🚀", "");
+  const name = fc.constantFrom("a", "a.b", "a b", "a $b", "a $a $b", "a$b", "b", "[", "?", "🚀", "");
   const path = fc.constantFrom("/a", "/b", "/c");
   const catalog = fc.array(fc.record({ name, path }), { maxLength: 16, size: "max" });
   const token = fc.oneof(
@@ -108,6 +108,32 @@ describe("listMentionedSkills", () => {
       spy.mockRestore();
     }
     expect(fullSearches).toBeLessThanOrEqual(2);
+  });
+
+  it("shares character visits across overlapping bare starts", () => {
+    fc.assert(fc.property(fc.integer({ min: 8, max: 128 }), fc.integer({ min: 8, max: 128 }), (length, count) => {
+      const name = Array(length).fill("a").join(" $");
+      const text = "$a ".repeat(count);
+      const work = { transitions: 0 };
+      const skills = [{ name }];
+      expect(listMentionedSkills(text, skills, work)).toEqual(count >= length ? skills : []);
+      expect(work.transitions).toBeGreaterThanOrEqual(text.length);
+      expect(work.transitions).toBeLessThanOrEqual(2 * text.length);
+    }));
+  });
+
+  it("finds an eight-component name without restarting at its seven inner dollars", () => {
+    const skills = [{ name: "a $a $a $a $a $a $a $a" }];
+    const work = { transitions: 0 };
+    const text = "$a ".repeat(8);
+    expect(listMentionedSkills(text, skills, work)).toEqual(skills);
+    expect(work.transitions).toBeLessThanOrEqual(2 * text.length);
+  });
+
+  it("requires a leading boundary on suffix matches and a trailing boundary on every name", () => {
+    const skills = ["a", "a $b", "a$b", "b", "b.c"].map((name) => ({ name }));
+    expect(listMentionedSkills("$a$b!", skills)).toEqual([skills[2]]);
+    expect(listMentionedSkills("$a $b.c", skills)).toEqual([skills[0], skills[1], skills[3], skills[4]]);
   });
 
   it("resolves repeated explicit chips in one traversal of the catalog", () => {

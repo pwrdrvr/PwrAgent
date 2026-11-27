@@ -40,9 +40,16 @@ describe("hydrateComposerDraft skill chips", () => {
     expect(fromMarkdown).not.toHaveBeenCalled();
   });
 
+  it("keeps ordinary markup in a pasted log on the plain text path", () => {
+    const text = "<tag> " + "[$a ".repeat(100);
+    vi.mocked(fromMarkdown).mockClear();
+    expect(hydrateComposerDraft(text, [], threadLinks, undefined)).toEqual({ draft: text, skillTokens: [] });
+    expect(fromMarkdown).not.toHaveBeenCalled();
+  });
+
   it("restores a CommonMark thread autolink without a bracketed label", () => {
     const url = buildThreadUrl(thread);
-    const restored = hydrateComposerDraft(`See <${url}>`, [], threadLinks, undefined);
+    const restored = hydrateComposerDraft(`See <${url.replace("pwragent://thread/", "PwRaGeNt://ThReAd/")}>`, [], threadLinks, undefined);
     expect(restored.draft).toBe("See ");
     expect(restored.skillTokens[0]).toMatchObject({ kind: "thread", index: 4, path: url });
   });
@@ -56,6 +63,23 @@ describe("hydrateComposerDraft skill chips", () => {
     const restored = hydrateComposerDraft("[$s31](/p/31) ".repeat(32), catalog, undefined, undefined);
     expect(restored.skillTokens).toHaveLength(32);
     expect(pathReads).toBeLessThanOrEqual(2 * catalog.length + 2 * restored.skillTokens.length);
+  });
+
+  it("reuses catalog lookups across edits and refreshes them for a replacement catalog", () => {
+    let unrelatedReads = 0;
+    const other = { name: "other", get path() { unrelatedReads += 1; return "/other"; } };
+    const selected = { name: "selected", path: "/picked", description: "original" };
+    const catalog = [selected, other];
+    const chip = "[$selected](/picked)";
+    hydrateComposerDraft(chip, catalog, undefined, undefined);
+    const coldReads = unrelatedReads;
+    for (const suffix of [" a", " ab", " abc"]) {
+      const restored = hydrateComposerDraft(chip + suffix, catalog, undefined, undefined);
+      expect(restored.skillTokens[0]?.description).toBe("original");
+    }
+    expect(unrelatedReads).toBe(coldReads);
+    const refreshed = [{ ...selected, description: "updated" }, other];
+    expect(hydrateComposerDraft(chip, refreshed, undefined, undefined).skillTokens[0]?.description).toBe("updated");
   });
 
   const labeledReferences = [

@@ -31,7 +31,7 @@ export function hydrateComposerDraft(
   // Incomplete pasted Markdown can therefore bypass the Markdown parser entirely.
   const labelEnd = canonicalDraft.indexOf("](");
   const hasInlineLink = labelEnd >= 0 && canonicalDraft.includes(")", labelEnd + 2);
-  const mayHaveAutolink = threadLinks && canonicalDraft.includes("<") && canonicalDraft.includes(">");
+  const mayHaveAutolink = threadLinks && /<pwragent:\/\/thread\/[^<>\r\n]*>/i.test(canonicalDraft);
   if (!hasInlineLink && !mayHaveAutolink) return { draft: canonicalDraft, skillTokens: [] };
 
   let draft = "";
