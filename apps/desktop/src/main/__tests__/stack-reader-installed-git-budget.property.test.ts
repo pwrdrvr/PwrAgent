@@ -540,6 +540,8 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-ttl-default-")));
     restoreGit = isolateProcessGitEnvironment();
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    const realRunGit = gitExecutable.runGitCommand;
+    const runSpy = vi.spyOn(gitExecutable, "runGitCommand");
     try {
       const tracked = path.join(sandbox, "tracked");
       await mkdir(tracked, { recursive: true });
@@ -553,12 +555,19 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       ];
 
       process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
-      const probedPaths = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
       const oracle = await new StackReader().read([rows[0]!], []);
+      const missing = new Set(rows.slice(1).map((item) => item.linkedDirectories[0]!.path));
+      // The budget depends on the missing-path answer. Keep the tracked
+      // checkout live and model the same Git error for the 17 absent paths.
+      runSpy.mockImplementation(async (cwd, args, options) => {
+        if (args[0] === "rev-parse" && missing.has(cwd)) throw missingCheckoutError(cwd);
+        return await realRunGit(cwd, args, options);
+      });
+      const probedPaths = () => runSpy.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
 
       let now = 0;
       const reader = new StackReader(() => now);
-      start.mockClear();
+      runSpy.mockClear();
       const cold = await reader.read(rows, []);
       expect(cold.stacks).toEqual(oracle.stacks);
       expect(probedPaths()).toHaveLength(totalDirs);
@@ -566,7 +575,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       // Expire all cached entries at once: one background pass must cap
       // synchronous TTL revalidations at the default budget (16).
       now += 31_000;
-      start.mockClear();
+      runSpy.mockClear();
       const firstRefresh = await reader.read(rows, []);
       expect(firstRefresh.stacks).toEqual(oracle.stacks);
       const firstPass = probedPaths();
@@ -575,13 +584,15 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       // Another long gap expires even the just-refreshed entries. The last
       // two must still get slots on the second pass.
       now += 31_000;
-      start.mockClear();
+      runSpy.mockClear();
       const secondRefresh = await reader.read(rows, []);
       expect(secondRefresh.stacks).toEqual(oracle.stacks);
       const secondPass = probedPaths();
       expect(secondPass).toHaveLength(16);
       expect(new Set([...firstPass, ...secondPass])).toEqual(new Set(rows.map((item) => item.linkedDirectories[0]!.path)));
+      expect(start.mock.calls.filter(([cwd]) => missing.has(cwd))).toHaveLength(0);
     } finally {
+      runSpy.mockRestore();
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }

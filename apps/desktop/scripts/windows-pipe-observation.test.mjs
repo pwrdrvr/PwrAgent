@@ -1,10 +1,8 @@
 import { EventEmitter } from "node:events";
-import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, inject, it, vi } from "vitest";
 import { ancestry, bindPipeNames, exactLauncherPipes, HANDLE_INVENTORY_OPTIONS, launcherParentMatches, normalizePipeName, parseHandleOutput, observeWindowsLauncher, packageManagerCommand } from "./windows-pipe-observation.mjs";
 import { localSymbolDirectories, nativeDebuggerStatus, nativeProbeFailure, nativeStackArguments, parseNativeStacks, verifiedNativeStack } from "./windows-native-stack.mjs";
 
@@ -302,11 +300,16 @@ describe("Windows natural pipe evidence", () => {
     expect(logEvidence).toHaveBeenCalledWith("windows-pipe-request-error", expect.objectContaining({ kind: "trigger" }));
   });
 
+  it("rejects an unavailable prepared helper before starting the native probe", async () => {
+    const { runWindowsPipeDiagnosticsProbe } = await import("./windows-pipe-diagnostics-probe.mjs");
+    await expect(runWindowsPipeDiagnosticsProbe(path.join(root(), "missing.exe"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it.skipIf(process.platform !== "win32" || process.arch !== "x64")("records native process creation and exit times on Windows", async () => {
-    const result = await promisify(execFile)(process.execPath, [path.join(import.meta.dirname, "windows-pipe-diagnostics-probe.mjs")], {
-      windowsHide: true, timeout: 35000,
-    });
-    const proof = JSON.parse(result.stdout);
+    const helper = inject("nativeHelperFixtures").windowsPipeProbe;
+    expect(helper).toBeTruthy();
+    const { runWindowsPipeDiagnosticsProbe } = await import("./windows-pipe-diagnostics-probe.mjs");
+    const proof = await runWindowsPipeDiagnosticsProbe(helper);
     expect(proof).toEqual(expect.objectContaining({
       creationIdentityVerified: true, nativeExitTimeVerified: true,
     }));

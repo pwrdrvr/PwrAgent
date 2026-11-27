@@ -246,7 +246,7 @@ async function prepareNativeStacks() {
   let probe;
   let probeFailed = false;
   let probeFailure;
-  try { probe = (await import("./windows-pipe-diagnostics-probe.mjs")).probeResult; }
+  try { probe = await (await import("./windows-pipe-diagnostics-probe.mjs")).runWindowsPipeDiagnosticsProbe(); }
   catch (error) { probeFailed = true; probeFailure = nativeProbeFailure(error); }
   nativeStackEnabled = !probeFailed && probe?.noninvasiveDebuggerVerified === true && probe?.debuggerQuitVerified === true;
   write("native-stack-setup.json", { enabled: nativeStackEnabled,
