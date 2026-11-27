@@ -1082,6 +1082,9 @@ export type McpGatewayConversationConsent = {
 
 export type ThreadListCacheState = {
   archived: boolean;
+  observationSequence?: number;
+  lookupOnly?: boolean;
+  retainedById?: Map<string, AppServerThreadSummary>;
   expiresAt?: number;
   promise?: Promise<AppServerThreadSummary[]>;
   providerRead?: {

@@ -13,6 +13,12 @@ export function projectOwnerJob(value: OwnerJobRecord): OwnerJobRecord {
   return Object.fromEntries(FIELDS.filter(field => value[field] !== undefined).map(field => [field, structuredClone(value[field])])) as OwnerJobRecord;
 }
 
+function decodeStoredJob(id: string, payload: string): OwnerJobRecord {
+  const record = projectOwnerJob(JSON.parse(payload));
+  if (record.id !== id) throw new Error("Invalid headless job record identity");
+  return record;
+}
+
 /** Acceptance and JSON retirement must survive loss of the process and OS. */
 export function withOwnerDataDurability<T>(db: StateDb, work: () => T): T {
   if (db.raw.inTransaction) return work();
@@ -27,19 +33,21 @@ export class SqliteOwnerJobStore implements OwnerJobStorage {
 
   get(id: string): OwnerJobRecord | undefined {
     const row = this.db.raw.prepare("SELECT payload FROM owner_jobs WHERE job_id = ?").get(id) as { payload: string } | undefined;
-    if (!row) return undefined;
-    const record = projectOwnerJob(JSON.parse(row.payload));
-    if (record.id !== id) throw new Error("Invalid headless job record identity");
-    return record;
+    return row && decodeStoredJob(id, row.payload);
   }
 
   list(): OwnerJobRecord[] {
     const rows = this.db.raw.prepare("SELECT job_id, payload FROM owner_jobs ORDER BY job_id").all() as { job_id: string; payload: string }[];
-    return rows.map(row => {
-      const record = projectOwnerJob(JSON.parse(row.payload));
-      if (record.id !== row.job_id) throw new Error("Invalid headless job record identity");
-      return record;
-    });
+    return rows.map(row => decodeStoredJob(row.job_id, row.payload));
+  }
+
+  latestForThread(threadId: string): OwnerJobRecord | undefined {
+    // list() visits job_id order and keeps the first job on a createdAt tie.
+    const row = this.db.raw.prepare(`SELECT job_id, payload FROM owner_jobs
+      WHERE json_extract(payload, '$.threadId') = ?
+      ORDER BY coalesce(json_extract(payload, '$.createdAt'), '') DESC, job_id LIMIT 1`).get(threadId) as
+      { job_id: string; payload: string } | undefined;
+    return row && decodeStoredJob(row.job_id, row.payload);
   }
 
   count(): number {
