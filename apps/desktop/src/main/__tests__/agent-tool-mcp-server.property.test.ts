@@ -1,11 +1,54 @@
 import { ResearchService } from "@pwragent/owner-core/research-service";
 import fc from "fast-check";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { MemoryResearchStorage } from "../../../../../packages/owner-core/src/__tests__/fixtures/research-memory-storage";
 import { AgentToolMcpServer } from "../agent-tools/agent-tool-mcp-server";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
+import { buildCurrentTurnInputSourceTool } from "../agent-tools/current-turn-input-source-tool";
 import { buildResearchToolDefinitions } from "../agent-tools/pwragent-research-agent-tools";
 import { createResearchAgentHandler } from "../research/research-runtime";
+
+it("dispatches a scoped Codex call only for the thread identified by its registration", async () => {
+  const parent = { backend: "codex", threadId: "parent", turnId: "active-turn" } as const;
+  const source = vi.fn(() => "desktop" as const);
+  const router = new AgentToolRouter([buildCurrentTurnInputSourceTool(source)]);
+  const server = new AgentToolMcpServer({
+    verifyCodexThreadId: true,
+    resolveCatalogs: () => [{ id: "app_management", router }],
+    resolveCallContext: () => parent,
+  });
+  try {
+    const { server: registration } = await server.registerClient(parent);
+    const headers = Object.fromEntries(registration.headers.map(({ name, value }) => [name, value]));
+    await fc.assert(fc.asyncProperty(
+      fc.oneof(fc.constant(parent.threadId), fc.constant(undefined), fc.uuid()),
+      async (threadId) => {
+        source.mockClear();
+        const response = await fetch(registration.url, {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+            name: "get_current_turn_input_source",
+            ...(threadId === undefined ? {} : { _meta: { threadId } }),
+          } }),
+        });
+        expect(response.status).toBe(200);
+        const data = (await response.text()).split("\n").find((line) => line.startsWith("data:"));
+        expect(data).toBeDefined();
+        const { result } = JSON.parse(data!.slice("data:".length));
+        if (threadId === parent.threadId) {
+          expect(result).toMatchObject({ structuredContent: { source: "desktop" } });
+          expect(source).toHaveBeenCalledOnce();
+        } else {
+          expect(result).toMatchObject({ isError: true, structuredContent: { code: "forbidden" } });
+          expect(source).not.toHaveBeenCalled();
+        }
+      },
+    ), { examples: [[parent.threadId], [undefined], ["child"]], numRuns: 10 });
+  } finally {
+    await server.close();
+  }
+});
 
 async function checkResearchCalls(
   backend: "claude" | "acp:grok", requestId: number | string, notes: [string, string], initializeAs: "none" | "object" | "batch",

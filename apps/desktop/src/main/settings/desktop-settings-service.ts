@@ -1329,6 +1329,10 @@ export class DesktopSettingsService {
           config.experimental?.codexToolDiscovery,
           true,
         ),
+        codexAgentToolsMcp: this.resolveConfigBoolean(
+          config.experimental?.codexAgentToolsMcp,
+          false,
+        ),
         researchEnabled: this.resolveConfigBoolean(
           config.experimental?.researchEnabled,
           false,
@@ -2488,6 +2492,10 @@ export class DesktopSettingsService {
 
   resolveCodexToolDiscovery(): boolean {
     return this.readExperimentalConfig().codexToolDiscovery ?? true;
+  }
+
+  resolveCodexAgentToolsMcp(): boolean {
+    return this.readExperimentalConfig().codexAgentToolsMcp === true;
   }
 
   /** Research is for every local backend. Codex Tool Discovery decides only whether Codex threads are offered its tools. */

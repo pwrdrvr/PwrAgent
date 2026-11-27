@@ -60,7 +60,6 @@ import type { AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
 import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import { createResearchAgentHandler } from "../research/research-runtime";
@@ -227,7 +226,7 @@ describe("DesktopBackendRegistry", () => {
           const turn = await registry.startTurn({ backend, threadId, input: [{ type: "text", text: "Coordinate research" }] }, "federation");
           // An ACP turn keeps its `pending:<session>:<time>` ID for its whole life.
           expect(turn.turnId).toMatch(/^pending:kimi-session-1:/);
-          const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
+          const server = registry["agentToolMcpServer"]!;
           const registration = await server.registerClient({ backend, threadId });
           await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
             requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
@@ -362,7 +361,7 @@ describe("DesktopBackendRegistry", () => {
         expect(registry.researchContextIsLive({ ...coordinator, turnId: parentTurn.turnId, callId: "start", transport: "mcp" })).toBe(true);
         atProviderPrompt.mockClear();
 
-        const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
+        const server = registry["agentToolMcpServer"]!;
         const registration = await server.registerClient(coordinator);
         await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
           requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },

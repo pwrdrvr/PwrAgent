@@ -239,6 +239,7 @@ export type DesktopSettingsConfig = {
     tokenMiserBoundedCommands?: boolean;
     tokenMiserBoundedHelper?: BoundedCommandHelperMode;
     codexToolDiscovery?: boolean;
+    codexAgentToolsMcp?: boolean;
     researchEnabled?: boolean;
     resourceCheckoutsEnabled?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
@@ -1199,6 +1200,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "codex_tool_discovery"],
       patch.experimental.codexToolDiscovery,
+    );
+  }
+  if (patch.experimental?.codexAgentToolsMcp !== undefined) {
+    set(
+      ["experimental", "codex_agent_tools_mcp"],
+      patch.experimental.codexAgentToolsMcp,
     );
   }
   if (patch.experimental?.researchEnabled !== undefined) {
@@ -2737,6 +2744,7 @@ function normalizeDesktopConfig(
       tokenMiserDefaultEnabled:
         readBoolean(experimental?.token_miser_default_enabled),
       codexToolDiscovery: readBoolean(experimental?.codex_tool_discovery),
+      codexAgentToolsMcp: readBoolean(experimental?.codex_agent_tools_mcp),
       researchEnabled: readBoolean(experimental?.research_enabled),
       resourceCheckoutsEnabled: readBoolean(
         experimental?.resource_checkouts_enabled,

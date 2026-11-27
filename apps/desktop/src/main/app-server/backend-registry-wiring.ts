@@ -202,7 +202,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   let acpAvailableCommandsStore: RegistryDependencies["acpAvailableCommandsStore"];
   let mcpGatewayTools: RegistryDependencies["mcpGatewayTools"];
   let pdfToolMcpServer: RegistryDependencies["pdfToolMcpServer"];
-  let claudeAgentToolMcpServer: RegistryDependencies["claudeAgentToolMcpServer"];
   let messagingStore: RegistryDependencies["messagingStore"];
   let messagingArchiveCleaner: RegistryDependencies["messagingArchiveCleaner"];
   let appManagementHandler: RegistryDependencies["appManagementHandler"];
@@ -353,6 +352,16 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         error: error instanceof Error ? error.message : String(error),
       });
       return true;
+    }
+  });
+  const resolveCodexAgentToolsMcpFn = options?.resolveCodexAgentToolsMcp ?? (() => {
+    try {
+      return settingsService?.resolveCodexAgentToolsMcp() ?? false;
+    } catch (error) {
+      backendRegistryLog.warn("failed to resolve Codex agent tools MCP setting", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
     }
   });
   const resolveDefaultPrAutoDispatchEnabledFn =
@@ -982,6 +991,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       ? undefined
       : options?.agentToolMcpServer ??
         new AgentToolMcpServer({
+          verifyCodexThreadId: true,
           resolveCallContext: (context) =>
             ports.resolveAgentToolMcpCallContext(context, "invoke"),
           resolveCatalogs: async (context) => context.managedReview
@@ -1013,14 +1023,14 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               forgePrToolHandler: ports.gatedForgePrToolHandler,
               forgeToolPolicy: ports.resolveForgeToolPolicy(),
               threadOrchestrationHandler: ports.threadOrchestrationHandler,
-              tokenMiserStore: context.backend === "codex" ? ports.tokenMiserStore : undefined,
+              tokenMiserStore: context.backend === "codex" && context.tokenMiserEnabled ? ports.tokenMiserStore : undefined,
               tokenMiserFocused: ports.tokenMiserService?.focused,
               boundedCommandCapture: ["acp:antigravity", "claude", "codex"].includes(context.backend) && ports.resolveTokenMiserBoundedCommands()
                 ? ports.boundedCommandCapture : undefined,
               starMapHandler: ports.starMapHandler,
               threadTodoHandler: ports.threadTodoHandler,
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
-              researchHandler: ports.mcpResearchHandler,
+              researchHandler: context.backend === "codex" ? ports.advertisedResearchHandler : ports.mcpResearchHandler,
               researchDecisionsReady: await ports.isResearchDecisionsReady(),
               checkoutHandler: ports.checkoutHandler,
               checkoutMode: ports.resourceCheckoutToolMode(context),
@@ -1063,7 +1073,6 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               ],
             })
           : undefined);
-  claudeAgentToolMcpServer = agentToolMcpServer;
   const claudeBackend = new ClaudeBackend({
     inspectInstallation: options?.useMachineClaudeDiscovery
       ? inspectClaudeInstallation
@@ -1758,6 +1767,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     pendingEnvironmentLaunchStore,
     resolveCodexDefaultModeRequestUserInputFn,
     resolveCodexToolDiscoveryFn,
+    resolveCodexAgentToolsMcpFn,
     resolveDefaultPrAutoDispatchEnabledFn,
     resolveProviderModelDefaultsFn,
     resolveHelperModelSettingsFn,
@@ -1814,7 +1824,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     worktreeArchiveService,
     worktreeRecoveryService,
     pdfToolMcpServer,
-    claudeAgentToolMcpServer,
+    agentToolMcpServer,
     claudeBackend,
     acpBackend,
     providerRuntimeFingerprints,

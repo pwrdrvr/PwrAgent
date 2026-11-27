@@ -62,7 +62,6 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-w
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
-import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
 
 describe("DesktopBackendRegistry", () => {
   it.each([
@@ -192,7 +191,7 @@ describe("DesktopBackendRegistry", () => {
             preferredModel: "fixture", preferredReasoningEffort: "low",
           });
       }
-      const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
+      const server = registry["agentToolMcpServer"]!;
       const registration = await server.registerClient({ backend, threadId });
       await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
         requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },

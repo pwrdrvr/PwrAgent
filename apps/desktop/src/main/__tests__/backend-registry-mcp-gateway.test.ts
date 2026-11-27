@@ -11,7 +11,6 @@ import {
   MCP_PROJECT_TOOL_APPROVAL_CHOICE_META_KEY,
   MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY,
 } from "@pwragent/shared/contracts/mcp-connections";
-import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
 import type { BoatApiRequest } from "../mcp-connections/boat-api";
 import { BoatTools } from "../mcp-connections/boat-tools";
 import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
@@ -54,7 +53,6 @@ describe("backend MCP gateway dispatch", () => {
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
   const brokers: McpConnectionGatewayService[] = [];
   let internals: {
-    claudeAgentToolMcpServer: AgentToolMcpServerLike;
     acpBackend: AcpBackendAdapter;
     handleServerRequest(backend: "codex", request: AppServerPendingRequestNotification): Promise<{ success: boolean; contentItems: unknown[] }>;
     pendingServerRequests: Map<string, unknown>;
@@ -300,7 +298,8 @@ describe("backend MCP gateway dispatch", () => {
     const read = vi.fn(async () => ({ status: "completed" }));
     registry.setForgeReadHandlers(read, read);
     await createMonitor();
-    const registration = await internals.claudeAgentToolMcpServer.registerClient({ backend: "codex", threadId: "headless-1" });
+    const threadId = "headless-1";
+    const registration = await registry["agentToolMcpServer"]!.registerClient({ backend: "codex", threadId });
     const client = new Client({ name: "monitor-forge-fixture", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
       requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
@@ -309,12 +308,12 @@ describe("backend MCP gateway dispatch", () => {
       const tools = (await client.listTools()).tools;
       expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["get_ci_run", "get_pull_request", "download_ci_artifact"]));
       expect(tools.map((tool) => tool.name)).not.toContain("rerun_failed_ci_jobs");
-      expect((await client.callTool({ name: "get_ci_run", arguments: { runId: 42 } })).isError).not.toBe(true);
+      expect((await client.callTool({ name: "get_ci_run", arguments: { runId: 42 }, _meta: { threadId } })).isError).not.toBe(true);
       expect(read).toHaveBeenCalledWith("get_ci_run", { runId: 42 }, expect.objectContaining({ threadId: "thread-1" }));
-      expect((await client.callTool({ name: "rerun_failed_ci_jobs", arguments: { runId: 42 } })).isError).toBe(true);
+      expect((await client.callTool({ name: "rerun_failed_ci_jobs", arguments: { runId: 42 }, _meta: { threadId } })).isError).toBe(true);
       policy.access.read = "off";
       expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain("get_ci_run");
-      expect((await client.callTool({ name: "get_ci_run", arguments: { runId: 42 } })).isError).toBe(true);
+      expect((await client.callTool({ name: "get_ci_run", arguments: { runId: 42 }, _meta: { threadId } })).isError).toBe(true);
     } finally {
       await client.close();
     }
@@ -1502,7 +1501,7 @@ select_for_new_threads = true
       await registry.publishLocalEvent({ backend, notification: { method: "turn/started", params: {
         threadId, turnId, turn: { id: turnId, status: "in_progress" },
       } } });
-      const registration = await internals.claudeAgentToolMcpServer.registerClient({ backend, threadId });
+      const registration = await registry["agentToolMcpServer"]!.registerClient({ backend, threadId });
       await client.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
         requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
       }));
@@ -1566,7 +1565,7 @@ select_for_new_threads = true
       await registry.publishLocalEvent({ backend, notification: { method: "turn/started", params: {
         threadId, turnId, turn: { id: turnId, status: "in_progress" },
       } } });
-      const { server } = await internals.claudeAgentToolMcpServer.registerClient({ backend, threadId });
+      const { server } = await registry["agentToolMcpServer"]!.registerClient({ backend, threadId });
       await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
         requestInit: { headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) },
       }));

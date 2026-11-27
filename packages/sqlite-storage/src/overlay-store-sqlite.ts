@@ -7900,6 +7900,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     executionMode: ThreadExecutionMode;
     updatedAt?: number;
     codexSkillProfile?: ThreadOverlayState["codexSkillProfile"];
+    codexAgentToolsMcp?: true;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const stored = this.getThread(threadKey);
@@ -7913,6 +7914,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       executionMode: params.executionMode,
       executionModeUpdatedAt: params.updatedAt ?? Date.now(),
       ...(params.codexSkillProfile ? { codexSkillProfile: params.codexSkillProfile } : {}),
+      ...(params.codexAgentToolsMcp ? { codexAgentToolsMcp: true } : {}),
     };
     // Every turn start re-asserts the mode. Only an ACP thread reads the
     // timestamp (to rank the overlay against a provider snapshot), so an
@@ -7921,6 +7923,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       stored
       && stored.executionMode === nextState.executionMode
       && stored.codexSkillProfile === nextState.codexSkillProfile
+      && stored.codexAgentToolsMcp === nextState.codexAgentToolsMcp
       && (
         !isAcpBackendId(params.backend)
         || stored.executionModeUpdatedAt === nextState.executionModeUpdatedAt

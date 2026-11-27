@@ -103,6 +103,7 @@ export function ExperimentalSettings(props: {
   onTokenMiserPollingReviewsEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexToolDiscoveryChange: (enabled: boolean) => Promise<void>;
+  onCodexAgentToolsMcpChange: (enabled: boolean) => Promise<void>;
   onResearchEnabledChange: (enabled: boolean) => Promise<void>;
   onResourceCheckoutsEnabledChange: (enabled: boolean) => Promise<void>;
   onWriteConfig: (patch: DesktopSettingsConfigPatch, onError?: (message: string) => void) => Promise<boolean>;
@@ -117,6 +118,8 @@ export function ExperimentalSettings(props: {
   >();
   const codexToolDiscovery = props.snapshot.experimental.codexToolDiscovery
     ?? { value: true, source: "default" as const };
+  const codexAgentToolsMcp = props.snapshot.experimental.codexAgentToolsMcp
+    ?? { value: false, source: "default" as const };
   const researchEnabled = props.snapshot.experimental.researchEnabled
     ?? { value: false, source: "default" as const };
   const resourceCheckoutsEnabled = props.snapshot.experimental.resourceCheckoutsEnabled
@@ -210,6 +213,25 @@ export function ExperimentalSettings(props: {
             help="Applies to new threads and the next turn when the Codex runtime supports refreshing tools. Start a new thread on older runtimes. Other providers are unchanged."
             source={sourceBadge(codexToolDiscovery)}
             onChange={props.onCodexToolDiscoveryChange}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="PwrAgent Tools via MCP"
+        description="Expose PwrAgent tools through the pwragent_apps server in new Codex threads."
+        chip={codexAgentToolsMcp.value ? "On" : "Off"}
+        chipKind={codexAgentToolsMcp.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={codexAgentToolsMcp.value}
+            disabled={props.saving}
+            label="Use MCP for PwrAgent tools"
+            help="Applies to new Codex threads. Each thread keeps the tool transport it started with."
+            source={sourceBadge(codexAgentToolsMcp)}
+            onChange={props.onCodexAgentToolsMcpChange}
           />
         </div>
       </SettingsSection>

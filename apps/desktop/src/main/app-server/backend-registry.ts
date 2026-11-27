@@ -901,6 +901,7 @@ import {
 import {
   TOKEN_MISER_MANAGED_CAPABILITY_REASON,
   buildClaudeConnectionMcpServerName,
+  buildCodexAgentToolsMcpConfig,
   buildCodexConnectionMcpConfig,
   buildCodexParentDynamicToolSpecs,
   buildCodexPdfMcpConfig,
@@ -1150,7 +1151,7 @@ export class DesktopBackendRegistry {
   private readonly acpSessionRuntimeOptions: AcpSessionRuntimeOptions;
   private readonly threadModelSettings: ThreadModelSettings;
   private readonly claudeBackend: ClaudeBackend;
-  private readonly claudeAgentToolMcpServer?: AgentToolMcpServerLike;
+  private readonly agentToolMcpServer?: AgentToolMcpServerLike;
   private closed = false;
   private shutdownRequested = false;
   private closeOperation?: Promise<void>;
@@ -1912,6 +1913,7 @@ export class DesktopBackendRegistry {
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
   private readonly resolveCodexToolDiscoveryFn: () => boolean;
+  private readonly resolveCodexAgentToolsMcpFn: () => boolean;
   private readonly resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   private readonly resolveProviderModelDefaultsFn: () => Record<
     string,
@@ -2068,6 +2070,7 @@ export class DesktopBackendRegistry {
     this.pendingEnvironmentLaunchStore = dependencies.pendingEnvironmentLaunchStore;
     this.resolveCodexDefaultModeRequestUserInputFn = dependencies.resolveCodexDefaultModeRequestUserInputFn;
     this.resolveCodexToolDiscoveryFn = dependencies.resolveCodexToolDiscoveryFn;
+    this.resolveCodexAgentToolsMcpFn = dependencies.resolveCodexAgentToolsMcpFn;
     this.resolveDefaultPrAutoDispatchEnabledFn = dependencies.resolveDefaultPrAutoDispatchEnabledFn;
     this.resolveProviderModelDefaultsFn = dependencies.resolveProviderModelDefaultsFn;
     this.resolveHelperModelSettingsFn = dependencies.resolveHelperModelSettingsFn;
@@ -2114,7 +2117,7 @@ export class DesktopBackendRegistry {
     this.worktreeArchiveService = dependencies.worktreeArchiveService;
     this.worktreeRecoveryService = dependencies.worktreeRecoveryService;
     this.pdfToolMcpServer = dependencies.pdfToolMcpServer;
-    this.claudeAgentToolMcpServer = dependencies.claudeAgentToolMcpServer;
+    this.agentToolMcpServer = dependencies.agentToolMcpServer;
     this.claudeBackend = dependencies.claudeBackend;
     this.acpBackend = dependencies.acpBackend;
     this.acpSessionRuntimeOptions = dependencies.acpSessionRuntimeOptions;
@@ -2261,6 +2264,7 @@ export class DesktopBackendRegistry {
       beginStartingTurnOrigin: (...args: Parameters<typeof this.beginStartingTurnOrigin>) => this.beginStartingTurnOrigin(...args),
       bindStartingTurnOrigin: (...args: Parameters<typeof this.bindStartingTurnOrigin>) => this.bindStartingTurnOrigin(...args),
       buildForkedCodexEnvironmentRuntime: (...args: Parameters<ThreadDirectoryService["buildForkedCodexEnvironmentRuntime"]>) => this.threadDirectoryService.buildForkedCodexEnvironmentRuntime(...args),
+      buildCodexAgentToolsMcpConfigForThread: (...args: Parameters<typeof this.buildCodexAgentToolsMcpConfigForThread>) => this.buildCodexAgentToolsMcpConfigForThread(...args),
       buildSupportedCodexDynamicToolsRefresh: (...args: Parameters<typeof this.buildSupportedCodexDynamicToolsRefresh>) => this.buildSupportedCodexDynamicToolsRefresh(...args),
       buildSupportedCodexTokenMiserConfig: (...args: Parameters<typeof this.buildSupportedCodexTokenMiserConfig>) => this.buildSupportedCodexTokenMiserConfig(...args),
       buildSupportedPwrdrvrTokenMiserActivation: (...args: Parameters<typeof this.buildSupportedPwrdrvrTokenMiserActivation>) => this.buildSupportedPwrdrvrTokenMiserActivation(...args),
@@ -2505,6 +2509,7 @@ export class DesktopBackendRegistry {
       get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
       get checkoutHandler() { return current().checkoutHandler; },
       resourceCheckoutToolMode: (thread: { backend: AppServerBackendKind; threadId?: string }) => this.resourceCheckoutToolMode(thread),
+      get advertisedResearchHandler() { return current().advertisedResearchHandler; },
       get mcpResearchHandler() { return current().mcpResearchHandler; },
       isResearchDecisionsReady: () => current().isResearchDecisionsReady(),
       get threadTurnQueue() { return current().threadTurnQueue; },
@@ -4985,10 +4990,12 @@ export class DesktopBackendRegistry {
     overlay: ThreadOverlayState | undefined,
     forVoice = false,
   ) {
+    if (overlay?.codexAgentToolsMcp && client.replaceThreadDeveloperInstructions) return undefined;
     const tools = await this.buildSupportedCodexDynamicToolsRefresh({
       client,
       threadId,
       tokenMiserEnabled: this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+      codexAgentToolsMcp: overlay?.codexAgentToolsMcp,
     });
     if (tools === undefined || !client.refreshThreadTools) {
       throw new Error(forVoice
@@ -5023,10 +5030,16 @@ export class DesktopBackendRegistry {
             await client.replaceThreadDeveloperInstructions({
               threadId: params.threadId,
               dynamicTools,
+              ...(overlay?.codexAgentToolsMcp ? {
+                config: await this.buildCodexAgentToolsMcpConfigForThread(
+                  params.threadId,
+                  this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+                ),
+              } : {}),
               developerInstructions: instructions,
               updateMessage: buildCodexAgentInstructionUpdate(instructions),
             });
-          } else {
+          } else if (dynamicTools !== undefined) {
             await client.refreshThreadTools!({ threadId: params.threadId, dynamicTools });
           }
         });
@@ -9523,6 +9536,7 @@ export class DesktopBackendRegistry {
       pendingStart: _pendingStart,
       ...request
     } = params;
+    const useAgentToolsMcp = backend === "codex" && this.resolveCodexAgentToolsMcpFn();
     const skillProfile = backend === "codex" && codexSkillProfileId
       ? getDesktopSettingsService().readModelsConfig().codex?.skillProfiles?.find(({ id }) => id === codexSkillProfileId)
       : undefined;
@@ -9651,7 +9665,7 @@ export class DesktopBackendRegistry {
     const tokenMiserEnabled = backend === "codex"
       && this.resolveTokenMiserEnabledForOverride(tokenMiserOverride);
     const runtimePreparation = resources.track(tokenMiserEnabled ? this.prepareTokenMiserRuntime() : Promise.resolve());
-    const agentToolCatalogs = resolveAgentToolCatalogs({
+    const agentToolCatalogs = useAgentToolsMcp ? [] : resolveAgentToolCatalogs({
       appManagementHandler: this.appManagementHandler,
       currentTurnInputSource: this.currentTurnInputSource,
       automationInspectionHandler: this.automationInspectionHandler,
@@ -9686,6 +9700,12 @@ export class DesktopBackendRegistry {
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
         ? this.registerPdfMcpClient({})
         : Promise.resolve(undefined));
+    const agentToolsMcpPreparation = resources.registerConnections(useAgentToolsMcp
+      ? this.registerCodexAgentToolsMcp({ tokenMiserEnabled }).then((registration) => [{
+          ...registration,
+          revoke: () => registration.revokeUnbound?.(),
+        }])
+      : Promise.resolve([]));
     const deferAcpConnections = backend === "acp:antigravity";
     const connectionPreparation = resources.registerConnections(backend === "codex" || (isAcpBackendId(backend) && !deferAcpConnections)
       ? this.threadMcpConnections.registerMcpConnections(mcpConnectionIds, undefined, backend)
@@ -9695,7 +9715,7 @@ export class DesktopBackendRegistry {
       ? this.threadMcpConnections.readConfiguredCodexMcpServerNames(cwd)
       : Promise.resolve(undefined));
     const resolvedDynamicTools =
-      backend === "codex"
+      backend === "codex" && !useAgentToolsMcp
         ? withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(agentToolCatalogs), this.resolveCodexToolDiscoveryFn())
         : undefined;
     // Custom MCP servers can report READY without Codex exposing their tools
@@ -9703,8 +9723,8 @@ export class DesktopBackendRegistry {
     const dynamicTools = resolvedDynamicTools?.length
       ? resolvedDynamicTools
       : undefined;
-    const [pdfMcpRegistration, preparedMcpRegistrations, inheritedCodexMcpServerNames] = await joinConcurrent([
-      pdfMcpPreparation, connectionPreparation, inventoryPreparation, runtimePreparation,
+    const [pdfMcpRegistration, preparedMcpRegistrations, inheritedCodexMcpServerNames, [agentToolsMcpRegistration]] = await joinConcurrent([
+      pdfMcpPreparation, connectionPreparation, inventoryPreparation, agentToolsMcpPreparation, runtimePreparation,
     ]);
     const pdfMcpConfig = pdfMcpRegistration
       ? buildCodexPdfMcpConfig(pdfMcpRegistration)
@@ -9732,6 +9752,7 @@ export class DesktopBackendRegistry {
     const codexThreadConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
       connectionMcpConfig,
+      agentToolsMcpRegistration ? buildCodexAgentToolsMcpConfig(agentToolsMcpRegistration) : undefined,
       tokenMiserConfig,
     );
     const toAcpMcpRegistration = (registrations: typeof preparedMcpRegistrations): AcpMcpServerRegistration | undefined =>
@@ -9903,6 +9924,7 @@ export class DesktopBackendRegistry {
           await this.overlayStore.setThreadExecutionMode({
             ...identity, executionMode: effectiveExecutionMode,
             ...(codexSkillProfile ? { codexSkillProfile } : {}),
+            ...(useAgentToolsMcp ? { codexAgentToolsMcp: true } : {}),
           });
           metadata.codexSkillProfile = codexSkillProfile;
         } catch (error) {
@@ -10159,6 +10181,7 @@ export class DesktopBackendRegistry {
         : buildLocalLinkedDirectory(cwd);
     let result: { threadId: string };
     let pdfMcpRegistration: AgentToolMcpRegistration | undefined;
+    let agentToolsMcpRegistration: AgentToolMcpRegistration | undefined;
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
     if (backend === "claude") {
@@ -10204,11 +10227,6 @@ export class DesktopBackendRegistry {
           client,
           enabled: tokenMiserEnabled,
         });
-        const codexThreadConfig = mergeCodexThreadConfigs(
-          pdfMcpConfig,
-          tokenMiserConfig,
-        );
-
         try {
           const sourceRuntime = directoryKind === "workspace"
             ? undefined
@@ -10243,6 +10261,14 @@ export class DesktopBackendRegistry {
             worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
           };
         }
+        if (sourceOverlay?.codexAgentToolsMcp) {
+          agentToolsMcpRegistration = await this.registerCodexAgentToolsMcp({ tokenMiserEnabled });
+        }
+        const codexThreadConfig = mergeCodexThreadConfigs(
+          pdfMcpConfig,
+          agentToolsMcpRegistration ? buildCodexAgentToolsMcpConfig(agentToolsMcpRegistration) : undefined,
+          tokenMiserConfig,
+        );
         result = await this.withArchiveWorkspaceWrite([cwd ?? "", ...linkedDirectories.map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], async () => await this.forkCodexThreadWithPendingStart(client, {
           threadId: request.sourceThreadId,
           ...(request.sourceThreadPath?.trim()
@@ -10258,7 +10284,9 @@ export class DesktopBackendRegistry {
           ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
         }, pending, codexEnvironmentStartupFailure));
         pdfMcpRegistration?.bindThread(result.threadId);
+        agentToolsMcpRegistration?.bindThread(result.threadId);
       } catch (error) {
+        agentToolsMcpRegistration?.revokeUnbound?.();
         await preparedWorkspace.rollback?.();
         request.onPreparedWorkspaceRollback?.(undefined);
         throw error;
@@ -10317,6 +10345,7 @@ export class DesktopBackendRegistry {
         ...(backend === "codex" && sourceOverlay?.codexSkillProfile
           ? { codexSkillProfile: sourceOverlay.codexSkillProfile }
           : {}),
+        ...(agentToolsMcpRegistration ? { codexAgentToolsMcp: true } : {}),
       });
       if (backend === "codex" && sourceOverlay?.tokenMiserEnabled !== undefined) {
         await this.overlayStore.setThreadTokenMiser({
@@ -12432,6 +12461,23 @@ export class DesktopBackendRegistry {
       : "render_initial_pages";
   }
 
+  private async registerCodexAgentToolsMcp(params: {
+    threadId?: string;
+    tokenMiserEnabled: boolean;
+  }): Promise<AgentToolMcpRegistration> {
+    if (!this.agentToolMcpServer) {
+      throw new Error("PwrAgent tools via MCP are unavailable on this instance.");
+    }
+    return await this.agentToolMcpServer.registerClient({ backend: "codex", ...params });
+  }
+
+  private async buildCodexAgentToolsMcpConfigForThread(
+    threadId: string,
+    tokenMiserEnabled: boolean,
+  ) {
+    return buildCodexAgentToolsMcpConfig(await this.registerCodexAgentToolsMcp({ threadId, tokenMiserEnabled }));
+  }
+
   private async registerPdfMcpClient(params: {
     threadId?: string;
   }): Promise<AgentToolMcpRegistration | undefined> {
@@ -12636,7 +12682,7 @@ export class DesktopBackendRegistry {
           for (const registration of registrations) registration.bindThread(params.threadId);
           // As for ACP, PwrAgent's own tools are optional: a server that cannot
           // start must not block the operator's turn.
-          const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId })
+          const owned = await this.agentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId })
             .catch((error: unknown) => {
               backendRegistryLog.warn("agent_tool_mcp_start_failed", {
                 backend: "claude",
@@ -12886,6 +12932,9 @@ export class DesktopBackendRegistry {
         const pdfPreparation = hasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
           ? this.registerPdfMcpClient({ threadId: params.threadId })
           : Promise.resolve(undefined);
+        const agentToolsMcpPreparation = overlay?.codexAgentToolsMcp
+          ? this.buildCodexAgentToolsMcpConfigForThread(params.threadId, tokenMiserEnabledForThread)
+          : Promise.resolve(undefined);
         // Re-read per turn so a mid-thread change to the selection or the
         // provider policy lands on the operator's next message.
         const isolateFromInherited =
@@ -12927,8 +12976,8 @@ export class DesktopBackendRegistry {
             : params.reasoningEffort ?? overlay?.reasoningEffort,
           fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
         });
-        const [, connectionConfig, preparedInput, settings, resolvedCwd, pdfRegistration] = await joinConcurrent([
-          runtimePreparation, connectionPreparation, inputPreparation, settingsPreparation, cwdPreparation, pdfPreparation,
+        const [, connectionConfig, preparedInput, settings, resolvedCwd, pdfRegistration, agentToolsMcpConfig] = await joinConcurrent([
+          runtimePreparation, connectionPreparation, inputPreparation, settingsPreparation, cwdPreparation, pdfPreparation, agentToolsMcpPreparation,
         ]);
         cwd = resolvedCwd;
         turnParams = settings;
@@ -12937,6 +12986,7 @@ export class DesktopBackendRegistry {
         codexThreadConfig = mergeCodexThreadConfigs(
           hasPdfMcpToolCatalog ? (pdfRegistration ? buildCodexPdfMcpConfig(pdfRegistration) : buildCodexPdfMcpDisabledConfig()) : undefined,
           connectionConfig,
+          agentToolsMcpConfig,
         );
       },
       announce: (pendingTurnId) => {
@@ -13026,6 +13076,7 @@ export class DesktopBackendRegistry {
               threadId: params.threadId,
               tokenMiserEnabled: tokenMiserEnabledForThread,
               turnId: syntheticStartedTurnId,
+              codexAgentToolsMcp: overlay?.codexAgentToolsMcp,
             });
           const pwrdrvrTokenMiser =
             await this.buildSupportedPwrdrvrTokenMiserActivation({
@@ -13063,6 +13114,7 @@ export class DesktopBackendRegistry {
             defaultModeRequestUserInput:
               this.resolveCodexDefaultModeRequestUserInputFn(),
             ...(dynamicTools !== undefined ? { dynamicTools } : {}),
+            ...(overlay?.codexAgentToolsMcp ? { requireThreadResume: true } : {}),
             ...(pwrdrvrTokenMiser !== undefined
               ? { pwrdrvrTokenMiser }
               : {}),
@@ -18135,7 +18187,9 @@ export class DesktopBackendRegistry {
     threadId: string;
     tokenMiserEnabled: boolean;
     turnId?: string;
+    codexAgentToolsMcp?: true;
   }): Promise<CodexDynamicToolSpec[] | undefined> {
+    if (params.codexAgentToolsMcp) return undefined;
     if (!(await this.supportsTokenMiserDynamicToolsResume(params.client))) {
       return undefined;
     }
@@ -19990,7 +20044,7 @@ export class DesktopBackendRegistry {
             };
             // Stock Codex keeps the creation-time catalog. The dispatch gate
             // still enforces the thread setting when its registered tool is called.
-            const initialTools = await this.buildCodexParentDynamicTools(
+            const initialTools = overlay?.codexAgentToolsMcp ? [] : await this.buildCodexParentDynamicTools(
               this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
               { tokenMiserOverride: overlay?.tokenMiserEnabled, jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled !== false
                 || !(await this.supportsTokenMiserDynamicToolsResume(client)) },
@@ -19998,7 +20052,18 @@ export class DesktopBackendRegistry {
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
             if (!fresh) {
               const manager = this.overlayStore.getVoiceManagerThread?.();
-              if (manager?.backend === "codex" && manager.threadId === threadId
+              if (overlay?.codexAgentToolsMcp) {
+                if (!client.resumeNativeVoiceThread) {
+                  throw new Error("This Codex runtime cannot resume live voice with PwrAgent tools via MCP.");
+                }
+                await client.resumeNativeVoiceThread({
+                  ...admission,
+                  config: await this.buildCodexAgentToolsMcpConfigForThread(
+                    threadId,
+                    this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+                  ),
+                });
+              } else if (manager?.backend === "codex" && manager.threadId === threadId
                 && !overlay?.codexEnvironmentRuntime
                 && client.resumeNativeVoiceThread
                 && !(await this.supportsTokenMiserDynamicToolsResume(client))) {
@@ -20008,7 +20073,7 @@ export class DesktopBackendRegistry {
                 await client.resumeNativeVoiceThread(admission);
               } else {
                 const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay, true);
-                await client.refreshThreadTools!({ ...admission, dynamicTools });
+                if (dynamicTools !== undefined) await client.refreshThreadTools!({ ...admission, dynamicTools });
               }
             }
           }

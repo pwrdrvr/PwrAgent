@@ -924,10 +924,12 @@ export function createOverlayStoreMock(params?: {
       backend,
       threadId,
       executionMode,
+      codexAgentToolsMcp,
     }: {
       backend: ThreadOverlayState["backend"];
       threadId: string;
       executionMode: "default" | "auto" | "full-access";
+      codexAgentToolsMcp?: true;
     }) => {
       const key = `${backend}:${threadId}`;
       const next = {
@@ -935,6 +937,7 @@ export function createOverlayStoreMock(params?: {
         backend,
         threadId,
         executionMode,
+        ...(codexAgentToolsMcp ? { codexAgentToolsMcp } : {}),
         extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
       } as ThreadOverlayState;
       overlays.set(key, next);

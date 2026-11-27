@@ -120,6 +120,7 @@ export type AgentToolMcpClientContext = {
   stdioFallback?: boolean;
   managedReview?: boolean;
   observeJobMonitorCatalog?: boolean;
+  tokenMiserEnabled?: boolean;
 };
 
 export type ResolvedAgentToolMcpCallContext = {
@@ -141,6 +142,7 @@ export type AgentToolHttpMcpServerConfig = {
 export type AgentToolMcpRegistration = {
   server: AgentToolHttpMcpServerConfig;
   bindThread: (threadId: string) => void;
+  revokeUnbound?: () => void;
   readListedJobMonitorCreation?: () => boolean | undefined;
   /** The live tool description. Use catalog scope for a deferred invocation's target. */
   readTool?: (name: string, scope?: "listed" | "catalog") => Promise<AgentMcpTool | undefined>;
@@ -179,6 +181,7 @@ export type AgentToolMcpAuthorization = {
 };
 
 export type AgentToolMcpServerOptions = {
+  verifyCodexThreadId?: boolean;
   resolveCatalogs: (
     context: AgentToolMcpClientContext,
   ) => AgentToolMcpCatalog[] | Promise<AgentToolMcpCatalog[]>;
@@ -263,6 +266,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         }
         return await this.resolveMcpTool(current, name);
       },
+      revokeUnbound: () => {
+        if (this.contextsByToken.get(token)?.threadId) return;
+        this.contextsByToken.delete(token);
+        this.jobMonitorListings.delete(token);
+      },
       bindThread: (threadId) => {
         const normalizedThreadId = threadId.trim();
         const current = this.contextsByToken.get(token);
@@ -319,20 +327,22 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
 
   private tokenForContext(context: AgentToolMcpClientContext): string {
     const normalizedThreadId = context.threadId?.trim();
-    if (normalizedThreadId) {
-      const key = boundThreadKey(context, normalizedThreadId);
-      const existing = this.tokensByBoundThread.get(key);
-      if (existing) {
-        return existing;
-      }
-    }
-    const token = randomBytes(32).toString("base64url");
     const normalizedContext = {
       backend: context.backend,
       ...(context.stdioFallback ? { stdioFallback: true } : {}),
       ...(context.managedReview ? { managedReview: true } : {}),
+      ...(context.tokenMiserEnabled ? { tokenMiserEnabled: true } : {}),
       ...(normalizedThreadId ? { threadId: normalizedThreadId } : {}),
     };
+    if (normalizedThreadId) {
+      const key = boundThreadKey(context, normalizedThreadId);
+      const existing = this.tokensByBoundThread.get(key);
+      if (existing) {
+        this.contextsByToken.set(existing, normalizedContext);
+        return existing;
+      }
+    }
+    const token = randomBytes(32).toString("base64url");
     this.contextsByToken.set(token, normalizedContext);
     if (normalizedThreadId) {
       this.tokensByBoundThread.set(
@@ -634,6 +644,12 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       return forbiddenMcpResponse(
         "PwrAgent MCP tools are callable only after the client is bound to a thread.",
       );
+    }
+    // Codex native subagents can inherit the parent's connection config.
+    if (this.options.verifyCodexThreadId
+      && clientContext.backend === "codex"
+      && request.params._meta?.threadId !== clientContext.threadId) {
+      return forbiddenMcpResponse("The Codex tool call must identify the registered thread.");
     }
     const callContext = await this.options.resolveCallContext(clientContext);
     if (!callContext) {

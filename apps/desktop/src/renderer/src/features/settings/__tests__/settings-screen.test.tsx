@@ -5018,6 +5018,20 @@ describe("SettingsScreen", () => {
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { codexToolDiscovery: false } }));
   });
 
+  it("offers the default-off Codex MCP tool transport and writes its own setting", async () => {
+    const settings = createSettingsState(createSnapshot());
+    render(<SettingsScreen
+      desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={settings} onClose={() => undefined}
+    />);
+    const toggle = screen.getByRole("switch", { name: "Use MCP for PwrAgent tools" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      experimental: { codexAgentToolsMcp: true },
+    }));
+  });
+
   it("offers default-off focused summaries inside Token Miser and saves the independent toggle", async () => {
     const snapshot = createSnapshot();
     snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };

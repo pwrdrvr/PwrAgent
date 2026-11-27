@@ -184,14 +184,30 @@ export function buildCodexTokenMiserDynamicToolSpecs(
 }
 
 export const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
+export const PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME = "pwragent_apps";
 
 export function buildCodexPdfMcpConfig(
   registration: AgentToolMcpRegistration,
 ): CodexThreadStartParams["config"] {
+  return buildCodexOwnedMcpConfig(PWRAGENT_PDF_MCP_SERVER_NAME, registration, false);
+}
+
+export function buildCodexAgentToolsMcpConfig(
+  registration: AgentToolMcpRegistration,
+): CodexThreadStartParams["config"] {
+  return buildCodexOwnedMcpConfig(PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME, registration, true);
+}
+
+function buildCodexOwnedMcpConfig(
+  serverName: string,
+  registration: AgentToolMcpRegistration,
+  required: boolean,
+): CodexThreadStartParams["config"] {
   return {
     mcp_servers: {
-      [PWRAGENT_PDF_MCP_SERVER_NAME]: {
+      [serverName]: {
         enabled: true,
+        ...(required ? { required: true } : {}),
         http_headers: Object.fromEntries(
           registration.server.headers.map(({ name, value }) => [name, value]),
         ),
