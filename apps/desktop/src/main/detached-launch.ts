@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import { promisify } from "node:util";
-import { windowsJobLauncherPath } from "./windows-job-launcher-path";
+import { windowsJobLauncherPath } from "./windows-job-launcher-path.ts";
 
 const runLauncher = promisify(execFile);
 

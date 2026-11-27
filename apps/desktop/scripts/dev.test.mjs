@@ -99,6 +99,20 @@ describe("dev launch wrapper", () => {
     }
   });
 
+  it("uses the Windows launcher rebuilt with the app when a previous dev launcher is present", () => {
+    const desktop = fileURLToPath(new URL("../", import.meta.url));
+    const builtLauncher = path.join(desktop, "out/main/pwragent-windows-job.exe");
+    const previousDevLauncher = path.join(desktop, ".local/windows-job-launcher/pwragent-windows-job.exe");
+    const files = new Set([builtLauncher, previousDevLauncher]);
+    vi.mocked(existsSync).mockImplementation((file) => files.has(file));
+    try {
+      const moduleUrl = pathToFileURL(path.join(desktop, "out/main/chunks/profile.js")).href;
+      expect(windowsJobLauncherPath(moduleUrl)).toBe(builtLauncher);
+    } finally {
+      vi.mocked(existsSync).mockRestore();
+    }
+  });
+
   it("checks sandbox permissions after preparing the runtime", () => {
     expect(DEV_SETUP_SCRIPTS).toEqual([
       ["./scripts/build-mcp-ipc-relay.mjs", "--optional"],
