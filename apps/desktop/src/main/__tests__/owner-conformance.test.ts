@@ -1,4 +1,5 @@
 import { openClaudeOwnerCliReleases, type ClaudeOwnerCliReleases } from "./helpers/claude-owner-cli-releases";
+import { checkOwnerParity, withAmbientShellCanary } from "./helpers/owner-parity";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
 import { execFileSync } from "node:child_process";
@@ -215,18 +216,7 @@ async function startOutpostOwner(
     events: outpost.events, workspace: outpost.workspace, waitForEvent: outpost.waitForEvent, close: outpost.close };
 }
 
-async function checkOwnerParity(check: (host: OwnerHost) => Promise<void>): Promise<void> {
-  // These exercises use independent profiles and transports. Each owner can
-  // finish its assertions and teardown while the other is starting.
-  const results = await Promise.allSettled([startDesktopOwner, startOutpostOwner].map(async (start) => {
-    const host = await start();
-    try { await check(host); }
-    finally { await host.close(); }
-  }));
-  const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1) throw new AggregateError(failures, "Both owner parity checks failed");
-}
+const parityOwnerStarters = [startDesktopOwner, startOutpostOwner];
 
 /**
  * Waits until the owner has sent nothing for a while, so each event is
@@ -673,14 +663,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await host.close(); vi.unstubAllEnvs(); }
   });
 
-  it("both registered owners keep stable explicit retries separate from changed acceptance", async ({ onTestFinished }) => {
-    const shellRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-ambient-shell-"));
-    onTestFinished(async () => { await rm(shellRoot, { recursive: true, force: true }); });
-    const shell = path.join(shellRoot, "ambient-shell");
-    await writeFile(shell, '#!/bin/sh\n: > "${0%/*}/invoked"\nexec /bin/sh -c "$2"\n', { mode: 0o700 });
-    vi.stubEnv("SHELL", shell);
-    onTestFinished(() => { vi.unstubAllEnvs(); });
-    await checkOwnerParity(async (host) => {
+  it("both registered owners keep stable explicit retries separate from changed acceptance", async (context) => {
+    await checkOwnerParity(context, parityOwnerStarters, async (host) => {
       const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
       const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
       const request = { ...identity, queueEntryId: "same-caller-identity", delivery: "new_turn" as const,
@@ -696,10 +680,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).rejects.toThrow();
       expect(host.providerSteerCount()).toBe(0);
       await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
-    });
-    // The subprocess discovers its fixture Codex with an owned shell, even
-    // when the caller's login shell can run arbitrary initialization code.
-    expect(existsSync(path.join(shellRoot, "invoked"))).toBe(false);
+    }, (run) => withAmbientShellCanary(context.signal, run));
   });
 
   it("scheduled stable identities cannot be replaced by an ordinary explicit admission", async () => {
@@ -1656,8 +1637,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     });
   });
 
-  it("the existing durable federation runtime caller shares one acceptance through queue cancellation and terminal reconciliation on both owners", async () => {
-    await checkOwnerParity(async (host) => {
+  it("the existing durable federation runtime caller shares one acceptance through queue cancellation and terminal reconciliation on both owners", async (context) => {
+    await checkOwnerParity(context, parityOwnerStarters, async (host) => {
       const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
       const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
       const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
