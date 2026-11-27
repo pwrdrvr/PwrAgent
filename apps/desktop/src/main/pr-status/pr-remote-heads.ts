@@ -166,6 +166,29 @@ function safeRemoteName(remote: string): boolean {
 
 type CheckoutLocation = { directory: string; gitDir: string; commonDir: string; gitDirLink?: string };
 
+async function readGitDirLink(file: string, info: BigIntStats, files: RefFiles): Promise<string | undefined> {
+  return /^gitdir: ([^\r\n]+)\r?\n?$/.exec(await files.text(file, info))?.[1];
+}
+
+/** Group candidates cheaply. The pointer alone supplies no checkout authority. */
+export async function readLinkedPrCheckoutHint(cwd: string, demand: PrMetadataDemand) {
+  return await runPrMetadataFileProbe(async (signal) => {
+    const files = new RefFiles(signal);
+    const dotGit = path.join(cwd, ".git");
+    const info = await files.status(dotGit);
+    if (!info?.isFile()) return undefined;
+    const gitDir = await readGitDirLink(dotGit, info, files);
+    if (!gitDir || !path.isAbsolute(gitDir) || path.normalize(gitDir) !== gitDir) return undefined;
+    const worktrees = path.dirname(gitDir);
+    if (path.basename(worktrees) !== "worktrees") return undefined;
+    const commonDir = path.dirname(worktrees);
+    // A private config can prevent this candidate from seeding the group.
+    // A sibling still gets a fresh checkout proof if a seed is available.
+    const canSeed = !await files.status(path.join(gitDir, "config.worktree"));
+    return { commonDir, canSeed };
+  }, demand);
+}
+
 export async function observePrGitExecutable(executable: string, demand: PrMetadataDemand) {
   return await runPrMetadataFileProbe(async (signal) => {
     const files = new RefFiles(signal);
@@ -181,7 +204,7 @@ async function locateRefs(cwd: string, files: RefFiles): Promise<CheckoutLocatio
   if (!dotGitInfo) return undefined;
   if (dotGitInfo.isDirectory()) return { directory, gitDir: dotGit, commonDir: dotGit };
   if (!dotGitInfo.isFile()) return undefined;
-  const gitDirLink = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(await files.text(dotGit, dotGitInfo))?.[1];
+  const gitDirLink = await readGitDirLink(dotGit, dotGitInfo, files);
   if (!gitDirLink) return undefined;
   const gitDir = await files.directory(path.resolve(directory, gitDirLink));
   const commonDir = path.resolve(gitDir, "../..");

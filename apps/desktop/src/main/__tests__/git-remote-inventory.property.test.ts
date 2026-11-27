@@ -250,35 +250,62 @@ it.skipIf(process.platform === "win32")("rechecks the selected Git before sharin
   }
 });
 
-it.skipIf(process.platform === "win32")("retries a canceled packaged Git system config probe for the next inventory reader", async () => {
-  const { root, checkouts: [seed, sibling] } = await ordinaryWorktrees(2);
+async function usePackagedGitWithCompiledSystemConfig(root: string) {
   configureBundledGit(path.dirname(bundledGitDirectory()));
   onTestFinished(() => { configureBundledGit(); });
   process.env.PWRAGENT_GIT_PATH = bundledGitExecutable();
   delete process.env.GIT_CONFIG_NOSYSTEM;
   const system = path.join(root, "compiled-system-config");
   await writeFile(system, "[core]\n\tabbrev = 12\n");
+  const runGit = git.runGitCommand;
+  return (cwd: string, args: string[], options?: Parameters<typeof runGit>[2]) => runGit(cwd, args, {
+    ...options, env: { ...process.env, ...options?.env, GIT_CONFIG_SYSTEM: system },
+    // Simulate a compiled path while letting Git report and read the file.
+    beforeSpawn: (executable, { GIT_CONFIG_SYSTEM: _system, ...env }) => options?.beforeSpawn?.(executable, env),
+  });
+}
 
+it.skipIf(process.platform === "win32")("shares healthy checkout config after a malformed checkout asks first", async () => {
+  const { root, checkouts } = await ordinaryWorktrees(2);
+  const broken = path.join(root, "broken");
+  const brokenCheckout = path.join(root, "broken-worktree");
+  await git.runGitCommand(root, ["init", "-b", "main", broken]);
+  await git.runGitCommand(broken, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+    "commit", "--allow-empty", "-m", "fixture"]);
+  await git.runGitCommand(broken, ["worktree", "add", "--detach", brokenCheckout]);
+  await writeFile(path.join(broken, ".git", "config"), "[unterminated\n");
+  const runGit = await usePackagedGitWithCompiledSystemConfig(root);
+  await expect(runGit(brokenCheckout, ["var", "GIT_CONFIG_SYSTEM"])).rejects.toThrow(/bad config line/);
+  const expected = await Promise.all(checkouts.map(async (cwd) =>
+    parseForgeRemote((await runGit(cwd, ["remote", "get-url", "origin"])).stdout)));
+
+  const runner = vi.spyOn(git, "runGitCommand").mockImplementation(runGit);
+  onTestFinished(() => { runner.mockRestore(); });
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  const read = (cwd: string) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig });
+  await expect(read(brokenCheckout)).resolves.toBeUndefined();
+  await expect(Promise.all(checkouts.map(read))).resolves.toEqual(expected);
+  // The first checkout's local error cannot consume the healthy group's sample.
+  expect(runner.mock.calls.filter(([cwd, [verb]]) => checkouts.includes(cwd) && verb === "config")).toHaveLength(1);
+});
+
+it.skipIf(process.platform === "win32")("retries a canceled packaged Git system config probe for the next inventory reader", async () => {
+  const { root, checkouts: [seed, sibling] } = await ordinaryWorktrees(2);
+  const runGit = await usePackagedGitWithCompiledSystemConfig(root);
   const paused = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const drained = Promise.withResolvers<void>();
-  const runGit = git.runGitCommand;
   let probes = 0;
   let configs = 0;
   const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (cwd, args, options) => {
-    const canceledProbe = args[0] === "var" && ++probes === 1;
+    const canceledProbe = args.includes("GIT_CONFIG_SYSTEM") && ++probes === 1;
     try {
       if (canceledProbe) {
         paused.resolve();
         await release.promise;
       }
       if (args[0] === "config") configs++;
-      // Simulate a compiled system path without reading the machine's config.
-      // The Git binary still reports and reads that file in the fixture.
-      return await runGit(cwd, args, {
-        ...options, env: { ...options?.env, GIT_CONFIG_SYSTEM: system },
-        beforeSpawn: (executable, { GIT_CONFIG_SYSTEM: _system, ...env }) => options?.beforeSpawn?.(executable, env),
-      });
+      return await runGit(cwd, args, options);
     } finally {
       if (canceledProbe) drained.resolve();
     }

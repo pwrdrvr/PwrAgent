@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { bundledGitLfsExecutable } from "../bundled-git";
@@ -5,7 +6,7 @@ import { isGitConfigNoMatch, nextRemoteSampleOrder, parseForgeRemote, readSshHos
 import { parseGitRemoteConfigRecords, type GitRemoteConfiguration } from "./git-remote-config";
 import { canReadSingleBranchOrigin, parsePrConfigWithOrigins, readPrConfigInputs } from "./pr-config-observation";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
-import { observeLinkedPrCheckout, observePrCheckoutConfigFiles, observePrGitExecutable } from "./pr-remote-heads";
+import { observeLinkedPrCheckout, observePrCheckoutConfigFiles, observePrGitExecutable, readLinkedPrCheckoutHint } from "./pr-remote-heads";
 
 const CONFIG_KEYS = `${REMOTE_CONFIG_KEYS}|^include\\.|^core\\.(bare|worktree|repositoryformatversion)$|^extensions\\.`;
 
@@ -34,13 +35,16 @@ function runInventoryGit(
   }, demand);
 }
 
-async function observeSystemConfig(cwd: string, inputs: InventoryInputs, demand: PrMetadataDemand) {
+async function observeSystemConfig(inputs: InventoryInputs, demand: PrMetadataDemand) {
   try {
     // The explicitly selected command can use Git's compiled-in system path.
     // Watch the binary before asking Git for that path, even if it is absent.
     const executableUnchanged = await observePrGitExecutable(inputs.executable, demand);
     if (!executableUnchanged) return undefined;
-    const { stdout, stderr } = await runInventoryGit(cwd, ["var", "GIT_CONFIG_SYSTEM"], inputs, demand);
+    // Git var loads config before printing the path. Suppress repository
+    // discovery so a broken checkout cannot affect the rest of the batch.
+    const { stdout, stderr } = await runInventoryGit(path.parse(inputs.executable).root,
+      [`--git-dir=${os.devNull}`, "var", "GIT_CONFIG_SYSTEM"], inputs, demand);
     const file = stdout.endsWith("\n") ? stdout.slice(0, -1) : "";
     if (stderr || !path.isAbsolute(file) || /[\0\r\n\uFFFD]/.test(file) || file.split(path.sep).includes("..")) return undefined;
     if (!await executableUnchanged(demand)) return undefined;
@@ -149,19 +153,19 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
   const groups = new Map<string, {
     seed: string;
     sample: SharedPrMetadataRead<Awaited<ReturnType<typeof sampleConfig>>>;
+    checkoutObservations: number;
+    pendingCheckouts: Set<Promise<unknown>>;
     checking?: { startedAfterObservation: number; result: SharedPrMetadataRead<number | undefined> };
   }>();
-  let checkoutObservations = 0;
-  const pendingCheckouts = new Set<Promise<unknown>>();
   let inputs: ReturnType<typeof currentInputs>;
   let initialized = false;
   let systemRead: SharedPrMetadataRead<SystemConfigObservation> | undefined;
   let systemResult: { observation: SystemConfigObservation } | undefined;
-  const readSystem = async (cwd: string, batchInputs: InventoryInputs, demand: PrMetadataDemand) => {
+  const readSystem = async (batchInputs: InventoryInputs, demand: PrMetadataDemand) => {
     if (systemResult) return systemResult.observation;
     if (!systemRead || systemRead.signal.aborted) {
       systemRead = new SharedPrMetadataRead(async (shared) => {
-        const observation = await observeSystemConfig(cwd, batchInputs, shared);
+        const observation = await observeSystemConfig(batchInputs, shared);
         shared.signal?.throwIfAborted();
         systemResult = { observation };
         return observation;
@@ -176,19 +180,24 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
       initialized = true;
     }
     if (!inputs) return undefined;
-    const pending = observeLinkedPrCheckout(cwd, demand).then((checkout) =>
-      checkout ? { checkout, observation: ++checkoutObservations, sampleOrder: nextRemoteSampleOrder() } : undefined);
-    pendingCheckouts.add(pending);
-    const observed = await pending.finally(() => { pendingCheckouts.delete(pending); });
-    if (!observed) return undefined;
-    const { checkout, observation } = observed;
+    const hint = await readLinkedPrCheckoutHint(cwd, demand);
+    if (!hint) return undefined;
+    const { commonDir, canSeed } = hint;
+    if (!canSeed && !groups.has(commonDir)) return undefined;
     const batchInputs = inputs;
-    const system = batchInputs.discoverSystemConfig ? await readSystem(cwd, batchInputs, demand) : undefined;
+    const system = batchInputs.discoverSystemConfig ? await readSystem(batchInputs, demand) : undefined;
     if (batchInputs.discoverSystemConfig && !system) return undefined;
-    let group = groups.get(checkout.commonDir);
+    let group = groups.get(commonDir);
     if (!group) {
-      group = { seed: cwd, sample: new SharedPrMetadataRead((shared) => sampleConfig(cwd, checkout, batchInputs, system, shared)) };
-      groups.set(checkout.commonDir, group);
+      group = {
+        seed: cwd, checkoutObservations: 0, pendingCheckouts: new Set(),
+        sample: new SharedPrMetadataRead(async (shared) => {
+          const checkout = await observeLinkedPrCheckout(cwd, shared);
+          if (checkout?.commonDir !== commonDir) return undefined;
+          return await sampleConfig(cwd, checkout, batchInputs, system, shared);
+        }),
+      };
+      groups.set(commonDir, group);
     }
     const sample = await group.sample.read(demand);
     const verify = sample?.unchanged;
@@ -199,20 +208,26 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
       } : sample?.exact;
     }
     if (!sample || !verify) return undefined;
+    const current = group;
+    const pending = observeLinkedPrCheckout(cwd, demand).then((checkout) => checkout?.commonDir === commonDir
+      ? { checkout, observation: ++current.checkoutObservations, sampleOrder: nextRemoteSampleOrder() } : undefined);
+    current.pendingCheckouts.add(pending);
+    const observed = await pending.finally(() => { current.pendingCheckouts.delete(pending); });
+    if (!observed) return undefined;
+    const { checkout, observation } = observed;
     // The shared verification must start after this checkout was observed.
     // Recheck the checkout afterward so both proofs cover the same interval.
     let checking = group.checking;
     if (!checking || checking.result.signal.aborted || checking.startedAfterObservation < observation) {
-      const current = group;
       const next: NonNullable<typeof checking> = {
         startedAfterObservation: Infinity,
         result: new SharedPrMetadataRead(async (shared) => {
           try {
             // Let the already queued first-pass probes share one verification.
             // A later checkout cannot join after that verification starts.
-            await Promise.allSettled(pendingCheckouts);
+            await Promise.allSettled(current.pendingCheckouts);
             shared.signal?.throwIfAborted();
-            next.startedAfterObservation = checkoutObservations;
+            next.startedAfterObservation = current.checkoutObservations;
             return await verify(shared);
           } finally {
             if (current.checking === next) current.checking = undefined;

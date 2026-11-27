@@ -2817,6 +2817,7 @@ describe("app server ipc", () => {
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
     const { bundledGitDirectory, bundledGitExecutable, configureBundledGit } = await import("../bundled-git");
     const { runGitCommand } = await import("../app-server/git-executable");
+    const checkoutConfig = await import("../pr-status/pr-remote-heads");
     const { gitSubprocessDiagnostics, prGitSubprocessCaller } = await import("../diagnostics/git-subprocess-diagnostics");
     const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache, parseForgeRemote } =
       await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
@@ -2874,6 +2875,8 @@ describe("app server ipc", () => {
     getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
     listThreads.mockResolvedValue(rows as never);
     resolveGitHubRepoForDirectory.mockImplementation((cwd, options) => readOrigin(cwd!, options));
+    const fullCheckoutProof = vi.spyOn(checkoutConfig, "observeLinkedPrCheckout");
+    onTestFinished(() => { fullCheckoutProof.mockRestore(); });
     const starts = new Map<string, string[]>();
     const startGit = gitSubprocessDiagnostics.startGit.bind(gitSubprocessDiagnostics);
     const diagnostics = vi.spyOn(gitSubprocessDiagnostics, "startGit").mockImplementation((cwd, args, purpose) => {
@@ -2900,9 +2903,13 @@ describe("app server ipc", () => {
       await writeFile(fleet, JSON.stringify(counts, null, 2));
     }
     const wildcardStarts = new Map<string, string[]>();
+    const narrowPaths = new Set<string>();
+    const narrowClones = new Set<string>();
     for (const { clone, cwd, variant } of expected) {
       if (variant === "single-branch") {
         expect(starts.get(cwd)).toEqual([expect.stringMatching(/^config /)]);
+        narrowPaths.add(cwd);
+        narrowClones.add(clone);
         continue;
       }
       const commands = wildcardStarts.get(clone) ?? [];
@@ -2912,6 +2919,8 @@ describe("app server ipc", () => {
     for (const commands of wildcardStarts.values()) {
       expect(commands).toEqual([expect.stringMatching(/^config .*--show-origin/)]);
     }
+    // Only the seed needs a full checkout proof when the refspec cannot be shared.
+    expect(fullCheckoutProof.mock.calls.filter(([cwd]) => narrowPaths.has(cwd))).toHaveLength(narrowClones.size);
   });
 
   it("keeps dormant attachments polling by number across checkout-cache expiry and validates a selected checkout", async () => {
