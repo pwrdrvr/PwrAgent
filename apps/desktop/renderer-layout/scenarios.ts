@@ -4,7 +4,6 @@ import { DESKTOP_APPEARANCE_DENSITIES, type DesktopAppearanceDensity } from "@pw
 
 const lenses = ["directories", "inbox", "recents", "attention", "drafts"] as const;
 const densities = DESKTOP_APPEARANCE_DENSITIES;
-const seed = 42;
 
 export type LayoutScenario = {
   lens: typeof lenses[number];
@@ -87,9 +86,10 @@ const generatedThread = fc.record({
   workerTitle,
 }));
 
-export function generatedLayouts() {
-  // One per lens, using a fixed seed for the CI browser pass. Cycle through
-  // the two schemes and three densities so none relies on sampling odds.
+export function generatedLayouts(seed: number) {
+  // Keep one case per lens and cover every density and both schemes in
+  // each run. The seed rotates which lens gets which density and scheme.
+  const offset = seed >>> 0;
   return fc.sample(fc.record({
     sidebarWidth: fc.constantFrom(280, 300, 340, 408, 480, 560),
     railWidth: fc.integer({ min: 240, max: 640 }),
@@ -97,13 +97,13 @@ export function generatedLayouts() {
     transcriptWidth: fc.integer({ min: 240, max: 900 }),
     directoryLabel: text,
     threads: fc.array(generatedThread, { minLength: 2, maxLength: 5 }),
-  }), { seed, numRuns: 5 }).map((sample, index) => ({
+  }), { seed, numRuns: lenses.length }).map((sample, index) => ({
     name: `fast-check seed ${seed}, case ${index + 1} (${lenses[index]})`,
     scenario: {
       ...sample,
       lens: lenses[index],
-      density: densities[index % densities.length],
-      theme: index % 2 === 0 ? "dark" : "light",
+      density: densities[(offset + index) % densities.length],
+      theme: (offset + index) % 2 === 0 ? "dark" : "light",
     } satisfies LayoutScenario,
   }));
 }

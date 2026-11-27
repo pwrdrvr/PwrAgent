@@ -10,8 +10,9 @@ import { applySubAgentActivityEvent, resetSubAgentActivityStore } from "../src/r
 import { DetailsFoldersSection } from "../src/renderer/src/features/thread-detail/context-panels/DetailsFoldersSection";
 import { DetailsAutoFixButton } from "../src/renderer/src/features/thread-detail/context-panels/DetailsAutoFixButton";
 import { PullRequestsPanel } from "../src/renderer/src/features/thread-detail/context-panels/PullRequestsPanel";
+import { ThreadMarkdown } from "../src/renderer/src/features/thread-detail/ThreadMarkdown";
 import { ReviewPullRequestPicker } from "../src/renderer/src/features/composer/ReviewPullRequestPicker";
-import { PullRequestLinkChip } from "../src/renderer/src/features/pr-status/PullRequestLinkChip";
+import { PullRequestLinkProvider } from "../src/renderer/src/lib/pull-request-links";
 import { stackRepository } from "../src/renderer/src/features/stacks/stack-pr-data";
 import type { ComponentProps, CSSProperties } from "react";
 import type { LayoutScenario } from "./scenarios";
@@ -101,7 +102,7 @@ window.checkRendererLayout = async (scenario) => {
             autoFix={<DetailsAutoFixButton thread={thread} settings={{}} />}
           />
         </div>
-        <div data-surface="prs-panel" style={{ ...surfaceStyle(scenario.railWidth), padding: 12 }}>
+        <div data-surface="prs-panel" className="context-panel" style={surfaceStyle(scenario.railWidth)}>
           <PullRequestsPanel thread={thread} desktopApi={prPanelApi} />
         </div>
         <div data-surface="review-picker" className="composer__review-field" style={surfaceStyle(scenario.pickerWidth)}>
@@ -114,7 +115,9 @@ window.checkRendererLayout = async (scenario) => {
           />
         </div>
         <div data-surface="transcript" className="message-body" style={surfaceStyle(scenario.transcriptWidth)}>
-          <p>Review {prs.map((pr) => <span key={pr.url}><PullRequestLinkChip pr={pr} />{" "}</span>)} today.</p>
+          <PullRequestLinkProvider threads={threads} activeThread={thread}>
+            <ThreadMarkdown text={`Review ${prs.map((pr) => `[PR #${pr.number}](${pr.url})`).join(" ")} today.`} />
+          </PullRequestLinkProvider>
         </div>
       </main>
     </div>,

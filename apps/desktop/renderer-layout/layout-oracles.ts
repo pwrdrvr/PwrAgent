@@ -14,6 +14,16 @@ function clippingEdges(node: Element) {
   return { left, right: left + node.clientWidth };
 }
 
+function isVisible(element: Element): boolean {
+  return element.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+}
+
+type HorizontalEdges = { left: number; right: number };
+
+function overflowDistance(box: HorizontalEdges, bounds: HorizontalEdges): number {
+  return Math.max(bounds.left - box.left, box.right - bounds.right);
+}
+
 function measureLanes(sidebar: Element, findings: string[]): number {
   let lanes = 0;
   for (const element of [sidebar, ...sidebar.querySelectorAll("*")]) {
@@ -32,8 +42,7 @@ function measureLanes(sidebar: Element, findings: string[]): number {
 function measureChips(findings: string[]): Record<string, number> {
   const measured: Record<string, number> = {};
   for (const chip of document.querySelectorAll(".pr-chip")) {
-    const chipBox = chip.getBoundingClientRect();
-    if (!chipBox.height) continue;
+    if (!isVisible(chip)) continue;
     const surface = chip.closest<HTMLElement>("[data-surface]")?.dataset.surface ?? "unknown surface";
     const label = chip.querySelector(".pr-chip__label");
     const labelText = label?.textContent ?? chip.textContent ?? "";
@@ -43,6 +52,7 @@ function measureChips(findings: string[]): Record<string, number> {
 
     const range = document.createRange();
     const walker = label && document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+    const labelVisible = label !== null && isVisible(label);
     let numbers = 0;
     for (let text = walker?.nextNode(); text; text = walker?.nextNode()) {
       for (const match of (text.textContent ?? "").matchAll(/#\d+/g)) {
@@ -56,7 +66,7 @@ function measureChips(findings: string[]): Record<string, number> {
           const clips = clipsHorizontally(ancestor);
           if (!clips && ancestor !== label && ancestor !== chip) continue;
           const edges = clips ? clippingEdges(ancestor) : ancestor.getBoundingClientRect();
-          if (!box.width || box.left < edges.left - tolerance || box.right > edges.right + tolerance) {
+          if (!box.width || !labelVisible || overflowDistance(box, edges) > tolerance) {
             findings.push(`Number clipped in ${surface}: ${match[0]} by ${describe(ancestor)} (${box.left.toFixed(1)}–${box.right.toFixed(1)}px inside ${edges.left.toFixed(1)}–${edges.right.toFixed(1)}px)`);
             break;
           }
@@ -69,24 +79,71 @@ function measureChips(findings: string[]): Record<string, number> {
   return measured;
 }
 
-function measureSurfaceEscapes(findings: string[]): void {
-  for (const surface of document.querySelectorAll("[data-surface]:not([data-surface=sidebar])")) {
-    const right = clippingEdges(surface).right - parseFloat(getComputedStyle(surface).paddingRight);
-    for (const child of surface.querySelectorAll("*")) {
-      const box = child.getBoundingClientRect();
-      if (!box.width || box.right <= right + tolerance) continue;
-      // An ellipsized title can have descendants laid out past the surface.
-      // Measure the part that can actually paint before the surface clips it.
-      let visibleRight = box.right;
-      for (let parent = child.parentElement; parent && parent !== surface; parent = parent.parentElement) {
-        if (clipsHorizontally(parent)) visibleRight = Math.min(visibleRight, clippingEdges(parent).right);
-      }
-      if (visibleRight > right + tolerance) {
-        const text = child.textContent?.trim().slice(0, 60);
-        findings.push(`Surface overflow in ${surface.getAttribute("data-surface")}: ${describe(child)} "${text}" escapes by ${(visibleRight - right).toFixed(1)}px`);
+function measureControls(surface: Element, name: string, bounds: HorizontalEdges, findings: string[]): void {
+  const controls = surface.querySelectorAll(
+    "button, a[href], input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [role=checkbox], [role=radio]",
+  );
+  for (const control of controls) {
+    if (!isVisible(control)) continue;
+    const box = control.getBoundingClientRect();
+    if (!box.width || !box.height) continue;
+    const overflow = overflowDistance(box, bounds);
+    if (overflow > tolerance) {
+      findings.push(`Control overflow in ${name}: ${describe(control)} escapes by ${overflow.toFixed(1)}px`);
+      continue;
+    }
+    // Use the control's full box before intersecting with any clip. An inset
+    // wrapper can hide part of a control even when its box fits the surface.
+    for (let parent = control.parentElement; parent; parent = parent.parentElement) {
+      if (!clipsHorizontally(parent)) continue;
+      const clipped = overflowDistance(box, clippingEdges(parent));
+      if (clipped > tolerance) {
+        findings.push(`Control clipped in ${name}: ${describe(control)} by ${describe(parent)} (${clipped.toFixed(1)}px)`);
+        break;
       }
     }
   }
+}
+
+function measureSurfaceEscapes(findings: string[]): void {
+  for (const surface of document.querySelectorAll("aside.sidebar, [data-surface]:not([data-surface=sidebar])")) {
+    const name = surface.getAttribute("data-surface") ?? "sidebar";
+    const edges = clippingEdges(surface);
+    const { paddingLeft, paddingRight } = getComputedStyle(surface);
+    const bounds = { left: edges.left + parseFloat(paddingLeft), right: edges.right - parseFloat(paddingRight) };
+    measureControls(surface, name, edges, findings);
+    // Sidebar lanes have their own scrollWidth check.
+    if (name === "sidebar") continue;
+    for (const child of surface.querySelectorAll("*")) {
+      const box = child.getBoundingClientRect();
+      if (!box.width || overflowDistance(box, bounds) <= tolerance) continue;
+      // An ellipsized title can have descendants laid out past the surface.
+      // Measure the part that can actually paint before the surface clips it.
+      let visibleLeft = box.left;
+      let visibleRight = box.right;
+      for (let parent = child.parentElement; parent && parent !== surface; parent = parent.parentElement) {
+        if (!clipsHorizontally(parent)) continue;
+        const clip = clippingEdges(parent);
+        visibleLeft = Math.max(visibleLeft, clip.left);
+        visibleRight = Math.min(visibleRight, clip.right);
+      }
+      const overflow = overflowDistance({ left: visibleLeft, right: visibleRight }, bounds);
+      if (visibleRight > visibleLeft && overflow > tolerance) {
+        const text = child.textContent?.trim().slice(0, 60);
+        findings.push(`Surface overflow in ${name}: ${describe(child)} "${text}" escapes by ${overflow.toFixed(1)}px`);
+      }
+    }
+  }
+}
+
+function measureSidebarRows(sidebar: Element) {
+  return [...sidebar.querySelectorAll<HTMLElement>(".thread-row-shell[data-thread-key] > .thread-row")].map((row) => ({
+    key: row.parentElement?.getAttribute("data-thread-key"),
+    numberedLeads: [...row.querySelectorAll(".thread-row__chips .pr-chip:not(.pr-chip--rollup) .pr-chip__label")]
+      .filter((label) => /#\d+/.test(label.textContent ?? "") && isVisible(label)).length,
+    titleRollups: [...row.querySelectorAll(".thread-row__header .pr-chip--rollup")]
+      .filter((rollup) => isVisible(rollup) && rollup.getBoundingClientRect().width > 0).length,
+  }));
 }
 
 export function measureLayout() {
@@ -95,9 +152,10 @@ export function measureLayout() {
   const lanes = sidebar ? measureLanes(sidebar, findings) : 0;
   const numbers = measureChips(findings);
   measureSurfaceEscapes(findings);
-  const hasAutoFix = Boolean(document.querySelector("[data-surface=details] [data-testid=details-pr-auto-fix]"));
-  const rows = sidebar?.querySelectorAll("[data-thread-key]").length ?? 0;
+  const autoFix = document.querySelector("[data-surface=details] [data-testid=details-pr-auto-fix]");
+  const hasAutoFix = Boolean(autoFix && isVisible(autoFix) && autoFix.getBoundingClientRect().width > 0);
+  const sidebarRows = sidebar ? measureSidebarRows(sidebar) : [];
   const activityLines = sidebar?.querySelectorAll(".sub-agent-activity").length ?? 0;
   const prefixedStackChips = sidebar?.querySelectorAll(".pr-chip--stacked .pr-chip__repo").length ?? 0;
-  return { findings, lanes, numbers, hasAutoFix, rows, activityLines, prefixedStackChips };
+  return { findings, lanes, numbers, hasAutoFix, sidebarRows, activityLines, prefixedStackChips };
 }
