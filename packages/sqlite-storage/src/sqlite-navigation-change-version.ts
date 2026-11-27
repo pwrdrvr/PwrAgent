@@ -34,6 +34,8 @@ function ensureNavigationVersion(db: Database.Database): { owner: number; viewer
           AFTER ${operation} ON main.${table} BEGIN SELECT pwragent_viewer_navigation_changed(); END`);
       }
     }
+    // Register the keyed change journal before its ledger triggers can fire.
+    sqliteThreadChangeVersion(db);
     // Only a turn that beats the best other eligible turn and supplies a
     // different fill contributes to navigation. Each lookup seeks one rival
     // with the same partial index and tie-break as the owner projection.
@@ -45,7 +47,7 @@ function ensureNavigationVersion(db: Database.Database): { owner: number; viewer
           FROM thread_usage_turns WHERE backend = NEW.backend AND thread_id = NEW.thread_id AND rowid != NEW.rowid
             AND final_context_tokens >= 0 AND model_context_window > 0
           ORDER BY observed_at DESC, rowid DESC LIMIT 1
-        ), 1) BEGIN SELECT pwragent_navigation_changed(); END;
+        ), 1) BEGIN SELECT pwragent_threads_changed(NEW.backend || ':' || NEW.thread_id); END;
       CREATE TEMP TRIGGER pwragent_context_delete AFTER DELETE ON main.thread_usage_turns
         WHEN OLD.final_context_tokens >= 0 AND OLD.model_context_window > 0 AND COALESCE((
           SELECT (OLD.observed_at, OLD.rowid) > (observed_at, rowid)
@@ -53,14 +55,14 @@ function ensureNavigationVersion(db: Database.Database): { owner: number; viewer
           FROM thread_usage_turns WHERE backend = OLD.backend AND thread_id = OLD.thread_id
             AND final_context_tokens >= 0 AND model_context_window > 0
           ORDER BY observed_at DESC, rowid DESC LIMIT 1
-        ), 1) BEGIN SELECT pwragent_navigation_changed(); END;
+        ), 1) BEGIN SELECT pwragent_threads_changed(OLD.backend || ':' || OLD.thread_id); END;
       CREATE TEMP TRIGGER pwragent_context_update AFTER UPDATE ON main.thread_usage_turns
         WHEN (NEW.final_context_tokens, NEW.model_context_window, NEW.observed_at, NEW.backend, NEW.thread_id, NEW.rowid)
           IS NOT (OLD.final_context_tokens, OLD.model_context_window, OLD.observed_at, OLD.backend, OLD.thread_id, OLD.rowid)
         BEGIN
           -- Compare the two candidate contributions against the unchanged
           -- ledger (exclude NEW). Identical contributions cancel in pairs.
-          SELECT pwragent_navigation_changed() FROM (
+          SELECT pwragent_threads_changed(OLD.backend || ':' || OLD.thread_id, NEW.backend || ':' || NEW.thread_id) FROM (
             SELECT OLD.backend AS owner, OLD.thread_id AS thread, OLD.observed_at AS observed,
               OLD.rowid AS id, OLD.final_context_tokens AS used, OLD.model_context_window AS capacity
             UNION ALL SELECT NEW.backend, NEW.thread_id, NEW.observed_at, NEW.rowid, NEW.final_context_tokens, NEW.model_context_window

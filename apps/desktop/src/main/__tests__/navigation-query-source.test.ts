@@ -1915,6 +1915,7 @@ it("reuses the warm sidebar index across historical fill corrections and rereads
       loadIndex: () => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query" }),
     })).entries[0]?.row.contextWindow?.totalTokens;
     const projection = vi.spyOn(overlay, "readNavigationQueryIndex");
+    const rowProjection = vi.spyOn(overlay, "readNavigationQueryThreads");
     expect(await read()).toBe(60);
     // A later rowid wins a time tie, but an identical fill still reuses the page.
     insert.run("repeat", 100, 60);
@@ -1929,10 +1930,13 @@ it("reuses the warm sidebar index across historical fill corrections and rereads
     db.raw.exec("DELETE FROM thread_usage_turns WHERE usage_turn_id = 'obsolete'");
     expect(await read()).toBe(60);
     expect(projection).toHaveBeenCalledTimes(1);
+    expect(rowProjection).toHaveBeenCalledTimes(1);
     // Backdating the leader reveals the previously corrected reading.
     db.raw.exec("UPDATE thread_usage_turns SET observed_at = 50 WHERE usage_turn_id = 'current'");
     expect(await read()).toBe(35);
-    expect(projection).toHaveBeenCalledTimes(2);
+    expect(projection).toHaveBeenCalledTimes(1);
+    expect(rowProjection).toHaveBeenCalledTimes(2);
+    expect(rowProjection.mock.lastCall?.[0].threads.map((row) => row.id)).toEqual(["thread-0"]);
   } finally {
     source.emit("thread/name/updated");
     mocks.profileStore = undefined;

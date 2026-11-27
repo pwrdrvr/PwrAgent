@@ -74,7 +74,8 @@ it("projects the latest observed fill for the requested backend and thread, inde
       id: parent.threadId, source, title: "Same ID", titleSource: "explicit" as const, linkedDirectories: [],
     }));
     const observation = observeTurnReads(db);
-    const index = store.readNavigationQueryIndex({ backend: "all", threads });
+    const measured = new Map<string, number>();
+    const index = store.readNavigationQueryIndex({ backend: "all", threads, measureRow: (key, bytes) => measured.set(key, bytes) });
     observation.restore();
     expect(observation.reads).toHaveLength(1);
     expect(observation.reads[0]!.rows).toBe(1);
@@ -84,6 +85,11 @@ it("projects the latest observed fill for the requested backend and thread, inde
       totalTokens: 0, modelContextWindow: 1_000,
     });
     expect(index.threads.find((row) => row.source === "claude")?.contextWindow).toBeUndefined();
+    // A keyed refresh must charge the same row bytes for a provider or ledger reading.
+    const contextWindow = { totalTokens: 0, modelContextWindow: 1_000 };
+    const fromProvider = store.readNavigationQueryThreads({ backend: "all", threads: [{ ...threads[0]!, contextWindow }],
+      measureRow: (key, bytes) => expect(bytes).toBe(measured.get(key)) });
+    expect(fromProvider.threads[0]?.contextWindow).toEqual(contextWindow);
 
     const snapshot = () => store.reconcileNavigationSnapshot({ backend: "all", threads, fetchedAt: createdAt });
     await snapshot();
