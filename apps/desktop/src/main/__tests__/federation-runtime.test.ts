@@ -1434,21 +1434,23 @@ describe("DesktopFederationRuntime", () => {
     const runtime = new DesktopFederationRuntime();
     const harness = runtime as unknown as RuntimeHarness;
     const target = { scope: "remote" as const, instanceId: "owner" };
-    const visible = vi.spyOn(harness, "visiblePeers").mockReturnValue([]);
+    harness.store = () => ({ getPeer: () => undefined, listPeers: () => [] });
     expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(FederationPeerUnavailableError);
-    visible.mockReturnValue([{ id: "owner", status: "disconnected" }]);
+    harness.remotePeerDirectory.set("owner", { status: "disconnected", label: "Owner", capabilities: [] });
     expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(FederationPeerUnavailableError);
-    visible.mockReturnValue([{ id: "owner", status: "connected" }]);
-    expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(/Upgrade/);
-    visible.mockReturnValue([Object.assign({ id: "owner", status: "connected" }, { navigationQueryProtocol: 2 })]);
+    harness.remotePeerDirectory.set("owner", { status: "connected", label: "Owner", capabilities: [], navigationQueryProtocol: 2 });
     expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).not.toThrow();
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    harness.router.registerConnection({ peerId: "owner", capabilities: [], sendEnvelope() {} });
+    expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).toThrow(/Upgrade/);
   });
 
   it("never sends a viewer's owner-resolved read to a connected owner", async () => {
     const runtime = new DesktopFederationRuntime();
     const harness = runtime as unknown as RuntimeHarness;
     const target = { scope: "remote" as const, instanceId: "owner" };
-    vi.spyOn(harness, "visiblePeers").mockReturnValue([Object.assign({ id: "owner", status: "connected" }, { navigationQueryProtocol: 2 })]);
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    harness.router.registerConnection({ peerId: "owner", capabilities: [], navigationQueryProtocol: 2, sendEnvelope() {} });
     const remoteBackend = vi.spyOn(runtime, "remoteBackend");
     await expect(runtime.remoteNavigationQueryPage(target, { protocol: 2, consumer: "main-sidebar", inventory: "owner",
       query: { kind: "exact", identities: [{ backend: "codex", threadId: "t", ownerInstanceId: "owner" }], resolveFromOwners: true },
