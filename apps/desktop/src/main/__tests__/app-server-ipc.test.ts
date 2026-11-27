@@ -50,7 +50,7 @@ import type {
 import type { ThreadPrWatchesResponse } from "@pwragent/shared/contracts/thread-pr-watches";
 import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
-import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
+import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import type { PrStatusObservations } from "../app-server/thread-pull-request-summaries";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
@@ -6250,7 +6250,8 @@ describe("app server ipc", () => {
     const provider = Promise.withResolvers<void>();
     const git = Promise.withResolvers<void>();
     overlayStoreFixture.stable = getDesktopOverlayStore();
-    const root = path.join(PWRAGENT_ROOT, "saved-project");
+    // Keep one provider path Windows-native even when this test runs on POSIX.
+    const root = "C:\\pwragent-test\\saved-project";
     const alternate = path.join(PWRAGENT_ROOT, "second-project");
     const rows: NavigationThreadSummary[] = Array.from({ length: 174 }, (_, index) => ({
       id: `saved-${index}`, source: "codex", title: `Saved ${index}`, titleSource: "explicit",
@@ -6261,8 +6262,8 @@ describe("app server ipc", () => {
     }));
     const directories = buildDirectorySummaries({ threads: rows }).flatMap((directory) =>
       directory.path ? [{ ...directory, path: directory.path }] : []);
-    const project = directories.find(({ path: directoryPath }) => directoryPath === root)!;
-    const secondProject = directories.find(({ path: directoryPath }) => directoryPath === alternate)!;
+    const projectKey = `directory:${canonicalizeNavigationPath(root)}`;
+    const secondProjectKey = `directory:${canonicalizeNavigationPath(alternate)}`;
     const selected = { backend: "codex" as const, threadId: rows[0]!.id };
     const pr = githubPr({ number: 1, org: "fixture", repo: "project", state: "passing",
       url: "https://github.com/fixture/project/pull/1", headRefName: "topic", linkedDirectoryPaths: [root] });
@@ -6300,10 +6301,10 @@ describe("app server ipc", () => {
     void archive.catch(() => {});
     try {
       const [index, attention, opened, pin] = await Promise.all([
-        read({ kind: "directory-index" }), read(lens), read({ kind: "directory", directoryKey: project.key, roots: "pinned" }),
+        read({ kind: "directory-index" }), read(lens), read({ kind: "directory", directoryKey: projectKey, roots: "pinned" }),
         read(groupQuery, "pins"),
       ]);
-      expect(index.directories?.map(({ key }) => key)).toEqual(expect.arrayContaining([project.key, secondProject.key]));
+      expect(index.directories?.map(({ key }) => key)).toEqual(expect.arrayContaining([projectKey, secondProjectKey]));
       expect(index.counts.total).toBe(174);
       expect(attention.entries[0]?.row.id).toBe(selected.threadId);
       expect(attention.entries[0]?.row.prs ?? []).toEqual([]);
@@ -6322,10 +6323,10 @@ describe("app server ipc", () => {
       const live = await read(lens);
       await vi.waitFor(() => expect(stackRead).toHaveBeenCalledOnce());
       expect(live.entries[0]?.row.stackMemberships).toBeUndefined();
-      const [switched, selection] = await Promise.all([read({ kind: "directory", directoryKey: secondProject.key }),
+      const [switched, selection] = await Promise.all([read({ kind: "directory", directoryKey: secondProjectKey }),
         read({ kind: "exact", identities: [selected], ancestryScope: "directory" })]);
       expect(switched.entries[0]?.row.id).toBe(rows[1]!.id);
-      expect(selection.selectionDirectory?.key).toBe(project.key);
+      expect(selection.selectionDirectory?.key).toBe(projectKey);
       expect(selection.entries[0]?.row.id).toBe(selected.threadId);
       expect(stackRead).toHaveBeenCalledOnce();
 
