@@ -20,6 +20,33 @@ export function remoteApplicationInstanceIdFor(
   return readRendererFederationTarget()?.instanceId;
 }
 
+type ReadApplications = NonNullable<DesktopApi["readApplications"]>;
+const peerApplicationReads = new WeakMap<ReadApplications, Map<string, Promise<DesktopApplicationsSnapshot>>>();
+const APPLICATIONS_TTL_MS = 30_000;
+
+/** The composer and open sidebar card share each owner's discovery, including an in-flight read. */
+export function readPeerApplications(read: ReadApplications, instanceId: string): Promise<DesktopApplicationsSnapshot> {
+  let peers = peerApplicationReads.get(read);
+  if (!peers) {
+    peers = new Map();
+    peerApplicationReads.set(read, peers);
+  }
+  const cached = peers.get(instanceId);
+  if (cached) return cached;
+  const request = read({ federationTarget: { scope: "remote", instanceId } }).then(
+    ({ applications }) => {
+      window.setTimeout(() => peers.delete(instanceId), APPLICATIONS_TTL_MS);
+      return applications;
+    },
+    (error: unknown) => {
+      peers.delete(instanceId);
+      throw error;
+    },
+  );
+  peers.set(instanceId, request);
+  return request;
+}
+
 export function useDesktopApplications(params: {
   desktopApi?: DesktopApi;
   localApplications?: DesktopApplicationsSnapshot;
@@ -43,15 +70,10 @@ export function useDesktopApplications(params: {
 
     const remoteInstanceId = params.remoteInstanceId;
     let cancelled = false;
-    void params.desktopApi.readApplications({
-      federationTarget: {
-        scope: "remote",
-        instanceId: remoteInstanceId,
-      },
-    }).then((response) => {
+    void readPeerApplications(params.desktopApi.readApplications, remoteInstanceId).then((applications) => {
       if (!cancelled) {
         setRemoteApplications({
-          applications: response.applications,
+          applications,
           instanceId: remoteInstanceId,
         });
       }

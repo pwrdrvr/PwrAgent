@@ -9,7 +9,10 @@ import {
   type RefObject,
 } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
-import type { DesktopApplicationDiscoveryCandidate } from "@pwragent/shared/contracts/settings";
+import type {
+  DesktopApplicationDiscoveryCandidate,
+  DesktopApplicationsSnapshot,
+} from "@pwragent/shared/contracts/settings";
 import {
   ArchiveIcon,
   CheckIcon,
@@ -22,6 +25,8 @@ import {
   TerminalIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
+import { resolvePreferredEditor } from "../../lib/preferred-application";
+import { readPeerApplications } from "../../lib/useDesktopApplications";
 import { getDesktopApi } from "../../lib/desktop-api";
 import {
   POINTER_AIM_SETTLE_MS,
@@ -57,11 +62,11 @@ export type SidebarThreadCardFolder = { label: string; path: string };
  * thread does not offer (a peer's thread has no local editor).
  */
 export type SidebarThreadCardActions = {
-  /** Apps on this machine that open the thread's folders. */
+  /** Apps that can open a folder on the owning machine. */
   open?: {
-    editors: readonly DesktopApplicationDiscoveryCandidate[];
-    preferredEditor?: DesktopApplicationDiscoveryCandidate;
-    terminal?: DesktopApplicationDiscoveryCandidate;
+    localApplications?: DesktopApplicationsSnapshot;
+    peerInstanceId?: string;
+    terminalLabel: string;
     /** "Show in Finder" and the like. */
     reveal?: { label: string; run: (folder: SidebarThreadCardFolder) => void };
     run: (application: DesktopApplicationDiscoveryCandidate, folder: SidebarThreadCardFolder) => void;
@@ -156,31 +161,46 @@ export const SidebarThreadCardHost = forwardRef<
     Boolean(heldRowRef.current?.contains(trigger) || crossingRowRef.current?.contains(trigger));
   const [expanded, setExpanded] = useState<Expanded>();
 
-  const content = (threadKey: string, row: HTMLElement, open: Expanded): ReactElement | null => {
+  const cardFor = (threadKey: string, row: HTMLElement, open: Expanded) => {
     const thread = optionsRef.current.readThread(threadKey);
     if (!thread) return null;
-    return (
-      <SidebarThreadCardContent
-        key={threadKey}
-        thread={thread}
-        facts={optionsRef.current.rowFacts(thread)}
-        actions={optionsRef.current.actionsFor(thread, row)}
-        expanded={open}
-        onExpand={setExpanded}
-        onDone={hide}
-      />
-    );
+    const facts = optionsRef.current.rowFacts(thread);
+    const actions = optionsRef.current.actionsFor(thread, row);
+    return {
+      peerInstanceId: facts.folders.length ? actions.open?.peerInstanceId : undefined,
+      render: (peerApplications?: DesktopApplicationsSnapshot) => (
+        <SidebarThreadCardContent
+          key={threadKey}
+          thread={thread}
+          facts={facts}
+          actions={actions}
+          peerApplications={peerApplications}
+          expanded={open}
+          onExpand={setExpanded}
+          onDone={hide}
+        />
+      ),
+    };
   };
 
-  // A live row (its PR, its Git state) and an expanded list both redraw the
-  // open card in place; `update` re-measures it against the viewport.
+  // Update in place so the tooltip re-measures when the terminal row appears.
   useEffect(() => {
     if (!visible || !shown) return;
-    const next = content(shown.threadKey, shown.row, expanded);
-    if (next) update(next);
-    else hide();
+    const card = cardFor(shown.threadKey, shown.row, expanded);
+    if (!card) {
+      hide();
+      return;
+    }
+    update(card.render());
+    const read = getDesktopApi()?.readApplications;
+    if (!card.peerInstanceId || !read) return;
+    let current = true;
+    void readPeerApplications(read, card.peerInstanceId).then((applications) => {
+      if (current) update(card.render(applications));
+    }, () => { /* Discovery is optional. The other actions are already visible. */ });
+    return () => { current = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.options, expanded, visible]);
+  }, [props.options, expanded, shown, visible]);
 
   // The row's card is its description while it is up.
   useEffect(() => {
@@ -204,7 +224,7 @@ export const SidebarThreadCardHost = forwardRef<
     const open = (target: HTMLElement, threadKey: string, delayed: boolean): void => {
       // A dragged row passes over others; none of them is being asked about.
       if (isNativeDragInteractionActive()) return;
-      const node = content(threadKey, target, undefined);
+      const node = cardFor(threadKey, target, undefined)?.render();
       if (!node) return;
       setShown({ threadKey, row: target });
       heldRowRef.current = target.closest(ROW_SELECTOR) ?? target;
@@ -220,7 +240,7 @@ export const SidebarThreadCardHost = forwardRef<
       // chip's card shown meanwhile cancels it through the bridge.
       sidebarPrCardBridge.delaying(bridgeCardRef.current);
       pendingRef.current = true;
-      showAfterDelay(target, () => content(threadKey, target, undefined), PROJECT_CARD_HOVER_DELAY_MS);
+      showAfterDelay(target, () => cardFor(threadKey, target, undefined)?.render(), PROJECT_CARD_HOVER_DELAY_MS);
     };
     return {
       enter: (target, threadKey) => open(target, threadKey, true),
@@ -388,6 +408,7 @@ export function useSidebarThreadCardTriggers(
 function SidebarThreadCardContent(props: {
   thread: NavigationThreadSummary;
   facts: ThreadInfoRowFacts;
+  peerApplications?: DesktopApplicationsSnapshot;
   actions: SidebarThreadCardActions;
   expanded: Expanded;
   onExpand: (expanded: Expanded) => void;
@@ -416,6 +437,7 @@ function SidebarThreadCardContent(props: {
       actions={(
         <ThreadCardActions
           actions={actions}
+          peerApplications={props.peerApplications}
           folders={props.facts.folders}
           running={info.facts?.running === true}
           expanded={props.expanded}
@@ -450,6 +472,7 @@ function useThreadCardCost(thread: NavigationThreadSummary): ThreadInfoCost | { 
 function ThreadCardActions(props: {
   actions: SidebarThreadCardActions;
   folders: readonly SidebarThreadCardFolder[];
+  peerApplications?: DesktopApplicationsSnapshot;
   running: boolean;
   expanded: Expanded;
   onExpand: (expanded: Expanded) => void;
@@ -457,9 +480,14 @@ function ThreadCardActions(props: {
 }): ReactElement {
   const { actions, folders, onDone } = props;
   const open = folders.length ? actions.open : undefined;
+  const applications = open?.localApplications ?? props.peerApplications;
+  const terminal = applications?.terminals.find((app) =>
+    app.canOpenWorkspace && app.id === applications.preferredTerminalId.value)
+    ?? applications?.terminals.find((app) => app.canOpenWorkspace);
   const choices = open ? openChoices(open) : [];
+  const preferredEditor = resolvePreferredEditor(open?.localApplications);
   const choice = choices.find((entry) => entry.id === lastOpenChoice)
-    ?? choices.find((entry) => entry.id === open?.preferredEditor?.id)
+    ?? choices.find((entry) => entry.id === preferredEditor?.id)
     ?? choices[0];
   const primary = folders[0];
   const runChoice = (entry: OpenChoice, folder: SidebarThreadCardFolder): void => {
@@ -542,18 +570,18 @@ function ThreadCardActions(props: {
           ) : null}
         </>
       ) : null}
-      {open?.terminal && primary ? (
+      {open && terminal && primary ? (
         <button
           className="sidebar-thread-card__row"
           tabIndex={-1}
           type="button"
           onClick={() => {
             onDone();
-            open.run(open.terminal!, primary);
+            open.run(terminal, primary);
           }}
         >
           <TerminalIcon size={13} aria-hidden="true" />
-          <span className="sidebar-thread-card__row-label">Open terminal here</span>
+          <span className="sidebar-thread-card__row-label">{open.terminalLabel}</span>
         </button>
       ) : null}
       {actions.copyBranch ? (
@@ -660,7 +688,8 @@ type OpenChoice = {
 };
 
 function openChoices(open: NonNullable<SidebarThreadCardActions["open"]>): OpenChoice[] {
-  const choices: OpenChoice[] = open.editors.map((application) => ({
+  const editors = open.localApplications?.editors.filter((app) => app.canOpenWorkspace) ?? [];
+  const choices: OpenChoice[] = editors.map((application) => ({
     id: application.id,
     name: application.name,
     label: `Open in ${application.name}`,

@@ -32,7 +32,6 @@ import {
 import { defaultOpenPullRequest } from "./ThreadRow";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { formatBackendLabel } from "../../lib/backend-label";
-import { resolvePreferredEditor } from "../../lib/preferred-application";
 import {
   threadInfoRowFacts,
   type ThreadInfoContext,
@@ -3780,8 +3779,7 @@ function SidebarContent(props: SidebarProps) {
 
   /**
    * The thread card's actions: the context menu's handlers and gates for one
-   * thread, plus the composer's open-in-app request for a thread on this
-   * machine. A peer's thread gets only what works on that peer.
+   * thread, plus the composer's open-in-app request for the owning machine.
    */
   function threadCardActionsFor(
     thread: NavigationThreadSummary,
@@ -3789,9 +3787,13 @@ function SidebarContent(props: SidebarProps) {
   ): SidebarThreadCardActions {
     const live = navigationThreadByKey.get(threadSummaryIdentityKey(thread)) ?? thread;
     const local = !thread.federation && !federationTarget;
-    const applications = props.localApplications;
+    const peer = thread.federation;
+    const peerTarget = peer?.ref.target.scope === "remote"
+      && peer.peerStatus === "connected"
+      && peer.capabilities?.includes("remote_window")
+      ? peer.ref.target
+      : undefined;
     const openApplication = getDesktopApi()?.openApplication;
-    const openable = (candidate: { canOpenWorkspace: boolean }) => candidate.canOpenWorkspace;
     const branch = getThreadNamedBranch(thread);
     const facts = threadCardRowFacts(thread);
     const prUrl = facts.pr?.pr.url;
@@ -3806,15 +3808,13 @@ function SidebarContent(props: SidebarProps) {
       contextMenuOpenerRef.current = row.querySelector<HTMLElement>(".thread-row__open");
     };
     return {
-      ...(local && applications && openApplication && !thread.workspaceMissing
+      ...((peerTarget || (local && props.localApplications)) && openApplication && !thread.workspaceMissing
         ? {
             open: {
-              editors: applications.editors.filter(openable),
-              preferredEditor: resolvePreferredEditor(applications),
-              terminal: applications.terminals.find((candidate) =>
-                candidate.canOpenWorkspace && candidate.id === applications.preferredTerminalId.value)
-                ?? applications.terminals.find(openable),
-              ...(canRevealPath
+              localApplications: local ? props.localApplications : undefined,
+              peerInstanceId: peerTarget?.instanceId,
+              terminalLabel: peerTarget ? `Open terminal on ${facts.machine.label}` : "Open terminal here",
+              ...(local && canRevealPath
                 ? {
                     reveal: {
                       label: revealInFileManagerLabel(props.platform),
@@ -3825,6 +3825,7 @@ function SidebarContent(props: SidebarProps) {
               run: (application, folder) => {
                 void openApplication({
                   applicationId: application.id,
+                  ...(peerTarget ? { federationTarget: peerTarget } : {}),
                   kind: application.kind,
                   targetPath: folder.path,
                 }).catch((error: unknown) => {
