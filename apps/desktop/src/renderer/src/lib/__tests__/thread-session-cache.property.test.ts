@@ -8,15 +8,20 @@ const session = fc.record({
   interacted: fc.boolean(),
   lastTouchedAt: fc.integer({ min: 0, max: 3 }),
   thinkingSinceAt: fc.option(fc.nat(3), { nil: undefined }),
+  backendReportedActive: fc.boolean(),
+  pendingMcpInteraction: fc.boolean(),
   pendingRequest: fc.boolean(),
   pendingUserInput: fc.boolean(),
   staleThinkingRecheckAt: fc.option(fc.nat(3), { nil: undefined }),
 }).map((value) => ({
   ...value,
-  thinkingSinceAt: value.pendingRequest || value.pendingUserInput ? 0 : value.thinkingSinceAt,
+  thinkingSinceAt: value.backendReportedActive || value.pendingMcpInteraction || value.pendingRequest || value.pendingUserInput
+    ? 0 : value.thinkingSinceAt,
 }));
 type Session = typeof idle & {
   thinkingSinceAt?: number;
+  backendReportedActive?: boolean;
+  pendingMcpInteraction?: boolean;
   pendingRequest?: boolean;
   pendingUserInput?: boolean;
   staleThinkingRecheckAt?: number;
@@ -50,7 +55,9 @@ it("matches full retention and indicator projections across updates, selection c
       const summary = cache.getSummary();
       for (const id of keys) {
         const entry = model.get(id);
-        if (cache.get(id) !== entry || summary.staleThinkingRechecks[id] !== entry?.staleThinkingRecheckAt
+        const blocked = entry?.backendReportedActive || entry?.pendingMcpInteraction || entry?.pendingRequest || entry?.pendingUserInput;
+        const expectedDeadline = blocked ? undefined : entry?.staleThinkingRecheckAt;
+        if (cache.get(id) !== entry || summary.staleThinkingRechecks[id] !== expectedDeadline
           || summary.thinkingThreadKeys[id] !== (entry?.thinkingSinceAt !== undefined || undefined)
           || summary.approvalRequestThreadKeys[id] !== (entry?.pendingRequest || undefined)
           || summary.inputRequestThreadKeys[id] !== (entry?.pendingUserInput || undefined)) {

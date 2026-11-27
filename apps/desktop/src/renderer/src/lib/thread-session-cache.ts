@@ -2,6 +2,8 @@ type RetainedSession = {
   interacted: boolean;
   lastTouchedAt: number;
   thinkingSinceAt?: number;
+  backendReportedActive?: boolean;
+  pendingMcpInteraction?: unknown;
   pendingRequest?: unknown;
   pendingUserInput?: unknown;
   staleThinkingRecheckAt?: number;
@@ -18,6 +20,18 @@ const MAX_VIEW_ONLY_THREADS = 10;
 
 function isProtected(key: string, session: RetainedSession, selected?: string) {
   return key === selected || session.interacted || session.thinkingSinceAt !== undefined;
+}
+
+export function hasPendingInteraction(session: RetainedSession): boolean {
+  return Boolean(session.pendingMcpInteraction || session.pendingRequest || session.pendingUserInput);
+}
+
+export function backgroundThinkingRecheckAt(session: RetainedSession | undefined): number | undefined {
+  // Keep the original deadline on the session while a request or active backend
+  // blocks cleanup. Becoming eligible again must republish even an expired deadline.
+  return session && !session.backendReportedActive && !hasPendingInteraction(session)
+    ? session.staleThinkingRecheckAt
+    : undefined;
 }
 
 function setKey<T extends boolean | number>(
@@ -85,7 +99,7 @@ export class ThreadSessionCache<T extends RetainedSession> {
     const thinkingThreadKeys = setKey(previous.thinkingThreadKeys, key, thinking || undefined);
     const approvalRequestThreadKeys = setKey(previous.approvalRequestThreadKeys, key, session?.pendingRequest ? true : undefined);
     const inputRequestThreadKeys = setKey(previous.inputRequestThreadKeys, key, session?.pendingUserInput ? true : undefined);
-    const staleThinkingRechecks = setKey(previous.staleThinkingRechecks, key, session?.staleThinkingRecheckAt);
+    const staleThinkingRechecks = setKey(previous.staleThinkingRechecks, key, backgroundThinkingRecheckAt(session));
     if (previous.thinkingThreadKeys !== thinkingThreadKeys || previous.approvalRequestThreadKeys !== approvalRequestThreadKeys
       || previous.inputRequestThreadKeys !== inputRequestThreadKeys || previous.staleThinkingRechecks !== staleThinkingRechecks) {
       this.summary = { ...previous, thinkingThreadKeys, approvalRequestThreadKeys, inputRequestThreadKeys, staleThinkingRechecks };

@@ -19,7 +19,7 @@ import {
   type SafetyBufferingState,
 } from "./safety-buffering-session";
 import { applyThreadUsageDisplay, readThreadUsageDisplay, useThreadUsageDisplay } from "./useThreadUsageDisplay";
-import { ThreadSessionCache } from "./thread-session-cache";
+import { backgroundThinkingRecheckAt, hasPendingInteraction, ThreadSessionCache } from "./thread-session-cache";
 import {
   anchorTurnUsageEntries,
   reconcileCompletedTurnUsageEntries,
@@ -3166,14 +3166,6 @@ function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason
 
 function hasThinkingState(session: ThreadSessionEntry): boolean {
   return Boolean(session.pendingReviewSubmissions) || describeThinkingState(session).length > 0;
-}
-
-function hasPendingInteraction(session: ThreadSessionEntry): boolean {
-  return Boolean(
-    session.pendingMcpInteraction ||
-      session.pendingRequest ||
-      session.pendingUserInput
-  );
 }
 
 function summarizeOptimisticEntries(
@@ -7098,11 +7090,7 @@ export function useThreadSessionState(params: {
         return [
           setTimeout(() => {
             updateSession(sessionThreadKey, (current) => {
-              if (
-                current.staleThinkingRecheckAt !== recheckAt
-                || current.backendReportedActive
-                || hasPendingInteraction(current)
-              ) {
+              if (backgroundThinkingRecheckAt(current) !== recheckAt) {
                 return current;
               }
 
