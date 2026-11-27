@@ -1,5 +1,6 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { DESKTOP_SPEND_ALERT_POLICY_DEFAULT } from "@pwragent/shared/contracts/settings";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -113,6 +114,7 @@ describe("turn end read budget", () => {
   async function setupThread(params: {
     historicalTurns: number;
     stateDb: StateDb;
+    threadSpendEnabled?: boolean;
   }) {
     const store = new SqliteOverlayStore(params.stateDb);
     const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-turn-end-"));
@@ -125,6 +127,10 @@ describe("turn end read budget", () => {
         onPendingRequest: () => () => {},
       } as never,
       overlayStore: store,
+      resolveSpendAlertPolicy: params.threadSpendEnabled ? () => ({
+        ...DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
+        threadSpendEnabled: true,
+      }) : undefined,
     });
     const internals = registry as unknown as Internals;
     internals.tokenMiserStore = new TestTokenMiserStore(
@@ -215,6 +221,7 @@ describe("turn end read budget", () => {
     const { internals, ledgerSize, registry, store } = await setupThread({
       historicalTurns,
       stateDb,
+      threadSpendEnabled: true,
     });
 
     const ledger = countWholeLedgerReads(stateDb, THREAD_ID);
