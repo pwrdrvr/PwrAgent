@@ -139,12 +139,17 @@ export function parseMachOLoadCommands(text) {
   return { libraries, rpaths, ids };
 }
 
-function dependencies(tools, trace) {
+export function linkedFilesFromTrace(trace, isFile) {
   const paths = new Set();
   for (const line of trace.split(/\r?\n/)) {
     const path = line.trim().replace(/\([^)]*\)$/, "");
-    if (isAbsolute(path) && existsSync(path) && statSync(path).isFile()) paths.add(path);
+    if (isAbsolute(path) && !paths.has(path) && isFile(path)) paths.add(path);
   }
+  return paths;
+}
+
+function dependencies(tools, trace) {
+  const paths = linkedFilesFromTrace(trace, (path) => existsSync(path) && statSync(path).isFile());
   // A dependency trace must identify persistent linker inputs. Otherwise the
   // build still succeeds, but it is deliberately not eligible for reuse.
   if (paths.size === 0) return undefined;
