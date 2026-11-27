@@ -505,6 +505,10 @@ async function assertState(model: Model, real: Real): Promise<void> {
   }))).toEqual(model.waiting.map((entry) => ({
     id: entry.id, held: entry.holds.length > 0, paused: entry.paused,
   })));
+  const waitingIds = new Set(model.waiting.map(entry => entry.id));
+  for (const queueEntryId of model.arrivals) {
+    expect(real.queue.hasQueuedEntry({ ...THREAD, queueEntryId })).toBe(waitingIds.has(queueEntryId));
+  }
   expect(real.queue.canStartImmediately(THREAD)).toBe(
     model.active === undefined
     && model.holdOrder.length === 0

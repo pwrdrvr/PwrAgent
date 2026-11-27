@@ -11440,6 +11440,10 @@ export class DesktopBackendRegistry {
     }
   }
 
+  hasQueuedTurn(request: ReadQueuedTurnRequest): boolean {
+    return this.threadTurnQueue.hasQueuedEntry(request);
+  }
+
   async readQueuedTurn(
     request: ReadQueuedTurnRequest,
     portable = false,

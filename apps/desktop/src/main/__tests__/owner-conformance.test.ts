@@ -184,7 +184,7 @@ async function startDesktopOwner(
     dispatch: (request, scope) => backend.startTurn({ ...request, messageOrigin: authenticateMessageOrigin({
       messageOrigin: request.messageOrigin, sourceInstanceId: JSON.parse(scope)[1], resolveSourceInstance: () => undefined,
     }) }),
-    isQueued: async receipt => { await backend.readQueuedTurn(receipt); return true; },
+    isQueued: async receipt => registry.hasQueuedTurn(receipt),
     steer: request => backend.controlActiveTurn!({ ...request, operation: "steer" }),
   });
   registerFederationBackendHandlers({ router, backend, durableTurnRequests });
@@ -201,6 +201,17 @@ async function startDesktopOwner(
       desktopOwner.registry = undefined;
     },
   };
+}
+
+function durableViewer(host: OwnerHost, capabilities: FederationCapability[]): DesktopFederationRuntime {
+  const router = new FederationRouter({ localInstanceId: "viewer" });
+  router.registerConnection({ peerId: host.ownerInstanceId, capabilities, sendEnvelope: () => {} });
+  const runtime = new DesktopFederationRuntime();
+  Object.assign(runtime, {
+    router, remoteBackend: () => host.client,
+    visiblePeers: () => [{ id: host.ownerInstanceId, label: host.name, role: "client", status: "connected", capabilities }],
+  });
+  return runtime;
 }
 
 /** The Outpost daemon on its Codex fixture, enrolled through a real invite. */
@@ -800,9 +811,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       const ref = { backend: "codex" as const, threadId: created.threadId };
       const active = await host.client.startTurn({ ...ref, input: [{ type: "text", text: "slow" }] });
       const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
-      const runtime = Object.assign(new DesktopFederationRuntime(), {
-        connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_turn_requests_v1"] }], remoteBackend: () => host.client,
-      });
+      const runtime = durableViewer(host, ["turn_control", "durable_turn_requests_v1"]);
       const request: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
         request: { ...ref, input: [{ type: "text", text: "Immutable durable neighbor" }] } };
       request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, request)).digest("hex");
@@ -1581,10 +1590,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
         const waiting = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "Invented waiting input" }] });
         const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
-        const runtime = Object.assign(new DesktopFederationRuntime(), {
-          connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_steer_requests_v1"] }],
-          remoteBackend: () => host.client,
-        });
+        const runtime = durableViewer(host, ["turn_control", "durable_steer_requests_v1"]);
         const value = (text: string, id: string = randomUUID()): SubmitDurableSteerRequest => {
           const request: SubmitDurableSteerRequest = { clientRequest: { version: 1, id, createdAt: Date.now(), payloadHash: "" },
             request: { backend: "codex", threadId: identity.threadId, expectedTurnId: active.turnId, input: [{ type: "text", text }] } };
@@ -1642,10 +1648,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
       const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
       const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
-      const runtime = Object.assign(new DesktopFederationRuntime(), {
-        connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_turn_requests_v1"] }],
-        remoteBackend: () => host.client,
-      });
+      const runtime = durableViewer(host, ["turn_control", "durable_turn_requests_v1"]);
       const submission = (text: string): SubmitDurableTurnRequest => {
         const value: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" }, request: { backend: "codex", threadId: identity.threadId, input: [{ type: "text", text }] } };
         value.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, value)).digest("hex");
@@ -1867,10 +1870,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
         const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
         const target = { scope: "remote" as const, instanceId: host.ownerInstanceId };
-        const runtime = Object.assign(new DesktopFederationRuntime(), {
-          connectedPeerTargets: () => [{ target, capabilities: ["turn_control", "durable_turn_requests_v1", "thread_navigation"] }],
-          remoteBackend: () => host.client,
-        });
+        const runtime = durableViewer(host, ["turn_control", "durable_turn_requests_v1", "thread_navigation"]);
         const request: SubmitDurableTurnRequest = { clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
           request: { backend: "codex", threadId: identity.threadId, input: [{ type: "text", text: "Immutable durable neighbor" }] } };
         request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest(host.ownerInstanceId, request)).digest("hex");
