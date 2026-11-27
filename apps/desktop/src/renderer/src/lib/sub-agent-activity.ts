@@ -4,6 +4,7 @@ import type { AppServerNotification } from "@pwragent/shared/contracts/normalize
 import { splitGraphemes } from "@pwragent/shared/text-graphemes";
 import type { DesktopApi } from "./desktop-api";
 import { agentEventThreadIdentityKey } from "./federated-thread-events";
+import { readRendererFederationTarget } from "./federation-window";
 
 /** A thread's running sub-agents' current activity lines, by card `monitorId`. */
 export type SubAgentActivities = ReadonlyMap<string, string>;
@@ -20,12 +21,18 @@ const EMPTY: SubAgentActivities = new Map();
 const activitiesByThread = new Map<string, SubAgentActivities>();
 const listeners = new Set<() => void>();
 let subscribedApi: DesktopApi | undefined;
+let unsubscribe: (() => void) | undefined;
 
 /** Applies one event; true when the store changed. Exported for tests. */
 export function applySubAgentActivityEvent(event: AgentEvent): boolean {
   if (event.notification.method !== "thread/subAgentActivity/updated") return false;
   const params = event.notification.params as ActivityParams;
-  const key = agentEventThreadIdentityKey(event, params.threadId);
+  // A viewer window's rows are all the peer's, keyed remote, and its events
+  // need not say so: key them by the window's target, as the rows are.
+  const key = agentEventThreadIdentityKey({
+    ...event,
+    federationTarget: event.federationTarget ?? readRendererFederationTarget(),
+  }, params.threadId);
   const next = new Map(params.activities.map((entry) => [entry.monitorId, entry.activity]));
   const previous = activitiesByThread.get(key);
   if (previous && previous.size === next.size && [...next].every(([id, line]) => previous.get(id) === line)) {
@@ -44,6 +51,8 @@ export function applySubAgentActivityEvent(event: AgentEvent): boolean {
 export function resetSubAgentActivityStore(): void {
   activitiesByThread.clear();
   listeners.clear();
+  unsubscribe?.();
+  unsubscribe = undefined;
   subscribedApi = undefined;
 }
 
@@ -51,8 +60,9 @@ function ensureSubscribed(desktopApi: DesktopApi): void {
   // One subscription for the window's lifetime: a tray that mounts later
   // still sees lines published while no tray was open.
   if (subscribedApi === desktopApi || !desktopApi.onAgentEvent) return;
+  unsubscribe?.();
   subscribedApi = desktopApi;
-  desktopApi.onAgentEvent((event) => {
+  unsubscribe = desktopApi.onAgentEvent((event) => {
     if (!applySubAgentActivityEvent(event)) return;
     for (const listener of listeners) listener();
   });

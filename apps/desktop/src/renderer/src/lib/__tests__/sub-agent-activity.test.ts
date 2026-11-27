@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { splitGraphemes } from "@pwragent/shared/text-graphemes";
 import {
@@ -9,7 +9,16 @@ import {
   splitSubAgentActivity,
 } from "../sub-agent-activity";
 
-afterEach(() => resetSubAgentActivityStore());
+// A renderer window; a viewer window also names the peer it fronts.
+let rendererWindow: { __pwragentFederationTarget?: unknown };
+beforeEach(() => {
+  rendererWindow = {};
+  vi.stubGlobal("window", rendererWindow);
+});
+afterEach(() => {
+  resetSubAgentActivityStore();
+  vi.unstubAllGlobals();
+});
 
 const event = (threadId: string, activities: { monitorId: string; activity: string }[], instanceId?: string): AgentEvent => ({
   backend: "claude",
@@ -29,6 +38,14 @@ describe("sub-agent activity store", () => {
     expect(applySubAgentActivityEvent({ backend: "claude", notification: {
       method: "thread/backgroundTasks/updated", params: { threadId: "t1", tasks: [] },
     } })).toBe(false);
+  });
+
+  it("keys a viewer window's events by the window's peer, as its rows are", () => {
+    rendererWindow.__pwragentFederationTarget = { scope: "remote", instanceId: "peer" };
+    const line = [{ monitorId: "claude-native:a", activity: "Reading app.css" }];
+    // Relayed without a target, it still lands on the peer's row key.
+    expect(applySubAgentActivityEvent(event("t1", line))).toBe(true);
+    expect(applySubAgentActivityEvent(event("t1", line, "peer"))).toBe(false);
   });
 });
 

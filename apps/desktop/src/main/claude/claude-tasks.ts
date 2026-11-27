@@ -54,8 +54,10 @@ function claudeSubAgentMonitorId(taskId: string): string {
 export function claudeSubAgentActivityText(description: string | undefined): string | undefined {
   const line = description?.replace(/\s+/g, " ").trim();
   if (!line) return undefined;
-  return line.length > CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH
-    ? `${line.slice(0, CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH - 1)}…` : line;
+  // Cut between code points: a UTF-16 cut can strand half a surrogate pair.
+  const points = Array.from(line);
+  return points.length > CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH
+    ? `${points.slice(0, CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH - 1).join("")}…` : line;
 }
 
 /** A sub-agent Claude runs for the Agent tool, not a command. */

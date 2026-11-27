@@ -2,7 +2,12 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX } from "@pwragent/shared/subagent-kind";
-import { ClaudeTaskTracker, claudeTaskRow } from "../claude/claude-tasks";
+import {
+  CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH,
+  ClaudeTaskTracker,
+  claudeSubAgentActivityText,
+  claudeTaskRow,
+} from "../claude/claude-tasks";
 
 /**
  * Rules, from what the operator sees:
@@ -233,6 +238,32 @@ describe("Claude sub-agent projection", () => {
           const activity = latestActivity.get(agents[index]!);
           return card.status === "running" && activity ? [{ monitorId: card.monitorId, activity }] : [];
         }));
+      }
+    }));
+  });
+});
+
+describe("claudeSubAgentActivityText", () => {
+  it("cuts before an emoji that straddles the limit, not through it", () => {
+    const text = `${"a".repeat(CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH - 2)}😀 and more`;
+    expect(claudeSubAgentActivityText(text)).toBe(`${"a".repeat(CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH - 2)}😀…`);
+  });
+
+  it("keeps one bounded line and never strands half a character", () => {
+    const piece = fc.constantFrom("a", " ", "\n", "/", "👩🏽‍💻", "😀", "東京", "é");
+    fc.assert(fc.property(fc.array(piece, { maxLength: 400, size: "max" }).map((parts) => parts.join("")), (text) => {
+      const line = claudeSubAgentActivityText(text);
+      const collapsed = text.replace(/\s+/g, " ").trim();
+      if (!collapsed) {
+        expect(line).toBeUndefined();
+        return;
+      }
+      expect(line).toBe(line!.toWellFormed());
+      expect(Array.from(line!).length).toBeLessThanOrEqual(CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH);
+      // Either the whole line, or its start with an ellipsis.
+      if (line !== collapsed) {
+        expect(line!.endsWith("…")).toBe(true);
+        expect(collapsed.startsWith(line!.slice(0, -1))).toBe(true);
       }
     }));
   });

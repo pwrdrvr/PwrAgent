@@ -40,3 +40,21 @@ it("re-renders only the thread whose activity changed, once per real change", ()
   expect(renders.get("claude:thread-0")! - mounted.get("claude:thread-0")!).toBe(50);
   for (const key of threads.slice(1)) expect(renders.get(key)).toBe(mounted.get(key));
 });
+
+it("keeps one event subscription when the desktop bridge object changes", () => {
+  const live = new Set<string>();
+  const api = (name: string) => ({ onAgentEvent: () => {
+    live.add(name);
+    return () => live.delete(name);
+  } }) as unknown as DesktopApi;
+  function Reader(props: { desktopApi: DesktopApi }) {
+    useSubAgentActivities(props.desktopApi, "claude:t1");
+    return null;
+  }
+  const first = api("first");
+  const { rerender } = render(<Reader desktopApi={first} />);
+  rerender(<Reader desktopApi={api("second")} />);
+  expect([...live]).toEqual(["second"]);
+  resetSubAgentActivityStore();
+  expect([...live]).toEqual([]);
+});
