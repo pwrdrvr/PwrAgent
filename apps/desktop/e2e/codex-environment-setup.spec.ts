@@ -588,7 +588,7 @@ test("thread environment Run command uses the current cwd after workspace handof
     const worktreePath = getSecondaryWorktreePath(fixture.repoDir);
     expect(worktreePath).toBeTruthy();
 
-    await app.window.getByRole("button", { name: "Run" }).click();
+    await app.window.getByRole("button", { name: "Run", exact: true }).click();
     await expect
       .poll(
         async () =>
@@ -638,7 +638,7 @@ test("thread environment Run command uses the current cwd after workspace handof
     await returnDialog.getByRole("button", { name: "Handoff" }).click();
     await expect(returnDialog).toBeHidden();
 
-    await app.window.getByRole("button", { name: "Run" }).click();
+    await app.window.getByRole("button", { name: "Run", exact: true }).click();
     await expect
       .poll(
         async () =>

@@ -16,6 +16,7 @@ import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { StateDb } from "../src/main/state/state-db";
 import { launchElectronApp, rightClickThreadRow } from "./fixtures/electron-app";
+import { accessTrigger, allowFullAccess } from "./fixtures/access-picker";
 import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 import {
   buildFakeAgentConfigToml,
@@ -470,7 +471,10 @@ test.describe("federation remote window", () => {
       const page = viewer.window;
       const selectPeer = async () => {
         await page.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Peer sub-agent parent", exact: true }).click();
-        await page.getByRole("tab", { name: "Sub-agents", exact: true }).click();
+        // Sub-agents are in Details › Jobs.
+        await page.getByRole("tab", { name: /^Details/ }).click();
+        await page.getByRole("tablist", { name: "Details", exact: true })
+          .getByRole("tab", { name: /^Jobs/ }).click();
       };
       await selectPeer();
       await expect(page.getByText("Historical worker 0", { exact: true })).toBeVisible();
@@ -2645,14 +2649,20 @@ test.describe("federation remote window", () => {
       await expect(childProvider).toContainText("OpenAI");
       await expect(childProvider).toHaveAttribute("data-model", "gpt-5.5");
 
-      const childAccessMode = childSettings.getByLabel(/^Access mode(?::|$)/);
+      // Where the runner's Codex is too old for a listed model (Windows CI),
+      // its update notice covers the start of the launchpad's controls row,
+      // where the Access shield sits. Dismiss it whenever it shows.
+      await remote.addLocatorHandler(
+        remote.locator(".app-notice-toast[data-notice-id^='codex-version:']"),
+        async (notice) => {
+          await notice.getByRole("button", { name: "Dismiss notice", exact: true }).click();
+        },
+      );
+
+      const childAccessMode = accessTrigger(childSettings);
       if (await childAccessMode.getAttribute("data-value") !== "full-access") {
-        await childAccessMode.click();
-        await remote.getByRole("option", { name: "Full Access" }).click();
-        await remote
-          .getByRole("dialog", { name: "Enable Full Access?" })
-          .getByRole("button", { name: "I Understand and Accept the Risks" })
-          .click();
+        await allowFullAccess(childSettings);
+        await remote.keyboard.press("Escape");
       }
       await expect(childAccessMode).toHaveAttribute("data-value", "full-access");
 

@@ -49,6 +49,7 @@ type Pending = {
   controller: AbortController;
   members: Set<Member>;
   version?: string;
+  retentionMs: number;
   reuseUntil?: number;
   /** A change landed after this scan began. Its readers still get it. */
   stale: boolean;
@@ -85,7 +86,7 @@ export class NavigationIndexReadPool {
   private readonly slots = new Map<string, Slot>();
   private readonly physical = new Set<Pending>();
   private readers = 0;
-  private readonly retained = new Map<string, { index: NavigationQueryIndex; backing: Charge; threads?: ThreadCharge; expires: number;
+  private readonly retained = new Map<string, { index: NavigationQueryIndex; backing: Charge; threads?: ThreadCharge; completedAt: number; expires: number;
     discardAt: number; timer: ReturnType<typeof setTimeout>; owner: Pending }>();
   private readonly collectionBytes = new WeakMap<readonly unknown[], { start: number; bytes: number }>();
   private retainedBytes = 0;
@@ -120,7 +121,7 @@ export class NavigationIndexReadPool {
   }
 
   private retain(key: string, index: NavigationQueryIndex, owner: Pending): void {
-    if (!this.retentionMs || owner.stale || owner.controller.signal.aborted) return;
+    if (!owner.retentionMs || owner.stale || owner.controller.signal.aborted) return;
     // Owner and viewer leases have independent generations and lifetimes.
     // Charge only certified identical objects together, including the native
     // row prefix when the viewer has appended pins. At most eight live keys.
@@ -149,7 +150,7 @@ export class NavigationIndexReadPool {
       backing = { bytes, leases: 0 };
     }
     const now = Date.now();
-    const expires = Math.min(now + this.retentionMs, owner.reuseUntil ?? Infinity);
+    const expires = Math.min(now + owner.retentionMs, owner.reuseUntil ?? Infinity);
     if (expires <= now) return;
     if (backing.leases++ === 0) this.retainedBytes += backing.bytes;
     if (threads && threads.leases++ === 0) this.retainedBytes += threads.bytes;
@@ -160,8 +161,8 @@ export class NavigationIndexReadPool {
     }
     const timer = setTimeout(() => this.stopServing(key), expires - now);
     timer.unref?.();
-    this.retained.set(key, { index, backing, threads, expires,
-      discardAt: now + this.revalidationMs, timer, owner });
+    this.retained.set(key, { index, backing, threads, completedAt: now, expires,
+      discardAt: now + this.revalidationMs + owner.retentionMs - this.retentionMs, timer, owner });
   }
 
   retainedUsage(): { entries: number; bytes: number } { return { entries: this.retained.size, bytes: this.retainedBytes }; }
@@ -207,7 +208,7 @@ export class NavigationIndexReadPool {
     }, (error: unknown) => {
       if (!(error instanceof HandOff) || !owned.members.size) return settle.reject(error);
       // The follow-up's own readers may have left since the checkpoint.
-      const next = slot.next ??= this.create(owned.load, owned.version, owned.projection);
+      const next = slot.next ??= this.create(owned.load, owned.version, owned.projection, owned.retentionMs);
       for (const member of owned.members) {
         member.pending = next;
         next.members.add(member);
@@ -229,8 +230,8 @@ export class NavigationIndexReadPool {
     });
   }
 
-  private create(load: Load, version: string | undefined, projection: boolean): Pending {
-    const owned: Pending = { projection, controller: new AbortController(), members: new Set(), version, stale: false, inherited: false,
+  private create(load: Load, version: string | undefined, projection: boolean, retentionMs: number): Pending {
+    const owned: Pending = { projection, controller: new AbortController(), members: new Set(), version, retentionMs, stale: false, inherited: false,
       started: false, load, promise: undefined as unknown as Promise<NavigationQueryIndex> };
     owned.promise = new Promise<NavigationQueryIndex>((resolve, reject) => { owned.settle = { resolve, reject }; });
     // A reader that leaves sees its own rejection; no one else awaits this.
@@ -241,16 +242,21 @@ export class NavigationIndexReadPool {
   /** Derived viewer work shares reader/retention budgets but consumes no
    * physical source slot: its nested owner read owns that admission.
    */
-  read(key: string, load: Load, signal?: AbortSignal, version?: string, kind: "source" | "projection" = "source"): Promise<NavigationQueryIndex> {
+  read(key: string, load: Load, signal?: AbortSignal, version?: string, kind: "source" | "projection" = "source",
+    retentionMs = this.retentionMs): Promise<NavigationQueryIndex> {
     signal?.throwIfAborted();
     const projection = kind === "projection";
     const stage = projection ? "viewer-index" : "index";
     const retained = this.retained.get(key);
-    if (retained && retained.owner.version === version && retained.expires > Date.now()) {
-      listingDiagnostics.link(stage, "cache-hit", retained.owner.promise);
-      return Promise.resolve(retained.index);
+    const now = Date.now();
+    if (retained && retained.owner.version === version && retained.expires > now) {
+      if (retained.completedAt + retentionMs > now) {
+        listingDiagnostics.link(stage, "cache-hit", retained.owner.promise);
+        return Promise.resolve(retained.index);
+      }
+    } else if (retained) {
+      this.stopServing(key);
     }
-    if (retained) this.stopServing(key);
     if (this.readers >= 256) return Promise.reject(new Error("Navigation index consumer admission is full."));
     let slot = this.slots.get(key);
     let owned: Pending;
@@ -263,16 +269,17 @@ export class NavigationIndexReadPool {
       // Share the one follow-up; it has not read anything yet, so it takes
       // the latest version.
       current.stale = true;
-      owned = slot.next ??= this.create(load, version, projection);
+      owned = slot.next ??= this.create(load, version, projection, retentionMs);
       owned.version = version;
       listingDiagnostics.link(stage, "coalesced", owned.promise);
     } else {
       if (!projection && this.physical.size >= 8) return Promise.reject(new Error("Navigation index source admission is full."));
       slot = {};
       this.slots.set(key, slot);
-      owned = this.create(load, version, projection);
+      owned = this.create(load, version, projection, retentionMs);
       this.start(key, slot, owned);
     }
+    owned.retentionMs = Math.max(owned.retentionMs, retentionMs);
     const ownedSlot = slot;
     const member: Member = { pending: owned };
     owned.members.add(member);

@@ -111,6 +111,7 @@ import {
   type LoadedTranscriptHistory,
   type TranscriptHistoryIndex,
 } from "./segmented-transcript";
+import { applyCorrespondenceRevision, isCorrespondenceMessage } from "./transcript-correspondence";
 import { normalizeTranscriptText } from "./transcript-review-presentation";
 import { hasMatchingReplayReview, isReviewStartEntry, reviewEntriesMatch, reviewEntryLabels } from "./transcript-review-matching";
 
@@ -1175,6 +1176,32 @@ function adoptOlderPageIdentities(
   };
 }
 
+function reconcileCorrespondenceSnapshot(
+  response: AppServerReadThreadResponse,
+  retained: AppServerReadThreadResponse | undefined,
+): AppServerReadThreadResponse {
+  if (!retained) return response;
+  const latest = new Map<string, AppServerThreadMessage>();
+  for (const entry of retained.replay.entries) {
+    if (entry.type === "message" && isCorrespondenceMessage(entry)) latest.set(entry.id, entry);
+  }
+  if (!latest.size) return response;
+
+  let changed = false;
+  const revise = <Message extends AppServerThreadMessage>(message: Message): Message => {
+    const incoming = latest.get(message.id);
+    const revised = incoming ? applyCorrespondenceRevision(message, incoming) : message;
+    changed ||= revised !== message;
+    return revised;
+  };
+  const entries = response.replay.entries.map((entry) => entry.type === "message" ? revise(entry) : entry);
+  const messages = response.replay.messages.map(revise);
+  return changed ? {
+    ...response,
+    replay: { ...response.replay, entries, messages },
+  } : response;
+}
+
 function preserveRetainedTranscriptTail(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
@@ -1243,6 +1270,7 @@ function preserveRetainedTranscriptTail(
     if (retainedMatch) {
       matchedRetainedEntries.add(retainedMatch);
       freshEntryByRetainedEntry.set(retainedMatch, freshEntry);
+
     }
   }
   const entries = reconcileRetainedTranscriptTail(
@@ -1250,17 +1278,12 @@ function preserveRetainedTranscriptTail(
     retainedEntries,
     freshEntryByRetainedEntry,
   );
-
   return {
     ...response,
     replay: {
       ...response.replay,
       entries,
-      messages: transcriptMessagesForEntries(
-        entries,
-        retainedResponse.replay.messages,
-        response.replay.messages
-      ),
+      messages: transcriptMessagesForEntries(entries, retainedResponse.replay.messages, response.replay.messages),
     },
   };
 }
@@ -5121,6 +5144,10 @@ function threadMessageOriginFromUnknown(
     || record.systemReason === "auto-compaction"
       ? record.systemReason
       : undefined;
+  const correspondenceRevision = systemReason === "thread-correspondence"
+    && typeof record.correspondenceRevision === "number"
+    && Number.isSafeInteger(record.correspondenceRevision) && record.correspondenceRevision > 0
+    ? record.correspondenceRevision : undefined;
   const messaging = threadMessageMessagingOriginFromUnknown(record.messaging);
   const dependencyId =
     record.kind === "pwragent" && typeof record.dependencyId === "string"
@@ -5145,6 +5172,7 @@ function threadMessageOriginFromUnknown(
       kind: record.kind,
       ...(dependencyId ? { dependencyId } : {}),
       ...(systemReason ? { systemReason } : {}),
+      ...(correspondenceRevision !== undefined ? { correspondenceRevision } : {}),
       ...(messaging ? { messaging } : {}),
       ...(subAgent ? { subAgent } : {}),
       ...(prAutomation ? { prAutomation } : {}),
@@ -5161,6 +5189,7 @@ function threadMessageOriginFromUnknown(
       kind: record.kind,
       ...(dependencyId ? { dependencyId } : {}),
       ...(systemReason ? { systemReason } : {}),
+      ...(correspondenceRevision !== undefined ? { correspondenceRevision } : {}),
       ...(messaging ? { messaging } : {}),
       ...(prAutomation ? { prAutomation } : {}),
       ...(reviewAutoFix ? { reviewAutoFix } : {}),
@@ -5176,6 +5205,7 @@ function threadMessageOriginFromUnknown(
     kind: record.kind,
     ...(dependencyId ? { dependencyId } : {}),
     ...(systemReason ? { systemReason } : {}),
+    ...(correspondenceRevision !== undefined ? { correspondenceRevision } : {}),
     sourceThread: {
       backend: sourceRecord.backend as AppServerBackendKind,
       ...(typeof sourceRecord.messageId === "string"
@@ -5490,8 +5520,10 @@ function assistantMessageEntryFromCompletedItem(params: {
           }),
         }
       : {}),
-    createdAt: Date.now(),
-    ...(params.turn ? { turn: params.turn } : {}),
+    createdAt: origin?.systemReason === "thread-correspondence"
+      ? normalizeNotificationTimestamp(record.createdAt) ?? Date.now() : Date.now(),
+    ...(params.turn && (origin?.systemReason !== "thread-correspondence" || typeof itemParams.turnId === "string")
+      ? { turn: params.turn } : {}),
     ...(phase ? { phase } : {}),
     ...(origin ? { origin } : {}),
   };
@@ -6279,7 +6311,7 @@ export function useThreadSessionState(params: {
           }
           const preservesLiveRows = lifecycleChangedDuringRead || transcriptChangedDuringRead;
           const responseWithRetainedTail = preserveRetainedTranscriptTail(
-            orderedResponse,
+            reconcileCorrespondenceSnapshot(orderedResponse, current.response),
             retainedResponse,
             bridgesRetainedRows,
             preservesLiveRows,
@@ -7131,6 +7163,7 @@ export function useThreadSessionState(params: {
         || openedTranscriptsRef.current.has(targetThreadKey);
       const isTranscriptUpdate = isThreadLocalTranscriptNotification(event.notification);
       const liveContextWindow = event.notification.method === "thread/contextWindow/updated"
+        && event.notification.params.source !== "compaction"
         ? readContextWindowFill(event.notification.params)
         : undefined;
       if (retainTranscript && liveContextWindow) {
@@ -7794,8 +7827,14 @@ export function useThreadSessionState(params: {
               : browserDraft
                 ?? current.optimisticEntries.find((entry) => entry.id === assistantMessageEntry.id)
                 ?? current.response?.replay.entries.find((entry) => entry.id === assistantMessageEntry.id);
+            let deliveredEntry = assistantMessageEntry;
+            if (observedMessage?.type === "message" && isCorrespondenceMessage(assistantMessageEntry)
+              && isCorrespondenceMessage(observedMessage)) {
+              deliveredEntry = applyCorrespondenceRevision(observedMessage, assistantMessageEntry, true);
+              if (deliveredEntry === observedMessage) return current;
+            }
             const sequence = readRendererSequence(observedMessage) ?? current.nextLiveEntrySequence;
-            const completedEntry = withRendererSequence(assistantMessageEntry, sequence);
+            const completedEntry = withRendererSequence(deliveredEntry, sequence);
             const responseWithUsage = taskMonitorUsageEntry
               ? appendThreadEntries(
                   current.response,
@@ -8501,7 +8540,7 @@ export function useThreadSessionState(params: {
           // A fill-only report from Claude or ACP. Replace the indicator
           // without touching turn usage: leaving the cumulative fields unset
           // keeps deriveTurnUsageBaseline on its total - last path.
-          if (!liveContextWindow) return current;
+          if (!liveContextWindow || (event.notification.params.source === "session" && current.contextWindow)) return current;
           return {
             ...current,
             contextWindow: liveContextWindow,

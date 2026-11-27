@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
 import {
   buildDirectoryReferenceInsertText,
@@ -319,6 +319,75 @@ describe("buildDirectoryReferenceMarkdown", () => {
 
 describe("listReferencedDirectories", () => {
   const directories = [CATALOG_SERVICE, CATALOG_PORTAL, PWRAGNT, UNLINKED];
+
+  it.each([[8, 16], [16, 8], [16, 16]])(
+    "bounds path comparisons for %i sibling directories and %i file chips",
+    (directoryCount, chipCount) => {
+      const paths = Array.from({ length: Math.max(directoryCount, chipCount) },
+        (_, index) => `/work/repo-${index}`);
+      const rows = paths.slice(0, directoryCount).map((path) => makeDirectory({ key: path, path }));
+      const files = paths.slice(0, chipCount).reverse().map((path) => `${path}/file.ts`);
+      const draft = files.map(chip).join(" ");
+      const prefixes = new Set(paths.map((path) => `${path}/`));
+      const filePaths = new Set(files);
+      let destinationComparisons = 0;
+      let descendantComparisons = 0;
+      const startsWith = String.prototype.startsWith;
+      // File chips force even successful destination matches through the prefix check.
+      const spy = vi.spyOn(String.prototype, "startsWith").mockImplementation(function (
+        this: string, prefix, position,
+      ) {
+        if (prefixes.has(prefix)) {
+          if (filePaths.has(this)) destinationComparisons += 1;
+          else descendantComparisons += 1;
+        }
+        return startsWith.call(this, prefix, position);
+      });
+      let result;
+      let segmentVisits = 0;
+      // Both inserting and looking up a path read one child map entry per segment or separator.
+      vi.stubGlobal("Map", class<K, V> extends Map<K, V> {
+        override get(key: K): V | undefined {
+          segmentVisits += 1;
+          return super.get(key);
+        }
+      });
+      try {
+        result = listReferencedDirectories(draft, rows);
+      } finally {
+        vi.unstubAllGlobals();
+        spy.mockRestore();
+      }
+      expect(result).toEqual(rows.slice(0, chipCount));
+      // Six parts per file chip, four per directory. Each match is inserted and queried once more.
+      const matchedCount = Math.min(directoryCount, chipCount);
+      const visitBudget = 6 * chipCount + 4 * directoryCount + 8 * matchedCount;
+      expect(segmentVisits).toBeGreaterThan(0);
+      expect(segmentVisits).toBeLessThanOrEqual(visitBudget);
+      const budget = directoryCount + chipCount;
+      expect.soft(destinationComparisons).toBeLessThanOrEqual(budget);
+      expect(descendantComparisons).toBeLessThanOrEqual(budget);
+    },
+  );
+
+  it("keeps the first eligible row for each stored path in directory order", () => {
+    const path = `${HOME}/repo`;
+    const unlinked = makeDirectory({ key: "unlinked", path, kind: "unlinked" });
+    const workspace = makeDirectory({ key: "workspace", path: `${path}/`, kind: "workspace" });
+    const duplicate = makeDirectory({ key: "duplicate", path });
+    const alias = makeDirectory({ key: "alias", path: "~/repo" });
+    const parent = makeDirectory({ key: "parent", path: HOME });
+    const sibling = makeDirectory({ key: "sibling", path: `${path}.bak` });
+    const result = listReferencedDirectories(
+      `${chip(sibling.path!)} ${chip(HOME)} ${chip(`${path}/file.ts`)}`,
+      [unlinked, workspace, parent, alias, duplicate, sibling],
+      { homeDir: HOME },
+    );
+    expect(result).toHaveLength(3);
+    expect(result[0]).toBe(workspace);
+    expect(result[1]).toBe(alias);
+    expect(result[2]).toBe(sibling);
+  });
 
   it("finds a tilde-path chip", () => {
     expect(

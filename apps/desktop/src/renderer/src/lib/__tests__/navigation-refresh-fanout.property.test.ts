@@ -34,6 +34,146 @@ async function until(predicate: () => boolean, steps = 500) {
 }
 const idle = (queries: NavigationWindowQueries) => [...queries.getSnapshot().resources.values()].every((resource) => !resource.loading);
 
+async function assertRefreshBurst(duplicates: number, changesInFlight: boolean) {
+  let revision = 0;
+  const replies: Array<() => void> = [];
+  const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["group-0", request(0)]]));
+    await until(() => idle(queries));
+    read.mockClear();
+    read.mockImplementation((sent) => {
+      const snapshot = page(sent, String(revision));
+      return new Promise((resolve) => replies.push(() => resolve(snapshot)));
+    });
+    const first = queries.refresh();
+    await until(() => replies.length === 1);
+    const waiters = [first];
+    for (let count = 0; count < duplicates; count++) {
+      if (changesInFlight) {
+        revision += 1;
+        queries.invalidate(undefined, undefined, event(0));
+      }
+      waiters.push(queries.refresh());
+    }
+    let finished = false;
+    void Promise.all(waiters).then(() => { finished = true; });
+    const expectedReads = changesInFlight ? 2 : 1;
+    for (let count = 0; count < expectedReads; count++) {
+      await until(() => replies.length === 1);
+      expect(finished).toBe(false);
+      replies.shift()!();
+    }
+    await until(() => finished || read.mock.calls.length > expectedReads);
+    expect(read).toHaveBeenCalledTimes(expectedReads);
+    expect(finished).toBe(true);
+    expect(queries.getSnapshot().resources.get("group-0")?.state.page?.countsRevision).toBe(String(revision));
+  } finally {
+    queries.dispose();
+    replies.splice(0).forEach((resolve) => resolve());
+  }
+}
+
+it("joins a second refresh to the in-flight read when the owner has not changed", async () => {
+  await assertRefreshBurst(1, false);
+});
+
+it("shares at most one replacement among refresh callers when the owner changes in flight", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 64 }), fc.boolean(), assertRefreshBurst), {
+    numRuns: 20, examples: [[4, false], [8, false], [16, false], [4, true], [8, true], [16, true]],
+  });
+});
+
+it("keeps a completed page covered while another page holds the window refresh open", async () => {
+  const gate = Promise.withResolvers<void>();
+  const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const owners = [{ scope: "local" as const }];
+  try {
+    queries.setDemand(new Map([["slow", request(0)], ["fast", request(1)]]));
+    await until(() => idle(queries));
+    read.mockClear();
+    read.mockImplementationOnce(async (sent) => { await gate.promise; return page(sent); });
+    const first = queries.refresh(undefined, owners);
+    await until(() => read.mock.calls.length === 2 && !queries.getSnapshot().resources.get("fast")!.loading);
+    const duplicate = queries.refresh(undefined, [{ scope: "local" }]);
+    gate.resolve();
+    await Promise.all([first, duplicate]);
+    expect(read).toHaveBeenCalledTimes(2);
+    await queries.refresh(undefined, owners);
+    expect(read).toHaveBeenCalledTimes(4);
+  } finally { gate.resolve(); queries.dispose(); }
+});
+
+it("refreshes a completed page invalidated during the rest of its window refresh", async () => {
+  const gate = Promise.withResolvers<void>();
+  const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["slow", request(0)], ["fast", request(1)]]));
+    await until(() => idle(queries));
+    read.mockClear();
+    read.mockImplementationOnce(async (sent) => { await gate.promise; return page(sent); });
+    const first = queries.refresh();
+    await until(() => read.mock.calls.length === 2 && !queries.getSnapshot().resources.get("fast")!.loading);
+    read.mockImplementation(async (sent) => page(sent, "changed"));
+    queries.invalidate("fast", undefined, event(1));
+    const changed = queries.refresh();
+    await until(() => queries.getSnapshot().resources.get("fast")!.state.page?.countsRevision === "changed");
+    gate.resolve();
+    await Promise.all([first, changed]);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(queries.getSnapshot().resources.get("slow")!.state.page?.countsRevision).toBe("0");
+  } finally { gate.resolve(); queries.dispose(); }
+});
+
+it("shares completion across owner changes that each overtake a dispatched refresh", async () => {
+  async function observe(changes: number) {
+    const replies: Array<() => void> = [];
+    let revision = 0;
+    let settled = 0;
+    const read = vi.fn(async (sent: NavigationQueryRequest) => page(sent));
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    const liveChecks = vi.spyOn(queries as unknown as { isCurrent: (resource: unknown) => boolean }, "isCurrent");
+    const waiters: Promise<void>[] = [];
+    const refresh = () => waiters.push(queries.refresh(undefined, undefined, true).then(() => { settled++; }));
+    try {
+      queries.setDemand(new Map([["group-0", request(0)]]));
+      await until(() => idle(queries));
+      liveChecks.mockClear();
+      read.mockClear();
+      read.mockImplementation((sent) => {
+        const snapshot = page(sent, String(revision));
+        return new Promise((resolve) => replies.push(() => resolve(snapshot)));
+      });
+      queries.invalidate("group-0");
+      refresh();
+      for (let i = 0; i < changes; i++) {
+        await until(() => replies.length === 1);
+        revision++;
+        queries.invalidate(undefined, undefined, event(0));
+        refresh();
+        expect(settled).toBe(0);
+        replies.shift()!();
+      }
+      await until(() => replies.length === 1);
+      expect(settled).toBe(0);
+      replies.shift()!();
+      await Promise.all(waiters);
+      expect(settled).toBe(changes + 1);
+      expect(read).toHaveBeenCalledTimes(changes + 1);
+      expect(queries.getSnapshot().resources.get("group-0")?.state.page?.countsRevision).toBe(String(revision));
+      return liveChecks.mock.calls.length;
+    } finally { queries.dispose(); replies.splice(0).forEach((resolve) => resolve()); }
+  }
+
+  // Doubling separately dispatched replacements doubles lifecycle work, not
+  // the number of callers independently following the entire read chain.
+  const first = await observe(16);
+  expect(await observe(32)).toBeLessThanOrEqual(2 * first);
+});
+
 it("row-only bursts obey complete child membership even while metadata is stale or refreshing", async () => {
   // Specification: without a membership change, the owner's complete child
   // set remains the exclusion oracle throughout any ordering of row events.

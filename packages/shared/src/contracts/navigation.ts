@@ -2546,6 +2546,8 @@ export type NavigationDirectoryRow = {
   repositoryKeys?: string[];
   localAvailability?: "unconfigured";
   counts: NavigationCounts;
+  /** Revision of the local members displayed by this owner, excluding mounted peer rows. */
+  ownerMembershipRevision?: string;
   pinnedRootCount: number;
   unpinnedRootCount: number;
   /** Ordinary threads under unpinned directory roots, including all descendants.
@@ -4311,6 +4313,7 @@ export type RemoveNavigationDirectoryRequest = {
   directoryKey: string;
   /** Archive owner-resolved members first, then recheck that the directory is empty. */
   archiveThreads?: boolean;
+  displayedMembershipRevision?: string;
   federationTarget?: FederationTarget;
 };
 export type RemoveNavigationDirectoryResponse = {
@@ -4322,6 +4325,7 @@ export type RemoveNavigationDirectoryResponse = {
 /** Resolve complete directory membership on its owner; never accept a renderer row allowlist. */
 export type MarkNavigationDirectorySeenRequest = {
   directoryKey: string;
+  displayedMembershipRevision?: string;
   federationTarget?: FederationTarget;
 };
 export type MarkNavigationDirectorySeenResponse = { directoryKey: string; changedCount: number };

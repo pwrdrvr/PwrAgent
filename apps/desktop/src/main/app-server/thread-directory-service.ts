@@ -79,6 +79,7 @@ import {
 } from "@pwragent/shared/contracts/backend";
 import { type DesktopProviderModelDefaults } from "@pwragent/shared/contracts/settings";
 import {
+  type CodexEnvironmentOption,
   type LaunchpadWorkMode,
   type NavigationLaunchpadDraft,
   type NavigationLaunchpadDefaults,
@@ -116,6 +117,7 @@ import {
   type ProviderDiscoveryPermit,
 } from "../settings/provider-discovery-permit";
 import {
+  isCodexEnvironmentDiscoveryTimeout,
   listCodexEnvironmentOptions,
   pruneCodexEnvironmentActionMap,
   resolveCodexEnvironmentActionId,
@@ -345,13 +347,15 @@ export class ThreadDirectoryService {
     owner?: { backend: AppServerBackendKind; threadId: string };
     /** Run setup in a workspace that is not a new worktree. */
     forceSetup?: boolean;
+    /** Restore has already read this option from the recreated worktree. */
+    restoredEnvironment?: CodexEnvironmentOption;
     onSetupProgress?: (
       event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
     ) => void;
     sourceRuntime?: CodexThreadEnvironmentRuntime;
     workMode: LaunchpadWorkMode;
   }): Promise<CodexThreadEnvironmentRuntime | undefined> {
-    const { cwd, forceSetup, onSetupProgress, sourceRuntime, workMode } = params;
+    const { cwd, forceSetup, onSetupProgress, restoredEnvironment, sourceRuntime, workMode } = params;
     if (!sourceRuntime?.environmentId) {
       return undefined;
     }
@@ -363,7 +367,7 @@ export class ThreadDirectoryService {
       return cloneCodexEnvironmentRuntimeForFork(sourceRuntime, cwd);
     }
 
-    const environment = (await listCodexEnvironmentOptions(cwd))
+    const environment = restoredEnvironment ?? (await listCodexEnvironmentOptions(cwd))
       .find((candidate) => candidate.id === sourceRuntime.environmentId);
     if (!environment) {
       const message = `Selected Codex environment '${sourceRuntime.environmentName}' is not available in the forked worktree.`;
@@ -1063,7 +1067,10 @@ export class ThreadDirectoryService {
       return runtime;
     }
 
-    const environment = (await listCodexEnvironmentOptions(cwd).catch(() => []))
+    const environment = (await listCodexEnvironmentOptions(cwd).catch((error) => {
+      if (isCodexEnvironmentDiscoveryTimeout(error)) throw error;
+      return [];
+    }))
       .find((candidate) => candidate.id === runtime.environmentId);
     if (!environment) {
       return runtime;
@@ -1641,15 +1648,19 @@ export class ThreadDirectoryService {
     ) {
       throw new Error("Scheduled time must be a finite Unix timestamp.");
     }
+    const selector = request.codexEnvironmentSelector?.trim();
+    const environmentOptionsRead = launchpad.codexEnvironmentId || selector
+      ? listCodexEnvironmentOptions(launchpad.directoryPath)
+      : Promise.resolve([]);
     const [codexEnvironmentOptions] = await joinConcurrent([
-      listCodexEnvironmentOptions(launchpad.directoryPath),
+      environmentOptionsRead,
       this.host().getBackendLaunchpadOptions(launchpad.backend, "thread-start-defaults"),
     ]);
-    if (request.codexEnvironmentSelector?.trim()) {
+    if (selector) {
       // An agent names an environment by id or name; only this machine has
       // the project's config to resolve it. Refuse before any workspace work.
       const resolution = resolveCodexEnvironmentSelector(
-        request.codexEnvironmentSelector,
+        selector,
         codexEnvironmentOptions,
         launchpad.directoryLabel,
       );

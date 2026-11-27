@@ -8,6 +8,14 @@ import {
   openModelSettings,
   speedChoices,
 } from "../../../test/model-settings";
+import {
+  accessStopValues,
+  accessTrigger,
+  allowAccessStop,
+  chooseAccessStop,
+  openAccessPicker,
+  queryAccessTriggers,
+} from "../../../test/access-picker";
 import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
@@ -3479,7 +3487,8 @@ describe("Composer", () => {
     expect(button).not.toHaveTextContent("VS Code");
   });
 
-  it.each([true, false])("shows Auto with runtime availability %s and help on its menu item", (available) => {
+  it.each([true, false])("shows Auto with runtime availability %s as a stop, its reason on hover and focus when unavailable", (available) => {
+    const onSetExecutionMode = vi.fn(async () => undefined);
     render(
       <Composer
         backends={[{
@@ -3493,7 +3502,7 @@ describe("Composer", () => {
           ],
         }]}
         disabled={false}
-        onSetExecutionMode={async () => undefined}
+        onSetExecutionMode={onSetExecutionMode}
         skills={[]}
         thread={{
           id: "thread-1", title: "Access", titleSource: "explicit",
@@ -3502,16 +3511,28 @@ describe("Composer", () => {
         }}
       />,
     );
-    const access = screen.getByRole("button", { name: /^Access mode(?::|$)/ });
-    expect(access).not.toHaveAttribute("aria-description");
-    fireEvent.focus(access);
-    expect(screen.queryByRole("tooltip")).toBeNull();
-    fireEvent.click(access);
-    const auto = screen.getByRole("option", { name: "Auto" });
-    expect(auto).toHaveProperty("disabled", !available);
-    expect(auto).toHaveAttribute("aria-description", available
-      ? "Workspace sandbox; Codex reviews eligible permission requests."
-      : "Auto requires Codex 0.153.0 or later.");
+    const access = accessTrigger();
+    expect(access).toHaveAccessibleName("Access: Default");
+    expect(access).toHaveAttribute("data-tooltip", "Access: Default");
+    const panel = openAccessPicker();
+    expect(access).toHaveAttribute("aria-expanded", "true");
+    expect(accessStopValues()).toEqual(["default", "auto"]);
+    expect(panel).toHaveTextContent("Workspace sandbox; asks you to approve additional access.");
+    const autoStop = panel.querySelector<HTMLElement>('[data-access="auto"]')!;
+    if (available) {
+      expect(autoStop).not.toHaveClass("is-disabled");
+      chooseAccessStop("auto");
+      expect(onSetExecutionMode).toHaveBeenCalledWith("auto");
+      return;
+    }
+    expect(autoStop).toHaveClass("is-disabled");
+    expect(autoStop).toHaveAttribute("data-tooltip", "Auto requires Codex 0.153.0 or later.");
+    const tick = within(panel).getByRole("button", { name: "Auto, unavailable" });
+    expect(tick).toHaveAttribute("aria-description", "Auto requires Codex 0.153.0 or later.");
+    expect(tick).toHaveClass("tooltip-target");
+    chooseAccessStop("auto");
+    fireEvent.keyDown(within(panel).getByRole("slider", { name: "Access level" }), { key: "ArrowRight" });
+    expect(onSetExecutionMode).not.toHaveBeenCalled();
   });
 
   it("describes Claude's access modes in Claude's own terms", () => {
@@ -3534,14 +3555,17 @@ describe("Composer", () => {
         }}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /^Access mode(?::|$)/ }));
-    expect(screen.getByRole("option", { name: "Auto" })).toHaveAttribute(
-      "aria-description",
-      "Claude Code's auto mode decides routine permission requests.",
-    );
+    const panel = openAccessPicker();
+    expect(panel).toHaveTextContent("Default. Asks you to approve edits and commands.");
+    // Hovering a stop is only a preview; dragging onto Auto shows its copy.
+    const track = within(panel).getByRole("slider", { name: "Access level" });
+    fireEvent.pointerDown(panel.querySelector('[data-access="default"]')!, { button: 0, pointerId: 1 });
+    fireEvent.pointerMove(panel.querySelector('[data-access="auto"]')!, { pointerId: 1 });
+    expect(panel).toHaveTextContent("Auto. Claude Code's auto mode decides routine permission requests.");
+    fireEvent.lostPointerCapture(track, { pointerId: 1 });
   });
 
-  it("flags the access-mode chip as danger when full access is selected", () => {
+  it("fills the access shield solid, as danger, when full access is selected", () => {
     render(
       <Composer
         backends={[
@@ -3569,9 +3593,8 @@ describe("Composer", () => {
       />,
     );
 
-    expect(
-      screen.getByLabelText(/^Access mode(?::|$)/).closest(".composer-dropdown"),
-    ).toHaveClass("composer-dropdown--danger");
+    expect(accessTrigger()).toHaveAccessibleName("Access: Full Access");
+    expect(accessTrigger()).toHaveClass("access-picker__trigger--danger", "access-picker__trigger--full");
   });
 
   it("does not show workspace application buttons on a launchpad before the thread exists", () => {
@@ -7872,7 +7895,7 @@ describe("Composer", () => {
 
     render(<ProviderSwitchHarness />);
 
-    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(accessTrigger()).toHaveValue("full-access");
     expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-5.6-luna");
     expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
     expect(modelSettingsPill()).toHaveAttribute("data-speed", "fast");
@@ -7900,8 +7923,8 @@ describe("Composer", () => {
       imageAttachments: undefined,
       prompt: "",
     });
-    expect(screen.queryByLabelText(/^Access mode(?::|$)/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
+    expect(queryAccessTriggers()).toHaveLength(1);
+    expect(accessTrigger()).toHaveValue("yolo");
     expect(modelSettingsPill()).toHaveAttribute("data-model", "grok-4.5-pro");
     expect(modelSettingsPill()).toHaveAttribute("data-effort", "low");
     expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("priority");
@@ -7922,7 +7945,7 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(modelSettingsPill()).toHaveAttribute("data-provider", "codex");
     });
-    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(accessTrigger()).toHaveValue("full-access");
     expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-5.6-sol");
     expect(modelSettingsPill()).toHaveAttribute("data-effort", "ultra");
     expect(modelSettingsPill()).toHaveAttribute("data-speed", "fast");
@@ -7938,7 +7961,7 @@ describe("Composer", () => {
       expect(modelSettingsPill()).toHaveAttribute("data-model", "grok-4.5-pro");
       expect(modelSettingsPill()).toHaveAttribute("data-effort", "medium");
       expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
-      expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
+      expect(accessTrigger()).toHaveValue("yolo");
       expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
         "Codex Environment",
       );
@@ -21075,7 +21098,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("default");
+    expect(accessTrigger()).toHaveValue("default");
     fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     expect(screen.getByRole("separator")).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByLabelText("Reply"));
@@ -21105,7 +21128,7 @@ describe("Composer", () => {
       });
     });
 
-    chooseDropdownOption("Access mode", "Full Access");
+    chooseAccessStop("full-access");
 
     await waitFor(() => {
       expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
@@ -21152,9 +21175,9 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("default");
+    expect(accessTrigger()).toHaveValue("default");
 
-    chooseDropdownOption("Access mode", "Full Access");
+    chooseAccessStop("full-access");
 
     await waitFor(() => {
       expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
@@ -21226,7 +21249,7 @@ describe("Composer", () => {
     });
   });
 
-  it.each(["codex", "acp:antigravity"] as const)("requires confirmation before switching a %s thread from Default Access to Full Access", async (provider) => {
+  it.each(["codex", "acp:antigravity"] as const)("requires inline confirmation before switching a %s thread from Default Access to Full Access", async (provider) => {
     const onSetExecutionMode = vi.fn(async () => undefined);
     const onDismissFullAccessRiskWarning = vi.fn(async () => undefined);
 
@@ -21266,29 +21289,31 @@ describe("Composer", () => {
       />
     );
 
-    chooseDropdownOption("Access mode", "Full Access");
+    chooseAccessStop("full-access");
 
-    const dialog = screen.getByRole("dialog", { name: "Enable Full Access?" });
-    expect(dialog.closest(".composer")).toBeNull();
-    expect(dialog.closest(".full-access-warning-modal")).not.toBeNull();
-    expect(dialog).toHaveTextContent("network access");
-    expect(dialog).toHaveTextContent("read/write access to almost all files");
-    expect(dialog).toHaveTextContent("supply chain attack");
+    // The confirmation is inline in the picker, not the modal warning, and
+    // the level does not change until Allow.
+    expect(screen.queryByRole("dialog", { name: "Enable Full Access?" })).not.toBeInTheDocument();
+    const panel = openAccessPicker();
+    expect(panel).toHaveTextContent("Full Access. Runs without");
+    expect(panel).toHaveTextContent("network and almost every file");
+    expect(within(panel).getByRole("slider", { name: "Access level" })).toHaveAttribute("aria-valuetext", "Default");
+    expect(accessTrigger()).toHaveValue("default");
     expect(onSetExecutionMode).not.toHaveBeenCalled();
 
-    fireEvent.click(
-      within(dialog).getByLabelText("Do not warn me again on this desktop."),
-    );
-    fireEvent.click(
-      within(dialog).getByRole("button", {
-        name: "I Understand and Accept the Risks",
-      }),
-    );
+    fireEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+    expect(within(panel).queryByRole("button", { name: "Allow Full Access" })).not.toBeInTheDocument();
+    expect(onSetExecutionMode).not.toHaveBeenCalled();
+
+    chooseAccessStop("full-access");
+    allowAccessStop();
 
     await waitFor(() => {
-      expect(onDismissFullAccessRiskWarning).toHaveBeenCalledTimes(1);
       expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
     });
+    expect(onSetExecutionMode).toHaveBeenCalledTimes(1);
+    // Allow is the confirmation; it does not dismiss future warnings.
+    expect(onDismissFullAccessRiskWarning).not.toHaveBeenCalled();
   });
 
   it("skips the Full Access warning after it has been dismissed", async () => {
@@ -21330,11 +21355,12 @@ describe("Composer", () => {
       />
     );
 
-    chooseDropdownOption("Access mode", "Full Access");
+    chooseAccessStop("full-access");
 
     expect(
       screen.queryByRole("dialog", { name: "Enable Full Access?" }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow Full Access" })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
     });
@@ -25249,7 +25275,7 @@ describe("Composer", () => {
       />
     );
 
-    chooseDropdownOption("Agent mode", "Yolo");
+    chooseAccessStop("yolo");
 
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
@@ -25296,7 +25322,7 @@ describe("Composer", () => {
       />
     );
 
-    chooseDropdownOption("Agent mode", "Auto Edit");
+    chooseAccessStop("autoEdit");
 
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
@@ -25343,7 +25369,7 @@ describe("Composer", () => {
       />
     );
 
-    chooseDropdownOption("Agent mode", "Auto");
+    chooseAccessStop("auto");
 
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
@@ -25357,6 +25383,37 @@ describe("Composer", () => {
         { stickySettingsChanged: true },
       );
     });
+  });
+
+  it("sends catalog-ordered Markdown for a bare skill exposed in another skill's path", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        skills={[
+          { name: "one task", path: "/dir $two !" },
+          { name: "two", path: "/two" },
+        ]}
+        thread={{
+          id: "thread-1",
+          title: "Skill hydration",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "$one task and $two" } });
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: "[$one task](/dir [$two](/two) !) and [$two](/two)" }],
+    })));
   });
 
   it("inserts skill markdown from autocomplete and sends it through startTurn", async () => {

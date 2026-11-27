@@ -186,6 +186,7 @@ import {
   reliableSubAgentCompletionBoundary,
   truncateSubAgentText,
 } from "./codex-native-subagents";
+import { CodexNativeSubAgentActivityTracker } from "./codex-native-subagent-activity";
 import {
   buildTaskMonitorFinalHandoffInput,
   buildTaskMonitorRecoveryPrompt,
@@ -641,6 +642,7 @@ export class SubAgentMonitorService {
   private async observeMonitorAccounting(delivery: TurnEventDelivery): Promise<void> {
     const { event } = delivery;
     await this.recordCodexNativeSubAgentActivity(event);
+    await this.publishCodexNativeSubAgentActivityLines(event);
     await this.recordCodexNativeSubAgentNotifications(event);
     await this.recordCodexNativeSubAgentNames(event);
     await this.recordTaskMonitorUsage(event);
@@ -687,6 +689,7 @@ export class SubAgentMonitorService {
   }
 
   private readonly codexNativeSubAgentParents = new Map<string, string>();
+  private readonly codexNativeSubAgentActivity = new CodexNativeSubAgentActivityTracker();
 
   private readonly codexNativeSubAgentModelSettings = new Map<
     string,
@@ -2210,6 +2213,25 @@ export class SubAgentMonitorService {
         });
       }
     }
+  }
+
+  /**
+   * Publishes what each running native worker is doing, from the worker
+   * thread's own steps. Live only: no card or usage write, since the line
+   * changes with every command a worker runs.
+   */
+  private async publishCodexNativeSubAgentActivityLines(event: AgentEvent): Promise<void> {
+    if (event.backend !== "codex") return;
+    const update = this.codexNativeSubAgentActivity.observe(event.notification,
+      (workerThreadId) => this.codexNativeSubAgentParents.get(workerThreadId));
+    if (!update) return;
+    // A live line must never cost the durable records this event still owes.
+    await this.context.emit({ backend: "codex", notification: { method: "thread/subAgentActivity/updated",
+      params: { threadId: update.parentThreadId, ...update.changes } } }).catch((error: unknown) => {
+      backendRegistryLog.warn("Codex worker activity line could not be published", {
+        error: String(error), parentThreadId: update.parentThreadId,
+      });
+    });
   }
 
   async recordCodexNativeSubAgentNames(event: AgentEvent): Promise<void> {

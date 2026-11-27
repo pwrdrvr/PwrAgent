@@ -21,13 +21,25 @@ export function claudeCommandSummaries(
   commands: readonly SlashCommand[],
   terminalCommands: ReadonlySet<string>,
 ): AppServerAvailableCommandSummary[] {
+  return selectClaudeCommandRows(commands, terminalCommands).map(claudeCommandSummary);
+}
+
+/** The rows `claudeCommandSummaries` shows: the one `/name` runs, per name. */
+export function selectClaudeCommandRows(
+  commands: readonly SlashCommand[],
+  terminalCommands: ReadonlySet<string>,
+): SlashCommand[] {
   const byName = new Map<string, SlashCommand>();
   for (const command of commands) {
     if (!command.name || command.name.startsWith("__") || terminalCommands.has(command.name)) continue;
     const current = byName.get(command.name);
     if (!current || (command.builtin && !current.builtin)) byName.set(command.name, command);
   }
-  return [...byName.values()].map((command) => ({
+  return [...byName.values()];
+}
+
+export function claudeCommandSummary(command: SlashCommand): AppServerAvailableCommandSummary {
+  return {
     name: command.name,
     ...(command.description ? { description: command.description } : {}),
     ...(command.aliases?.length ? { aliases: command.aliases } : {}),
@@ -35,7 +47,7 @@ export function claudeCommandSummaries(
     backend: "claude" as const,
     scope: "session" as const,
     source: "provider" as const,
-  }));
+  };
 }
 
 function normalizeClaudeCommandName(name: string): string {

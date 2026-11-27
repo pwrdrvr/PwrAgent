@@ -225,12 +225,20 @@ VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
     const dbPath = createTempDbPath();
     StateDb.open(dbPath).close();
     const raw = new Database(dbPath);
-    raw.exec("DROP TABLE thread_compactions");
-    raw.exec("ALTER TABLE thread_usage_turns DROP COLUMN final_context_tokens");
-    raw.exec("ALTER TABLE thread_usage_turns DROP COLUMN peak_context_tokens");
-    raw.exec("ALTER TABLE thread_usage_turns DROP COLUMN model_context_window");
-    raw.pragma("user_version = 53");
-    raw.close();
+    try {
+      raw.exec(`
+        DROP TABLE thread_compactions;
+        DROP INDEX idx_thread_usage_turns_acp_context;
+        DROP INDEX idx_thread_usage_turns_pending_acp_compaction;
+        ALTER TABLE thread_usage_turns DROP COLUMN acp_compaction_before_tokens;
+        ALTER TABLE thread_usage_turns DROP COLUMN final_context_tokens;
+        ALTER TABLE thread_usage_turns DROP COLUMN peak_context_tokens;
+        ALTER TABLE thread_usage_turns DROP COLUMN model_context_window;
+      `);
+      raw.pragma("user_version = 53");
+    } finally {
+      raw.close();
+    }
 
     const stateDb = StateDb.open(dbPath);
     try {
@@ -252,6 +260,16 @@ VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
           "final_context_tokens",
           "peak_context_tokens",
           "model_context_window",
+          "acp_compaction_before_tokens",
+        ]),
+      );
+      const usageIndexes = stateDb.raw
+        .prepare("PRAGMA index_list(thread_usage_turns)")
+        .all() as Array<{ name: string }>;
+      expect(usageIndexes.map((index) => index.name)).toEqual(
+        expect.arrayContaining([
+          "idx_thread_usage_turns_acp_context",
+          "idx_thread_usage_turns_pending_acp_compaction",
         ]),
       );
     } finally {

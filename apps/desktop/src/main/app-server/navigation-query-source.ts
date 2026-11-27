@@ -19,6 +19,7 @@ import { createNavigationQuerySnapshot, navigationQuerySnapshotSharedThreads } f
 import type { NavigationPullRequestProjection } from "@pwragent/owner-core/navigation-query-store";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
+import { readMessagingBindingsRevision } from "../messaging/named-messaging-bindings";
 import { attachNavigationPrCiWatchMarks } from "./navigation-pr-watch-marks";
 import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
 import { nextNavigationObservation } from "./navigation-observation-clock";
@@ -41,6 +42,9 @@ import { readNavigationCheckouts } from "../git-info/directory-store";
 // Keep a bounded comparison candidate across nearby refreshes. The serving
 // window and the provider/filesystem validation on its expiry still apply.
 const indexReads = new NavigationIndexReadPool(1_000, 15_000);
+// Sidebar pages share the compact display inventory between switches.
+// Registry events and the durable source version revoke it immediately.
+const SIDEBAR_INDEX_REUSE_MS = 15_000;
 const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = getDesktopStackReader();
 const navigationQueryLog = getMainLogger("pwragent:navigation-query");
@@ -362,6 +366,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   refreshProviders?: boolean;
   /** Display and coverage checks can use saved membership while discovery runs. */
   useSavedStartupInventory?: boolean;
+  sidebarDisplay?: boolean;
   /** Actions that use checkout membership as authority need live Git verification. */
   requireVerifiedDirectories?: boolean;
   /** This caller renders thread stack membership. */
@@ -401,7 +406,9 @@ export async function loadLocalNavigationQueryIndex(params: {
   // while startup was checking must not serve a reader after it finishes.
   // The refreshed event invalidates the read too, but a listener that runs
   // before the pool's (owner PR metadata) would join the stale index.
-  const version = navigationIndexVersion(registry, overlayStore, Boolean(params.viewer));
+  const sourceVersion = navigationIndexVersion(registry, overlayStore, Boolean(params.viewer));
+  // Named connections use separate stores, outside the overlay's SQLite version.
+  const version = `${sourceVersion}|${readMessagingBindingsRevision()}`;
   return reads.read(key, async (signal, checkpoint, previous, limitReuseTo) => {
     let navigationChanged = false;
     let stackPrScope: StackPrRelevanceScope | undefined;
@@ -490,7 +497,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       const priority = params.callerReason === "selected-stack-detail"
         ? PR_METADATA_PRIORITY.selected
         : PR_METADATA_PRIORITY.background;
-      const { index: projected, prScope } = await projectNavigationIndexStacks(local, registry, version, priority, signal, previous);
+      const { index: projected, prScope } = await projectNavigationIndexStacks(local, registry, sourceVersion, priority, signal, previous);
       stackPrScope = prScope;
       if (prScope) stackPrScopes.set(projected, prScope);
       // Owner and viewer leases project the same native stacks, so either can
@@ -498,7 +505,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       // a newer one must not replace it.
       if (epoch !== undefined && !((latestStackProjections.get(registry)?.epoch ?? -1) > epoch)) {
         latestStackProjections.set(registry, {
-          stacks: projected.stacks ?? [], prScope, overlayStore, epoch, version, completedAt: Date.now(),
+          stacks: projected.stacks ?? [], prScope, overlayStore, epoch, version: sourceVersion, completedAt: Date.now(),
         });
       }
       return projected;
@@ -538,7 +545,8 @@ export async function loadLocalNavigationQueryIndex(params: {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
     }
     return createNavigationQuerySnapshot(index, undefined, undefined, previous());
-  }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source");
+  }, params.signal, version, params.viewer || params.includeStacks ? "projection" : "source",
+  params.sidebarDisplay ? SIDEBAR_INDEX_REUSE_MS : undefined);
 }
 
 type SidebarStackFields = Pick<NavigationThreadSummary, "stackMemberships" | "stackLeadPrKey">;
@@ -569,7 +577,7 @@ export async function loadSidebarNavigationQueryIndex(
   params: Parameters<typeof loadLocalNavigationQueryIndex>[0],
 ): Promise<NavigationQueryIndex> {
   const { includeStacks, ...source } = params;
-  const local = await loadLocalNavigationQueryIndex({ ...source, useSavedStartupInventory: true });
+  const local = await loadLocalNavigationQueryIndex({ ...source, useSavedStartupInventory: true, sidebarDisplay: true });
   params.signal?.throwIfAborted();
   // Discovery publishes a replacement inventory. Let it settle before
   // starting an inventory-wide scan on the checkouts it may replace.

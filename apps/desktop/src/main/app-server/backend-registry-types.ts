@@ -124,7 +124,7 @@ import {
 import {
   type PwrAgentThreadOrchestrationResponse,
 } from "@pwragent/shared/contracts/thread-orchestration-tools";
-import { type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { type AcpUsageTurnCompletion, type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { type HelperModelId, type HelperModelResolution } from "@pwragent/shared/helper-models";
 import {
   type TaskMonitorResponse,
@@ -1084,6 +1084,10 @@ export type ThreadListCacheState = {
   archived: boolean;
   expiresAt?: number;
   promise?: Promise<AppServerThreadSummary[]>;
+  providerRead?: {
+    observationSequence: number;
+    result: Promise<{ threads: AppServerThreadSummary[]; enriched: boolean }>;
+  };
   threads?: AppServerThreadSummary[];
 };
 
@@ -1394,6 +1398,7 @@ export type PendingLiveThreadUsageLine = {
   backend: AppServerBackendKind;
   line: ThreadUsageLineRecord;
   observationSequence: number;
+  acpCompletion?: AcpUsageTurnCompletion;
 };
 
 export type LiveThreadUsageBatch = {
@@ -1427,6 +1432,7 @@ export type LiveThreadUsageEmitWork = {
 };
 
 export type RecentlyCompletedThreadUsageTurn = {
+  acpPromptSettling?: true;
   completedAt?: number;
   startedAt?: number;
   turnId: string;

@@ -420,7 +420,8 @@ it.each([4, 8])("budgets manual refresh and automatic turn-end passes with %i di
       snapshots: f.snapshots.mock.calls.length, commits: writes.commits })
       .toEqual({ ipc: 1 + 2 * n, provider: 0, materializations: 0, pins: 0, snapshots: 0, commits: 0 });
     f.reset();
-    await vi.advanceTimersByTimeAsync(1001);
+    // Move past the 15-second sidebar index reuse window before measuring a cold pass.
+    await vi.advanceTimersByTimeAsync(15_001);
     const { writes: coldWrites } = await measureSqliteWrites(async () => {
       await f.queries.refresh(); await until(f.idle);
     });

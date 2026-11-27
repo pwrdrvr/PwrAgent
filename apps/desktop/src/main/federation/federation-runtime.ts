@@ -977,6 +977,14 @@ export function federationEventClassForMethod(
     || method === "thread/operatorRequests/changed") {
     return "navigation";
   }
+  // What each running sub-agent is doing: a thread row's Sub-agents tray
+  // draws it, so navigation subscribers take the payload itself. It is not a
+  // NAVIGATION_EVENT_METHODS member, so it never becomes an invalidation; it
+  // changes per tool call and leaves every row and collection as it was.
+  // Peers that predate it classify it as transcript and drop it.
+  if (method === "thread/subAgentActivity/updated") {
+    return "navigation";
+  }
   if (method === NAVIGATION_DIRECTORY_SET_CHANGED_METHOD) {
     return "directory_set";
   }

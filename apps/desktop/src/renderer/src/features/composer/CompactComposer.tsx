@@ -16,12 +16,7 @@ import type {
   NavigationLaunchpadImageAttachment,
 } from "@pwragent/shared/contracts/navigation";
 import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
-import {
-  ChevronLeftIcon,
-  ChevronRightIcon,
-  ChevronUpIcon,
-  CloseIcon,
-} from "../../icons";
+import { ChevronUpIcon, CloseIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
   normalizeImageFile,
@@ -39,6 +34,7 @@ import {
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { useDismissableMenu } from "./ComposerDropdown";
 import { ModelSettingsPicker, type ModelSettingsPickerProps } from "./ModelSettingsPicker";
+import { AccessPicker, type AccessPickerProps } from "./AccessPicker";
 import {
   useComposerMentions,
   type ComposerMentionSources,
@@ -67,28 +63,29 @@ export type CompactComposerAction = {
 export type CompactComposerModelSettings = Omit<ModelSettingsPickerProps, "size" | "id">;
 
 /**
- * Everything the settings chip's menu can offer beyond the host's plain
- * actions: Access. It renders only when its options AND its callback are
- * supplied, so a host exposes exactly what its thread can actually change.
- * Model, effort and speed are the model pill's (`modelSettings`).
+ * The access picker on the strip: the composer's shield and stepped level
+ * bar, as a card-sized chip. The host supplies it only when its thread's
+ * access can actually change, and routes every commit through the Full
+ * Access gate (`useExecutionModeSelection`).
+ */
+export type CompactComposerAccess = Pick<
+  AccessPickerProps,
+  "backend" | "control" | "disabled" | "needsConfirmation" | "onCommit"
+>;
+
+/**
+ * What the strip can change beyond the model pill (`modelSettings`) and the
+ * host's plain actions: Access. It renders only when supplied, so a host
+ * exposes exactly what its thread can actually change.
  */
 export type CompactComposerSettingsMenu = {
   /**
-   * Called when the menu opens. Lazy on purpose: a card the operator only
-   * reads must not pay for a backend describe it never shows.
+   * Called when the settings menu or the access picker opens. Lazy on
+   * purpose: a card the operator only reads must not pay for a backend
+   * describe it never shows.
    */
   onOpen?: () => void;
-  executionModes?: Array<{
-    label: string;
-    mode: ThreadExecutionMode;
-    value?: string;
-    selected?: boolean;
-    danger?: boolean;
-  }>;
-  /** Override display label for the Access row when a provider has named native modes (e.g. Antigravity). */
-  accessLabel?: string;
-  onSelectExecutionMode?: (mode: ThreadExecutionMode) => void;
-  onSelectAccessOption?: (value: string) => void;
+  access?: CompactComposerAccess;
 };
 
 /** A queued message the host took back so the operator can edit it. */
@@ -174,22 +171,13 @@ export type CompactComposerProps = {
   placeholder?: string;
   /** Rendered at the bottom of the settings chip's menu. */
   secondaryActions?: CompactComposerAction[];
-  /** Setting sections for the chip menu; see the type's doc comment. */
+  /** Access and the menu's open hook; see the type's doc comment. */
   settingsMenu?: CompactComposerSettingsMenu;
   threadTitle: string;
 };
 
-type SettingsMenuView = "access" | "root";
-
 const MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS = 5;
 const MAX_COMPACT_COMPOSER_FILE_ATTACHMENTS = 20;
-
-const MENU_VIEW_TITLES: Record<
-  Exclude<SettingsMenuView, "root">,
-  string
-> = {
-  access: "Access",
-};
 
 /**
  * Composer for surfaces with no vertical budget — currently the star map's
@@ -220,13 +208,12 @@ const MENU_VIEW_TITLES: Record<
  * ambient text inside the field, because the field scrolls at max height
  * and anything pinned inside it ends up painting over the draft. The model
  * pill (`ModelSettingsPicker`, the same control as the thread composer's)
- * leads it; the access chip doubles as the trigger for the settings menu,
- * which also absorbs the host's secondary actions. The strip stays one
- * line: pill and chip on the left, Stop / Send pills on the right.
+ * leads it, then the access picker (`AccessPicker`, the composer's shield
+ * and level bar), then a chip opening the host's secondary actions. The
+ * strip stays one line: those on the left, Stop / Send pills on the right.
  */
 export function CompactComposer(props: CompactComposerProps) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuView, setMenuView] = useState<SettingsMenuView>("root");
   const [imageAttachments, setImageAttachments] = useState<
     NavigationLaunchpadImageAttachment[]
   >([]);
@@ -312,20 +299,11 @@ export function CompactComposer(props: CompactComposerProps) {
   const settings = props.settingsMenu;
   const settingsOnOpen = settings?.onOpen;
 
-  const accessLabel = props.executionMode
+  const access = settings?.access;
+  // Without a picker, the thread's access is a readout on the strip.
+  const accessReadout = !access && props.executionMode
     ? formatExecutionModeLabel(props.executionMode)
     : undefined;
-  const chipSegments = [
-    accessLabel
-      ? {
-          danger: props.executionMode === "full-access",
-          key: "access",
-          text: accessLabel,
-        }
-      : undefined,
-  ].filter((segment): segment is NonNullable<typeof segment> =>
-    Boolean(segment),
-  );
 
   const send = useCallback(async (
     commandText?: string,
@@ -731,20 +709,9 @@ export function CompactComposer(props: CompactComposerProps) {
   );
 
   const toggleMenu = useCallback(() => {
-    if (!menuOpen) {
-      setMenuView("root");
-      settingsOnOpen?.();
-    }
+    if (!menuOpen) settingsOnOpen?.();
     setMenuOpen(!menuOpen);
   }, [menuOpen, settingsOnOpen]);
-
-  const closeAndSelect = useCallback(
-    (select: () => void) => {
-      closeMenu();
-      select();
-    },
-    [closeMenu],
-  );
 
   const sendDisabled =
     props.disabled
@@ -758,182 +725,34 @@ export function CompactComposer(props: CompactComposerProps) {
     );
 
   const actions = props.secondaryActions ?? [];
-  // A section renders only when its mutation callback exists.
-  const accessSection = Boolean(
-    (settings?.onSelectAccessOption || settings?.onSelectExecutionMode)
-      && (settings.executionModes?.length ?? 0) > 1,
-  );
-  const hasSettingsRows = accessSection;
-  const hasMenu = hasSettingsRows || actions.length > 0;
-  const settingRow = (
-    label: string,
-    value: ReactNode,
-    view: SettingsMenuView,
-  ) => (
-    <button
-      aria-haspopup="menu"
-      className="compact-composer__menu-item"
-      onClick={() => setMenuView(view)}
-      role="menuitem"
-      type="button"
-    >
-      <span className="compact-composer__menu-label">{label}</span>
-      {value}
-      <span aria-hidden="true" className="compact-composer__menu-chevron">
-        <ChevronRightIcon size={10} />
-      </span>
-    </button>
-  );
-
-  const optionRow = (params: {
-    checked: boolean;
-    danger?: boolean;
-    key: string;
-    label: string;
-    onSelect: () => void;
-  }) => (
-    <button
-      aria-checked={params.checked}
-      className="compact-composer__menu-item"
-      key={params.key}
-      onClick={() => closeAndSelect(params.onSelect)}
-      role="menuitemradio"
-      type="button"
-    >
-      <span aria-hidden="true" className="compact-composer__menu-check">
-        {params.checked ? "✓" : ""}
-      </span>
-      <span className="compact-composer__menu-label">
-        {params.danger ? (
-          <span className="compact-composer__danger-pill">{params.label}</span>
-        ) : (
-          params.label
-        )}
-      </span>
-    </button>
-  );
-
-  const submenu = (title: string, rows: ReactNode) => (
-    <>
-      <button
-        className="compact-composer__menu-item compact-composer__menu-item--back"
-        onClick={() => setMenuView("root")}
-        role="menuitem"
-        type="button"
-      >
-        <span aria-hidden="true" className="compact-composer__menu-chevron">
-          <ChevronLeftIcon size={10} />
-        </span>
-        Back
-      </button>
-      {/* The menu container carries the view's name; the visible eyebrow
-          is decoration on top of it, not a menu child in its own right. */}
-      <div aria-hidden="true" className="compact-composer__menu-eyebrow">
-        {title}
-      </div>
-      {rows}
-    </>
-  );
+  const hasMenu = actions.length > 0;
 
   // Built only while the menu is open: this component re-renders per
   // keystroke, and a closed menu must not cost an element tree per key.
-  const menuBody = (): ReactNode => {
-    if (menuView === "access") {
-      const modes = settings?.executionModes ?? [];
-      return submenu(
-        MENU_VIEW_TITLES.access,
-        modes.map((entry) =>
-          optionRow({
-            checked: entry.selected ?? (entry.mode === props.executionMode),
-            danger: entry.danger ?? (entry.mode === "full-access"),
-            key: entry.value ?? entry.mode,
-            label: entry.label,
-            onSelect: () => {
-              if (settings?.onSelectAccessOption && entry.value !== undefined) {
-                settings.onSelectAccessOption(entry.value);
-                return;
-              }
-              settings?.onSelectExecutionMode?.(entry.mode);
-            },
-          }),
-        ),
-      );
-    }
-    return (
-      <>
-        {accessSection
-          ? settingRow(
-              "Access",
-              props.executionMode === "full-access" ? (
-                <span className="compact-composer__danger-pill">
-                  {settings?.accessLabel ?? accessLabel}
-                </span>
-              ) : (
-                <span className="compact-composer__menu-value">
-                  {settings?.accessLabel ?? accessLabel ?? formatExecutionModeLabel("default")}
-                </span>
-              ),
-              "access",
-            )
-          : null}
-        {hasSettingsRows && actions.length > 0 ? (
-          <div className="compact-composer__menu-separator" role="separator" />
-        ) : null}
-        {actions.map((action) => (
-          <button
-            className="compact-composer__menu-item"
-            disabled={action.disabled}
-            key={action.key}
-            onClick={() => {
-              closeMenu();
-              action.onSelect();
-            }}
-            role="menuitem"
-            type="button"
-          >
-            {action.label}
-          </button>
-        ))}
-      </>
-    );
-  };
+  const menuBody = (): ReactNode =>
+    actions.map((action) => (
+      <button
+        className="compact-composer__menu-item"
+        disabled={action.disabled}
+        key={action.key}
+        onClick={() => {
+          closeMenu();
+          action.onSelect();
+        }}
+        role="menuitem"
+        type="button"
+      >
+        {action.label}
+      </button>
+    ));
 
-  const chipContent =
-    chipSegments.length > 0 ? (
-      <>
-        {chipSegments.map((segment, index) => (
-          <span key={segment.key} className="compact-composer__chip-part">
-            {index > 0 ? (
-              <span aria-hidden="true" className="compact-composer__chip-dot">
-                ·
-              </span>
-            ) : null}
-            <span
-              className={
-                segment.danger
-                  ? "compact-composer__danger-pill"
-                  : "compact-composer__chip-segment"
-              }
-            >
-              {segment.text}
-            </span>
-          </span>
-        ))}
-      </>
+  const accessReadoutNode = accessReadout ? (
+    props.executionMode === "full-access" ? (
+      <span className="compact-composer__danger-pill">{accessReadout}</span>
     ) : (
-      // A thread with no access readout still needs a door to the menu;
-      // the bare glyph is the old kebab's, on the chip's own geometry.
-      <span aria-hidden="true">⋯</span>
-    );
-
-  // Keep the visible readout inside the accessible name (label-in-name):
-  // a voice-control user saying "click Full Access" must land here.
-  const chipLabel =
-    chipSegments.length > 0
-      ? `Thread settings: ${chipSegments
-          .map((segment) => segment.text)
-          .join(" · ")}`
-      : "Thread settings";
+      <span className="compact-composer__chip-segment">{accessReadout}</span>
+    )
+  ) : null;
 
   return (
     <div className="compact-composer">
@@ -1045,21 +864,56 @@ export function CompactComposer(props: CompactComposerProps) {
             <ModelSettingsPicker {...props.modelSettings} size="card" />
           </div>
         ) : null}
+        {access ? (
+          <div
+            className="compact-composer__access"
+            // The picker's panel portals out of the card's DOM but not out
+            // of its React tree; input from it stops here, as the model
+            // pill's does, so a drag on the level bar never pans the map.
+            onKeyDown={(event) => {
+              if (!event.currentTarget.contains(event.target as Node)) event.stopPropagation();
+            }}
+            onPointerDown={(event) => {
+              if (!event.currentTarget.contains(event.target as Node)) event.stopPropagation();
+            }}
+          >
+            <AccessPicker
+              {...access}
+              scope="this thread"
+              size="card"
+              onOpenChange={(open) => {
+                if (open) settingsOnOpen?.();
+              }}
+            />
+          </div>
+        ) : accessReadoutNode ? (
+          // No picker (the host cannot change this thread's access), so
+          // the access is plain readable text, with no interactive affordance.
+          <span
+            aria-label={`Access: ${accessReadout}`}
+            className="compact-composer__chip compact-composer__chip--static"
+            role="img"
+          >
+            {accessReadoutNode}
+          </span>
+        ) : null}
         {hasMenu ? (
           <div className="compact-composer__menu" ref={menuRef}>
             <button
               aria-expanded={menuOpen}
               aria-haspopup="menu"
-              aria-label={chipLabel}
-              className={
-                menuOpen
-                  ? "compact-composer__chip is-open"
-                  : "compact-composer__chip"
-              }
+              aria-label="Thread settings"
+              className={[
+                "compact-composer__chip",
+                "compact-composer__chip--more",
+                "tooltip-target",
+                menuOpen ? "is-open" : "",
+              ].filter(Boolean).join(" ")}
+              data-tooltip={menuOpen ? undefined : "Thread settings"}
               onClick={toggleMenu}
               type="button"
             >
-              {chipContent}
+              <span aria-hidden="true">⋯</span>
               <span
                 aria-hidden="true"
                 className="compact-composer__chip-chevron"
@@ -1070,11 +924,7 @@ export function CompactComposer(props: CompactComposerProps) {
             {/* Same in-card anchoring rule as the mention popover above. */}
             {menuOpen ? (
               <div
-                aria-label={
-                  menuView === "root"
-                    ? "Thread settings"
-                    : MENU_VIEW_TITLES[menuView]
-                }
+                aria-label="Thread settings"
                 className="compact-composer__menu-list"
                 role="menu"
               >
@@ -1082,13 +932,6 @@ export function CompactComposer(props: CompactComposerProps) {
               </div>
             ) : null}
           </div>
-        ) : chipSegments.length > 0 ? (
-          // No menu to open (a host with no actions and no settings), so
-          // the chip is informational only — plain readable text, no
-          // interactive affordance.
-          <span className="compact-composer__chip compact-composer__chip--static">
-            {chipContent}
-          </span>
         ) : null}
 
         <span className="compact-composer__spacer" />

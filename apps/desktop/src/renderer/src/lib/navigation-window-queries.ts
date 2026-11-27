@@ -18,7 +18,7 @@ import {
 } from "@pwragent/shared/navigation-query-events";
 import { readDirectoryGitProof, readDirectoryGitRevisions, readNavigationMetadataDependencies } from "@pwragent/shared/navigation-metadata-dependencies";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
-import type { FederationTarget } from "@pwragent/shared/contracts/federation";
+import { federationTargetKey, type FederationTarget } from "@pwragent/shared/contracts/federation";
 import type {
   NavigationDirectoryGitRevisions,
   NavigationIdentity,
@@ -90,6 +90,7 @@ type Resource = {
   token: string;
   value: NavigationWindowResource;
   pending?: Promise<void>;
+  refreshCompletion?: Promise<void>;
   /** Metadata notices observed after dispatch and awaiting the replacement baseline. */
   membershipRead?: {
     paths: Set<string>;
@@ -200,6 +201,7 @@ export class NavigationWindowQueries {
   private readonly pageDependencies = new WeakMap<NavigationQueryPage, NavigationMetadataDependencies | undefined>();
   private readonly recentPinPublications = new Set<string>();
   private readonly readWaiters = new Set<() => void>();
+  private readonly pendingWindowRefreshes = new Map<string, Promise<void>>();
   private snapshot: NavigationWindowQueriesState = { resources: new Map() };
 
   private nextLogical = 0;
@@ -465,8 +467,11 @@ export class NavigationWindowQueries {
       added.push(resource);
       changed = true;
     }
-    if (changed) this.trimRetained(this.activePageBytes);
-    if (changed) navigationListingDiagnostics.record({ ...this.diagnostic, phase: "demand", count: added.length });
+    if (changed) {
+      this.pendingWindowRefreshes.clear();
+      this.trimRetained(this.activePageBytes);
+      navigationListingDiagnostics.record({ ...this.diagnostic, phase: "demand", count: added.length });
+    }
     let startedReads = false;
     if (this.visible) {
       for (const resource of added) {
@@ -483,6 +488,7 @@ export class NavigationWindowQueries {
 
   setVisible(visible: boolean): void {
     if (this.disposed || this.visible === visible) return;
+    this.pendingWindowRefreshes.clear();
     this.visible = visible;
     let budget: ResumeBudget | undefined;
     for (const resource of this.resources.values()) {
@@ -492,7 +498,8 @@ export class NavigationWindowQueries {
       } else {
         // Replace the lifetime rather than revive a released token or pending read.
         const next: Resource = { ...resource, token: `${this.prefix}:${++this.nextResource}`,
-          released: false, pending: undefined, refreshAfterPending: false, invalidated: false, membershipUncertain: true };
+          released: false, pending: undefined, refreshCompletion: undefined, refreshAfterPending: false,
+          invalidated: false, membershipUncertain: true };
         // Hiding the window ends a restore early. Showing it is a new opening.
         if (!next.resumeExpansion) budget = this.armResume(next, budget);
         this.resources.set(resource.value.id, next);
@@ -503,8 +510,21 @@ export class NavigationWindowQueries {
     this.publish();
   }
 
-  refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause, trigger?: string, includeDirectoryIndex = false): Promise<void> {
+  refresh(id?: string, owners?: readonly FederationTarget[], invalidatedOnly = false, cause?: NavigationDiagnosticCause,
+    trigger?: string, includeDirectoryIndex = false, requireNewObservation = false): Promise<void> {
     if (!this.visible || this.disposed) return Promise.resolve();
+    if (requireNewObservation) this.pendingWindowRefreshes.clear();
+    // One ordinary window refresh covers its completed pages as long as it
+    // still has reads pending. An owner change or new demand ends that cover.
+    const owner = owners?.[0];
+    const windowScope = id === undefined && !invalidatedOnly && !trigger && !includeDirectoryIndex
+      && !requireNewObservation && (!owners || owners.length === 1)
+      ? (owner ? federationTargetKey(owner) : "all") : undefined;
+    const pendingWindowRefresh = windowScope === undefined ? undefined : this.pendingWindowRefreshes.get(windowScope);
+    if (pendingWindowRefresh) {
+      navigationListingDiagnostics.record({ ...this.diagnostic, phase: "coalesced", cause });
+      return pendingWindowRefresh;
+    }
     const resources = id ? [this.resources.get(id)].filter((value): value is Resource => Boolean(value)) : [...this.resources.values()];
     // Keep the caller separate from the event that fenced each page: a queued
     // action can consume a seen/status invalidation without becoming its cause.
@@ -516,10 +536,13 @@ export class NavigationWindowQueries {
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "refresh", batch, count: selected.length, invalidatedOnly,
       caller: safeNavigationDiagnosticTrigger(trigger), trigger: safeNavigationDiagnosticTrigger(trigger), cause });
     let startedReads = false;
-    const refreshed = Promise.all(selected.map(async (resource) => {
+    const refreshed = Promise.all(selected.map((resource) => {
       const pending = resource.pending;
-      let retryJoinedPinRead = Boolean(pending && owesPinRead(resource));
-      if (forceRead(resource) || resource.invalidated || (!pending && owesPinRead(resource))) {
+      const retryJoinedPinRead = Boolean(pending && owesPinRead(resource));
+      // Owner events already fence pending reads. Attribute the replacement
+      // to this caller without scheduling another one for the same event.
+      const replacePending = requireNewObservation && forceRead(resource);
+      if (!pending || replacePending || resource.invalidated) {
         resource.diagnosticRefreshBatch = batch;
         if (!resource.diagnosticCause || resource.diagnosticCause === "refresh") resource.diagnosticCause = cause;
         resource.diagnosticTrigger ??= trigger;
@@ -528,27 +551,46 @@ export class NavigationWindowQueries {
         // between provider observations. A scoped row refresh already knows
         // exactly why its baseline is stale.
         if (!resource.invalidated) resource.membershipUncertain = true;
-        if (resource.pending) resource.refreshAfterPending = true;
-        const read = this.read(resource, false, undefined, false, "refresh", false);
+        if (pending && replacePending) resource.refreshAfterPending = true;
+        void this.read(resource, false, undefined, false, "refresh", false);
         startedReads ||= !pending && Boolean(resource.pending);
-        await read;
       }
-      while (this.isCurrent(resource)) {
-        if (resource.pending) {
-          await resource.pending;
-          continue;
-        }
-        // The receipt can arrive while the broadcast's read is still in
-        // flight. Give that failed read the same recovery as a late receipt.
-        if (!retryJoinedPinRead || !owesPinRead(resource)) break;
-        retryJoinedPinRead = false;
-        await this.read(resource, false);
-      }
+      const shared = this.waitForRefreshCompletion(resource);
+      if (!retryJoinedPinRead) return shared;
+      // The receipt can arrive while the broadcast's read is still in
+      // flight. Give that failed read the same recovery as a late receipt.
+      return shared?.then(() => {
+        if (!this.isCurrent(resource) || !owesPinRead(resource)) return;
+        void this.read(resource, false);
+        return this.waitForRefreshCompletion(resource);
+      });
     }));
+    let completion = refreshed.then(() => undefined);
+    if (windowScope !== undefined && selected.length > 0) {
+      completion = completion.finally(() => {
+        if (this.pendingWindowRefreshes.get(windowScope) === completion) this.pendingWindowRefreshes.delete(windowScope);
+      });
+      this.pendingWindowRefreshes.set(windowScope, completion);
+    }
     // One refresh queues its reads in one turn. Publish every newly queued
     // read's loading state together, including a refresh of multiple owners.
     if (startedReads) this.publish();
-    return refreshed.then(() => undefined);
+    return completion;
+  }
+
+  private waitForRefreshCompletion(resource: Resource): Promise<void> | undefined {
+    if (resource.refreshCompletion || !resource.pending) return resource.refreshCompletion;
+    // Follow replacements once per resource, then settle every joined caller.
+    const drain = async (first: Promise<void>) => {
+      try {
+        await first;
+        while (this.isCurrent(resource) && resource.pending) await resource.pending;
+      } finally {
+        resource.refreshCompletion = undefined;
+      }
+    };
+    resource.refreshCompletion = drain(resource.pending);
+    return resource.refreshCompletion;
   }
 
   /** Invalidate transport baselines before canonical owner events can race a late page. */
@@ -643,7 +685,10 @@ export class NavigationWindowQueries {
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "invalidate", batch, count,
       cause: navigationDiagnosticCause(event), trigger: navigationDiagnosticTrigger(event),
       source: event ? event.federationTarget?.scope === "remote" ? "remote" : "local" : undefined });
-    if (changed) this.publish();
+    if (changed) {
+      this.pendingWindowRefreshes.clear();
+      this.publish();
+    }
   }
 
   private fenceBaseline(resource: Resource): void {
@@ -1126,6 +1171,7 @@ export class NavigationWindowQueries {
     if (resource.value.state.rebaselineRequired && !explicitAnchor && !fromStart) return Promise.resolve();
     let cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
+    if (explicitLoadMore || explicitAnchor || fromStart) this.pendingWindowRefreshes.clear();
     const queryKey = this.resumeKey(resource);
     const previousExpandedRows = resource.expandedRows;
     const restoringBeforeRead = explicitAnchor || fromStart ? 0 : loadedRows(resource.value.state.page);
@@ -1465,6 +1511,7 @@ export class NavigationWindowQueries {
     if (this.disposed) return;
     navigationListingDiagnostics.record({ ...this.diagnostic, phase: "dispose" });
     this.disposed = true;
+    this.pendingWindowRefreshes.clear();
     for (const resource of this.resources.values()) this.release(resource);
     this.resources.clear();
     this.activePageBytes = 0;

@@ -1,3 +1,4 @@
+export { AccessShieldIcon } from "./AccessShieldIcon";
 export { ArchiveIcon } from "./ArchiveIcon";
 export { ArrowLeftToLineIcon } from "./ArrowLeftToLineIcon";
 export { ArrowRightToLineIcon } from "./ArrowRightToLineIcon";
@@ -51,6 +52,7 @@ export { MattermostIcon } from "./MattermostIcon";
 export { MicIcon } from "./MicIcon";
 export { MicOffIcon } from "./MicOffIcon";
 export { MinimizeIcon } from "./MinimizeIcon";
+export { MoreHorizontalIcon } from "./MoreHorizontalIcon";
 export { MoreVerticalIcon } from "./MoreVerticalIcon";
 export { LineIcon } from "./LineIcon";
 export { NewThreadIcon } from "./NewThreadIcon";

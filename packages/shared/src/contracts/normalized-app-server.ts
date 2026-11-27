@@ -840,6 +840,8 @@ export type AppServerThreadMessageOrigin = {
   dependencyId?: string;
   stackNotice?: import("./thread-system-messages").StackNotice;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice" | "auto-compaction";
+  /** Sequence in the sender's durable correspondence log, scoped to this message ID. */
+  correspondenceRevision?: number;
   /**
    * The operator sent this agent-routed message by acting on a to-do card,
    * so a paused project's refusal of messages from other threads skips it.
@@ -2499,6 +2501,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId: string;
+        /** An ACP compaction request finished. Ordinary fill must still verify shrink. */
+        completedAcpCompactionRequest?: true;
         turn: {
           id: string;
           /** Attribution only; never a permission or consent source. */
@@ -2644,6 +2648,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId: string;
+        /** ACP accepted the stop, and its prompt result can still report usage. */
+        acpPromptSettling?: true;
         turn: {
           id: string;
           /** Attribution only; never a permission or consent source. */
@@ -2812,6 +2818,8 @@ export type AppServerNotification =
         turnId?: string;
         usedTokens: number;
         modelContextWindow: number;
+        /** Ordinary live model calls omit this. Session readings may be cached. */
+        source?: "compaction" | "session";
       };
     }
   | {
@@ -3195,6 +3203,20 @@ export type AppServerNotification =
         batchId: string;
         status: "running" | "success" | "failed" | "cancelled";
       };
+    }
+  | {
+      /**
+       * What the thread's running sub-agents are doing now, keyed by their
+       * Sub-agents card (`monitorId`): one line such as "Reading app.css".
+       * Carries only changes (`SubAgentActivityChanges`): lines that started
+       * or changed, and the cards whose line ended. A window that missed an
+       * event shows a line from the sub-agent's next tool call on, and shows
+       * none once its card stops running. Live only: never persisted, and it
+       * changes with every tool call a sub-agent makes, so it never
+       * invalidates navigation.
+       */
+      method: "thread/subAgentActivity/updated";
+      params: { threadId: string } & import("../sub-agent-activity-lines").SubAgentActivityChanges;
     }
   | {
       /**

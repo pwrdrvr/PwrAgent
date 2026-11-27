@@ -39,7 +39,7 @@ it("keeps the refresh caller independent of the invalidating event and query ide
   ), { numRuns: 25 });
 });
 
-it("attributes a pending read and its coalesced replacement to their own refresh callers", async () => {
+it("attributes a pending read and the replacement after an owner change to their own refresh callers", async () => {
   const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () => page);
   const controller = new NavigationWindowQueries({ getNavigationQueryPage: read });
   try {
@@ -53,11 +53,15 @@ it("attributes a pending read and its coalesced replacement to their own refresh
     read.mockImplementationOnce(async () => { started(); await gate; return page; });
     const first = controller.refresh(undefined, undefined, false, undefined, "navigation/refresh");
     await entered;
-    const second = controller.refresh(undefined, undefined, false, undefined, "scheduled/thread-lifecycle");
+    controller.invalidate("inbox", undefined, { backend: "codex", notification: {
+      method: "thread/status/changed", params: { threadId: "thread", status: { type: "active" } },
+    } });
+    const second = controller.refresh(undefined, undefined, true, undefined, "scheduled/thread-lifecycle");
     finish();
     await Promise.all([first, second]);
     expect(read).toHaveBeenCalledTimes(2);
     expect(read.mock.calls.map(([next]) => next.diagnostic?.caller))
       .toEqual(["navigation/refresh", "scheduled/thread-lifecycle"]);
+    expect(read.mock.calls[1]![0].diagnostic?.trigger).toBe("thread/status/changed");
   } finally { controller.dispose(); }
 });

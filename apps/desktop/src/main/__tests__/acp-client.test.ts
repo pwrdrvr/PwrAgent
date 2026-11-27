@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared/pending-request-response";
 import { deriveInboxState } from "@pwragent/shared/inbox";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared/contracts/normalized-app-server";
-import { AcpAgentClient, resolveAntigravityMcpToolTarget } from "../acp/acp-client";
+import { AcpAgentClient, AcpSessionTransferBusyError, resolveAntigravityMcpToolTarget } from "../acp/acp-client";
 import { pwragentToolSkipsAgentApproval } from "../app-server/acp-host-tool-approval";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
@@ -372,6 +372,97 @@ describe("AcpAgentClient", () => {
         timeoutMs: 20_000,
       },
     ]);
+  });
+
+  it("separates Antigravity's in-flight generation, compaction request, and continuation context reports", async () => {
+    const prompts: Array<ReturnType<typeof Promise.withResolvers<unknown>>> = [];
+    const transport = new FakeAcpAgentTransport({
+      initialize: { protocolVersion: 1, agentInfo: { name: "Antigravity ACP Server", version: "1.5.18" } },
+    });
+    const request = transport.request.bind(transport);
+    transport.request = async (method, params, timeout) => {
+      if (method !== "session/prompt") return await request(method, params, timeout);
+      const deferred = Promise.withResolvers<unknown>();
+      prompts.push(deferred);
+      return deferred.promise;
+    };
+    const updates: Array<{ used: unknown; source: unknown; turnId: unknown }> = [];
+    const finishes: Array<{ compacted: unknown; usage: unknown }> = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity", store, transport,
+      onSessionUpdate: (event) => {
+        if (event.update.sessionUpdate === "usage_update") {
+          updates.push({ used: event.update.used, source: event.contextUsageSource, turnId: event.turnId });
+        }
+        if (event.update.kind === "turn_finished") {
+          finishes.push({ compacted: event.completedAcpCompactionRequest, usage: event.update.usage });
+        }
+      },
+    });
+    async function start(turnId: string) {
+      await client.startPrompt({ sessionId: "session-1", prompt: "Write about gardening.", turnId });
+    }
+    function report(used: number) {
+      transport.emitSessionUpdate("session-1", { sessionUpdate: "usage_update", used, size: 1_048_576 });
+    }
+    try {
+      await client.initialize();
+      await client.startSession({ cwd: "/repo", executionMode: "default", mcpServers: "none" });
+      report(0);
+      await start("turn-1");
+      const steer = client.steerSession({ sessionId: "session-1", text: "/compact",
+        content: [{ type: "text", text: "/compact" }], interjectionId: "compaction" });
+      await vi.waitFor(() => expect(prompts).toHaveLength(2));
+      prompts[0]!.resolve({ stopReason: "end_turn" });
+      report(37_205);
+      report(38_745);
+      report(38_745);
+      prompts[1]!.resolve({ stopReason: "end_turn", usage: { totalTokens: 75_950 } });
+      await expect(steer).resolves.toEqual({ delivery: "currentTurn" });
+      await vi.waitFor(() => expect(finishes).toHaveLength(1));
+      expect(updates).toEqual([
+        { used: 0, source: "session", turnId: undefined },
+        { used: 37_205, source: undefined, turnId: "turn-1" },
+        { used: 38_745, source: "compaction", turnId: "turn-1" },
+      ]);
+      expect(finishes[0]).toEqual({ compacted: true, usage: { totalTokens: 75_950 } });
+      await start("turn-2");
+      transport.emitSessionUpdate("session-1", {
+        sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." },
+      });
+      report(13_383);
+      prompts[2]!.resolve({ stopReason: "end_turn" });
+      await vi.waitFor(() => expect(finishes).toHaveLength(2));
+      expect(updates.at(-1)).toEqual({ used: 13_383, source: undefined, turnId: "turn-2" });
+      expect(finishes[1]?.compacted).toBeUndefined();
+
+      // Replacing /compact must flush its summary and start a clean ordinary generation.
+      await client.startPrompt({ sessionId: "session-1", prompt: "/compact",
+        turnId: "turn-3", isCompactCommand: true });
+      const replacement = client.steerSession({ sessionId: "session-1", text: "Keep gardening.",
+        content: [{ type: "text", text: "Keep gardening." }], interjectionId: "replace-compact" });
+      await vi.waitFor(() => expect(prompts).toHaveLength(5));
+      report(39_000);
+      prompts[3]!.resolve({ stopReason: "end_turn" });
+      // Wait for the detached response's handler to observe the handoff.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      transport.emitSessionUpdate("session-1", {
+        sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Continuing." },
+      });
+      await expect(replacement).resolves.toEqual({ delivery: "currentTurn" });
+      report(15_000);
+      report(16_000);
+      prompts[4]!.resolve({ stopReason: "end_turn" });
+      await vi.waitFor(() => expect(finishes).toHaveLength(3));
+      expect(updates.slice(-3)).toEqual([
+        { used: 39_000, source: "compaction", turnId: "turn-3" },
+        { used: 15_000, source: undefined, turnId: "turn-3" },
+        { used: 16_000, source: undefined, turnId: "turn-3" },
+      ]);
+      expect(finishes[2]?.compacted).toBeUndefined();
+    } finally {
+      await client.dispose();
+    }
   });
 
   it("steers an active Antigravity turn via overlapping session/prompt handoff", async () => {
@@ -2452,6 +2543,37 @@ describe("AcpAgentClient", () => {
       expect(await transport.emitRequest("session/request_permission", request, 2))
         .toEqual({ outcome: { outcome: "selected", optionId: retained ? "allow" : "deny" } });
       expect(onRequest).toHaveBeenCalledTimes(retained ? 1 : 2);
+    } finally {
+      await client.dispose();
+    }
+  });
+
+  it("signals transfer readiness only once all Antigravity native background work ends", async () => {
+    const transport = new FakeAcpAgentTransport({
+      initialize: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { close: {} } } },
+    });
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport });
+    try {
+      await client.initialize();
+      const { sessionId } = await client.startSession({ cwd: "/repo", executionMode: "default", mcpServers: "none" });
+      const emit = (toolCallId: string, status: string) => transport.emitSessionUpdate(sessionId, {
+        sessionUpdate: "tool_call_update", toolCallId, name: "run_command", status,
+      });
+      emit("first", "in_progress");
+      emit("second", "in_progress");
+      const busy = await client.closeSessionForTransfer(sessionId).catch((error: unknown) => error);
+      expect(busy).toBeInstanceOf(AcpSessionTransferBusyError);
+      const ready = vi.fn();
+      void (busy as AcpSessionTransferBusyError).ready.then(ready);
+      emit("first", "completed");
+      await Promise.resolve();
+      expect(ready).not.toHaveBeenCalled();
+      expect(transport.requests.some(({ method }) => method === "session/close")).toBe(false);
+      emit("second", "completed");
+      await (busy as AcpSessionTransferBusyError).ready;
+      expect(ready).toHaveBeenCalledTimes(1);
+      await client.closeSessionForTransfer(sessionId);
+      expect(transport.requests.filter(({ method }) => method === "session/close")).toHaveLength(1);
     } finally {
       await client.dispose();
     }

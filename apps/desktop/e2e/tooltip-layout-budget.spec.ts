@@ -80,7 +80,7 @@ test("tooltip ignores sibling and own-anchor streaming and still detects sibling
   try {
     await app.window.getByRole("button", { name: /Linked directory tooltip thread/i }).first().click();
     const rail = app.window.getByRole("complementary", { name: "Thread context" });
-    await rail.getByRole("tab", { name: "Linked projects" }).click();
+    await rail.getByRole("tab", { name: /^Details/ }).click();
     const anchor = rail.getByLabel("Path for PwrAgent", { exact: true });
     await anchor.focus();
     await expect(app.window.getByRole("tooltip")).toBeVisible();

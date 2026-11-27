@@ -82,6 +82,22 @@ export type ThreadUsageLineScope =
 
 export type ThreadUsageLineStatus = "pending" | "finalized" | "superseded";
 
+/** Owner-observed ACP context, committed with this turn's existing usage write. */
+export type AcpUsageTurnCompletion = {
+  backend: `acp:${string}`;
+  threadId: string;
+  turnId: string;
+  completedAt: number;
+  compacted?: true;
+  context?: {
+    firstContextTokens: number;
+    firstObservedAt: number;
+    finalContextTokens: number;
+    peakContextTokens: number;
+    modelContextWindow: number;
+  };
+};
+
 export type ThreadUsageLineRecord = {
   backend: string;
   /** Opaque account identity captured for this request, independently of limits. */

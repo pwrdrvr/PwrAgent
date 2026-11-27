@@ -508,9 +508,12 @@ it("coalesces invalidations during a pending read into one following refresh", a
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
   queries.setDemand(new Map([["lens", request()]]));
   await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
-  void queries.refresh(); void queries.refresh(); void queries.refresh();
+  const refreshes = Array.from({ length: 3 }, () => {
+    queries.invalidate("lens");
+    return queries.refresh("lens", undefined, true);
+  });
   first.resolve(page());
-  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  await Promise.all(refreshes);
   expect(read).toHaveBeenCalledTimes(2);
   queries.dispose();
 });

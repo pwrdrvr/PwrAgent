@@ -837,7 +837,7 @@ function renderDetail(
             {wake.model ? <><dt>Runs on</dt><dd>{wake.model}</dd></> : null}
             {wake.createdAt !== undefined ? <><dt>Since</dt><dd>{formatWatchTime(wake.createdAt, now)}</dd></> : null}
           </dl>
-          {showTab("subagents", "Show in Sub-agents")}
+          {showTab("subagents", "Show in Jobs")}
         </span>
       );
     case "scheduled_action":
@@ -865,14 +865,14 @@ function renderDetail(
       return (
         <span className="waiting-for-panel__detail">
           {wake.task.progress ? <span className="pr-watch-list__sub">{wake.task.progress}</span> : null}
-          {showTab("actions", "Show in Actions")}
+          {showTab("actions", "Show in Jobs")}
         </span>
       );
     case "pr_watch":
     case "pr_auto_fix":
       return (
         <span className="waiting-for-panel__detail">
-          {showTab("prs", "Show in Pull requests")}
+          {showTab("prs", "Show in PRs")}
         </span>
       );
     case "held_message":

@@ -127,6 +127,7 @@ import type {
 import type { FederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import type { NavigationResumeState } from "@pwragent/shared/navigation-resume-state";
 import type {
+  AcpUsageTurnCompletion,
   ThreadPricingSummary,
   ThreadSpendAlert,
   ThreadUsageLineRecord,
@@ -2207,6 +2208,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
    */
   async upsertThreadUsageLines(params: {
     lines: ThreadUsageLineRecord[];
+    acpCompletions?: AcpUsageTurnCompletion[];
   }): Promise<{
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
@@ -2227,7 +2229,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     // batch is read-only and must not open even an empty SQLite transaction.
     const finalizedBatch = lines.map((line) => this.readProtectedThreadUsageSync(line));
     if (
-      finalizedBatch.every((entry) => entry !== undefined)
+      !params.acpCompletions?.length
+      && finalizedBatch.every((entry) => entry !== undefined)
       && finalizedBatch.every((entry, index) =>
         !enrichProtectedThreadUsage(entry.line, lines[index]!),
       )
@@ -2734,6 +2737,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       for (let index = 0; index < lines.length; index += 1) {
         lines[index] = upsertLine(lines[index]!);
       }
+      for (const completion of params.acpCompletions ?? []) {
+        this.persistCompletedAcpContext(completion);
+      }
 
       return [
         ...[...unchangedSummaries.entries()]
@@ -2760,7 +2766,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     completedAt: number;
     /** The owner's account limits at completion; rides the same UPDATE. */
     limitObservation?: UsageLimitObservation;
+    acpCompletion?: AcpUsageTurnCompletion;
   }): Promise<boolean> {
+    const { acpCompletion } = params;
+    if (acpCompletion) {
+      return this.stateDb.raw.transaction(() => {
+        const contextChanged = this.persistCompletedAcpContext(acpCompletion);
+        return this.completeThreadUsageTiming(params) || contextChanged;
+      }).immediate();
+    }
+    return this.completeThreadUsageTiming(params);
+  }
+
+  private completeThreadUsageTiming(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    turnId: string;
+    completedAt: number;
+    limitObservation?: UsageLimitObservation;
+  }): boolean {
     // The ledger link is authoritative even across provider or thread identities.
     const turn = this.stateDb.raw.prepare(
       `SELECT turn.completed_at, turn.completed_at_inferred FROM thread_usage_turns AS turn
@@ -2793,6 +2817,114 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       params.turnId,
     );
     return result.changes > 0;
+  }
+
+  private persistCompletedAcpContext(completion: AcpUsageTurnCompletion): boolean {
+    const { backend, threadId, turnId } = completion;
+    const turn = this.stateDb.raw.prepare(
+      `SELECT usage_turn_id, provider, model, final_context_tokens, acp_compaction_before_tokens
+         FROM thread_usage_turns
+        WHERE backend = ? AND thread_id = ? AND turn_id = ? AND parent_thread_id IS NULL
+          AND EXISTS (
+            SELECT 1 FROM thread_usage_lines AS line
+             WHERE line.usage_turn_id = thread_usage_turns.usage_turn_id
+               AND line.source = 'live' AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL AND line.status != 'superseded'
+          )`,
+    ).get(backend, threadId, turnId) as {
+      usage_turn_id: string;
+      provider: string;
+      model: string | null;
+      final_context_tokens: number | null;
+      acp_compaction_before_tokens: number | null;
+    } | undefined;
+    if (!turn) {
+      // An unbilled prompt still supplied the first ordinary observation.
+      // Without a billing model it can retire the candidate, but cannot verify it.
+      if (completion.context) this.settlePendingAcpCompaction(completion, completion.context);
+      return false;
+    }
+    const context = turn.final_context_tokens === null ? completion.context : undefined;
+    const rememberCompaction = completion.compacted && turn.acp_compaction_before_tokens === null;
+    if (!context && !rememberCompaction) return false;
+
+    if (context) this.settlePendingAcpCompaction(completion, context, turn);
+    const before = rememberCompaction
+      ? completion.context?.finalContextTokens
+        ?? turn.final_context_tokens
+        ?? this.readAcpIdleCompactionBaseline(completion, turn)
+      : null;
+    this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET final_context_tokens = COALESCE(?, final_context_tokens),
+              peak_context_tokens = COALESCE(?, peak_context_tokens),
+              model_context_window = COALESCE(?, model_context_window),
+              acp_compaction_before_tokens = COALESCE(?, acp_compaction_before_tokens)
+        WHERE usage_turn_id = ?`,
+    ).run(context?.finalContextTokens ?? null, context?.peakContextTokens ?? null,
+      context?.modelContextWindow ?? null, before, turn.usage_turn_id);
+    return true;
+  }
+
+  private readAcpIdleCompactionBaseline(
+    { backend, threadId, turnId, completedAt }: AcpUsageTurnCompletion,
+    compactTurn: { provider: string; model: string | null },
+  ): number {
+    // A model switch invalidates the latest ordinary fill. Seeking farther
+    // back to a matching model could use the fill from a different interval.
+    const previous = this.stateDb.raw.prepare(
+      `SELECT final_context_tokens, provider, model FROM thread_usage_turns
+        WHERE backend = ? AND thread_id = ? AND parent_thread_id IS NULL
+          AND backend GLOB 'acp:*'
+          AND turn_id != ? AND completed_at <= ? AND final_context_tokens > 0
+        ORDER BY completed_at DESC, observed_at DESC LIMIT 1`,
+    ).get(backend, threadId, turnId, completedAt) as {
+      final_context_tokens: number;
+      provider: string;
+      model: string | null;
+    } | undefined;
+    return previous && previous.model !== null
+      && previous.model === compactTurn.model && previous.provider === compactTurn.provider
+      ? previous.final_context_tokens
+      : 0;
+  }
+
+  private settlePendingAcpCompaction(
+    completion: AcpUsageTurnCompletion,
+    context: NonNullable<AcpUsageTurnCompletion["context"]>,
+    ordinaryTurn?: { provider: string; model: string | null },
+  ): void {
+    const { backend, threadId, turnId } = completion;
+    const pending = this.stateDb.raw.prepare(
+      `SELECT turn_id, completed_at, acp_compaction_before_tokens, provider, model FROM thread_usage_turns
+        WHERE backend = ? AND thread_id = ? AND parent_thread_id IS NULL
+          AND turn_id != ? AND completed_at <= ? AND acp_compaction_before_tokens > 0
+        ORDER BY completed_at DESC, observed_at DESC LIMIT 1`,
+    ).get(backend, threadId, turnId, context.firstObservedAt) as {
+      turn_id: string;
+      completed_at: number;
+      acp_compaction_before_tokens: number;
+      provider: string;
+      model: string | null;
+    } | undefined;
+    if (!pending) return;
+    if (ordinaryTurn && pending.model !== null
+      && pending.provider === ordinaryTurn.provider && pending.model === ordinaryTurn.model
+      && context.firstContextTokens < pending.acp_compaction_before_tokens) {
+      this.insertThreadCompaction({
+        backend, threadId, turnId: pending.turn_id,
+        compactionId: JSON.stringify(["verified-acp", backend, threadId, pending.turn_id]),
+        observedAt: pending.completed_at,
+        updatedAt: context.firstObservedAt,
+      });
+    }
+    // The first ordinary observation settles this interval. Keep zero as a
+    // receipt so terminal re-emission cannot arm the same compaction again.
+    this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns SET acp_compaction_before_tokens = 0
+        WHERE backend = ? AND thread_id = ? AND parent_thread_id IS NULL
+          AND turn_id != ? AND completed_at <= ? AND acp_compaction_before_tokens > 0`,
+    ).run(backend, threadId, turnId, context.firstObservedAt);
   }
 
   /**
@@ -3649,7 +3781,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async recordThreadCompaction(params: {
     compaction: ThreadCompactionRecord;
   }): Promise<boolean> {
-    const compaction = params.compaction;
+    return this.insertThreadCompaction(params.compaction);
+  }
+
+  private insertThreadCompaction(compaction: ThreadCompactionRecord): boolean {
     const result = this.stateDb.raw
       .prepare(
         `INSERT INTO thread_compactions (

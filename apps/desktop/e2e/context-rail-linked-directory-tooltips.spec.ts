@@ -31,8 +31,8 @@ test("shows linked directory path tooltips in the context rail", async () => {
     const contextRail = app.window.getByRole("complementary", {
       name: "Thread context",
     });
-    // Directory paths live together in the dedicated Linked Projects tab.
-    await contextRail.getByRole("tab", { name: "Linked projects" }).click();
+    // Directory paths live in Details › Thread › Folders & git.
+    await contextRail.getByRole("tab", { name: /^Details/ }).click();
     await expect(
       contextRail.getByLabel("Path for PwrAgent", { exact: true })
     ).toBeVisible();
@@ -43,38 +43,17 @@ test("shows linked directory path tooltips in the context rail", async () => {
     await contextRail.getByLabel("Path for PwrAgent", { exact: true }).focus();
     await expectVisibleTooltip(app.window, "/repo/PwrAgent/.worktrees/feature-context-tooltips");
 
-    await contextRail
-      .getByRole("button", { name: "Copy path for PwrAgent", exact: true })
-      .focus();
-    await expectVisibleTooltip(
-      app.window,
-      "/repo/PwrAgent/.worktrees/feature-context-tooltips\nClick to copy to clipboard"
-    );
-
-    await contextRail.getByLabel("Path for worktree PwrAgent", { exact: true }).focus();
-    await expectVisibleTooltip(
-      app.window,
-      "/repo/PwrAgent/.worktrees/feature-context-tooltips"
-    );
-
-    await contextRail
-      .getByRole("button", { name: "Copy path for worktree PwrAgent", exact: true })
-      .focus();
-    await expectVisibleTooltip(
-      app.window,
-      "/repo/PwrAgent/.worktrees/feature-context-tooltips\nClick to copy to clipboard"
-    );
-
-    await contextRail.getByLabel("Path for local LocalCheckout", { exact: true }).focus();
+    await contextRail.getByLabel("Path for LocalCheckout", { exact: true }).focus();
     await expectVisibleTooltip(app.window, "/repo/PwrAgent");
 
+    // Copy path moved into each folder's ⋯ menu, beside the full path.
     await contextRail
-      .getByRole("button", { name: "Copy path for local LocalCheckout", exact: true })
-      .focus();
-    await expectVisibleTooltip(
-      app.window,
-      "/repo/PwrAgent\nClick to copy to clipboard"
-    );
+      .getByRole("button", { name: "Folder actions for LocalCheckout", exact: true })
+      .click();
+    await expect(
+      app.window.getByRole("menuitem", { name: /^Copy path/ })
+    ).toContainText("/repo/PwrAgent");
+    await app.window.keyboard.press("Escape");
   } finally {
     await app.close();
   }

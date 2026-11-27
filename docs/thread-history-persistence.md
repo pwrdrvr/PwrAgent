@@ -205,8 +205,9 @@ PwrAgent stores supplemental outbound messages in the active profile's
 `state/thread-correspondence/<thread-identity-hash>.jsonl`. A message event holds
 its full input once; later status events contain only delivery metadata. These
 are PwrAgent's own correspondence records, not a copy of provider history.
-They are materialized as ordinary transcript messages on the sender's latest
-history page, so activity rollup and renderer reload do not discard them.
+Replay materializes them on the sender's transcript page that owns the source
+turn. A send between turns appears after the preceding turn as a standalone
+message. Sends after the last turn appear on the latest history page.
 
 The recipient FIFO remains owned by its main process. Navigation snapshots
 contain only previews. `readQueuedTurn` reads one entry through its owner;

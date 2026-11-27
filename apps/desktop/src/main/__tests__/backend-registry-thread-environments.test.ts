@@ -36,6 +36,7 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { BackendAcpRuntimeCapabilities } from "@pwragent/shared/contracts/backend";
 import { CodexEnvironmentCommandError, type CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
 import * as codexEnvironmentRuntime from "../app-server/codex-environment-runtime";
+import * as codexEnvironmentConfig from "../app-server/codex-environment-config";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -2049,6 +2050,32 @@ command = '''${expectedActionCommand}'''
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("refuses to execute the saved action when environment discovery times out", async () => {
+    const commandRunner = vi.fn<CodexEnvironmentCommandRunner>(async () => ({ pid: 12345 }));
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      codexEnvironmentCommandRunner: commandRunner,
+      overlayStore: createOverlayStoreMock({ overlays: { "codex:thread-1": {
+        backend: "codex", threadId: "thread-1", executionMode: "default", extraLinkedDirectories: [],
+        codexEnvironmentRuntime: {
+          environmentId: "env", executionTarget: "local", cwd: "/checkout",
+          actions: [{ id: "dev", name: "Dev", command: "old-command" }],
+        },
+      } } }),
+    });
+    const read = vi.spyOn(codexEnvironmentConfig, "listCodexEnvironmentOptions")
+      .mockRejectedValueOnce(Object.assign(new Error("Mount timed out"), { code: "ETIMEDOUT" }));
+    try {
+      await expect(registry.runCodexEnvironmentAction({
+        backend: "codex", threadId: "thread-1", actionId: "dev", cwd: "/checkout",
+      })).rejects.toMatchObject({ code: "ETIMEDOUT", message: "Mount timed out" });
+      expect(commandRunner).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+      await registry.close();
     }
   });
 

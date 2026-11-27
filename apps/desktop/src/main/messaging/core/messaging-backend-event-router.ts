@@ -152,6 +152,7 @@ export class MessagingBackendEventRouter {
     if (
       event.notification.method === "item/transientMessage/updated"
       || event.notification.method === "thread/subAgents/updated"
+      || event.notification.method === "thread/subAgentActivity/updated"
       || isPrivateTaskMonitorEvent(event)
     ) {
       // Private monitor/sub-agent activity and transient transcript text

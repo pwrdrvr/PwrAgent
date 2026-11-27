@@ -61,6 +61,7 @@ import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
+import * as namedBindings from "../messaging/named-messaging-bindings";
 import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
 import { navigationDirectoryGitRevisions, projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 
@@ -97,6 +98,58 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
     },
   };
 }
+
+it("serves a warm Attention filter from the existing sidebar index until the owner changes", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const source = createSource();
+  const store = new NavigationQueryStore();
+  const project = vi.fn(() => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query" }));
+  const read = (query: NavigationQueryRequest["query"]) => store.readPage({
+    scopeKey: "warm-sidebar", request: { protocol: 2, consumer: "main-sidebar", query }, loadIndex: project,
+  });
+  try {
+    source.finish();
+    await read({ kind: "lens", lens: "attention" });
+    const projected = await project.mock.results[0]!.value;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await read({ kind: "lens", lens: "attention", attention: "active" });
+    expect(await project.mock.results[1]!.value).toBe(projected);
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+
+    source.emit("thread/status/changed");
+    await read({ kind: "lens", lens: "attention", attention: "active" });
+    expect(source.listThreads).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(15_001);
+    await read({ kind: "lens", lens: "attention" });
+    expect(source.listThreads).toHaveBeenCalledTimes(3);
+  } finally { vi.useRealTimers(); }
+});
+
+it("drops a revoked named messaging binding from the next warm sidebar read", async () => {
+  const source = createSource();
+  const thread: NavigationThreadSummary = { id: "thread", source: "codex", title: "Thread", titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: false } };
+  const binding = { id: "named-binding", backend: "codex", threadId: thread.id, createdAt: 1,
+    channel: { channel: "telegram", connectionId: "bot", conversation: { kind: "topic", id: "topic" } },
+  } as MessagingBindingRecord;
+  const previous = mocks.store.readNavigationQueryIndex.getMockImplementation()!;
+  mocks.store.readNavigationQueryIndex.mockImplementation(() => ({ threads: [thread], directories: [] }));
+  let bindings = [binding];
+  namedBindings.setNamedMessagingBindingReader(async () => bindings);
+  const read = () => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query" });
+  try {
+    source.finish();
+    expect((await read()).threads[0]?.messagingBindings).toHaveLength(1);
+    bindings = [];
+    namedBindings.noteMessagingBindingsChange();
+    expect((await read()).threads[0]?.messagingBindings ?? []).toEqual([]);
+    expect(source.listThreads).toHaveBeenCalledTimes(2);
+  } finally {
+    namedBindings.setNamedMessagingBindingReader(undefined);
+    mocks.store.readNavigationQueryIndex.mockImplementation(previous);
+  }
+});
 
 it("stores only serviceable stacks and pages past the compact membership preview", () => {
   fc.assert(fc.property(fc.integer({ min: 9, max: 36 }), fc.integer({ min: 1, max: 24 }), (selected, unrelated) => {
@@ -1209,28 +1262,17 @@ it("reuses membership across a PR status burst while pages observe the current r
   }
 });
 
-async function withNavigationStackCheckout(run: (fixture: {
+type NavigationStackSource = {
   source: ReturnType<typeof createSource>;
   read: (viewer?: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> }) => Promise<NavigationQueryIndex>;
   viewer: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> };
-  retargetCatalog: () => Promise<void>;
-}) => Promise<void>) {
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-stack-work-")));
-  const restore = isolateProcessGitEnvironment(root);
+};
+
+async function withNavigationStackSource(root: string, run: (fixture: NavigationStackSource) => Promise<void>) {
   const source = createSource();
   source.registry.stackThreadHeld = () => true;
   const original = mocks.store.readNavigationQueryIndex.getMockImplementation()!;
   try {
-    const git = async (...args: string[]) => (await runIsolatedGit(root, args)).stdout.trim();
-    await git("init", "-b", "topic");
-    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture");
-    const head = await git("rev-parse", "HEAD");
-    await git("branch", "main");
-    const writeCatalog = (branch: string, commit: string) => writeFile(path.join(root, ".git", "gh-stack"), JSON.stringify({
-      schemaVersion: 1, repository: "github.com:fixture/stack",
-      stacks: [{ trunk: { branch: "main", head }, branches: [{ branch, head: commit, base: head }] }],
-    }));
-    await writeCatalog("topic", head);
     source.listThreads.mockImplementation(async () => [{
       id: "stacked", source: "codex", title: "Stacked", titleSource: "explicit",
       gitBranch: "topic", linkedDirectories: [{ id: root, path: root, kind: "local", label: "Fixture" }],
@@ -1246,14 +1288,35 @@ async function withNavigationStackCheckout(run: (fixture: {
     const read = (view?: typeof viewer) => loadLocalNavigationQueryIndex({
       registry: source.registry, callerReason: "renderer-navigation-query", includeStacks: true, viewer: view,
     });
-    await run({ source, read, viewer, retargetCatalog: async () => {
-      await git("branch", "other-topic");
-      const next = await git("rev-parse", "refs/heads/other-topic");
-      await writeCatalog("other-topic", next);
-    } });
+    await run({ source, read, viewer });
   } finally {
     source.emit("thread/name/updated");
     mocks.store.readNavigationQueryIndex.mockImplementation(original);
+  }
+}
+
+async function withNavigationStackCheckout(run: (fixture: NavigationStackSource & {
+  retargetCatalog: () => Promise<void>;
+}) => Promise<void>) {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-stack-work-")));
+  const restore = isolateProcessGitEnvironment(root);
+  try {
+    const git = async (...args: string[]) => (await runIsolatedGit(root, args)).stdout.trim();
+    await git("init", "-b", "topic");
+    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture");
+    const head = await git("rev-parse", "HEAD");
+    await git("branch", "main");
+    const writeCatalog = (branch: string, commit: string) => writeFile(path.join(root, ".git", "gh-stack"), JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/stack",
+      stacks: [{ trunk: { branch: "main", head }, branches: [{ branch, head: commit, base: head }] }],
+    }));
+    await writeCatalog("topic", head);
+    await withNavigationStackSource(root, (fixture) => run({ ...fixture, retargetCatalog: async () => {
+      await git("branch", "other-topic");
+      const next = await git("rev-parse", "refs/heads/other-topic");
+      await writeCatalog("other-topic", next);
+    } }));
+  } finally {
     restore();
     await rm(root, { recursive: true, force: true });
   }
@@ -1371,9 +1434,18 @@ it("keeps the owner listing when a stacked viewer with peer pins nears the byte 
 });
 
 it("isolates local owner listing and stack projection from remote pin and peer-status churn", async () => {
-  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+  await withNavigationStackSource(path.resolve(os.tmpdir(), "fixture-stack"), async ({ source, read, viewer }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const stackReads = vi.spyOn(StackReader.prototype, "read");
+    // Observe the navigation invalidation boundary. The checkout tests above
+    // exercise live Git stack discovery and its revalidation deadline.
+    const stack: StackSummary = {
+      key: "fixture-stack", name: "Fixture", repository: "github.com:fixture/stack", trunk: "main", inferred: false,
+      layers: [{
+        branch: "topic", parent: "main", role: "layer", health: "in_sync",
+        thread: { key: "codex:stacked", title: "Stacked" },
+      }],
+    };
+    const stackReads = vi.spyOn(StackReader.prototype, "read").mockResolvedValue({ stacks: [stack], catalogs: [] });
     const materialize = mocks.store.readNavigationQueryIndex;
     let pinTitle = "Viewer pin v0";
     let peerOnline = true;
@@ -1403,8 +1475,8 @@ it("isolates local owner listing and stack projection from remote pin and peer-s
           { minLength: 4, maxLength: 8, size: "max" },
         ),
         async (events) => {
-          // Advance both Date.now() and pool retention timers between runs so
-          // slow real-Git runs cannot expire the 1,000 ms owner snapshot mid-pass.
+          // Expire both the owner snapshot and pool entries between cases.
+          // Keep the clock fixed within each case to isolate event invalidation.
           vi.advanceTimersByTime(2_000);
           source.emit("thread/name/updated");
           pinTitle = "Viewer pin warm";

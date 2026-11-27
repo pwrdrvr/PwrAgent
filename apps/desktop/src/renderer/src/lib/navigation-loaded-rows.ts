@@ -13,7 +13,7 @@ import { threadSummaryIdentityKey } from "./federated-thread-events";
 /** Owner descriptors plus independently loaded configuration or a viewer-local launchpad. */
 export type NavigationDirectoryView = Pick<NavigationDirectoryRow,
   "key" | "kind" | "label" | "path" | "repositoryKey" | "repositoryKeys" | "localAvailability" | "pinnedRank"
-  | "directoryThreadsCollapsed" | "forgeAutomation" | "peerProject" | "checkoutPaths"
+  | "directoryThreadsCollapsed" | "forgeAutomation" | "peerProject" | "checkoutPaths" | "ownerMembershipRevision"
 > & {
   counts?: NavigationCounts;
   pinnedRootCount?: number;

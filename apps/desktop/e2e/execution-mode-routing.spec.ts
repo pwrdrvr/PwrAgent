@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { accessTrigger, allowFullAccess, chooseAccessStop } from "./fixtures/access-picker";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,7 +27,7 @@ test("applies the correct per-turn permission policy after execution mode toggle
       })
     ).toBeVisible();
 
-    const accessMode = app.window.getByLabel(/^Access mode(?::|$)/);
+    const accessMode = accessTrigger(app.window);
     await expect(accessMode).toHaveAttribute("data-value", "default");
 
     await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("First turn on default mode");
@@ -49,32 +50,18 @@ test("applies the correct per-turn permission policy after execution mode toggle
     await app.advance({ stepId: "turn-completed-1" });
     await app.advance({ stepId: "status-idle-1" });
 
-    await accessMode.click();
-    await app.window
-      .getByRole("option", { name: "Full Access" })
-      .click();
-    const fullAccessWarning = app.window.getByRole("dialog", {
-      name: "Enable Full Access?",
-    });
-    await expect(fullAccessWarning).toContainText("network access");
-    await expect(fullAccessWarning).toContainText("read/write access");
-    const [viewportSize, dialogBox] = await Promise.all([
-      app.window.evaluate(() => ({
-        height: window.innerHeight,
-        width: window.innerWidth,
-      })),
-      fullAccessWarning.boundingBox(),
-    ]);
-    expect(dialogBox).not.toBeNull();
-    expect(
-      Math.abs(dialogBox!.x + dialogBox!.width / 2 - viewportSize.width / 2),
-    ).toBeLessThan(2);
+    // The Full Access stop asks inline; the level holds until Allow, and
+    // a click outside the picker drops the unconfirmed stop.
+    const picker = await chooseAccessStop(app.window, "full-access");
+    await expect(picker).toContainText("network and almost every file");
+    await expect(picker.getByRole("button", { name: "Allow Full Access" })).toBeVisible();
+    await expect(
+      app.window.getByRole("dialog", { name: "Enable Full Access?" }),
+    ).toHaveCount(0);
     await app.window.mouse.click(20, 20);
-    await expect(fullAccessWarning).toBeVisible();
+    await expect(picker).toBeHidden();
     await expect(accessMode).toHaveAttribute("data-value", "default");
-    await fullAccessWarning
-      .getByRole("button", { name: "I Understand and Accept the Risks" })
-      .click();
+    await allowFullAccess(app.window);
     await expect(accessMode).toHaveAttribute("data-value", "full-access");
 
     await app.window

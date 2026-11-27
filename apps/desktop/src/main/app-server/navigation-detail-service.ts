@@ -31,7 +31,7 @@ import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
 import { redactLaunchpadAgentDraft } from "@pwragent/shared/contracts/navigation";
 import { describeHibernatedThreadWorkspace, detectMissingThreadWorkspace, primaryThreadWorktree } from "./missing-thread-workspace";
-import { normalizeWorktreePathForComparison } from "./linked-directory-identity";
+import { normalizeWorktreePathForComparison, resolveThreadWorkspaceCwd } from "./linked-directory-identity";
 import { readMergedSubAgentPage } from "./thread-display";
 import { collectConcurrent } from "../../shared/concurrent-work";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -458,10 +458,18 @@ export class NavigationDetailService {
     // A hibernated checkout is not missing until a restore of it has failed.
     const checkoutHibernation = this.registry.readCheckoutHibernation({ backend: summary.source, threadId: summary.id });
     const worktreePath = primaryThreadWorktree(thread)?.worktreePath;
+    const restoringPath = checkoutHibernation.progress?.worktreePath;
     const failedRestorePath = checkoutHibernation.restoreFailure?.worktreePath;
-    const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories, primaryGitRepository] = await Promise.all([
+    // A retry takes precedence over the prior refusal for the same checkout.
+    const restoringWorktree = worktreePath && restoringPath
+      && normalizeWorktreePathForComparison(worktreePath) === normalizeWorktreePathForComparison(restoringPath);
+    // A summary read for turn admission does not resolve environment choices.
+    const environmentCwd = thread.codexEnvironmentOptions === undefined
+      ? resolveThreadWorkspaceCwd(thread)
+      : undefined;
+    const [subAgentCollection, workspaceMissing, activeCards, activePrWatches, pendingWakes, workspaceDirectories, primaryGitRepository, environmentOptions] = await Promise.all([
       this.subAgentCollectionManifest(request.ref, summary),
-      detectMissingThreadWorkspace(thread, {
+      restoringWorktree ? undefined : detectMissingThreadWorkspace(thread, {
         readBranch: async (repositoryPath) =>
           (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
         includeHibernated: Boolean(worktreePath && failedRestorePath
@@ -479,6 +487,7 @@ export class NavigationDetailService {
           }))
         : undefined,
       thread.primaryGitRepository ?? resolvePrimaryThreadRepoKey(thread, undefined, { demand: prDemand }),
+      environmentCwd ? listCodexEnvironmentOptions(environmentCwd).catch(() => undefined) : undefined,
     ]);
     const collections = NAVIGATION_DETAIL_COLLECTION_NAMES.map((name) => name === "subAgents"
       ? { name, ...subAgentCollection }
@@ -492,6 +501,7 @@ export class NavigationDetailService {
       : checkoutHibernation.progress ?? describeHibernatedThreadWorkspace(thread, checkoutHibernation.restoring);
     const configuration = {
       ...thread,
+      ...(environmentOptions ? { codexEnvironmentOptions: environmentOptions } : {}),
       ...(primaryGitRepository ? { primaryGitRepository } : {}),
       ...(workspaceMissing ? { workspaceMissing } : {}),
       ...(workspaceHibernated ? { workspaceHibernated } : {}),

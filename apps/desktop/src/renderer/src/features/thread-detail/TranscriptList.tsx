@@ -95,6 +95,7 @@ import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
 import { TranscriptReview } from "./TranscriptReview";
 import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
+import { createTranscriptReadingAnchor } from "./transcript-reading-anchor";
 import { installDisclosureAnchor } from "./transcript-scroll-fit";
 import { TranscriptDiff } from "./TranscriptDiff";
 import { TranscriptError } from "./TranscriptError";
@@ -250,6 +251,7 @@ type ScrollSnapshot = {
 };
 
 type SyncScrollStateOptions = {
+  keepReadingAnchor?: boolean;
   preserveGlueOnResize?: boolean;
 };
 
@@ -768,6 +770,13 @@ export function TranscriptList(props: TranscriptListProps) {
     : props.agentCommandsStatus;
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
+  const readingRowPrefix = useId();
+  const [readingAnchor] = useState(createTranscriptReadingAnchor);
+  const readingRowIds: string[] = [];
+  const committedReadingRowIds = useRef<readonly string[]>([]);
+  useLayoutEffect(() => {
+    committedReadingRowIds.current = readingRowIds;
+  });
   const bottomFollowFrameRef = useRef<number | undefined>(undefined);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
   const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
@@ -1279,8 +1288,18 @@ export function TranscriptList(props: TranscriptListProps) {
     const isAtBottom = Boolean(snapshot && snapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX);
     if (isAtBottom) {
       isGluedToBottomRef.current = true;
+      readingAnchor.clear();
     } else {
       isGluedToBottomRef.current = false;
+      const container = scrollContainerRef.current;
+      if (container && snapshot && !options?.keepReadingAnchor) {
+        readingAnchor.capture(
+          container,
+          committedReadingRowIds.current,
+          wasGluedToBottom || snapshot.scrollTop !== previousSnapshot?.scrollTop
+            || snapshot.threadId !== previousSnapshot?.threadId,
+        );
+      }
     }
     setHasContentBelow(Boolean(snapshot && !isAtBottom));
     setIsAtTop(Boolean(snapshot && snapshot.scrollTop <= 0));
@@ -1291,7 +1310,7 @@ export function TranscriptList(props: TranscriptListProps) {
         scrollTop: snapshot.scrollTop,
       });
     }
-  }, [captureSnapshot]);
+  }, [captureSnapshot, readingAnchor]);
 
   const scrollToBottom = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -1452,6 +1471,7 @@ export function TranscriptList(props: TranscriptListProps) {
     if (!container || !hasTranscriptContent) {
       snapshotRef.current = undefined;
       isGluedToBottomRef.current = true;
+      readingAnchor.clear();
       setHasContentBelow(false);
       setIsAtTop(true);
       return;
@@ -1476,7 +1496,10 @@ export function TranscriptList(props: TranscriptListProps) {
       scrollToBottom();
       return;
     }
-    if (hasPrependedMessages && previousSnapshot) {
+    const keptReadingAnchor = previousSnapshot !== undefined
+      && previousSnapshot.threadId === props.threadId
+      && readingAnchor.restore(container, hasPrependedMessages);
+    if (hasPrependedMessages && previousSnapshot && !keptReadingAnchor) {
       const heightDelta = container.scrollHeight - previousSnapshot.scrollHeight;
       container.scrollTop = previousSnapshot.scrollTop + heightDelta;
     } else if (previousSnapshot?.threadId !== props.threadId) {
@@ -1511,7 +1534,7 @@ export function TranscriptList(props: TranscriptListProps) {
       return;
     }
 
-    syncScrollState();
+    syncScrollState({ keepReadingAnchor: keptReadingAnchor });
   }, [
     hasTranscriptContent,
     props.pendingRequest,
@@ -1522,6 +1545,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.runningTurnUsageText,
     props.restoredViewport,
     props.threadId,
+    readingAnchor,
     scrollToBottom,
     syncScrollState,
     transcriptEntries,
@@ -1560,6 +1584,15 @@ export function TranscriptList(props: TranscriptListProps) {
       return undefined;
     }
 
+    const syncAfterLayout = () => {
+      const { scrollToBottom, syncScrollState, requestOlderPageIfUnderflowing } = resizeActionsRef.current;
+      if (isGluedToBottomRef.current) {
+        scrollToBottom();
+      } else {
+        syncScrollState({ keepReadingAnchor: readingAnchor.restore(container) });
+      }
+      requestOlderPageIfUnderflowing();
+    };
     const lastBlockSizes = new WeakMap<Element, number>();
     const observer = new ResizeObserver((entries) => {
       let blockChanged = !entries || entries.length === 0;
@@ -1603,20 +1636,33 @@ export function TranscriptList(props: TranscriptListProps) {
       } else if (isSidebarResizing()) {
         return;
       }
-      const { scrollToBottom, syncScrollState, requestOlderPageIfUnderflowing } = resizeActionsRef.current;
-      if (isGluedToBottomRef.current) {
-        scrollToBottom();
-      } else {
-        syncScrollState({ preserveGlueOnResize: true });
-      }
-      requestOlderPageIfUnderflowing();
+      syncAfterLayout();
     });
     observer.observe(content);
     observer.observe(container);
+    const stopWatchingBlocks = readingAnchor.watchBlocks(content);
+
+    // A decode can redistribute height between wrapped image lines without
+    // resizing the content box. Check the same anchor for these loads too.
+    let imageLayoutFrame: number | undefined;
+    const onImageSettled = (event: Event) => {
+      if (isGluedToBottomRef.current || imageLayoutFrame !== undefined
+        || !(event.target instanceof HTMLImageElement)) return;
+      imageLayoutFrame = requestAnimationFrame(() => {
+        imageLayoutFrame = undefined;
+        if (!isSidebarResizing()) syncAfterLayout();
+      });
+    };
+    content.addEventListener("load", onImageSettled, true);
+    content.addEventListener("error", onImageSettled, true);
     return () => {
       observer.disconnect();
+      stopWatchingBlocks();
+      content.removeEventListener("load", onImageSettled, true);
+      content.removeEventListener("error", onImageSettled, true);
+      if (imageLayoutFrame !== undefined) cancelAnimationFrame(imageLayoutFrame);
     };
-  }, [hasScrollContainer]);
+  }, [hasScrollContainer, readingAnchor]);
 
   // A disclosure the operator clicks stays where it was clicked, whether it
   // was pinned to the top of the pane or was the last row of a transcript
@@ -1626,8 +1672,11 @@ export function TranscriptList(props: TranscriptListProps) {
     if (!container) {
       return undefined;
     }
-    return installDisclosureAnchor(container, disableBottomGlue);
-  }, [disableBottomGlue, hasScrollContainer]);
+    return installDisclosureAnchor(container, () => {
+      disableBottomGlue();
+      readingAnchor.clear();
+    });
+  }, [disableBottomGlue, hasScrollContainer, readingAnchor]);
 
   // When a sidebar drag ends, the pane has settled at its final width but the
   // ResizeObserver/onScroll handlers were paused throughout — re-sync the
@@ -1640,10 +1689,11 @@ export function TranscriptList(props: TranscriptListProps) {
       if (isGluedToBottomRef.current) {
         scrollToBottom();
       } else {
-        syncScrollState({ preserveGlueOnResize: true });
+        const container = scrollContainerRef.current;
+        syncScrollState({ keepReadingAnchor: container ? readingAnchor.restore(container) : false });
       }
     });
-  }, [scrollToBottom, syncScrollState]);
+  }, [readingAnchor, scrollToBottom, syncScrollState]);
 
   if (props.loading && !hasTranscriptContent && !hasPendingContent) {
     return <p className="transcript-empty">Loading transcript…</p>;
@@ -1716,6 +1766,7 @@ export function TranscriptList(props: TranscriptListProps) {
           if (isSidebarResizing()) {
             return;
           }
+          if (!isGluedToBottomRef.current) readingAnchor.restore(event.currentTarget);
           syncScrollState({ preserveGlueOnResize: true });
           if (event.currentTarget.scrollTop <= LOAD_OLDER_THRESHOLD_PX) {
             requestOlderPage();
@@ -1737,6 +1788,9 @@ export function TranscriptList(props: TranscriptListProps) {
               item.type === "workPhaseGroup" ? item.id : item.entry.id;
             const occurrence = rowOccurrences.get(entryKey) ?? 0;
             rowOccurrences.set(entryKey, occurrence + 1);
+            const rowKey = JSON.stringify([props.threadId, entryKey, occurrence]);
+            const readingRowId = readingRowPrefix + rowKey;
+            readingRowIds.push(readingRowId);
             // Anchor each item to its turn so external surfaces (the edited-file
             // group timestamps) can scroll the transcript to a turn's position —
             // by turn id, with the turn's end/start time as a fallback for turns
@@ -1857,7 +1911,8 @@ export function TranscriptList(props: TranscriptListProps) {
               );
             return (
               <div
-                key={JSON.stringify([props.threadId, entryKey, occurrence])}
+                key={rowKey}
+                id={readingRowId}
                 className="transcript-list__item"
                 role="listitem"
                 data-entry-id={

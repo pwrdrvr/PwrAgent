@@ -2,7 +2,7 @@ import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import { ThreadTurnStartLifecycle } from "@pwragent/owner-core/thread-turn-start-lifecycle";
-import type { ThreadWorktreeRegistration } from "@pwragent/shared/contracts/navigation";
+import type { CodexEnvironmentOption, ThreadWorktreeRegistration } from "@pwragent/shared/contracts/navigation";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import { removeManagedWorktree } from "./managed-worktree";
@@ -228,6 +228,7 @@ export interface ThreadArchiveCoordinatorHost extends Pick<RegistryHostPorts,
     owner?: { backend: AppServerBackendKind; threadId: string };
     /** Run setup in a workspace that is not a new worktree. */
     forceSetup?: boolean;
+    restoredEnvironment?: CodexEnvironmentOption;
     onSetupProgress?: (
       event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
     ) => void;
@@ -482,6 +483,7 @@ export class ThreadArchiveCoordinator {
   /** Single-flight restores of hibernated checkouts. Concurrent sends share
    * one, and the turn queue treats the thread as busy until it settles. */
   private readonly checkoutRestores = new Map<string, Promise<void>>();
+  private readonly checkoutRecoveryLocks = new PerKeyAsyncLock();
 
   /** The last failed restore per thread. Memory only: a failed restore writes
    * nothing, and the next attempt or a relaunch tries again. */
@@ -1427,6 +1429,11 @@ export class ThreadArchiveCoordinator {
     await this.restoreHibernatedCheckout(identity);
   }
 
+  /** Hold turn admission while another thread is putting the same checkout back. */
+  withCheckoutRecovery<T>(worktreePath: string, work: () => Promise<T>): Promise<T> {
+    return this.checkoutRecoveryLocks.run(path.resolve(worktreePath), work);
+  }
+
   private restoreHibernatedCheckout(identity: { backend: AppServerBackendKind; threadId: string }, snapshotId?: string): Promise<void> {
     const key = buildThreadIdentityKey(identity.backend, identity.threadId);
     const existing = this.checkoutRestores.get(key);
@@ -1452,7 +1459,6 @@ export class ThreadArchiveCoordinator {
   /** At most two commits: the snapshot record, and the environment runtime
    * when setup ran. A refusal writes nothing. */
   private async restoreHibernatedCheckoutNow(identity: { backend: AppServerBackendKind; threadId: string }, snapshotId?: string): Promise<void> {
-    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
     const overlay = await this.context.stores.threads.getThreadOverlayState(identity);
     const snapshot = snapshotId === undefined
       ? await this.activeHibernatedSnapshot(identity, overlay)
@@ -1462,6 +1468,17 @@ export class ThreadArchiveCoordinator {
     if (snapshotId !== undefined && setupRuntime && (await this.activeHibernatedSnapshot(identity, overlay))?.id !== snapshotId) {
       setupRuntime = undefined;
     }
+    await this.withCheckoutRecovery(snapshot.worktreePath,
+      () => this.restoreHibernatedSnapshot(identity, snapshot, setupRuntime, snapshotId === undefined));
+  }
+
+  private async restoreHibernatedSnapshot(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    snapshot: WorktreeSnapshotSummary,
+    setupRuntime: CodexThreadEnvironmentRuntime | undefined,
+    restoringCurrentCheckout: boolean,
+  ): Promise<void> {
+    const key = buildThreadIdentityKey(identity.backend, identity.threadId);
     const progress: ThreadHibernatedWorkspace = {
       ...describeHibernatedThreadWorkspace({ linkedDirectories: [{ id: "restore", kind: "worktree", label: "",
         path: snapshot.repositoryPath, worktreePath: snapshot.worktreePath }], worktreeSnapshots: [snapshot],
@@ -1484,25 +1501,31 @@ export class ThreadArchiveCoordinator {
       } });
       throw new Error(message);
     };
-    const recreate = async (detachedAt?: string) => await this.withArchiveWorkspaceWrite([snapshot.worktreePath], async () =>
+    const recreate = async (detachedAt?: string, fallbackMissingSources = false) => await this.withArchiveWorkspaceWrite([snapshot.worktreePath], async () =>
       await this.host().worktreeRecoveryService.recreate({
         ...identity,
         repositoryPath: snapshot.repositoryPath,
         worktreePath: snapshot.worktreePath,
         checkpoint: { snapshotRef: snapshot.snapshotRef, snapshotCommit: snapshot.snapshotCommit, sourceHead: snapshot.sourceHead },
+        ...(fallbackMissingSources ? { fallbackMissingSources: true } : {}),
         ...(detachedAt
           ? { detached: true, startPoint: detachedAt }
           : { branch: snapshot.sourceBranch, detached: !snapshot.sourceBranch, expectedHead: snapshot.sourceHead }),
       }));
     let result = await recreate();
+    const missingSources = identity.backend === "codex" && restoringCurrentCheckout && result.status === "failed"
+      && (result.reason === "checkpoint-missing" || result.reason === "branch-missing" && !snapshot.sourceHead);
+    if (missingSources) result = await recreate(undefined, true);
     // Recovery leaves no checkout behind when the branch is checked out
     // elsewhere, moved, or gone. Retry at the saved HEAD, detached.
     const conflict = result.status === "failed" ? DETACHED_RESTORE_REASONS[result.reason] : undefined;
     let detachedFrom: WorktreeSnapshotSummary["detachedFrom"];
     if (result.status === "failed" && conflict && snapshot.sourceBranch && snapshot.sourceHead) {
-      detachedFrom = { branch: snapshot.sourceBranch, head: snapshot.sourceHead, reason: conflict,
-        ...(result.branchCheckedOutAt ? { checkedOutAt: result.branchCheckedOutAt } : {}) };
-      result = await recreate(snapshot.sourceHead);
+      if (!missingSources) {
+        detachedFrom = { branch: snapshot.sourceBranch, head: snapshot.sourceHead, reason: conflict,
+          ...(result.branchCheckedOutAt ? { checkedOutAt: result.branchCheckedOutAt } : {}) };
+      }
+      result = await recreate(snapshot.sourceHead, missingSources);
     }
     if (result.status === "failed") return await fail(result.message);
     if (result.checkpoint && !result.checkpoint.restored) {
@@ -1535,6 +1558,11 @@ export class ThreadArchiveCoordinator {
       method: "navigation/threadDirectories/updated",
       params: { reason: "selected-thread", threadIds: [identity.threadId] },
     } });
+    if (missingSources && result.warnings.length) {
+      await this.context.emit({ backend: identity.backend, notification: {
+        method: "warning", params: { threadId: identity.threadId, message: result.warnings.join(" ") },
+      } }).catch(() => {});
+    }
   }
 
   /** A restored checkout has no rebuildable output, so a project
@@ -1547,13 +1575,29 @@ export class ThreadArchiveCoordinator {
     onSetupStart?: () => Promise<void>,
   ): Promise<void> {
     if (!sourceRuntime?.environmentId || sourceRuntime.executionTarget !== "local") return;
-    const environment = (await listCodexEnvironmentOptions(cwd).catch(() => []))
-      .find((candidate) => candidate.id === sourceRuntime.environmentId);
-    if (!environment?.setupScript) return;
-    await onSetupStart?.();
     let runtime: CodexThreadEnvironmentRuntime | undefined;
     try {
-      runtime = await this.host().buildForkedCodexEnvironmentRuntime({ cwd, forceSetup: true, owner: identity, sourceRuntime, workMode: "worktree" });
+      const options = await listCodexEnvironmentOptions(cwd).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new CodexEnvironmentStartupError(message, "setup", {
+          ...sourceRuntime,
+          cwd,
+          setupStatus: "failed",
+          setupOutput: message,
+          setupFinishedAt: Date.now(),
+          setupStartedAt: undefined,
+          setupExitCode: undefined,
+          setupDurationMs: undefined,
+          setupFailureAcknowledgedAt: undefined,
+          shellEnvironment: undefined,
+        });
+      });
+      const environment = options.find((candidate) => candidate.id === sourceRuntime.environmentId);
+      if (!environment?.setupScript) return;
+      await onSetupStart?.();
+      runtime = await this.host().buildForkedCodexEnvironmentRuntime({
+        cwd, restoredEnvironment: environment, owner: identity, sourceRuntime, workMode: "worktree",
+      });
     } catch (error) {
       if (!(error instanceof CodexEnvironmentStartupError)) throw error;
       runtime = error.runtime;

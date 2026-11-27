@@ -4,6 +4,7 @@ import {
   type MarkNavigationDirectorySeenResponse,
 } from "@pwragent/shared/contracts/navigation";
 import { directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
+import { navigationDirectoryMembershipRevision } from "@pwragent/owner-core/navigation-query-projection";
 import {
   navigationInvalidationMayChangeMembership,
   navigationQueryEventRequiresRefresh,
@@ -19,7 +20,7 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import { getDesktopBackendRegistry } from "./backend-registry";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
-import { loadLocalNavigationQueryIndex } from "./navigation-query-source";
+import { loadLocalNavigationQueryIndex, loadSidebarNavigationQueryIndex } from "./navigation-query-source";
 
 function directoryCheckChangeDescription(event: AgentEvent): string {
   const params = event.notification.params as { threadId?: unknown; thread?: { id?: unknown } } | undefined;
@@ -30,8 +31,14 @@ function directoryCheckChangeDescription(event: AgentEvent): string {
   return `${event.backend}, ${event.notification.method}${thread}${instance}`;
 }
 
-async function matchesDisplayedMembership(directoryKey: string, keys: ReadonlySet<string>, callerReason: string): Promise<boolean> {
-  const visible = await loadLocalNavigationQueryIndex({ callerReason });
+async function matchesDisplayedMembership(directoryKey: string, keys: ReadonlySet<string>, callerReason: string,
+  displayedMembershipRevision?: string): Promise<boolean> {
+  if (displayedMembershipRevision !== undefined) {
+    return displayedMembershipRevision === navigationDirectoryMembershipRevision(directoryKey, keys);
+  }
+  // Older viewers do not echo a revision. Use the same display policy for
+  // their check rather than comparing two newly rebuilt owner inventories.
+  const visible = await loadSidebarNavigationQueryIndex({ callerReason });
   const displayed = visible.directories.find((directory) => directory.key === directoryKey);
   return (!visible.coverage || visible.coverage.state === "complete")
     && displayed?.threadKeys.length === keys.size
@@ -73,7 +80,7 @@ export async function removeLocalNavigationDirectory(
     }
     if (request.archiveThreads && directory) {
       const keys = new Set(directory.threadKeys);
-      const matches = await matchesDisplayedMembership(request.directoryKey, keys, "remove-navigation-directory");
+      const matches = await matchesDisplayedMembership(request.directoryKey, keys, "remove-navigation-directory", request.displayedMembershipRevision);
       if (changedDuringRead || !matches) {
         throw new Error("Directory membership changed. Refresh navigation and try again.");
       }
@@ -145,7 +152,7 @@ export async function markLocalNavigationDirectorySeen(
     const directory = index.directories.find((candidate) => candidate.key === request.directoryKey);
     if (!directory) throw new Error("This directory is no longer available on its owner.");
     const keys = new Set(directory.threadKeys);
-    const matches = await matchesDisplayedMembership(request.directoryKey, keys, "mark-navigation-directory-seen");
+    const matches = await matchesDisplayedMembership(request.directoryKey, keys, "mark-navigation-directory-seen", request.displayedMembershipRevision);
     if (changedDuringRead || !matches) {
       throw new Error("Directory membership changed. Refresh navigation and try again.");
     }

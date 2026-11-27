@@ -55,7 +55,7 @@ test("loads the hydrated desktop shell with its main-process window title", asyn
     await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
     await expect(
       app.window.getByRole("tab", {
-        name: "Thread info"
+        name: /^Details/
       })
     ).toBeVisible();
 

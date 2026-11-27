@@ -491,6 +491,133 @@ describe("useThreadSkills", () => {
     expect(threadARequestCount).toBe(2);
   });
 
+  it("keeps a Claude thread's loaded skills when its live command list arrives", async () => {
+    const listSkills = vi.fn(async () => ({
+      backend: "claude" as const,
+      fetchedAt: Date.now(),
+      data: [
+        {
+          skills: [{ name: "release", path: "/repo/.claude/skills/release/SKILL.md", enabled: true }],
+          commands: [{ name: "init", backend: "claude" as const, scope: "session" as const, source: "provider" as const }],
+        },
+      ],
+    }));
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      listSkills,
+      onAgentEvent: (handler) => {
+        agentEventHandler = handler;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSkills({
+        desktopApi,
+        thread: {
+          id: "claude-1",
+          title: "Claude thread",
+          titleSource: "explicit",
+          source: "claude",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      })
+    );
+
+    await act(async () => {
+      await result.current.ensureLoaded();
+    });
+    expect(result.current.skills.map((skill) => skill.name)).toEqual(["release"]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "claude",
+        notification: {
+          method: "thread/availableCommands/updated",
+          params: {
+            threadId: "claude-1",
+            commands: [
+              { name: "init", backend: "claude", scope: "session", source: "provider" },
+              { name: "compact", backend: "claude", scope: "session", source: "provider" },
+            ],
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.providerCommands.map((command) => command.name)).toEqual(["compact", "init"]);
+    });
+    expect(result.current.skills.map((skill) => skill.name)).toEqual(["release"]);
+    expect(listSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it("still loads a Claude thread's skills when its live command list arrives first", async () => {
+    const listSkills = vi.fn(async () => ({
+      backend: "claude" as const,
+      fetchedAt: Date.now(),
+      data: [
+        {
+          skills: [{ name: "release", path: "/repo/.claude/skills/release/SKILL.md", enabled: true }],
+          commands: [{ name: "init", backend: "claude" as const, scope: "session" as const, source: "provider" as const }],
+        },
+      ],
+    }));
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      listSkills,
+      onAgentEvent: (handler) => {
+        agentEventHandler = handler;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSkills({
+        desktopApi,
+        thread: {
+          id: "claude-1",
+          title: "Claude thread",
+          titleSource: "explicit",
+          source: "claude",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      })
+    );
+
+    // The thread's first turn reports its commands before any picker opens.
+    act(() => {
+      agentEventHandler?.({
+        backend: "claude",
+        notification: {
+          method: "thread/availableCommands/updated",
+          params: {
+            threadId: "claude-1",
+            commands: [{ name: "init", backend: "claude", scope: "session", source: "provider" }],
+          },
+        },
+      });
+    });
+
+    await act(async () => {
+      await result.current.ensureLoaded();
+    });
+    expect(listSkills).toHaveBeenCalledTimes(1);
+    expect(result.current.skills.map((skill) => skill.name)).toEqual(["release"]);
+  });
+
   it("updates cached ACP provider commands when session metadata changes", async () => {
     const listSkills = vi.fn(async () => ({
       backend: "acp:kimi" as const,

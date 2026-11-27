@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -19,8 +18,6 @@ import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import {
   CODEX_SPEED_DESCRIPTIONS,
   effortMeterHeights,
-  effortStopAtPointer,
-  effortStopForKey,
   effortStopLabelled,
   heldPanelFoot,
   heldPanelOffset,
@@ -28,6 +25,7 @@ import {
   placeModelSettingsPanel,
   type ModelSettingsPanelPlacement,
 } from "./model-settings-picker-model";
+import { SteppedLevelBar } from "./SteppedLevelBar";
 
 /** One row of the provider rail or the model list. */
 export type ModelSettingsChoice = {
@@ -763,9 +761,6 @@ function EffortSection({ effort }: { effort: NonNullable<ModelSettingsPickerProp
   const count = effort.stops.length;
   const index = effort.stops.indexOf(effort.value ?? "");
   const [preview, setPreview] = useState<number>();
-  const [hover, setHover] = useState<number>();
-  const dragging = useRef(false);
-  const trackRef = useRef<HTMLDivElement>(null);
   const shown = preview ?? index;
   const isDefault = Boolean(effort.defaultOption) && effort.value === effort.defaultOption?.value;
   const heading = shown >= 0
@@ -773,23 +768,6 @@ function EffortSection({ effort }: { effort: NonNullable<ModelSettingsPickerProp
     : isDefault
       ? effort.defaultOption?.label
       : effort.value;
-
-  // The segment under the pointer when the event names one; while the track
-  // holds pointer capture every event targets the track, so the position
-  // along it decides.
-  const stopAt = (event: ReactPointerEvent<HTMLElement>): number => {
-    const segment = (event.target as HTMLElement).closest<HTMLElement>("[data-effort-stop]");
-    if (segment?.dataset.effortStop !== undefined) {
-      return Number(segment.dataset.effortStop);
-    }
-    const rect = trackRef.current?.getBoundingClientRect();
-    return effortStopAtPointer(event.clientX, rect?.left ?? 0, rect?.width ?? 0, count);
-  };
-  const commit = (stop: number | undefined) => {
-    if (stop === undefined || stop < 0 || stop >= count) return;
-    const value = effort.stops[stop]!;
-    if (value !== effort.value) effort.onChange(value);
-  };
 
   return (
     <section aria-label="Effort" className="model-settings__section model-settings__effort">
@@ -814,87 +792,23 @@ function EffortSection({ effort }: { effort: NonNullable<ModelSettingsPickerProp
           </button>
         ) : null}
         {count > 0 ? (
-          <div className="model-settings__effort-bar">
-            <div
-              aria-disabled={effort.disabled || undefined}
-              aria-label="Effort"
-              aria-valuemax={count - 1}
-              aria-valuemin={0}
-              aria-valuenow={index >= 0 ? index : undefined}
-              aria-valuetext={index >= 0 ? effort.stops[index]
-                : isDefault ? effort.defaultOption?.label
-                : effort.value || "Not set"}
-              className={[
-                "model-settings__effort-track",
-                index < 0 && preview === undefined ? "is-unset" : "",
-              ].filter(Boolean).join(" ")}
-              ref={trackRef}
-              role="slider"
-              style={{ gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }}
-              tabIndex={effort.disabled ? -1 : 0}
-              onKeyDown={(event) => {
-                if (effort.disabled) return;
-                const next = effortStopForKey(event.key, index, count);
-                if (next === undefined) return;
-                event.preventDefault();
-                event.stopPropagation();
-                commit(next);
-              }}
-              onLostPointerCapture={() => {
-                dragging.current = false;
-                setPreview(undefined);
-              }}
-              onPointerDown={(event) => {
-                if (effort.disabled || event.button !== 0) return;
-                event.preventDefault();
-                (event.currentTarget as HTMLElement).focus({ preventScroll: true });
-                event.currentTarget.setPointerCapture?.(event.pointerId);
-                setPreview(stopAt(event));
-                dragging.current = true;
-              }}
-              onPointerLeave={() => setHover(undefined)}
-              onPointerMove={(event) => {
-                if (effort.disabled) return;
-                const stop = stopAt(event);
-                if (dragging.current) setPreview(stop);
-                else setHover(stop);
-              }}
-              onPointerUp={(event) => {
-                if (!dragging.current) return;
-                const stop = stopAt(event);
-                dragging.current = false;
-                setPreview(undefined);
-                event.currentTarget.releasePointerCapture?.(event.pointerId);
-                commit(stop);
-              }}
-            >
-              {effort.stops.map((stop, stopIndex) => (
-                <i
-                  className={[
-                    "model-settings__effort-stop",
-                    stopIndex <= shown ? "is-on" : "",
-                    preview === undefined && hover !== undefined && stopIndex > shown && stopIndex <= hover
-                      ? "is-hover"
-                      : "",
-                  ].filter(Boolean).join(" ")}
-                  data-effort={stop}
-                  data-effort-stop={stopIndex}
-                  key={stop}
-                />
-              ))}
-            </div>
-            <div
-              aria-hidden="true"
-              className="model-settings__effort-ticks"
-              style={{ gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }}
-            >
-              {effort.stops.map((stop, stopIndex) => (
-                <span className={stopIndex === shown ? "is-on" : undefined} key={stop}>
-                  {effortStopLabelled(stopIndex, count, shown) ? stop : ""}
-                </span>
-              ))}
-            </div>
-          </div>
+          <SteppedLevelBar
+            ariaLabel="Effort"
+            className="model-settings__effort-bar"
+            dataAttribute="effort"
+            disabled={effort.disabled}
+            labelled={(stop, chosen) => effortStopLabelled(stop, count, chosen)}
+            stops={effort.stops.map((stop) => ({ key: stop, tick: stop }))}
+            value={index}
+            valueText={index >= 0 ? effort.stops[index]!
+              : isDefault ? effort.defaultOption?.label ?? ""
+              : effort.value || "Not set"}
+            onCommit={(stop) => {
+              const value = effort.stops[stop];
+              if (value !== undefined && value !== effort.value) effort.onChange(value);
+            }}
+            onPreviewChange={setPreview}
+          />
         ) : null}
       </div>
     </section>

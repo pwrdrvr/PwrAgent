@@ -36,6 +36,7 @@ import {
 import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import { ArchiveWorktreeTransport } from "./fixtures/archive-worktree-transport";
 import type { CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
+import * as codexEnvironmentConfig from "../app-server/codex-environment-config";
 import { inspectRegisterableWorktree } from "../app-server/worktree-maintenance-registration";
 
 /**
@@ -626,6 +627,25 @@ describe("idle checkout hibernation and restore", () => {
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("uncommitted edit\n");
   }));
 
+  it("starts from the main checkout when a hibernated Codex worktree lost its checkpoint and branch", ownFixtureTest(async () => {
+    const fixture = await createFixture();
+    const { registry, store } = fixture.open();
+    expect(await sweep(registry)).toMatchObject({ hibernated: 1 });
+    const saved = (await snapshotOf(store))!;
+    await git(fixture.repo, ["update-ref", "-d", saved.snapshotRef]);
+    await git(fixture.repo, ["branch", "-D", "owned"]);
+    await store.upsertWorktreeSnapshot({ ...identity, snapshot: {
+      ...saved, snapshotCommit: "f".repeat(40), sourceHead: "e".repeat(40),
+    } });
+    const start = stubProviderTurnStart(registry);
+    await registry.startTurn({ ...identity, input: [{ type: "text", text: "Continue" }] });
+    expect(start).toHaveBeenCalledOnce();
+    expect((await git(fixture.worktree, ["rev-parse", "HEAD"])).trim())
+      .toBe((await git(fixture.repo, ["rev-parse", "HEAD"])).trim());
+    expect((await git(fixture.worktree, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()).toBe("HEAD");
+    expect(await snapshotOf(store)).toMatchObject({ state: "restored" });
+  }));
+
   it.each([false, true])("keeps a queued send behind its own checkout restore (delayed acknowledgement: %s)", ownFixtureTest(async (delayAcknowledgement) => {
     // Each provider inventory has one registry owner. The preceding direct
     // sends must settle and close before a queued-send fixture replaces it.
@@ -956,6 +976,37 @@ describe("Restore now and Keep it awake", () => {
     releaseSetup();
     await restore;
     expect(registry.readCheckoutHibernation(identity)).toEqual({ restoring: false });
+  }));
+
+  it("records an environment read timeout as a setup failure after checkout restore", ownFixtureTest(async () => {
+    const fixture = await createFixture({ environment: true });
+    const runner = vi.fn<CodexEnvironmentCommandRunner>(async () => ({ exitCode: 0, output: "installed", durationMs: 1 }));
+    const { registry, store } = fixture.open(ON, { commandRunner: runner });
+    await store.setThreadCodexEnvironmentRuntime({ ...identity, codexEnvironmentRuntime: {
+      environmentId: "env", environmentName: "Env", executionTarget: "local", setupStatus: "completed",
+      shellEnvironment: { PATH: "/old/setup" },
+    } });
+    await sweep(registry);
+    const original = codexEnvironmentConfig.listCodexEnvironmentOptions;
+    const read = vi.spyOn(codexEnvironmentConfig, "listCodexEnvironmentOptions")
+      .mockImplementation((cwd) => cwd === fixture.worktree
+        ? Promise.reject(Object.assign(new Error("Environment read timed out"), { code: "ETIMEDOUT" }))
+        : original(cwd));
+    try {
+      const { writes } = await measureSqliteWrites(() =>
+        registry.setThreadCheckoutHibernation({ ...identity, restore: true }));
+      expect(await snapshotOf(store)).toMatchObject({ state: "restored" });
+      const runtime = (await store.getThreadOverlayState(identity))?.codexEnvironmentRuntime;
+      expect(runtime).toMatchObject({
+        cwd: fixture.worktree, setupStatus: "failed", setupOutput: "Environment read timed out",
+      });
+      expect(runtime?.shellEnvironment).toBeUndefined();
+      expect(runner).not.toHaveBeenCalled();
+      expectSqliteWriteBudget({ scenario: "checkout-hibernation-restore-environment-timeout",
+        note: "restore one hibernated checkout and record environment discovery failure", writes });
+    } finally {
+      read.mockRestore();
+    }
   }));
 });
 

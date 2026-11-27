@@ -91,7 +91,7 @@ function StackPopover({ thread, pr, member, onOpen, close, focus, body, onResize
         {openRail ? <button type="button" className="stack-popover__rail" onClick={() => {
           close();
           openRail(thread);
-        }}>Show in Pull requests</button> : null}
+        }}>Show in PRs</button> : null}
         <span><kbd>↑↓</kbd> move · <kbd>↵</kbd> open PR</span>
       </div>
     </div>

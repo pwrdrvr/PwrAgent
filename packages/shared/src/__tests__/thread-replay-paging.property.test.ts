@@ -56,6 +56,9 @@ function omit(entry: AppServerThreadEntry): AppServerThreadEntry {
         type: "message",
         role: entry.role,
         text: omitted,
+        ...(entry.origin?.systemReason === "thread-correspondence" ? {
+          origin: { kind: "pwragent", systemReason: "thread-correspondence" },
+        } : {}),
         ...(entry.phase ? { phase: entry.phase } : {}),
       };
     case "activity":
@@ -84,13 +87,32 @@ function candidates(source: AppServerThreadReplay, space: ThreadReplayCursorIdSp
       pages.push(replayWithEntries(source, compacted, pagination));
     }
   } else {
+    const anchor = entries.findLast(isCursorEntry);
     for (let start = 1; start < entries.length; start += 1) {
       const suffix = entries.slice(start);
+      if (anchor && !suffix.includes(anchor)) continue;
       pages.push(replayWithEntries(source, suffix, cursorFor(suffix, true)));
     }
-    const last = entries.at(-1);
+    const finalEntry = entries.at(-1);
+    const anchorIndex = anchor ? entries.indexOf(anchor) : -1;
+    const hasPrevious = pagination.hasPreviousPage || (anchor ? anchorIndex > 0 : entries.length > 1);
+    if (anchor && finalEntry !== anchor) {
+      const suffix = entries.slice(anchorIndex);
+      const cursor = cursorFor([anchor], hasPrevious);
+      for (let count = 1; count <= suffix.length; count += 1) {
+        const compacted = [...suffix.slice(0, count).map(omit), ...suffix.slice(count)];
+        pages.push(replayWithEntries(source, compacted, cursor));
+      }
+      pages.push(replayWithEntries(source, [anchor], cursor));
+      pages.push(replayWithEntries(source, [omit(anchor)], cursor));
+      for (let start = anchorIndex + 1; start < entries.length; start += 1) {
+        const overlays = entries.slice(start);
+        pages.push(replayWithEntries(source, overlays, cursorFor(overlays, true)));
+      }
+    }
+    const last = finalEntry;
     if (last) {
-      const compactedCursor = cursorFor([last], pagination.hasPreviousPage || entries.length > 1);
+      const compactedCursor = cursorFor([last], hasPrevious);
       pages.push(replayWithEntries(source, [omit(last)], compactedCursor));
     }
   }
@@ -163,6 +185,25 @@ it("matches the first fitting page at exact UTF-8 byte boundaries for both curso
       }
     },
   ));
+});
+
+it("keeps a provider cursor when the only fitting suffix is idle correspondence", () => {
+  const older: AppServerThreadEntry = { type: "message", id: "older", role: "assistant", text: "Older work" };
+  const anchor: AppServerThreadEntry = { type: "message", id: "anchor", role: "assistant", text: "x".repeat(240) };
+  const receipt: AppServerThreadEntry = { type: "message", id: "correspondence:receipt", role: "assistant",
+    text: "r".repeat(240), origin: { kind: "pwragent", systemReason: "thread-correspondence", correspondenceRevision: 2 } };
+  const source = fixture([older, anchor, receipt]);
+  const continuation = replayWithEntries(source, [anchor], cursorFor([anchor], true));
+  const result = fitThreadReplayWithinByteBudget({
+    replay: source, maxBytes: jsonBytes(continuation), cursorIdSpace: "entry-id",
+    isCursorEntry: ({ id }) => id !== receipt.id, measureJsonBytes: jsonBytes,
+  });
+  expect(result.pagination).toEqual(continuation.pagination);
+  expect(result.entries.some(({ id }) => id === anchor.id)).toBe(true);
+  expect(result.entries.find(({ id }) => id === receipt.id)).toMatchObject({
+    text: omitted, origin: { systemReason: "thread-correspondence" },
+  });
+  expect(jsonBytes(result)).toBeLessThanOrEqual(jsonBytes(continuation));
 });
 
 it("keeps a longer suffix that fits by minting a shorter entry cursor", () => {

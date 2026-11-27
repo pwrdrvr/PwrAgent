@@ -15,7 +15,21 @@ import {
   modelSettingsPill,
   openModelSettings,
 } from "../../../test/model-settings";
-import { CompactComposer, type CompactComposerModelSettings } from "../CompactComposer";
+import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ProviderAccessModeOption } from "@pwragent/shared/provider-access-mode";
+import {
+  CompactComposer,
+  type CompactComposerAccess,
+  type CompactComposerModelSettings,
+} from "../CompactComposer";
+import {
+  accessStopValues,
+  accessTrigger,
+  allowAccessStop,
+  chooseAccessStop,
+  openAccessPicker,
+  queryAccessTriggers,
+} from "../../../test/access-picker";
 
 vi.mock("../../../lib/image-normalization", () => ({
   normalizeImageFile: vi.fn(),
@@ -704,46 +718,73 @@ describe("CompactComposer", () => {
 });
 
 describe("CompactComposer settings menu", () => {
-  const settingsMenu = (
-    overrides: Partial<
-      NonNullable<Parameters<typeof CompactComposer>[0]["settingsMenu"]>
-    > = {},
-  ) => ({
-    executionModes: [
-      { label: "Default Access", mode: "default" as const },
-      { label: "Full Access", mode: "full-access" as const },
-    ],
-    onSelectExecutionMode: vi.fn(),
-    ...overrides,
+  const executionOption = (
+    mode: ThreadExecutionMode,
+    label: string,
+  ): ProviderAccessModeOption => ({
+    kind: "execution",
+    value: mode,
+    label,
+    executionMode: mode,
+    available: true,
+    requiresFullAccessConfirmation: mode === "full-access",
+    ...(mode === "full-access" ? { tone: "danger" as const } : {}),
   });
+  const accessSlot = (
+    value: ThreadExecutionMode = "default",
+    overrides: Partial<CompactComposerAccess> = {},
+  ): CompactComposerAccess => {
+    const options = [
+      executionOption("default", "Default Access"),
+      executionOption("auto", "Auto"),
+      executionOption("full-access", "Full Access"),
+    ];
+    return {
+      backend: "codex",
+      control: {
+        kind: "execution",
+        ariaLabel: "Access mode",
+        value,
+        selectedOption: options.find((option) => option.value === value),
+        options,
+      },
+      needsConfirmation: (option) => option.requiresFullAccessConfirmation,
+      onCommit: vi.fn(),
+      ...overrides,
+    };
+  };
 
-  function openMenu() {
-    // The chip's accessible name carries the visible readout after the
-    // "Thread settings:" prefix (label-in-name), so match on the prefix.
-    fireEvent.click(screen.getByRole("button", { name: /^Thread settings/ }));
-  }
-
-  it("asks the host to load options when the menu opens", () => {
+  it("asks the host to load options when the menu or the picker opens", () => {
     // Lazy on purpose: a card the operator only reads must not pay for a
     // backend describe it never shows.
     const onOpen = vi.fn();
-    renderComposer({ settingsMenu: settingsMenu({ onOpen }) });
+    renderComposer({
+      secondaryActions: [{ key: "a", label: "Compact thread", onSelect: vi.fn() }],
+      settingsMenu: { onOpen, access: accessSlot() },
+    });
     expect(onOpen).not.toHaveBeenCalled();
-    openMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Thread settings" }));
     expect(onOpen).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(document, { key: "Escape" });
+    openAccessPicker();
+    expect(onOpen).toHaveBeenCalledTimes(2);
   });
 
-  it("offers model, effort and speed in the pill, not the settings menu", () => {
+  it("puts Access on the strip as the composer's shield, not in the menu", () => {
     renderComposer({
       executionMode: "default",
       modelSettings: modelSettings(),
-      settingsMenu: settingsMenu(),
+      secondaryActions: [{ key: "a", label: "Compact thread", onSelect: vi.fn() }],
+      settingsMenu: { access: accessSlot("auto") },
     });
-    openMenu();
+    expect(accessTrigger().getAttribute("aria-label")).toBe("Access: Auto");
+    expect(accessTrigger().getAttribute("aria-haspopup")).toBe("dialog");
+    // The level is named on the chip, beside the shield.
+    expect(accessTrigger().textContent).toContain("Auto");
+    fireEvent.click(screen.getByRole("button", { name: "Thread settings" }));
+    expect(screen.queryByRole("menuitem", { name: /Access/ })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: /Model/ })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: /Reasoning/ })).toBeNull();
     expect(screen.queryByRole("menuitemcheckbox", { name: "Fast mode" })).toBeNull();
-    expect(screen.getByRole("menuitem", { name: /Access/ })).toBeTruthy();
   });
 
   it("picks a model and an effort in the pill's panel", () => {
@@ -777,71 +818,94 @@ describe("CompactComposer settings menu", () => {
     expect(modelSettingsPill().querySelector(".model-settings__pill-bolt")).toBeTruthy();
   });
 
-  it("offers Auto as a separate sandboxed access mode", () => {
-    const menu = settingsMenu({ executionModes: [
-      { label: "Default Access", mode: "default" },
-      { label: "Auto", mode: "auto" },
-      { label: "Full Access", mode: "full-access" },
-    ] });
-    renderComposer({ executionMode: "default", settingsMenu: menu });
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Access/ }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Auto" }));
-    expect(menu.onSelectExecutionMode).toHaveBeenCalledWith("auto");
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("switches access mode from the submenu", () => {
-    const menu = settingsMenu();
-    renderComposer({ executionMode: "default", settingsMenu: menu });
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Access/ }));
-    fireEvent.click(
-      screen.getByRole("menuitemradio", { name: "Full Access" }),
+  it("commits Auto from the level bar at once", () => {
+    const access = accessSlot();
+    renderComposer({ settingsMenu: { access } });
+    expect(accessStopValues()).toEqual(["default", "auto", "full-access"]);
+    chooseAccessStop("auto");
+    expect(access.onCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ value: "auto" }),
+      false,
     );
-    expect(menu.onSelectExecutionMode).toHaveBeenCalledWith("full-access");
-    expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("returns to the root view through Back", () => {
-    renderComposer({ settingsMenu: settingsMenu() });
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Access/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Back" }));
-    expect(screen.getByRole("menuitem", { name: /Access/ })).toBeTruthy();
+  it("holds Full Access until Allow, then commits it as confirmed", () => {
+    const access = accessSlot();
+    renderComposer({ settingsMenu: { access } });
+    chooseAccessStop("full-access");
+    expect(access.onCommit).not.toHaveBeenCalled();
+    allowAccessStop();
+    expect(access.onCommit).toHaveBeenCalledTimes(1);
+    expect(access.onCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ value: "full-access" }),
+      true,
+    );
   });
 
-  it("reopens on the root view after browsing a submenu", () => {
-    renderComposer({ settingsMenu: settingsMenu() });
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Access/ }));
-    fireEvent.keyDown(document, { key: "Escape" });
-    openMenu();
-    expect(screen.getByRole("menuitem", { name: /Access/ })).toBeTruthy();
+  it("opens the picker under the card, portalled out of it", () => {
+    const onCardPointerDown = vi.fn();
+    const { container } = render(
+      <div onPointerDown={onCardPointerDown}>
+        <CompactComposer
+          onSend={vi.fn()}
+          settingsMenu={{ access: accessSlot() }}
+          threadTitle="Thread t1"
+        />
+      </div>,
+    );
+    const panel = openAccessPicker();
+    expect(container.contains(panel)).toBe(false);
+    expect(panel.classList.contains("access-picker__panel--below")).toBe(true);
+    // A drag on the level bar must not reach the card's ancestors, which
+    // pan the Star Map under it.
+    onCardPointerDown.mockClear();
+    fireEvent.pointerDown(within(panel).getByRole("slider"), { button: 0, pointerId: 1 });
+    expect(onCardPointerDown).not.toHaveBeenCalled();
   });
 
-  it("hides the Access row when there is only one mode", () => {
+  it("returns focus to the chip when Tab leaves either end of the portalled panel", () => {
+    // The panel is portalled to the end of the body, so the browser's own
+    // Tab order would carry focus away from the card.
+    renderComposer({ settingsMenu: { access: accessSlot() } });
+    let panel = openAccessPicker();
+    const slider = within(panel).getByRole("slider");
+    expect(document.activeElement).toBe(slider);
+    fireEvent.keyDown(slider, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(accessTrigger());
+    expect(accessTrigger().getAttribute("aria-expanded")).toBe("false");
+
+    chooseAccessStop("full-access");
+    panel = openAccessPicker();
+    const cancel = within(panel).getByRole("button", { name: "Cancel" });
+    cancel.focus();
+    fireEvent.keyDown(cancel, { key: "Tab" });
+    expect(document.activeElement).toBe(accessTrigger());
+    expect(accessTrigger().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("shows access as a readout when the host offers no picker", () => {
     renderComposer({
+      executionMode: "full-access",
       secondaryActions: [{ key: "open-full", label: "Open in full view", onSelect: vi.fn() }],
-      settingsMenu: settingsMenu({
-        executionModes: [{ label: "Default Access", mode: "default" }],
-      }),
+      settingsMenu: {},
     });
-    openMenu();
-    expect(screen.queryByRole("menuitem", { name: /Access/ })).toBeNull();
+    expect(queryAccessTriggers()).toEqual([]);
+    expect(screen.getByRole("img", { name: "Access: Full Access" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Thread settings" }));
     expect(screen.getByRole("menuitem", { name: "Open in full view" })).toBeTruthy();
   });
 
-  it("separates settings from host actions in one menu", () => {
+  it("keeps only the host's actions in the menu", () => {
     const onSelect = vi.fn();
     renderComposer({
       secondaryActions: [
         { key: "open-full", label: "Open in full view", onSelect },
       ],
-      settingsMenu: settingsMenu(),
+      settingsMenu: { access: accessSlot() },
     });
-    openMenu();
-    expect(screen.getByRole("separator")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Thread settings" }));
+    expect(screen.queryByRole("separator")).toBeNull();
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Open in full view" }),
     );
