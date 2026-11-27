@@ -4181,6 +4181,11 @@ textarea,
   padding-left: 22px;
 }
 
+.document-window__markdown ol.transcript-message__list {
+  --list-gutter: 22px;
+  padding-left: var(--list-gutter);
+}
+
 .document-window__markdown .transcript-message__list li + li {
   margin-top: 8px;
 }
@@ -32577,6 +32582,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-message__heading {
   font-weight: 700;
   line-height: 1.4;
+  scroll-margin-top: 16px;
 }
 
 .transcript-message__heading:is(h1) {
@@ -32625,8 +32631,154 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow-wrap: anywhere;
 }
 
+ol.transcript-message__list {
+  --list-gutter: 20px;
+  padding-left: var(--list-gutter);
+}
+
+ol.transcript-message__list > li::marker {
+  font-variant-numeric: tabular-nums;
+}
+
 .transcript-message__list li + li {
   margin-top: 4px;
+}
+
+.thread-markdown ul.transcript-message__list.contains-task-list {
+  padding-left: 22px;
+}
+
+.thread-markdown ol.transcript-message__list.contains-task-list {
+  --list-gutter: 22px;
+}
+
+.thread-markdown .task-list-item {
+  list-style-type: none;
+}
+
+.thread-markdown .task-list-item > .contains-task-list {
+  margin-top: 4px;
+}
+
+.thread-markdown .task-list-item > input[type="checkbox"],
+.thread-markdown .task-list-item > p:first-child > input[type="checkbox"] {
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin: 0 4px 0 -22px;
+  padding: 0;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 4px;
+  background: var(--bg-input);
+  appearance: none;
+  -webkit-appearance: none;
+  vertical-align: -2px;
+  cursor: default;
+  opacity: 1;
+}
+
+.thread-markdown .task-list-item > input[type="checkbox"]:checked,
+.thread-markdown .task-list-item > p:first-child > input[type="checkbox"]:checked {
+  border-color: var(--accent-border);
+  background: var(--accent-fill);
+}
+
+.thread-markdown .task-list-item > input[type="checkbox"]:checked::after,
+.thread-markdown .task-list-item > p:first-child > input[type="checkbox"]:checked::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 7px;
+  height: 4px;
+  border-bottom: 1.75px solid var(--button-text);
+  border-left: 1.75px solid var(--button-text);
+  content: "";
+  transform: translate(-50%, -62%) rotate(-45deg);
+}
+
+.thread-markdown section[data-footnotes] {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.88em;
+  line-height: 1.5;
+}
+
+.thread-markdown section[data-footnotes] > .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.thread-markdown section[data-footnotes] > ol {
+  margin: 0;
+}
+
+.thread-markdown section[data-footnotes] li {
+  scroll-margin-top: 16px;
+}
+
+.thread-markdown section[data-footnotes] li::marker {
+  color: var(--text-muted);
+}
+
+.thread-markdown section[data-footnotes] li + li {
+  margin-top: 6px;
+}
+
+.thread-markdown section[data-footnotes] li > p {
+  margin: 0;
+}
+
+.thread-markdown section[data-footnotes] li > p + p {
+  margin-top: 6px;
+}
+
+.thread-markdown sup:has(> a[data-footnote-ref]) {
+  line-height: 0;
+}
+
+.thread-markdown a[data-footnote-ref] {
+  padding: 0 2px;
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+}
+
+.thread-markdown a[data-footnote-ref]::before {
+  content: "[";
+}
+
+.thread-markdown a[data-footnote-ref]::after {
+  content: "]";
+}
+
+.thread-markdown a[data-footnote-ref]:hover {
+  text-decoration: underline;
+  text-decoration-color: currentColor;
+}
+
+.thread-markdown a[data-footnote-backref] {
+  margin-left: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  text-decoration: none;
+}
+
+.thread-markdown a[data-footnote-backref]:hover {
+  color: var(--accent-bright);
+  text-decoration: none;
 }
 
 .transcript-message__blockquote {
