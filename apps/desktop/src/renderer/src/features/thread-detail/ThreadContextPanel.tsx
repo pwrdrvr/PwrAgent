@@ -723,11 +723,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     desktopApi: props.desktopApi,
     onOpenPanel: () => selectTab("providers"),
   });
-  // On the collapsed rail's gauge the peek stands in for the hover reveal,
-  // which resumes if the pointer moves on up the spine. An open rail keeps
-  // the gauge's tab tooltip: the peek would cover the panel being read.
+  // The gauge peeks unless the AI providers panel is already showing, where
+  // it keeps its tab tooltip. On the collapsed rail the peek stands in for
+  // the hover reveal, which resumes if the pointer moves on up the spine.
   const enterGauge = (event: MouseEvent<HTMLElement>, tooltipText: string): void => {
-    if (open) {
+    if (open && activeRailTab === "providers") {
       railTooltip.showAfterDelay(event.currentTarget, tooltipText);
       return;
     }

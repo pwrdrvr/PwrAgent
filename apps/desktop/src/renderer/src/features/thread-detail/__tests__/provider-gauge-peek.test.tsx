@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
@@ -66,11 +67,15 @@ function mockLayout(): void {
   });
 }
 
-function renderPanel(onActiveTabChange = vi.fn(), pinned = false) {
+function renderPanel(
+  onActiveTabChange = vi.fn(),
+  pinned = false,
+  activeTab: ComponentProps<typeof ThreadContextPanel>["activeTab"] = "info",
+) {
   mockLayout();
   render(
     <ThreadContextPanel
-      activeTab="info"
+      activeTab={activeTab}
       backends={BACKENDS}
       pinned={pinned}
       thread={thread}
@@ -126,8 +131,16 @@ describe("AI provider gauge peek", () => {
     expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
   });
 
-  it("keeps the tab tooltip, not the peek, while the rail is open", async () => {
+  it("peeks over an open rail showing another panel", async () => {
     renderPanel(vi.fn(), true);
+    const shown = await openPeek();
+    expect(shown).toBeInTheDocument();
+    // The peek is the only tooltip: the tab's own never joins it.
+    expect(screen.getAllByRole("tooltip")).toEqual([shown]);
+  });
+
+  it("keeps the tab tooltip, not the peek, while the AI providers panel shows", async () => {
+    renderPanel(vi.fn(), true, "providers");
     move(document.body, gauge());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(TOOLTIP_HOVER_DELAY_MS);
