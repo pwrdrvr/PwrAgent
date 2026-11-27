@@ -1,7 +1,7 @@
 import * as pricingDisplay from "@pwragent/shared/thread-pricing-display";
 import { DESKTOP_SPEND_ALERT_POLICY_DEFAULT } from "@pwragent/shared/contracts/settings";
 import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
-import { LivePricingLines } from "../app-server/live-pricing-lines";
+import { LiveGatePricingLines, LivePricingLines } from "../app-server/live-pricing-lines";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
@@ -18,7 +18,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
 import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
+import { countPricingRows as countTurnPricingReads } from "./pricing-read-counts";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import { TestTokenMiserStore } from "./token-miser-test-store";
 
@@ -370,8 +372,53 @@ describe("Token Miser savings scaling", () => {
     expect(counter.reads.pricing).toBe(0);
   });
 
+  it("completes a cold owner turn without rebuilding history and loads only gates whose replay advances", async () => {
+    const thread = { backend: "codex", threadId: THREAD_ID } as const;
+    const model = PARENT_MODELS[0];
+    const tokens = { inputTokens: 100, cachedInputTokens: 10, outputTokens: 5, totalTokens: 105 };
+    const persisted = new SqliteTokenMiserStorage(tokenMiserStore.stateDb);
+    const entries = buildWorkload(1).entries.map((entry, i) => ({
+      ...entry, objectId: "00000000-0000-4000-8000-" + String(i).padStart(12, "0"),
+      parentModel: model, replayTrackingVersion: 2 as const, parentRequestsObservedAfterGate: 2,
+      ...(i >= 2 ? { replayTrackingStoppedAt: entry.createdAt + 1 } : {}),
+    }));
+    for (const entry of entries) persisted.writeMetadata(entry);
+    await store.upsertThreadUsageLines({ lines: entries.map((entry, i) => ({
+      ...parentLine({ id: String(i), turnId: entry.turnId, model }), priceStatus: "priced", totalCostMicros: 10,
+    })) });
+    await internals.persistTokenMiserLedgerEntries(entries);
+    await internals.publishLiveTokenMiserReplayEntries(entries);
+
+    const usageReads = countTurnPricingReads(stateDb);
+    const replayReads = countTurnPricingReads(tokenMiserStore.stateDb);
+    const published: string[][] = [];
+    registry.onEvent(({ notification }) => {
+      if (notification.method === "thread/pricing/updated") {
+        const pricing = notification.params.pricing as { lines: ThreadUsageLineRecord[] };
+        published.push(pricing.lines.map(line => line.turnId ?? ""));
+      }
+    });
+    const turnId = "next";
+    await registry.publishLocalEvent({ backend: thread.backend, notification: { method: "turn/started",
+      params: { threadId: THREAD_ID, turnId, turn: { id: turnId, status: "inProgress" } } } });
+    await registry.publishLocalEvent({ backend: thread.backend, notification: { method: "thread/tokenUsage/updated",
+      params: { threadId: THREAD_ID, turnId, model, tokenUsage: { last: tokens, total: tokens } } } });
+    await registry.publishLocalEvent({ backend: thread.backend, notification: { method: "turn/completed",
+      params: { threadId: THREAD_ID, turnId, turn: { id: turnId, status: "completed", output: [] } } } });
+
+    expect(published).toEqual([[turnId]]);
+    expect(usageReads.usageRows).toBeLessThanOrEqual(2);
+    expect(replayReads).toMatchObject({ metadataRows: 2, metadataKeys: 2, payloadQueries: 1 });
+    await tokenMiserStore.flushAll();
+    for (const [i, entry] of entries.entries()) {
+      const actual = persisted.readMetadata(entry.objectId) as TokenMiserObjectMetadata;
+      expect(actual.parentRequestsObservedAfterGate).toBe(i < 2 ? 3 : 2);
+      expect(actual.cachedReplayCount ?? 0).toBe((entry.cachedReplayCount ?? 0) + Number(i < 2));
+    }
+  });
+
   it("probes only changed gate IDs as spend publications accumulate", async () => {
-    const live = new LivePricingLines();
+    const live = new LiveGatePricingLines();
     internals.liveTokenMiserUsageLines.set(THREAD_ID, live);
     const lookup = vi.spyOn(store as unknown as { readThreadUsageLineSync(id: string): unknown }, "readThreadUsageLineSync");
     const ledger = registryModules(registry).threadUsageLedger;
@@ -388,7 +435,7 @@ describe("Token Miser savings scaling", () => {
 
   it("keeps the gate adjustment equal to full spend across storage, replacement and retirement", async () => {
     const thread = { backend: "codex", threadId: THREAD_ID } as const;
-    const live = new LivePricingLines();
+    const live = new LiveGatePricingLines();
     internals.liveTokenMiserUsageLines.set(THREAD_ID, live);
     const spend = vi.spyOn(store, "readThreadSpendMicros");
     const ledger = registryModules(registry).threadUsageLedger;
@@ -396,7 +443,13 @@ describe("Token Miser savings scaling", () => {
       spend.mockClear();
       await ledger.emitThreadPricingUpdated(thread);
       const full = await ledger.readThreadPricingWithLiveTokenMiser(thread);
-      expect(await spend.mock.results[0]?.value).toBe(full.lines.reduce((sum, line) => sum + line.totalCostMicros, 0));
+      const expected = full.lines.reduce((sum, line) => sum + line.totalCostMicros, 0);
+      const request = { ...thread, liveGates: live, localModelIds: [], liveLines: [] };
+      const alerted = await spend.mock.results[0]?.value;
+      if (alerted === null) expect(expected).toBeLessThan(25_000_000);
+      else expect(alerted).toBe(expected);
+      expect(await store.readThreadSpendMicros(request)).toBe(expected);
+      expect(await store.readThreadSpendMicros({ ...request, thresholdMicros: expected })).toBe(expected);
     };
     const gate = gateLine({ index: 0, inputTokens: 1000, monitorId: "first", live: true });
     live.set(gate.usageLineId, gate);
@@ -415,6 +468,22 @@ describe("Token Miser savings scaling", () => {
     await check();
     live.set(gate.usageLineId, gate);
     await check();
+  });
+
+  it("counts a native child's charge summarized only on its parent before ruling out a spend alert", async () => {
+    const hidden = gateLine({ index: 0, inputTokens: 1000, monitorId: "parent-charge" });
+    const thread = { backend: "codex" as const, threadId: hidden.threadId };
+    const own = { ...parentLine({ ...thread, id: "own", turnId: "own" }), priceStatus: "priced" as const, totalCostMicros: 1 };
+    await store.upsertThreadUsageLine({ line: own });
+    await store.upsertThreadUsageLine({ line: { ...hidden, provider: "anthropic", pricingBasis: "provider-reported" } });
+    const held = { ...own, usageLineId: "held", totalCostMicros: 2 };
+    const liveGates = new LiveGatePricingLines();
+    liveGates.set(held.usageLineId, held);
+    const full = await store.readThreadPricing(thread);
+    const expected = full.lines.reduce((sum, row) => sum + row.totalCostMicros, held.totalCostMicros);
+    expect(full.lines).toContainEqual(expect.objectContaining({ usageLineId: hidden.usageLineId, totalCostMicros: hidden.totalCostMicros }));
+    expect(expected).toBeGreaterThan(full.summaries.reduce((sum, row) => sum + row.totalCostMicros, held.totalCostMicros));
+    expect(await store.readThreadSpendMicros({ ...thread, liveGates, liveLines: [], localModelIds: [], thresholdMicros: expected })).toBe(expected);
   });
 
   it("reconciles live-only turns and replacements as a usage line changes scope", async () => {

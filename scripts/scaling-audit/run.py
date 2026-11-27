@@ -95,7 +95,7 @@ def run(repo, output, suites, args):
             if "properties" in suites:
                 stage(folder / "scaling-audit-model.ts", (KIT / "matched-model.ts").read_text())
         if "pricing" in suites or "token-miser" in suites:
-            stage(MAIN / "scaling-audit-pricing-rows.ts", (KIT / "pricing-rows.ts").read_text())
+            stage(MAIN / "scaling-audit-pricing-rows.ts", (ROOT / MAIN / "pricing-read-counts.ts").read_text())
         if "navigation" in suites or "sqlite" in suites:
             stage(MAIN / "scaling-audit-navigation-fixture.ts", (KIT / "navigation-fixture.ts").read_text())
             stage(MAIN / "scaling-audit-generate.mjs", (KIT / "generate.mjs").read_text().replace("./shape.json", "./scaling-audit-shape.json"))

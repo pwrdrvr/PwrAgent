@@ -43,6 +43,7 @@ import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata"
 import { prepareSqliteRead } from "./sqlite-prepared-read";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteChangedThreadKeys, sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
+import { DIRECT_SPEND_HISTORY, ROLLED_UP_SPEND_HISTORY } from "./thread-pricing-summary-schema";
 import { forgetThreadSpend, projectedThreadSpend, type SpendGateLines } from "./thread-spend-projection";
 import { PricingPageCards, PricingPageLiveRows, PricingPagePrices, type PricingPageAccounting, type PricingPageOverlay } from "./pricing-page-overlay";
 import type { PricingGateSelection } from "@pwragent/shared/thread-pricing-display";
@@ -249,6 +250,12 @@ type ThreadPricingReadParams = {
   threadId: string;
   /** A publication also delivers older turn prices repaired by its reads. */
   onRepriced?: (line: ThreadUsageLineRecord) => void;
+};
+
+type ThreadSpendRead = ThreadPricingReadParams & {
+  localModelIds: readonly string[];
+  liveLines: readonly ThreadUsageLineRecord[];
+  liveGates?: SpendGateLines;
 };
 
 type ThreadPricingLedgerRead = {
@@ -3859,30 +3866,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   /** The alert total includes priced historical gaps and in-flight monitor usage. */
-  async readThreadSpendMicros(params: ThreadPricingReadParams & {
-    localModelIds: readonly string[];
-    liveLines: readonly ThreadUsageLineRecord[];
-    liveGates?: SpendGateLines;
-  }): Promise<number> {
+  readThreadSpendMicros(params: ThreadSpendRead & { thresholdMicros?: undefined }): Promise<number>;
+  readThreadSpendMicros(params: ThreadSpendRead & { thresholdMicros: number }): Promise<number | null>;
+  async readThreadSpendMicros(params: ThreadSpendRead & { thresholdMicros?: number }): Promise<number | null> {
     const db = this.stateDb.raw;
-    // The summary and gap probes share a SQLite snapshot. The partial
-    // indexes contain only main rows that could anchor a priced usage gap.
+    // The summary and the indexed checks for exceptions share one SQLite snapshot.
     const readSummary = () => prepareSqliteRead(db, `
       SELECT SUM(CASE WHEN UPPER(currency) = 'USD' THEN total_cost_micros ELSE 0 END) AS micros,
              SUM(unpriced_usage_line_count) AS unpriced,
+             MIN(ledger_delta_ready) AS ready,
              EXISTS (
-               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_spend_thread
-               WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
-                 AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL
+               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_gap_thread
+               WHERE backend = @backend AND thread_id = @threadId AND ` + DIRECT_SPEND_HISTORY + `
                UNION ALL
-               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_spend_parent
-               WHERE backend = @backend AND parent_thread_id = @threadId AND parent_thread_id IS NOT NULL
-                 AND status != 'superseded' AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL
-             ) AS possible_gap
+               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_gap_parent
+               WHERE backend = @backend AND parent_thread_id = @threadId AND parent_thread_id IS NOT NULL AND ` + ROLLED_UP_SPEND_HISTORY + `
+             ) AS needs_history
         FROM thread_pricing_summaries INDEXED BY idx_thread_pricing_summaries_thread
        WHERE backend = @backend AND thread_id = @threadId
     `).get({ backend: params.backend, threadId: params.threadId }) as {
-      micros: number | null; unpriced: number | null; possible_gap: number;
+      micros: number | null; unpriced: number | null; needs_history: number; ready: number | null;
     };
     let summary = readSummary();
     if (summary.unpriced && this.firstUnpricedBatchHasModel(params)) {
@@ -3892,7 +3895,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (pending) await pending;
       summary = readSummary();
     }
-    if (!summary.possible_gap && !params.localModelIds.length && !params.liveLines.length && !params.liveGates?.size) return summary.micros ?? 0;
+    if (!summary.needs_history && !params.localModelIds.length && !params.liveLines.length && !params.liveGates?.size) return summary.micros ?? 0;
+    // For an alert, adding every live gate to the durable total is an upper
+    // bound: overlaying by ID can only replace an existing nonnegative charge.
+    // Below the threshold there is no alert amount to publish. Exact callers
+    // and possible crossings take the normal replacement and gap projection.
+    if (!summary.needs_history && summary.ready === 1 && !params.localModelIds.length && !params.liveLines.length
+      && params.thresholdMicros !== undefined && params.liveGates?.positiveUsdMicros !== undefined
+      && (summary.micros ?? 0) + params.liveGates.positiveUsdMicros < params.thresholdMicros) return null;
     // Never retain uncommitted caller state. Our own read transaction keeps
     // the spend checkpoint, changed rows, worker replacements and summary on
     // the same snapshot when another owner is writing this profile.

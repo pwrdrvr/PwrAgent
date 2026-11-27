@@ -1,5 +1,22 @@
 import type Database from "better-sqlite3";
 
+// A gap requires at least one cumulative component to exceed this row alone.
+// Earlier nonnegative accounted tokens can only reduce it further. Keep the
+// index predicate identical to the EXISTS probe on every schema version.
+const POSSIBLE_PRICED_GAP = `(status != 'superseded' AND model IS NOT NULL AND scope != 'monitor'
+  AND cumulative_output_tokens IS NOT NULL AND cumulative_cached_input_tokens IS NOT NULL
+  AND (COALESCE(cumulative_uncached_input_tokens, cumulative_input_tokens - cumulative_cached_input_tokens) > uncached_input_tokens
+    OR cumulative_cached_input_tokens > cached_input_tokens OR cumulative_output_tokens > output_tokens
+    OR cumulative_reasoning_output_tokens > reasoning_output_tokens)) IS TRUE`;
+
+// A negative charge can increase spend when replaced. Native children can
+// also have charges summarized only under their parent. Exclude both cases
+// when using the summary plus live costs to rule out an alert.
+export const ROLLED_UP_SPEND_HISTORY = `(${POSSIBLE_PRICED_GAP} OR
+  (status != 'superseded' AND price_status = 'priced' AND total_cost_micros < 0)) IS TRUE`;
+export const DIRECT_SPEND_HISTORY = `(${ROLLED_UP_SPEND_HISTORY} OR
+  (status != 'superseded' AND parent_thread_id != thread_id)) IS TRUE`;
+
 // Update only initialized buckets. The store materializes new buckets so a
 // native child's usage does not gain a separate visible summary. Match both
 // identities on existing buckets, once when the thread is its own parent.

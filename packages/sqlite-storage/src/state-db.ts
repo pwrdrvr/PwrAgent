@@ -1,3 +1,4 @@
+import { OPEN_REPLAY_GATE } from "./token-miser-storage-sqlite";
 import {
   hasScheduledActionProjectionSchema,
   SCHEDULED_ACTION_PROJECTION_SCHEMA,
@@ -45,7 +46,7 @@ import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
-import { ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
+import { DIRECT_SPEND_HISTORY, ROLLED_UP_SPEND_HISTORY, ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
 import { ensureThreadManagedMembershipSchema, reclaimEmptyLegacyMembershipIndex } from "./thread-managed-membership";
 
 export const CURRENT_STATE_DB_USER_VERSION = 88;
@@ -1615,6 +1616,10 @@ const MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP = 500;
  */
 const FEDERATION_SESSION_AUDIT_CAP = 500;
 
+const OPEN_REPLAY_INDEX = `CREATE INDEX IF NOT EXISTS idx_token_miser_open_replay
+  ON token_miser_objects(thread_id, object_id, json_extract(payload, '$.createdAt'))
+  WHERE ${OPEN_REPLAY_GATE};`;
+
 const TOKEN_MISER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS token_miser_objects (
   object_id TEXT PRIMARY KEY,
@@ -1635,7 +1640,7 @@ CREATE TABLE IF NOT EXISTS token_miser_retention (
   generation TEXT NOT NULL,
   archived INTEGER NOT NULL
 );
-`;
+` + OPEN_REPLAY_INDEX;
 
 export class StateDb {
   private db: BetterSqlite3.Database;
@@ -3120,6 +3125,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadUsagePricingIndexes(db);
     ensureThreadPricingSummaryReadIndexes(db);
     ensureThreadAccountingReadIndexes(db);
+    if (tableExists(db, "token_miser_objects")) db.exec(OPEN_REPLAY_INDEX);
     // Current and newer partial profiles skip the numbered migration ladder.
     // Repair the mapping after FTS convergence, in this same transaction. Older
     // profiles first finish identity migrations, then create it in v82.
@@ -3946,12 +3952,10 @@ function ensureThreadAccountingReadIndexes(db: BetterSqlite3.Database): void {
   // index specific to turn rows and the repair indexes specific to unpriced
   // rows so normal priced root writes do not maintain any of these indexes.
   db.exec(`
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_spend_thread
-  ON thread_usage_lines(backend, thread_id) WHERE status != 'superseded'
-    AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_spend_parent
-  ON thread_usage_lines(backend, parent_thread_id) WHERE parent_thread_id IS NOT NULL AND status != 'superseded'
-    AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gap_thread
+  ON thread_usage_lines(backend, thread_id) WHERE ${DIRECT_SPEND_HISTORY};
+CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gap_parent
+  ON thread_usage_lines(backend, parent_thread_id) WHERE parent_thread_id IS NOT NULL AND ${ROLLED_UP_SPEND_HISTORY};
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_child_turn
   ON thread_usage_lines(backend, parent_thread_id, turn_id)
   WHERE scope = 'turn' AND status != 'superseded' AND parent_thread_id IS NOT NULL;

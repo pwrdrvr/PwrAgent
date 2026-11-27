@@ -8,6 +8,10 @@ import { watchPricingRows } from "./sqlite-pricing-row-changes";
 import type { StateDb } from "./state-db";
 import { prepareSqliteRead } from "./sqlite-prepared-read";
 
+export const OPEN_REPLAY_GATE = `CASE WHEN json_valid(payload) THEN
+  json_extract(payload, '$.replayTrackingVersion') = 2 AND json_type(payload, '$.replayTrackingStoppedAt') IS NULL
+  ELSE 0 END`;
+
 type MetadataPageRow = { thread_id: string; created_at: number; object_id: string; payload: string };
 
 export class SqliteTokenMiserStorage<
@@ -39,6 +43,12 @@ export class SqliteTokenMiserStorage<
       : this.db.prepare("SELECT payload FROM token_miser_objects WHERE object_id = ? AND thread_id = ?").get(objectId, threadId)
     ) as { payload: string } | undefined;
     return row ? JSON.parse(row.payload) as Metadata : undefined;
+  }
+
+  readMetadataByIds(objectIds: readonly string[]): Metadata[] {
+    const rows = prepareSqliteRead(this.db, `SELECT payload FROM token_miser_objects
+      WHERE object_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(objectIds)) as { payload: string }[];
+    return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
   }
 
   listMetadata(threadId?: string): Metadata[] {
@@ -136,6 +146,15 @@ export class SqliteTokenMiserStorage<
           WHERE (thread_id, created_at, object_id) > (?, ?, ?)
           ORDER BY thread_id, created_at, object_id LIMIT ?`)
           .all(after.threadId, after.createdAt, after.objectId, limit)) as MetadataPageRow[];
+  }
+
+  readOpenReplayPage(threadId: string, afterId: string | undefined, limit: number): TokenMiserObjectRecord[] {
+    // The partial index supplies identity and the current payload timestamp,
+    // including after another owner corrects the original insert's timestamp.
+    return prepareSqliteRead(this.db, `SELECT object_id AS objectId, thread_id AS threadId,
+        json_extract(payload, '$.createdAt') AS createdAt
+      FROM token_miser_objects INDEXED BY idx_token_miser_open_replay
+      WHERE thread_id = ? AND object_id > ? AND ` + OPEN_REPLAY_GATE + " ORDER BY object_id LIMIT ?").all(threadId, afterId ?? "", limit) as TokenMiserObjectRecord[];
   }
 
   writeMetadata(metadata: Metadata): void {
