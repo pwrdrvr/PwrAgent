@@ -223,6 +223,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // v88's pruned automation costs table and two indexes add three VACUUM pages.
     // The two app update notice tables add one root page each.
     // The three transcript accounting indexes add one vacuum page each.
+    // The pending ACP compaction index adds one VACUUM page.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));
