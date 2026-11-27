@@ -5141,3 +5141,67 @@ describe("ThreadContextPanel Decisions tab", () => {
     expect(statusSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("ThreadContextPanel Details render work", () => {
+  // The rail renders on every streamed delta, with a fresh controls object
+  // each time. A delta that changes none of the rail's inputs walked every
+  // tracked project for Attach folder, twice, and every edit group for the
+  // Changes count: tracked projects × deltas across a turn.
+  it("rereads neither tracked projects nor edit groups on a delta that changes neither", () => {
+    const reads = { paths: 0, groups: 0 };
+    const directories = Array.from({ length: 20 }, (_, index) => {
+      const path = `/Users/fixture-user/github/project-${index}`;
+      return {
+        key: `project-${index}`,
+        kind: "directory" as const,
+        label: `project-${index}`,
+        get path() {
+          reads.paths += 1;
+          return path;
+        },
+      };
+    });
+    const details = [{ id: "file-1", path: "src/a.ts" }, { id: "file-2", path: "src/b.ts" }];
+    const groups = [{
+      id: "group-1",
+      get details() {
+        reads.groups += 1;
+        return details;
+      },
+    }] as unknown as NonNullable<ComponentProps<typeof ThreadContextPanel>["editedFileGroups"]>;
+    const thread: NavigationThreadSummary = {
+      ...baseThread,
+      projectKey: "/Users/fixture-user/github/project-0",
+      linkedDirectories: [
+        { id: "dir-0", kind: "local", label: "project-0", path: "/Users/fixture-user/github/project-0" },
+      ],
+    };
+    const desktopApi = {
+      pickDirectoryFromDisk: vi.fn(async () => undefined),
+      attachDirectoryToThread: vi.fn(),
+    } as unknown as ComponentProps<typeof ThreadContextPanel>["desktopApi"];
+    const panelAt = (tick: number) => (
+      <ThreadContextPanel
+        activeTab="info"
+        backends={[baseBackend]}
+        desktopApi={desktopApi}
+        editedFileGroups={groups}
+        initialLoadDurationMs={tick}
+        pinned
+        thread={thread}
+        onActiveTabChange={() => undefined}
+        detailsControls={{ machineLabel: "This machine", directories }}
+      />
+    );
+    const { rerender } = render(panelAt(0));
+    const segments = screen.getByRole("tablist", { name: "Details" });
+    expect(within(segments).getByRole("tab", { name: /^Changes/ })).toHaveTextContent("2");
+    reads.paths = 0;
+    reads.groups = 0;
+
+    for (let tick = 1; tick <= 3; tick += 1) rerender(panelAt(tick));
+
+    expect(reads).toEqual({ paths: 0, groups: 0 });
+    expect(within(segments).getByRole("tab", { name: /^Changes/ })).toHaveTextContent("2");
+  });
+});

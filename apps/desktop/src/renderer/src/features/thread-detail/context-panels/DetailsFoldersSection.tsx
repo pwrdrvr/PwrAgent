@@ -95,7 +95,12 @@ export const DetailsFoldersSection = memo(function DetailsFoldersSection(props: 
   const [attaching, setAttaching] = useState(false);
   const [detachError, setDetachError] = useState<string>();
   const [detachingDirectoryId, setDetachingDirectoryId] = useState<string>();
-  const directories = dedupeLinkedProjectDirectories(props.thread.linkedDirectories);
+  // Kept by identity: the rail renders on every streamed delta, and a fresh
+  // list would refilter every tracked project for Attach folder each time.
+  const directories = useMemo(
+    () => dedupeLinkedProjectDirectories(props.thread.linkedDirectories),
+    [props.thread.linkedDirectories],
+  );
   const resolvedPrimary = findPrimaryThreadLinkedDirectory(directories, props.thread.projectKey);
   // Drawn first even when the thread's cwd names none of its folders.
   const primaryDirectory = resolvedPrimary ?? directories[0];

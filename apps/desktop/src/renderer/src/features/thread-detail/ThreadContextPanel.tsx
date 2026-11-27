@@ -279,6 +279,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     [props.editedFileGroups],
   );
   const actionRuns = useMemo(() => props.actionRuns ?? [], [props.actionRuns]);
+  // The rail renders on every streamed delta; the edit groups keep their
+  // identity until an edit lands, so the Changes count is walked only then.
+  const changedFiles = useMemo(() => countChangedFiles(editedFileGroups), [editedFileGroups]);
   // The Pull requests tab counts what wakes this thread: this instance's own
   // list for a local thread, the owner's projection for a peer's, plus the
   // merge build watches its card lists from Continue After.
@@ -390,12 +393,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       .reduce((total, summary) => total + summary.totalCostMicros, 0))
     : undefined;
   const detailsOpen = open && activeRailTab === "details";
-  const jobsSummary = summarizeDetailsJobs({
-    terminalCount: props.backgroundTerminals?.terminals?.length ?? 0,
+  const terminalCount = props.backgroundTerminals?.terminals?.length ?? 0;
+  const subAgents = props.thread?.subAgents;
+  const activeSubAgents = props.thread?.activeSubAgents;
+  const jobsSummary = useMemo(() => summarizeDetailsJobs({
+    terminalCount,
     runs: actionRuns,
-    subAgents: props.thread?.subAgents ?? [],
-    activeSubAgents: props.thread?.activeSubAgents,
-  });
+    subAgents: subAgents ?? [],
+    activeSubAgents,
+  }), [actionRuns, activeSubAgents, subAgents, terminalCount]);
   const pendingWakes = useThreadPendingWakes(props.thread, props.desktopApi, { includeEnded: open && activeTab === "waiting" });
   const pendingWakeCount = pendingWakes.state.status === "ready"
     ? pendingWakes.state.wakes.filter(isThreadPendingWakeLive).length
@@ -1103,7 +1109,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   function renderDetails() {
     const thread = props.thread;
     if (!thread) return null;
-    const changedFiles = countChangedFiles(editedFileGroups);
     const prCount = thread.prs?.length ?? 0;
     const prDescription = [
       prCount ? `${prCount} pull request${prCount === 1 ? "" : "s"}` : undefined,
