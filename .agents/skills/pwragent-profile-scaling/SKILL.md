@@ -18,7 +18,18 @@ The candidate defaults to this checkout including working changes. Use clean pin
 
 Start with `summary.md`. In `results.json`, match the revision, suite, scenario dimensions and counter name. The comparison exits nonzero for increased deterministic work, missing scenarios or failed oracles. An improvement may trade a full join for targeted reads. Inspect both counters before judging a change. SQLite durations and serialized Pricing bytes are diagnostics. A property failure records its seed, assertion and shrink path in the revision's `work.jsonl`; `vitest.json` records the error. For a new mechanism, use the [scaling audit skill](../pwragent-scaling-audit/SKILL.md) to choose dimensions and reduce a regression to an ordinary low-cost test.
 
-The PR label `ci:scaling-audit` compares the pinned base and head with 25 cases for each of the 37 matched assertions. It exercises shaped and uniform navigation, real SQLite overlays, provider completion and Stop, held review Auto-fixes, open Pricing, Federation retries, stream identity and transcript merge/reopen. Local defaults use 1,000 cases per assertion. The extra pin-demand, Git-cache, resize, dispatcher and historical incremental-index suites and headed control are locally selectable. Use `run.py --help` for suite names.
+The PR label `ci:scaling-audit` compares the pinned base and head with 25 cases for each of the 37 matched assertions. Both sides run the following probes with one worker.
+
+| Suite | Inputs and measured work |
+|---|---|
+| Navigation | Cold and expired Attention reads, eight batched then eight separate status updates at 869, 1,738 and 3,476 rows. Nine uniform scenarios vary pins and project concentration and add start/archive. Count provider lists, checkout paths, joined, targeted and projected directory rows. Live-index revisions also count copied array slots and predicate evaluations. |
+| SQLite | Twelve status changes at 435, 869 and 1,738 live threads with 2,807 archived overlays. Vary archive pressure independently at 869 live rows with 0 and 5,614 archived. Count full joins, input rows, compact overlay rows and checkout paths. |
+| Turn lifecycle and held Auto-fix | Deliver ordinary completion or Stop for 1, 4 and 16 targets with 8–32 unrelated records per category. Count activity and review records visited. Deliver eight terminal or forge events with 0–64 held reviews and count review reads and stack-hold checks. |
+| Pricing | Start, meter and complete 64 turns while reading a four-row historical page after every completion. Sample cumulative publication rows/bytes, rows returned by SQL, full-ledger processing and page output at 8, 16, 32 and 64 turns. |
+| Federation | Vary 2–8 peers, queue depth 8–32 and 4–16 simultaneous redeliveries. Check admission and receipt identity, count warm label/ID/input accesses, queue copies and committed writes. |
+| Transcript | Cross 60–240 entries with 3–24 reviews, reopen 50–400 messages with legacy monitor attribution, and stream eight deltas across 8–64 historical edit turns. Count field reads and replaced edit objects. |
+
+Local defaults use 1,000 cases per assertion. The extra pin-demand, Git-cache, resize, dispatcher and historical incremental-index suites and headed control are locally selectable. Use `run.py --help` for suite names.
 
 ## Topology and historical replay
 
