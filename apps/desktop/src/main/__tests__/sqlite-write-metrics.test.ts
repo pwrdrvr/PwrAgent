@@ -2639,11 +2639,16 @@ describe("sqlite write metrics", () => {
       try {
         await internal.emit(workerUsage(1_000));
         expect(await storedWorkerLine()).toBeUndefined();
+        registryModules(registry).subAgentMonitorService.setCodexNativeSubAgentParent("worker-review", "flattened-parent");
         expect((await registryModules(registry).threadUsageLedger.readThreadPricingWithLiveTokenMiser({
           backend: "codex", threadId: "worker-review",
         })).lines.find((line) => line.scope === "monitor")).toMatchObject({
           threadId: "worker-review", inputTokens: 1_000,
         });
+        const monitors = registryModules(registry).subAgentMonitorService;
+        await monitors.persistLiveCodexNativeSubAgentUsage("worker-review");
+        expect([...monitors.heldWorkerPricingLines("worker-review")]).toEqual([]);
+        expect(await storedWorkerLine()).toMatchObject({ threadId: "worker-review", inputTokens: 1_000 });
       } finally {
         await registry.close();
       }

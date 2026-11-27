@@ -7,7 +7,7 @@ import type {
   AppServerNotification,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { registryModules } from "../app-server/backend-registry-wiring";
-import type { ReviewSubAgentRecord, TaskMonitorDelegationRecord } from "../app-server/backend-registry-types";
+import type { TaskMonitorDelegationRecord } from "../app-server/backend-registry-types";
 import { taskMonitorThreadKey } from "../app-server/thread-turn-keys";
 import { FederationAccountingStream } from "../federation/federation-event-stream";
 import { eventMatchesThreadSelection, unsequencedFederationEventPayload } from "../federation/federation-runtime";
@@ -47,14 +47,13 @@ async function exercise(kind: WorkerKind, parentBackend: AppServerBackendKind,
     taskMonitorDelegations: Map<string, TaskMonitorDelegationRecord>;
     completedTaskMonitorsByThread: Map<string, TaskMonitorDelegationRecord>;
   };
-  const reviews = modules.managedReviewService.activeReviewSubAgentRecords as Map<string, ReviewSubAgentRecord>;
   const headless = headlessAutomationRecords(registry);
   const automationOwner = vi.spyOn(modules.headlessAutomation, "headlessAutomationErrorNoticeContext");
   // Native Codex workers have Codex parents. Other workers can cross providers.
   const ownerBackend = kind === "native" || kind === "automation" ? "codex" : parentBackend;
   for (const worker of ["worker-a", "worker-b"]) {
     if (kind === "native") monitors.setCodexNativeSubAgentParent(worker, "owner");
-    else if (kind === "review") reviews.set(worker, {
+    else if (kind === "review") modules.turnState.activateReview({
       backend: "codex", parentBackend: ownerBackend, parentThreadId: "owner", reviewThreadId: worker,
       createdAt: 1, displayText: "Review", mode: "managed", task: "Review", turnId: "turn",
     });
@@ -190,7 +189,7 @@ async function exercise(kind: WorkerKind, parentBackend: AppServerBackendKind,
     automationOwner.mockRestore();
     monitorState.taskMonitorDelegations.clear();
     monitorState.completedTaskMonitorsByThread.clear();
-    reviews.clear();
+    for (const record of modules.turnState.liveReviewRecords().values()) modules.turnState.finishReview(record);
     headless.clear();
     await registry.close();
     for (const db of databases) db.close();

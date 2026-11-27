@@ -319,12 +319,11 @@ describe("turn end read budget", () => {
     };
   }
 
-  it("does the same whole-thread work for a small and a large thread", async () => {
+  it("shares spend recovery with the first display read and skips it after a thread alert", async () => {
     const small = await measureTurnEnd(20);
     const large = await measureTurnEnd(2_000, true);
-    // One ledger read serves the turn end's one pricing publish, and the
-    // renderer's follow-up reads reuse it. The Token Miser persist looks up
-    // only its own gates' lines.
+    // The small thread first sees a cumulative gap on this turn. Its cold
+    // spend baseline also serves the first explicit Pricing read.
     const { overlayParseBytes: _smallBytes, overlayParses, ...rest } = small;
     expect(rest).toEqual({
       followUpLedgerReads: 0,
@@ -334,7 +333,11 @@ describe("turn end read budget", () => {
       tokenMiserAccountingBuilds: 0,
     });
     const { overlayParseBytes, ...largeRest } = large;
-    expect(largeRest).toEqual({ ...rest, overlayParses });
+    // The large history has a pending thread alert. Only explicit display
+    // demand reads its full history, even with new gates at turn end.
+    expect(largeRest).toEqual({
+      ...rest, overlayParses, ledgerReads: 0, ledgerRowsPerLedger: 0, followUpLedgerReads: 1,
+    });
     // Gate cards live in their own table, so the overlay row a turn end
     // parses does not grow with the thread's 2,005 cards: each parse read
     // ~3.5 MB when they were in the row. Bytes are bounded rather than

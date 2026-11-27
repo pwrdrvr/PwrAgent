@@ -22,6 +22,7 @@ export function detectUsageSpendAlerts(params: {
   };
   threadId: string;
   threadSpendAlerted?: boolean;
+  threadSpendMicros?: number;
   triggeredAlertIds: ReadonlySet<string>;
   now?: number;
 }): ThreadSpendAlert[] {
@@ -32,6 +33,13 @@ export function detectUsageSpendAlerts(params: {
     const thresholdMicros = spendThresholdMicros(
       params.policy.activeTurnSpendThresholdUsd,
     );
+    const spendByTurn = new Map<string, number>();
+    for (const line of params.pricing.lines) {
+      if (line.threadId === params.threadId && line.turnId && line.scope === "turn"
+        && line.turnUsageAttributed !== false && line.priceStatus === "priced" && line.currency.toUpperCase() === "USD") {
+        spendByTurn.set(line.turnId, (spendByTurn.get(line.turnId) ?? 0) + line.totalCostMicros);
+      }
+    }
     for (const activeTurnId of new Set(params.activeTurnIds ?? [])) {
       const alertId = [
         "spend-alert",
@@ -41,18 +49,7 @@ export function detectUsageSpendAlerts(params: {
         activeTurnId,
         thresholdMicros,
       ].join(":");
-      const spendMicros = params.pricing.lines.reduce(
-        (total, line) =>
-          line.threadId === params.threadId
-          && line.turnId === activeTurnId
-          && line.scope === "turn"
-          && line.turnUsageAttributed !== false
-          && line.priceStatus === "priced"
-          && line.currency.toUpperCase() === "USD"
-            ? total + line.totalCostMicros
-            : total,
-        0,
-      );
+      const spendMicros = spendByTurn.get(activeTurnId) ?? 0;
       if (
         spendMicros >= thresholdMicros
         && !params.triggeredAlertIds.has(alertId)
@@ -71,7 +68,7 @@ export function detectUsageSpendAlerts(params: {
     }
   }
 
-  if (params.policy.threadSpendEnabled) {
+  if (params.policy.threadSpendEnabled && !params.threadSpendAlerted) {
     const thresholdMicros = spendThresholdMicros(
       params.policy.threadSpendThresholdUsd,
     );
@@ -81,7 +78,7 @@ export function detectUsageSpendAlerts(params: {
       params.backend,
       params.threadId,
     ].join(":");
-    const spendMicros = params.pricing.summaries.reduce(
+    const spendMicros = params.threadSpendMicros ?? (params.pricing.summaries.reduce(
       (total, summary) =>
         summary.currency.toUpperCase() === "USD"
           ? total + summary.totalCostMicros
@@ -94,10 +91,9 @@ export function detectUsageSpendAlerts(params: {
           ? total + line.totalCostMicros
           : total,
       0,
-    );
+    ));
     if (
       spendMicros >= thresholdMicros
-      && !params.threadSpendAlerted
       && !params.triggeredAlertIds.has(alertId)
     ) {
       alerts.push({

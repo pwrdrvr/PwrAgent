@@ -138,6 +138,23 @@ it("makes review admission outcomes final and retains early terminals until the 
   expect(state.codex("parent").reviewStarts).toEqual([]);
 });
 
+it("keeps early child terminals for each start still open at delivery", () => {
+  const state = new RegistryTurnState();
+  const parent = { backend: "claude" as const, threadId: "parent" };
+  const first = state.beginReviewStart(parent);
+  const second = state.beginReviewStart(parent);
+  const other = state.beginReviewStart({ ...parent, backend: "codex" });
+  state.endReviewStart(first);
+  const terminal = { backend: "codex" as const, threadId: "child", turnId: "turn", method: "turn/completed" as const };
+  state.recordReviewTerminal(terminal);
+  const late = state.beginReviewStart(parent);
+  const key = "codex:child:turn";
+  expect(state.reviewStartTerminal(first, key)).toBeUndefined();
+  expect(state.reviewStartTerminal(second, key)).toBe(terminal);
+  expect(state.reviewStartTerminal(other, key)).toBe(terminal);
+  expect(state.reviewStartTerminal(late, key)).toBeUndefined();
+});
+
 it("rebinds a managed review child without carrying its previous lookup identity", () => {
   fc.assert(fc.property(fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:grok"), backend => {
     const state = new RegistryTurnState();
@@ -174,14 +191,19 @@ it("derives immutable review views from membership changes across every parent p
       state.activateReview(record);
       expect(state.liveReviewForParent(backend, record.parentThreadId)).toBe(record);
       expect([...state.liveReviewRecords()]).toEqual([...expected]);
+      expect(state.liveReviewsForChild(record.backend, record.reviewThreadId)?.get(record.turnId)).toBe(record);
       const projection = state.liveReviewRecords();
       state.seedStatus(`unobserved-idle-${index}`, "idle");
       expect(state.liveReviewRecords()).toBe(projection);
       expect(before.size).toBe(0);
     }
     for (const key of [...expected.keys()].reverse()) {
+      const record = expected.get(key)!;
+      const childSnapshot = state.liveReviewsForChild(record.backend, record.reviewThreadId);
       expected.delete(key);
       state.finishReview(key);
+      expect(childSnapshot?.get(record.turnId)).toBe(record);
+      expect(state.liveReviewsForChild(record.backend, record.reviewThreadId)).toBeUndefined();
       expect([...state.liveReviewRecords()]).toEqual([...expected]);
     }
   }));

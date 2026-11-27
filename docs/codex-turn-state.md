@@ -107,10 +107,11 @@ and the property failed. Evidence is retained under
 `RegistryContext.turnState`. Its Codex map stores one `CodexThreadActivity`
 per thread. The pure `transition` function is the only writer of that value.
 There are no mutable Codex collection views. Query results are projections.
-Review membership and child attribution have memoized readonly views, rebuilt
-from the union and invalidated by the state commit. Their entries are never
-mutated. This keeps streamed events from scanning idle thread history merely
-to check whether reviews exist. Unobserved idle listing rows do not allocate
+Live review membership is indexed by child backend and thread. Child lookups
+and the owner-wide listing expose immutable snapshots in activation order.
+Pending child attribution is keyed by child identity. A terminal visits only
+parents with open start requests to retain evidence for an as-yet unknown
+child. Unobserved idle listing rows do not allocate
 activity records; sequence fences and request/history evidence are retained.
 
 | Phase | Required evidence | Admission projection |

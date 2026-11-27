@@ -1,3 +1,4 @@
+import { LivePricingLines } from "../../app-server/live-pricing-lines";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { ThreadUsageLedger } from "../../app-server/thread-usage-ledger";
@@ -20,7 +21,7 @@ export function usageLedgerStandIn(params: {
     liveTokenMiserUsageLines: Map<string, Map<string, ThreadUsageLineRecord>>;
     liveTokenMiserSubAgents: Map<string, Map<string, ThreadSubAgentSummary>>;
   };
-  for (const [threadId, lines] of params.usageLines ?? []) live.liveTokenMiserUsageLines.set(threadId, lines);
+  for (const [threadId, lines] of params.usageLines ?? []) live.liveTokenMiserUsageLines.set(threadId, new LivePricingLines(lines));
   for (const [threadId, cards] of params.subAgents ?? []) live.liveTokenMiserSubAgents.set(threadId, cards);
   return ledger;
 }

@@ -15,7 +15,6 @@ import type {
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared/contracts/normalized-app-server";
-import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import type { TokenMiserCodeModeObservation, TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry, disposeDesktopBackendRegistry, initializeDesktopBackendRegistry } from "../app-server/backend-registry";
@@ -842,13 +841,8 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     );
     expect(pricingEvent?.notification.params).toMatchObject({
       threadId: "thread-parent",
-      pricing: {
-        lines: expect.arrayContaining([
-          expect.objectContaining({
-            sourceItemId: "system:token-miser:gate-live",
-          }),
-        ]),
-      },
+      displayInvalidated: true,
+      pricing: { lines: [], summaries: [] },
     });
     const snapshot = registry.withLiveTokenMiserNavigationSnapshot({
       backend: "all",
@@ -899,20 +893,11 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     const updatedPricingEvents = events.filter(
       (event) => event.notification.method === "thread/pricing/updated",
     );
-    const updatedPricingParams = updatedPricingEvents.at(-1)?.notification.params;
-    expect(updatedPricingParams).toMatchObject({
-      pricing: {
-        lines: expect.any(Array),
-      },
+    expect(updatedPricingEvents.at(-1)?.notification.params).toMatchObject({ displayInvalidated: true });
+    const updatedPricing = await registryModules(registry).threadUsageLedger.readThreadPricingWithLiveTokenMiser({
+      backend: "codex", threadId: "thread-parent",
     });
-    const updatedPricing = updatedPricingParams as {
-      pricing: { lines: ThreadUsageLineRecord[] };
-    };
-    expect(
-      updatedPricing.pricing.lines.filter((line) =>
-        line.sourceItemId === "system:token-miser:gate-live"
-      ),
-    ).toHaveLength(1);
+    expect(updatedPricing.lines.filter((line) => line.sourceItemId === "system:token-miser:gate-live")).toHaveLength(1);
 
     const persist = (
       registryModules(registry).threadUsageLedger as unknown as {
