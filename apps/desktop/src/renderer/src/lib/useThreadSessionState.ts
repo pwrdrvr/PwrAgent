@@ -1179,11 +1179,11 @@ function preserveRetainedTranscriptTail(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
   hasLoadedHistory: boolean,
-  preservesLiveRows = false,
+  liveChanges?: { versions: ReadonlyMap<string, number> | undefined; capture: number },
 ): AppServerReadThreadResponse {
   if (
     !retainedResponse
-    || (!preservesLiveRows
+    || (!liveChanges
       && (!hasLoadedHistory || !response.replay.pagination.supportsPagination))
   ) {
     return response;
@@ -1206,6 +1206,7 @@ function preserveRetainedTranscriptTail(
     return remaining ? [remaining] : [];
   });
   const matchedRetainedEntries = new Set<AppServerThreadEntry>();
+  const newerCorrespondence = new Map<string, string>();
   const retainedEntriesById = new Map<string, AppServerThreadEntry[]>();
   const retainedEntryIndexById = new Map<string, number>();
   for (const retainedEntry of retainedEntries) {
@@ -1243,24 +1244,38 @@ function preserveRetainedTranscriptTail(
     if (retainedMatch) {
       matchedRetainedEntries.add(retainedMatch);
       freshEntryByRetainedEntry.set(retainedMatch, freshEntry);
+      if (liveChanges && freshEntry.type === "message" && retainedMatch.type === "message"
+        && freshEntry.origin?.systemReason === "thread-correspondence"
+        && freshEntry.id === retainedMatch.id && freshEntry.text !== retainedMatch.text
+        && (liveChanges.versions?.get(freshEntry.id) ?? 0) > liveChanges.capture) {
+        newerCorrespondence.set(freshEntry.id, retainedMatch.text);
+      }
     }
   }
-  const entries = reconcileRetainedTranscriptTail(
+  let entries = reconcileRetainedTranscriptTail(
     response.replay.entries,
     retainedEntries,
     freshEntryByRetainedEntry,
   );
+  const withNewerCorrespondence = <Message extends AppServerThreadMessage>(message: Message): Message => {
+    const text = newerCorrespondence.get(message.id);
+    return text === undefined ? message : {
+      ...message, text, parts: message.parts?.map((part) => part.type === "text" ? { ...part, text } : part),
+    };
+  };
+  if (newerCorrespondence.size) {
+    // Live receipts update the delivery heading. Keep the replay placement
+    // and attachments, which are independent of the recipient's status.
+    entries = entries.map((entry) => entry.type === "message" ? withNewerCorrespondence(entry) : entry);
+  }
+  const messages = transcriptMessagesForEntries(entries, retainedResponse.replay.messages, response.replay.messages);
 
   return {
     ...response,
     replay: {
       ...response.replay,
       entries,
-      messages: transcriptMessagesForEntries(
-        entries,
-        retainedResponse.replay.messages,
-        response.replay.messages
-      ),
+      messages: newerCorrespondence.size ? messages.map(withNewerCorrespondence) : messages,
     },
   };
 }
@@ -6282,7 +6297,7 @@ export function useThreadSessionState(params: {
             orderedResponse,
             retainedResponse,
             bridgesRetainedRows,
-            preservesLiveRows,
+            preservesLiveRows ? { versions: liveItemVersionsRef.current.get(targetThreadKey), capture: liveTranscriptVersion ?? 0 } : undefined,
           );
           const providerPageTurnIds =
             bridgesRetainedRows && !skipsProviderTurns && previousPageTurnIds
@@ -7148,7 +7163,11 @@ export function useThreadSessionState(params: {
             itemVersions = new Map();
             liveItemVersionsRef.current.set(targetThreadKey, itemVersions);
           }
-          if (!itemVersions.has(itemId)) itemVersions.set(itemId, liveTranscriptVersion);
+          // A correspondence ID is reused for each delivery status. The first
+          // observation still bounds provider tool rows, whose IDs are stable.
+          if (!itemVersions.has(itemId) || itemId.startsWith("correspondence:")) {
+            itemVersions.set(itemId, liveTranscriptVersion);
+          }
         }
       }
 

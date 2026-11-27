@@ -1183,4 +1183,42 @@ describe("useThreadSessionState transcript ordering regressions (MBT shrunk coun
       session.close();
     }
   });
+
+  it("retains a newer live correspondence status when an older replay finishes", async () => {
+    const queued: AppServerThreadEntry = {
+      type: "message",
+      id: "correspondence:send",
+      role: "assistant",
+      text: "Queued",
+      createdAt: BASE_NOW,
+      parts: [{ type: "text", text: "Queued" }, { type: "file", name: "fixture.txt" }],
+      origin: { kind: "pwragent", systemReason: "thread-correspondence" },
+    };
+    const session = await mountSession({ backend: "codex", supportsPagination: true, snapshot: () => [queued] });
+    try {
+      act(() => {
+        session.emit("item/completed", {
+          item: { id: queued.id, type: "agentMessage", origin: queued.origin, createdAt: BASE_NOW, text: "Queued" },
+        });
+      });
+      act(() => {
+        void session.result.current.reload();
+        session.emit("item/completed", {
+          item: { id: queued.id, type: "agentMessage", origin: queued.origin, createdAt: BASE_NOW, text: "Started" },
+        });
+      });
+      expect(session.result.current.entries).toMatchObject([{ id: queued.id, text: "Started" }]);
+
+      await act(async () => {
+        const stale = session.reads.shift()!;
+        stale.resolve(stale.response);
+      });
+      expect(session.result.current.entries).toMatchObject([{
+        id: queued.id, text: "Started", createdAt: BASE_NOW,
+        parts: [{ type: "text", text: "Started" }, { type: "file", name: "fixture.txt" }],
+      }]);
+    } finally {
+      session.close();
+    }
+  });
 });
