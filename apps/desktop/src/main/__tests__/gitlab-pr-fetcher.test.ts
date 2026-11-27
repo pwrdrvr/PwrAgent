@@ -22,6 +22,66 @@ function fixture(respond: (endpoint: string) => unknown) {
   return { fetcher, run, discover };
 }
 
+it("waits for a GitLab read slot and shares one provider request for queued duplicates", async () => {
+  const hold = Promise.withResolvers<void>();
+  const saturated = Promise.withResolvers<void>();
+  const calls: string[] = [];
+  const takeToken = vi.fn(() => true);
+  const fetcher = new GitLabPrFetcher({
+    discover: async () => discovery,
+    tryTakeRequestToken: takeToken,
+    run: async (_command, args) => {
+      const endpoint = args.at(-1)!;
+      calls.push(endpoint);
+      if (calls.length === 3) saturated.resolve();
+      if (endpoint !== "queued") await hold.promise;
+      return JSON.stringify({ endpoint });
+    },
+  });
+  const active = ["one", "two", "three"].map((endpoint) => fetcher.readApi(ref.host, endpoint));
+  await saturated.promise;
+  const queued = Promise.all([fetcher.readApi(ref.host, "queued"), fetcher.readApi(ref.host, "queued")]);
+  void queued.catch(() => {});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(takeToken).toHaveBeenCalledTimes(3);
+  hold.resolve();
+
+  await expect(queued).resolves.toEqual([{ endpoint: "queued" }, { endpoint: "queued" }]);
+  await Promise.all(active);
+  expect(calls).toEqual(["one", "two", "three", "queued"]);
+  expect(takeToken).toHaveBeenCalledTimes(4);
+});
+
+it("waits for a GitLab write slot without coalescing changes", async () => {
+  const hold = Promise.withResolvers<void>();
+  const saturated = Promise.withResolvers<void>();
+  let calls = 0;
+  const takeToken = vi.fn(() => true);
+  const fetcher = new GitLabPrFetcher({
+    discover: async () => discovery,
+    tryTakeRequestToken: takeToken,
+    run: async () => {
+      const call = ++calls;
+      if (call === 3) saturated.resolve();
+      await hold.promise;
+      return JSON.stringify({ call });
+    },
+  });
+  const write = () => fetcher.writeApi(ref.host, "projects/1/issues/2/notes", "POST", { body: "fixture" });
+  const active = [write(), write(), write()];
+  await saturated.promise;
+  const queued = Promise.all([write(), write()]);
+  void queued.catch(() => {});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(takeToken).toHaveBeenCalledTimes(3);
+  hold.resolve();
+
+  const results = [...await Promise.all(active), ...await queued];
+  expect(results).toHaveLength(5);
+  expect(takeToken).toHaveBeenCalledTimes(5);
+  expect(calls).toBe(5);
+});
+
 describe("GitLab MR routing and status", () => {
   it("preserves nested namespaces and keeps GitLab identities out of GitHub", () => {
     expect(parseGitLabMrUrl(mr.web_url)).toEqual(ref);
@@ -357,22 +417,29 @@ describe("review regressions", () => {
     expect(tryTakeRequestToken).toHaveBeenCalledTimes(2);
   });
 
-  it("bounds concurrent subprocesses without an unbounded wait queue", async () => {
+  it("runs three subprocesses at a time and sheds only spillover beyond the waiting limit", async () => {
     const releases: Array<() => void> = [];
+    let draining = false;
     const run = vi.fn((_command: string, args: string[]) => new Promise<string>((resolve) => {
       // The merge trains setting answers at once; only MR reads are held.
       if (!args.at(-1)?.includes("/merge_requests/")) return resolve(JSON.stringify({}));
       const number = Number(args.at(-1)?.split("/").pop());
-      releases.push(() => resolve(JSON.stringify({ ...mr, iid: number, web_url: mr.web_url.replace(/17$/, String(number)) })));
+      const release = () => resolve(JSON.stringify({ ...mr, iid: number, web_url: mr.web_url.replace(/17$/, String(number)) }));
+      if (draining) release();
+      else releases.push(release);
     }));
     const tryTakeRequestToken = vi.fn(() => true);
     const fetcher = new GitLabPrFetcher({ discover: async () => discovery, run, tryTakeRequestToken });
     const pending = Promise.allSettled(Array.from({ length: 40 }, (_, index) => fetcher.fetchByRef({ ...ref, number: index + 1 })));
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+    draining = true;
     releases.forEach((release) => release());
     const results = await pending;
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(3);
-    // Three MR reads, then one shared merge trains setting read.
-    expect(tryTakeRequestToken).toHaveBeenCalledTimes(4);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(35);
+    expect(results.filter((result) => result.status === "rejected")).toEqual(
+      Array.from({ length: 5 }, () => ({ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("request queue is full") }) })),
+    );
+    // Three active MR reads, 32 waiting, and one shared merge trains setting read.
+    expect(tryTakeRequestToken).toHaveBeenCalledTimes(36);
   });
 });

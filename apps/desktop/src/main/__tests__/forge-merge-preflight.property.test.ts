@@ -7,13 +7,21 @@ import { GithubPrFetcher, installGithubMergeStackTransport } from "../pr-status/
 const repository: ForgeRepository = { provider: "github", host: "github.com", owner: "fixture", repo: "project" };
 const headSha = "a".repeat(40);
 
-async function expectOperatorMergeWithEmptySharedBudget(number: number): Promise<void> {
+async function expectOperatorMergeWithEmptySharedBudget(number: number, saturate = false): Promise<void> {
   const pullRequest = `https://github.com/fixture/project/pull/${number}`;
   const path = `repos/fixture/project/pulls/${number}`;
   const requests: string[] = [];
+  const activeReads = Promise.withResolvers<void>();
+  const readsStarted = Promise.withResolvers<void>();
+  let heldCount = 0;
   const fetcher: typeof fetch = async (input) => {
     const route = new URL(String(input)).pathname;
     requests.push(route);
+    if (route.startsWith("/fixture/held/")) {
+      if (++heldCount === 3) readsStarted.resolve();
+      await activeReads.promise;
+      return Response.json({});
+    }
     if (route === `/${path}`) return Response.json({
       number, state: "open", created_at: "2026-11-10T00:00:00Z",
       head: { ref: "patch", sha: headSha }, base: { ref: "main", repo: { default_branch: "main" } },
@@ -23,9 +31,15 @@ async function expectOperatorMergeWithEmptySharedBudget(number: number): Promise
     } } } });
     throw new Error(`Unexpected request ${route}`);
   };
+  let sharedTokens = 0;
   const ci = new ForgeCiClient({
     githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true,
-    takeToken: () => false, fetch: fetcher,
+    takeToken: () => {
+      if (sharedTokens === 0) return false;
+      sharedTokens--;
+      return true;
+    },
+    fetch: fetcher,
   });
   const runGhCommand = vi.fn(async () => ({ stdout: "" }));
   const github = new GithubPrFetcher({
@@ -35,9 +49,22 @@ async function expectOperatorMergeWithEmptySharedBudget(number: number): Promise
   const uninstall = installGithubMergeStackTransport(ci);
   try {
     await expect(ci.requestGithub(repository, { path })).rejects.toMatchObject({ code: "rate_limited" });
-    await expect(github.mergePullRequest({ pullRequest, method: "squash", checkStackOrder: true }))
-      .resolves.toMatchObject({ mergedUrl: pullRequest });
-    expect(requests).toEqual([`/${path}`, "/graphql"]);
+    const heldPaths = saturate ? ["/fixture/held/1", "/fixture/held/2", "/fixture/held/3"] : [];
+    sharedTokens = heldPaths.length;
+    const holds = heldPaths.map((route) => ci.requestGithub(repository, { path: route.slice(1) }));
+    if (saturate) await readsStarted.promise;
+    const merge = github.mergePullRequest({ pullRequest, method: "squash", checkStackOrder: true });
+    // The pre-fix merge can reject before the reads are released.
+    void merge.catch(() => {});
+    if (saturate) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(requests).toEqual(heldPaths);
+      expect(runGhCommand).not.toHaveBeenCalled();
+      activeReads.resolve();
+    }
+    await expect(merge).resolves.toMatchObject({ mergedUrl: pullRequest });
+    await Promise.all(holds);
+    expect(requests).toEqual([...heldPaths, `/${path}`, "/graphql"]);
     expect(runGhCommand).toHaveBeenCalledExactlyOnceWith("/fixture/gh", ["pr", "merge", pullRequest, "--squash"], { timeout: 60_000 });
   } finally {
     uninstall();
@@ -46,11 +73,16 @@ async function expectOperatorMergeWithEmptySharedBudget(number: number): Promise
 
 it("allows a direct merge to check stack order with an empty shared budget", async () => {
   // Polling and agent requests cannot consume the capacity that runs both stack checks for a click.
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 100_000 }), expectOperatorMergeWithEmptySharedBudget));
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 100_000 }),
+    (number) => expectOperatorMergeWithEmptySharedBudget(number)));
 });
 
 it("squash-merges an unstacked pull request when polling has exhausted the shared budget", async () => {
   await expectOperatorMergeWithEmptySharedBudget(1);
+});
+
+it("waits for an active forge read slot before an operator merge checks stack order", async () => {
+  await expectOperatorMergeWithEmptySharedBudget(1, true);
 });
 
 it("bounds the operator reserve and falls back to the shared budget when needed", async () => {

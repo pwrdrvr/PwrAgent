@@ -5,10 +5,11 @@ import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { readEnterpriseGithubToken } from "./github-enterprise-auth";
 import { readGithubAuthToken } from "./github-graphql-client";
-import { GitLabReadError, type GitLabPrFetcher } from "./gitlab-pr-fetcher";
+import { GitLabBudgetDeferred, GitLabReadError, type GitLabPrFetcher } from "./gitlab-pr-fetcher";
 import { ForgeReadError, repositoryUrl, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "./forge-tool-contract";
 import { FORGE_ARTIFACT_MAX_BYTES, FORGE_JSON_MAX_BYTES, FORGE_LOG_MAX_BYTES } from "./forge-read-limits";
 import { saveForgeArtifact } from "./forge-artifact-download";
+import { ForgeRequestQueueFull, ForgeRequestSlots } from "./forge-request-slots";
 import { PrStatusTokenBucket } from "./pr-status-token-bucket";
 
 type Payload = Record<string, unknown>;
@@ -108,7 +109,7 @@ async function readGithubErrorReason(response: Response): Promise<string | undef
 }
 
 export class ForgeCiClient {
-  private active = 0;
+  private readonly slots = new ForgeRequestSlots(3);
   private readonly cooldowns = new Map<string, number>();
   private readonly operatorMergePreflightBudget = new PrStatusTokenBucket();
   constructor(private readonly options: {
@@ -282,31 +283,54 @@ export class ForgeCiClient {
     r: ForgeRepository, signal: AbortSignal | undefined, work: () => Promise<T>, source: ForgeRequestSource = "shared",
   ): Promise<T> {
     signal?.throwIfAborted();
-    if (!this.options.enabled(r.provider)) throw new ForgeReadError("provider_disabled", `${r.provider} is disabled in Settings → Git.`);
     const key = `${r.provider}:${r.host}`;
+    this.assertAvailable(r.provider, key);
+    try {
+      return await this.slots.run(signal, async () => {
+        this.assertAvailable(r.provider, key);
+        // GitLab's existing transport owns its own admission token.
+        if (r.provider === "github") {
+          const reserved = source === "operator_merge_preflight" && this.operatorMergePreflightBudget.tryTake();
+          if (!reserved && !this.options.takeToken(source)) {
+            throw new ForgeReadError("rate_limited", "The shared forge request budget is exhausted. Retry later.");
+          }
+        }
+        try {
+          return await work();
+        } catch (error) {
+          if (signal?.aborted) throw new ForgeReadError("cancelled", "Forge read cancelled.");
+          throw this.requestError(r, key, error);
+        }
+      });
+    } catch (error) {
+      if (signal?.aborted && error === signal.reason) throw new ForgeReadError("cancelled", "Forge read cancelled.");
+      if (error instanceof ForgeRequestQueueFull) throw new ForgeReadError("busy", error.message);
+      throw error;
+    }
+  }
+
+  private assertAvailable(provider: ForgeRepository["provider"], key: string): void {
+    if (!this.options.enabled(provider)) throw new ForgeReadError("provider_disabled", `${provider} is disabled in Settings → Git.`);
     const retryAt = this.cooldowns.get(key) ?? 0;
     if (retryAt > Date.now()) throw new ForgeReadError("rate_limited", `Provider cooldown is active; retry after ${new Date(retryAt).toISOString()}.`);
-    if (this.active >= 3) throw new ForgeReadError("busy", "Three forge reads are already active; retry after they complete.");
-    // GitLab's existing transport owns its own admission token.
-    if (r.provider === "github") {
-      const reserved = source === "operator_merge_preflight" && this.operatorMergePreflightBudget.tryTake();
-      if (!reserved && !this.options.takeToken(source)) {
-        throw new ForgeReadError("rate_limited", "The shared forge request budget is exhausted. Retry later.");
-      }
+  }
+
+  private extendCooldown(key: string, deadline: number): void {
+    this.cooldowns.set(key, Math.max(this.cooldowns.get(key) ?? 0, deadline));
+  }
+
+  private requestError(r: ForgeRepository, key: string, error: unknown): ForgeReadError {
+    if (error instanceof ForgeRequestQueueFull) return new ForgeReadError("busy", error.message);
+    if (error instanceof GitLabBudgetDeferred) return new ForgeReadError("rate_limited", error.message);
+    if (error instanceof GitLabReadError) {
+      if (error.retryAt || error.status >= 500) this.extendCooldown(key, error.retryAt ?? Date.now() + 60_000);
+      return new ForgeReadError(error.status === 429 ? "rate_limited" : error.status === 401 ? "unauthenticated" : error.status === 403 ? "forbidden" : error.status === 404 ? "not_found" : error.status === 413 ? "response_too_large" : "provider_error", error.message);
     }
-    this.active++;
-    try {
-      return await work();
-    } catch (error) {
-      if (signal?.aborted) throw new ForgeReadError("cancelled", "Forge read cancelled.");
-      if (error instanceof GitLabReadError) {
-        if (error.retryAt || error.status >= 500) this.cooldowns.set(key, error.retryAt ?? Date.now() + 60_000);
-        throw new ForgeReadError(error.status === 429 ? "rate_limited" : error.status === 401 ? "unauthenticated" : error.status === 403 ? "forbidden" : error.status === 404 ? "not_found" : error.status === 413 ? "response_too_large" : "provider_error", error.message);
-      }
-      if (!(error instanceof ForgeReadError) || ["rate_limited", "provider_error"].includes(error.code) && !(error as ForgeReadError & { providerReported?: boolean }).providerReported) this.cooldowns.set(key, Math.max(this.cooldowns.get(key) ?? 0, Date.now() + 60_000));
-      if (error instanceof ForgeReadError) throw error;
-      throw new ForgeReadError("provider_error", `${r.provider} request failed on ${r.host}. Check CLI login for this host, read permissions, connectivity, and response size (16 MiB logs, 2 MiB metadata).`);
-    } finally { this.active--; }
+    if (!(error instanceof ForgeReadError) || ["rate_limited", "provider_error"].includes(error.code) && !(error as ForgeReadError & { providerReported?: boolean }).providerReported) {
+      this.extendCooldown(key, Date.now() + 60_000);
+    }
+    if (error instanceof ForgeReadError) return error;
+    return new ForgeReadError("provider_error", `${r.provider} request failed on ${r.host}. Check CLI login for this host, read permissions, connectivity, and response size (16 MiB logs, 2 MiB metadata).`);
   }
 
   private async github(
@@ -351,7 +375,7 @@ export class ForgeCiClient {
         const retryHeader = response.headers.get("retry-after");
         const retry = retryHeader && Number.isFinite(Number(retryHeader)) ? Date.now() + Number(retryHeader) * 1000 : Date.parse(retryHeader ?? "");
         const reset = Number(response.headers.get("x-ratelimit-reset")) * 1000;
-        this.cooldowns.set(`github:${r.host}`, Math.max(Date.now() + 60_000, reset || 0, retry || 0));
+        this.extendCooldown(`github:${r.host}`, Math.max(Date.now() + 60_000, reset || 0, retry || 0));
         throw new ForgeReadError("rate_limited", "GitHub rate limit reached. Respect the provider cooldown before retrying.");
       }
       const reason = method === "GET" ? undefined : await readGithubErrorReason(response);

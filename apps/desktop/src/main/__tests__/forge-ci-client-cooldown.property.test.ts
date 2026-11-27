@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import type { ForgeRepository } from "../pr-status/forge-tool-contract";
+import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 
 /*
  * The admission a forge read promises (`ForgeCiClient.admit`):
@@ -70,6 +71,95 @@ const step = fc.record({
 });
 
 describe("Forge CI client cooldown (model)", () => {
+  it("skips a cancelled waiter and applies a new cooldown before spending queued tokens", async () => {
+    const rateLimited = Promise.withResolvers<Response>();
+    const holds = Promise.withResolvers<void>();
+    const saturated = Promise.withResolvers<void>();
+    const paths: string[] = [];
+    const takeToken = vi.fn(() => true);
+    const client = new ForgeCiClient({
+      githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() },
+      enabled: () => true, takeToken,
+      fetch: async (input) => {
+        const path = new URL(String(input)).pathname.split("/").at(-1)!;
+        paths.push(path);
+        if (paths.length === 3) saturated.resolve();
+        if (path === "first") return await rateLimited.promise;
+        if (path === "held") await holds.promise;
+        return Response.json({});
+      },
+    });
+    const first = client.requestGithub(REPO, { path: "first" });
+    const held = [client.requestGithub(REPO, { path: "held" }), client.requestGithub(REPO, { path: "held" })];
+    await saturated.promise;
+    const controller = new AbortController();
+    const cancelled = client.requestGithub(REPO, { path: "cancelled" }, controller.signal);
+    const cooled = client.requestGithub(REPO, { path: "cooled" });
+    const otherHost = client.requestGithub({ ...REPO, host: "ghe.example.com" }, { path: "other" });
+    const cancelledCheck = expect(cancelled).rejects.toMatchObject({ code: "cancelled" });
+    const cooledCheck = expect(cooled).rejects.toMatchObject({
+      code: "rate_limited", message: expect.stringContaining("Provider cooldown is active"),
+    });
+    const otherCheck = expect(otherHost).resolves.toEqual({});
+    const firstCheck = expect(first).rejects.toMatchObject({ code: "rate_limited" });
+
+    controller.abort();
+    expect(takeToken).toHaveBeenCalledTimes(3);
+    rateLimited.resolve(new Response(null, { status: 429 }));
+    await Promise.all([firstCheck, cancelledCheck, cooledCheck, otherCheck]);
+    expect(paths).toEqual(["first", "held", "held", "other"]);
+    expect(takeToken).toHaveBeenCalledTimes(4);
+    holds.resolve();
+    await Promise.all(held);
+  });
+
+  it("can start a GitLab read as soon as the local budget permits it", async () => {
+    let budgetAvailable = false;
+    const run = vi.fn(async () => "{}");
+    const gitlab = new GitLabPrFetcher({
+      discover: async () => ({ candidates: [], selectedCommand: "/fixture/glab" }),
+      tryTakeRequestToken: () => budgetAvailable,
+      run,
+    });
+    const client = new ForgeCiClient({ gitlab, enabled: () => true, takeToken: () => true });
+    const repository: ForgeRepository = { ...REPO, provider: "gitlab", host: "gitlab.com" };
+    await expect(client.readGitlab(repository, "fixture")).rejects.toMatchObject({ code: "rate_limited" });
+    expect(run).not.toHaveBeenCalled();
+
+    budgetAvailable = true;
+    await expect(client.readGitlab(repository, "fixture")).resolves.toEqual({});
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the longest retry deadline across overlapping provider responses", async () => {
+    let now = START;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const slowerResponse = Promise.withResolvers<Response>();
+    const sent = Promise.withResolvers<void>();
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      if (String(input).endsWith("/slow")) {
+        sent.resolve();
+        return await slowerResponse.promise;
+      }
+      return new Response(null, { status: 429, headers: { "retry-after": "120" } });
+    });
+    const client = new ForgeCiClient({
+      fetch: fetcher, githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() },
+      enabled: () => true, takeToken: () => true,
+    });
+    const slower = client.requestGithub(REPO, { path: "slow" });
+    await sent.promise;
+    await expect(client.requestGithub(REPO, { path: "fast" })).rejects.toMatchObject({ code: "rate_limited" });
+    slowerResponse.resolve(new Response(null, { status: 429, headers: { "retry-after": "60" } }));
+    await expect(slower).rejects.toMatchObject({ code: "rate_limited" });
+
+    now += 90_000;
+    await expect(client.requestGithub(REPO, { path: "retry" })).rejects.toMatchObject({
+      code: "rate_limited", message: expect.stringContaining(new Date(START + 120_000).toISOString()),
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("sends nothing during a cooldown and spends a token only on a sent request", async () => {
     await fc.assert(fc.asyncProperty(fc.array(step, { minLength: 1, maxLength: 30 }), async (steps) => {
       let now = START;
