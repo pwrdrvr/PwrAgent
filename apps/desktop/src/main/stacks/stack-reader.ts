@@ -18,6 +18,25 @@ import { githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } fr
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 
+function publicationTargetsByRepository(prs: readonly PrSummary[]) {
+  const targets = new Map<string, { numbers: Set<number>; branches: Set<string> }>();
+  for (const pr of prs) {
+    const repository = prRepository(pr);
+    let entry = targets.get(repository);
+    if (!entry) targets.set(repository, entry = { numbers: new Set(), branches: new Set() });
+    entry.numbers.add(pr.number);
+    if (pr.headRefName && sameRepositoryHead(pr)) entry.branches.add(pr.headRefName);
+  }
+  return targets;
+}
+
+function catalogTracksPublication(catalog: CatalogRead, targets: ReturnType<typeof publicationTargetsByRepository>): boolean {
+  if (catalog.status !== "ok") return false;
+  const matching = targets.get(catalog.catalog.repository.toLowerCase());
+  return matching !== undefined && catalog.catalog.stacks.some((stack) => stack.branches.some((layer) =>
+    layer.pullRequest ? matching.numbers.has(layer.pullRequest.number) : matching.branches.has(layer.branch)));
+}
+
 export type StackThreadActivity = {
   held?: boolean;
   repair?: boolean;
@@ -1031,9 +1050,10 @@ async function projectClone(
   clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[], memo: CommitGraphMemo,
   readStatus: (clone: Checkout, demand?: PrMetadataDemand) => Promise<CloneGitStatus>,
   demand?: PrMetadataDemand,
+  localCatalogOnly = false,
 ): Promise<{ stacks: StackSummary[]; worktrees: StackWorktree[]; observed: Map<string, PrSummary> }> {
   const catalog = clone.catalog.status === "ok" ? clone.catalog.catalog : undefined;
-  const repositories = new Set(threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
+  const repositories = new Set(localCatalogOnly ? [] : threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
   if (catalog?.stacks.length) repositories.add(catalog.repository.toLowerCase());
   const stacks: StackSummary[] = [];
   const observed = new Map<string, PrSummary>();
@@ -1051,7 +1071,7 @@ async function projectClone(
     // A stack that exists on GitHub and holds one of this clone's PRs, unless
     // a local catalog already records it.
     const localBranches = new Set(localStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
-    const forgeStacks = githubForgeStacksIn(repository).filter((stack) => stack.layers.some((layer) => attached.has(layer.number))
+    const forgeStacks = localCatalogOnly ? [] : githubForgeStacksIn(repository).filter((stack) => stack.layers.some((layer) => attached.has(layer.number))
       && !localStacks.some((local) => local.number === stack.number)
       && !stack.layers.some((layer) => localBranches.has(layer.branch)));
     const forgeNumbers = new Map(forgeStacks.map((stack) => [stack.number, stack] as const));
@@ -1059,7 +1079,7 @@ async function projectClone(
     const catalogBranches = new Set(catalogStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
     // Infer from this clone's attachments. The registry is repository-wide and
     // can include PRs observed through a different clone.
-    const inferred = inferPullRequestStacks(prs.filter((pr) => attached.has(pr.number) && sameRepositoryHead(pr)), catalogBranches);
+    const inferred = localCatalogOnly ? [] : inferPullRequestStacks(prs.filter((pr) => attached.has(pr.number) && sameRepositoryHead(pr)), catalogBranches);
     return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, forgeNumbers, prs, bindings, inferred }] : [];
   });
   if (!plans.length) return { stacks, worktrees: [], observed };
@@ -1421,15 +1441,15 @@ export class StackReader {
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
     activity?: (threadKey: string) => Promise<StackThreadActivity>,
     observation = new StackReadObservation(), validateAttachments?: ValidateStackAttachments,
-    trackedPublishingRepositories?: ReadonlySet<string>,
+    publishingPrs?: readonly PrSummary[],
   ) {
-    return await this.readProjection(threads, knownPrs, directories, activity, observation, false, validateAttachments, trackedPublishingRepositories);
+    return await this.readProjection(threads, knownPrs, directories, activity, observation, false, validateAttachments, publishingPrs);
   }
 
   private async readProjection(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[],
     directories: readonly string[] | undefined, activity: ((threadKey: string) => Promise<StackThreadActivity>) | undefined,
     observation: StackReadObservation, retried: boolean, validateAttachments?: ValidateStackAttachments,
-    trackedPublishingRepositories?: ReadonlySet<string>,
+    publishingPrs?: readonly PrSummary[],
   ): Promise<{ stacks: StackSummary[]; catalogs: CatalogRead[] }> {
     const { demand, hints, inventoryDemand } = observation;
     demand.signal?.throwIfAborted();
@@ -1447,29 +1467,28 @@ export class StackReader {
     const retryProjection = async (): Promise<{ stacks: StackSummary[]; catalogs: CatalogRead[] }> => {
       if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
       return await this.readProjection(
-        threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments, trackedPublishingRepositories,
+        threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments, publishingPrs,
       );
     };
 
     const wanted = new Set<string>();
+    const publicationTargets = publishingPrs && publicationTargetsByRepository(publishingPrs);
     // Read explicitly requested catalogs even when there is nothing to bind.
     const scopedCatalogs = await Promise.all(scopedCommonDirs.map(async (commonDir) => {
       const catalog = await observation.catalog(commonDir);
-      if (catalog.status === "ok" && catalog.catalog.stacks.length) wanted.add(commonDir);
+      if (publicationTargets ? catalogTracksPublication(catalog, publicationTargets)
+        : catalog.status === "ok" && catalog.catalog.stacks.length) wanted.add(commonDir);
       return catalog;
     }));
-    // Auto-publishing only acts on tracked stacks. Once live Git has pinned
-    // the scoped clones, an inferred chain alone cannot justify a fleet scan.
-    if (directories && trackedPublishingRepositories && !wanted.size && !unavailable.length
-      && scopedCatalogs.every(({ status }) => status === "missing" || status === "ok")) {
+    // Only a matching local catalog can make the publisher act on a layer.
+    // Recheck the scoped evidence in case a catalog appeared during admission.
+    if (directories && publicationTargets && !wanted.size) {
       const changed = await scopedCatalogsChanged();
       demand.signal?.throwIfAborted();
       if (changed) return await retryProjection();
-      if (![...trackedPublishingRepositories].some((repository) => githubForgeStacksIn(repository).length)) {
-        return { stacks: [], catalogs: scopedCatalogs };
-      }
+      return { stacks: [], catalogs: [...scopedCatalogs, ...unavailable] };
     }
-    const eligible = possibleInferredLayers(local, knownPrs);
+    const eligible = publicationTargets ? new Set<string>() : possibleInferredLayers(local, knownPrs);
     const inferredRows = local.filter((row) => row.prs?.some((pr) => eligible.has(prIdentity(pr))));
     const inferredPaths = new Set(inferredRows.flatMap(threadDirectories));
     const paths = !directories || wanted.size || eligible.size
@@ -1485,7 +1504,7 @@ export class StackReader {
     const unavailablePaths = new Set<string>();
     const backgroundNavigation = !directories
       && (demand.priority?.() ?? PR_METADATA_PRIORITY.background) === PR_METADATA_PRIORITY.background;
-    const packagedHintVersion = backgroundNavigation && !retried ? hints.packagedDiscoveryHintVersion() : undefined;
+    const packagedHintVersion = !retried ? hints.packagedDiscoveryHintVersion() : undefined;
     if (backgroundNavigation && this.deferredTtlRevalidations.size) {
       const currentPaths = new Set(paths);
       // Reserve slots before the concurrent probes so faster checkouts cannot
@@ -1632,7 +1651,7 @@ export class StackReader {
       const checkout = verified.get(cwd);
       if (checkout) checkouts.set(cwd, checkout);
     }
-    const cloneCheckouts = directories ? scopedClones : new Map([...checkouts.values()]
+    const cloneCheckouts = directories && !publicationTargets ? scopedClones : new Map([...(directories ? scopedClones : checkouts).values()]
       .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
     const attachments = validateAttachments && observeStackAttachments(checkouts, observation, retried);
     const attachmentWitnesses = new Set<Checkout>();
@@ -1710,6 +1729,7 @@ export class StackReader {
           this.commitGraph,
           (clone, cloneDemand) => this.readCloneGitStatus(clone, observation, backgroundNavigation, cloneDemand),
           demand,
+          publicationTargets !== undefined,
         ),
       };
     }));
@@ -1786,7 +1806,7 @@ export class StackReader {
         };
       }));
       return { ...stack, layers: layers.map((layer, index) => ({ ...layer, ...gates[index] })) };
-    }), catalogs: [...results.map(({ catalog }) => catalog), ...unavailable] };
+    }), catalogs: [...(directories && publicationTargets ? scopedCatalogs : results.map(({ catalog }) => catalog)), ...unavailable] };
   }
 }
 
