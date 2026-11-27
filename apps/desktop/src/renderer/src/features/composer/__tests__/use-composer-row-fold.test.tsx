@@ -1,8 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render } from "@testing-library/react";
+import fc from "fast-check";
 import { useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ComposerFoldTier } from "../composer-control-fold";
+import { COMPOSER_FOLD_TIERS, type ComposerFoldTier } from "../composer-control-fold";
 import { measureComposerRowFold, useComposerRowFold } from "../useComposerRowFold";
 
 /**
@@ -95,6 +96,68 @@ describe("useComposerRowFold", () => {
       await Promise.resolve();
     });
     expect(commits.at(-1)).toBe(1);
+  });
+
+  it("refolds before paint when a control stops folding with its tier", async () => {
+    // Counterexample for the oracle below. Plan folds with the Details
+    // controls while it is off and stays in the row once on. Only its slot's
+    // tier changes, so nothing else in the row mutates to prompt a measure.
+    rowWidth = 210;
+    const plan: Control = { key: "plan", width: 30, tier: "details" };
+    const commits: number[] = [];
+    const view = render(<Row commits={commits} controls={[PINNED, plan, RUN]} />);
+    expect(commits.at(-1)).toBe(1);
+
+    view.rerender(<Row commits={commits} controls={[PINNED, { ...plan, tier: undefined }, RUN]} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Pinned 100 + Plan 30 + Run 100 overflows 210, so Run folds too.
+    expect(commits.at(-1)).toBe(2);
+  });
+
+  it("commits a fresh measure's fold after any change to which tier a control folds with", async () => {
+    // Oracle: once the mutation microtask has run, the committed fold equals
+    // measuring the row from scratch. Moving a control in or out of a tier
+    // (Plan pinning itself once on) left the stale fold painted. Shrunk
+    // counterexample: a 100px row of one 101px control that joins "details"
+    // and leaves it again; the example above is the composer's own case.
+    const tier = fc.option(fc.constantFrom(...COMPOSER_FOLD_TIERS), { nil: undefined });
+    const control = fc.record({ width: fc.integer({ min: 10, max: 120 }), tier });
+    const commits: number[] = [];
+    // One mounted row for every run: the CI budget caps a rendered fixture.
+    const view = render(<Row commits={commits} controls={[]} />);
+    const row = view.container.querySelector<HTMLElement>(".row")!;
+    const settle = async () => {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    };
+    await fc.assert(
+      fc.asyncProperty(
+        fc.integer({ min: 100, max: 400 }),
+        fc.array(control, { minLength: 1, maxLength: 6 }),
+        fc.array(fc.tuple(fc.nat(), tier), { minLength: 1, maxLength: 4 }),
+        async (width, initial, changes) => {
+          rowWidth = width;
+          let controls: Control[] = initial.map((item, index) => ({ key: `c${index}`, ...item }));
+          view.rerender(<Row commits={commits} controls={controls} />);
+          await settle();
+          act(() => resized?.());
+          await act(async () => {
+            vi.advanceTimersByTime(16);
+          });
+          for (const [at, nextTier] of changes) {
+            const index = at % controls.length;
+            controls = controls.map((item, position) => position === index ? { ...item, tier: nextTier } : item);
+            view.rerender(<Row commits={commits} controls={controls} />);
+            await settle();
+            expect(commits.at(-1)).toBe(measureComposerRowFold(row).foldedTierCount);
+          }
+        },
+      ),
+      { numRuns: 5 },
+    );
   });
 
   describe("with the model picker open inside the row", () => {

@@ -156,7 +156,7 @@ describe("composer controls layout", () => {
     // Send is icon-only; its label is still its name.
     const send = screen.getByRole("button", { name: "Send" });
     expect(send.querySelector("svg")).not.toBeNull();
-    expect(container.querySelector(".composer__toggle[aria-label='Plan mode']")).toBeNull();
+    expect(within(setup as HTMLElement).getByRole("button", { name: "Plan mode" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("merges project, checkout and machine into one Where pill on a new thread", () => {
@@ -395,6 +395,41 @@ describe("composer controls layout", () => {
       await act(async () => { run.click(); });
       expect(runCodexEnvironmentAction).toHaveBeenCalledWith(expect.objectContaining({ threadId: row.id, actionId: "test" }));
     }
+  });
+
+  it("folds Plan with the Details controls while it is off and keeps it in the row once on", async () => {
+    // Pinned controls are 340 (see above). ▶ (28 + 4) fits beside them in
+    // 380; the Details controls, Plan among them, do not.
+    installRowLayout(380);
+    const { container } = render(
+      <Composer
+        backends={[backendSummary()]}
+        desktopApi={{ pickFileFromDisk: vi.fn(), runCodexEnvironmentAction: vi.fn(), setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={environmentThread}
+      />,
+    );
+    await settleFold();
+
+    const setup = container.querySelector(".composer__setup") as HTMLElement;
+    const planSlot = () => within(setup).getByRole("button", { name: "Plan mode", hidden: true })
+      .closest(".composer__fold-slot") as HTMLElement;
+    expect(setup.dataset.foldedTiers).toBe("1");
+    expect(planSlot()).toHaveClass("is-folded");
+
+    fireEvent.click(within(setup).getByRole("button", { name: "Thread options" }));
+    fireEvent.click(within(screen.getByRole("menu", { name: "Thread options" })).getByRole("menuitemcheckbox", { name: "Plan mode", checked: false }));
+    // Refolded before a frame could paint: Plan now takes ▶'s room.
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+
+    expect(planSlot()).not.toHaveClass("is-folded");
+    expect(planSlot()).not.toHaveAttribute("data-composer-fold");
+    expect(within(setup).getByRole("button", { name: "Plan mode" })).toHaveAttribute("aria-pressed", "true");
+    expect(setup.dataset.foldedTiers).toBe("2");
   });
 
   it("draws the Details-bound controls and ▶ only once the thread's configuration has loaded", async () => {
