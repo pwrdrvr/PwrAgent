@@ -98,6 +98,8 @@ export type SidebarThreadCardHandle = {
   hold: (row: HTMLElement | null) => void;
   hide: () => void;
   getElement: () => HTMLElement | null;
+  /** A press anywhere: a card still waiting out its delay never opens. */
+  cancelPending: () => void;
 };
 
 type Expanded = "apps" | "folders" | undefined;
@@ -134,22 +136,15 @@ export const SidebarThreadCardHost = forwardRef<
       bridge: true,
     },
   });
-  const { getElement, show, tooltipId, update, visible } = tooltip;
-  // The hover delay is the card's own, not the tooltip's: when it ends, a
-  // card a chip on the row opened meanwhile is where the pointer rests.
-  const delayTimerRef = useRef<number | undefined>(undefined);
-  const cancelDelay = (): void => {
-    window.clearTimeout(delayTimerRef.current);
-    delayTimerRef.current = undefined;
-  };
-  const hide = (): void => {
-    cancelDelay();
-    tooltip.hide();
-  };
-  useEffect(() => () => window.clearTimeout(delayTimerRef.current), []);
+  const { getElement, hide, show, showAfterDelay, tooltipId, update, visible } = tooltip;
   bridgeCardRef.current.hide = hide;
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+  // Set while the hover delay runs. The tooltip cancels its own delay on a
+  // press too, but only once an effect has attached its listeners: a press
+  // in the same frame as the pointer's arrival (a quick click) beats it.
+  const pendingRef = useRef(false);
+  if (visible) pendingRef.current = false;
   const [shown, setShown] = useState<{ threadKey: string; row: HTMLElement }>();
   // The row whose card is up (or about to be): its own chips are on the way
   // to the card, so crossing one keeps this card (`HoverCardBridge.holds`).
@@ -213,17 +208,15 @@ export const SidebarThreadCardHost = forwardRef<
       setExpanded(undefined);
       // Focus opens at once; a pointer swaps at once while any sidebar card is up.
       const swap = sidebarPrCardBridge.enterTrigger(bridgeCardRef.current);
-      cancelDelay();
       if (!delayed || swap) {
         show(target, node);
         return;
       }
-      delayTimerRef.current = window.setTimeout(() => {
-        delayTimerRef.current = undefined;
-        if (sidebarPrCardBridge.showsOther(bridgeCardRef.current)) return;
-        const next = content(threadKey, target, undefined);
-        if (next) show(target, next);
-      }, PROJECT_CARD_HOVER_DELAY_MS);
+      // The tooltip's own delay, so a press, scroll or Escape cancels it; a
+      // chip's card shown meanwhile cancels it through the bridge.
+      sidebarPrCardBridge.delaying(bridgeCardRef.current);
+      pendingRef.current = true;
+      showAfterDelay(target, () => content(threadKey, target, undefined), PROJECT_CARD_HOVER_DELAY_MS);
     };
     return {
       enter: (target, threadKey) => open(target, threadKey, true),
@@ -241,9 +234,14 @@ export const SidebarThreadCardHost = forwardRef<
       },
       hide,
       getElement,
+      cancelPending: () => {
+        if (!pendingRef.current) return;
+        pendingRef.current = false;
+        if (!visibleRef.current) hide();
+      },
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getElement, tooltip.hide, show]);
+  }, [getElement, hide, show, showAfterDelay]);
 
   return <>{tooltip.tooltipNode}</>;
 });
@@ -345,6 +343,7 @@ export function useSidebarThreadCardTriggers(
     };
     const onPointerDown = (): void => {
       navigating = false;
+      card.current?.cancelPending();
     };
     const onFocusIn = (event: FocusEvent): void => {
       const target = event.target;

@@ -36,6 +36,7 @@ const windowTimers: Timers = {
  */
 export class HoverCardBridge {
   private visible: BridgedHoverCard | undefined;
+  private delayed: BridgedHoverCard | undefined;
   private graceTimer: number | undefined;
 
   constructor(
@@ -60,9 +61,12 @@ export class HoverCardBridge {
     return true;
   }
 
-  /** Whether a card other than `card` is up. */
-  showsOther(card: BridgedHoverCard): boolean {
-    return this.visible !== undefined && this.visible !== card;
+  /**
+   * `card` waits out its hover delay. A card that shows meanwhile (a chip's,
+   * on the way to it) is where the pointer rests: it cancels `card`.
+   */
+  delaying(card: BridgedHoverCard): void {
+    this.delayed = card;
   }
 
   hasPinnedCard(): boolean {
@@ -80,6 +84,9 @@ export class HoverCardBridge {
     this.cancelGrace();
     this.visible = card;
     current?.hide();
+    const delayed = this.delayed;
+    this.delayed = undefined;
+    if (delayed && delayed !== card) delayed.hide();
   }
 
   /** `card` closed for its own reasons (blur, scroll, Escape). */

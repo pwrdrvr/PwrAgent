@@ -28,3 +28,20 @@ describe("HoverCardBridge.holds", () => {
     }));
   });
 });
+
+describe("HoverCardBridge.delaying", () => {
+  // Rule: a card waiting out its hover delay is cancelled by any other card
+  // that shows meanwhile, and never by itself showing.
+  it("cancels the waiting card when another one shows", () => {
+    fc.assert(fc.property(fc.boolean(), fc.boolean(), (otherShows, otherFirst) => {
+      const bridge = new HoverCardBridge(300, immediateTimers);
+      let rowCancelled = false;
+      const row: BridgedHoverCard = { hide: () => { rowCancelled = true; } };
+      const chip: BridgedHoverCard = { hide: () => undefined };
+      if (otherFirst) bridge.shown(chip);
+      bridge.delaying(row);
+      bridge.shown(otherShows ? chip : row);
+      expect(rowCancelled).toBe(otherShows && !otherFirst);
+    }));
+  });
+});

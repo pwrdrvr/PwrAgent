@@ -322,6 +322,25 @@ describe("sidebar thread card", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#7");
   });
 
+  // Found by E2E: a click on a row opened its thread, then the card came up
+  // over the transcript 600 ms later and took the next click.
+  it("never opens for a row pressed during the hover delay", () => {
+    renderSidebar({ threads: [thread("a"), thread("b")] });
+    move(document.querySelector(".sidebar")!, rowTitle("a"));
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS / 2));
+    fireEvent.pointerDown(rowTitle("a"));
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(card()).toBeNull();
+    // A quick click: the press lands in the same frame as the pointer, before
+    // React commits anything for the arrival.
+    act(() => {
+      move(rowTitle("a"), rowTitle("b"));
+      fireEvent.pointerDown(rowTitle("b"));
+    });
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(card()).toBeNull();
+  });
+
   // Found in a real layout: a pointer that lands on the chip from outside
   // got the PR card at 250 ms, then lost it to the row's card at 600 ms.
   it("leaves the PR card up for a pointer that came straight to the chip", () => {
