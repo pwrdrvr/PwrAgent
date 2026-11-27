@@ -3,11 +3,10 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { build } from "esbuild";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { expect, inject, it, onTestFinished, vi } from "vitest";
 import fc from "fast-check";
-import { buildHeadless } from "../../../scripts/build-headless.mjs";
+import { requireOracleFixture } from "../../test-setup/oracle-fixture-context";
 import { ensureNamedProfileExists } from "../profile";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 
@@ -25,49 +24,17 @@ type Host = {
   close(): Promise<void>;
 };
 
-type Runtime = { root: string; outputDirectory: string; guard: string };
-
-// The bundle is shared fixture setup, not the behavior under test. Building it
-// once keeps each test's budget for the driver it forks.
-let runtime: Runtime;
-let runtimeRoot: string | undefined;
-beforeAll(async () => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "headless-concurrency-")));
-  runtimeRoot = root;
-  const outputDirectory = path.join(root, "runtime");
-  const fixture = path.join(import.meta.dirname, "fixtures/owner-conformance-codex-transport.ts");
-  await buildHeadless({ outputDirectory, sourcemap: false, logLevel: "warning", plugins: [{ name: "conformance-provider", setup(builder) {
-    builder.onResolve({ filter: /(?:^|\/)stdio-transport$/ }, () => ({ path: "fixture-codex", namespace: "owned-codex" }));
-    builder.onLoad({ filter: /.*/, namespace: "owned-codex" }, () => ({
-      contents: `export { OwnerConformanceCodexTransport as StdioJsonRpcTransport } from ${JSON.stringify(fixture)};`, loader: "ts", resolveDir: import.meta.dirname,
-    }));
-    builder.onLoad({ filter: /headless[\\/]index\.ts$/ }, (args) => ({
-      contents: fs.readFileSync(args.path, "utf8") + `\nexport { OwnerConformanceCodexTransport as fixtureCodex } from ${JSON.stringify(fixture)};`, loader: "ts",
-    }));
-  } }] });
-  const guard = path.join(root, "guard.cjs");
-  await build({
-    entryPoints: [path.join(import.meta.dirname, "setup/agent-cli-spawn-guard.ts")], outfile: guard,
-    bundle: true, platform: "node", format: "cjs", logLevel: "silent",
-    plugins: [{ name: "child-hooks", setup(builder) {
-      builder.onResolve({ filter: /^vitest$/ }, () => ({ path: "hooks", namespace: "child-test" }));
-      builder.onLoad({ filter: /.*/, namespace: "child-test" }, () => ({
-        contents: `export const afterEach = () => {}; export const afterAll = fn => process.once("exit", () => { try { fn(); } catch (error) { require("node:fs").writeSync(2, error.message + "\\n"); process.exitCode = 1; } });`, loader: "js",
-      }));
-    } }],
-  });
-  runtime = { root, outputDirectory, guard };
-});
-afterAll(() => {
-  if (runtimeRoot) fs.rmSync(runtimeRoot, { recursive: true, force: true });
-});
-
 async function builtHost(
   signal: AbortSignal,
   observe?: (child: ChildProcess, close: () => Promise<void>) => void,
 ): Promise<Host> {
-  const { outputDirectory, guard } = runtime;
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(runtime.root, "host-")));
+  const { outputDirectory, guard } = requireOracleFixture(inject("headlessDriver"));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "headless-concurrency-host-")));
+  let closeHost: (() => Promise<void>) | undefined;
+  onTestFinished(async () => {
+    try { await closeHost?.(); }
+    finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
   const workspace = path.join(root, "workspace");
   fs.mkdirSync(workspace);
   const env = { ...process.env, PWRAGENT_HOME: path.join(root, "home"), PWRAGENT_PROFILE: "fixture", CLAUDE_CONFIG_DIR: path.join(root, "claude") };
@@ -137,7 +104,7 @@ async function builtHost(
   const close = () => {
     closing ??= (async () => {
       // Keep a failed stop write visible, but still join process and pipe
-      // retirement before afterAll can remove the shared runtime root.
+      // retirement before the test can remove the driver's state.
       const stopped = child.connected ? send({ method: "stop" }).then(() => undefined, (error: Error) => error) : undefined;
       const [code] = await exited;
       const error = await stopped;
@@ -146,7 +113,7 @@ async function builtHost(
     })();
     return closing;
   };
-  onTestFinished(close);
+  closeHost = close;
   observe?.(child, close);
   try {
     await Promise.race([once(child, "message"), exited.then(([code]) => { throw new Error(`Node owner exited (${code}): ${output}`); })]);

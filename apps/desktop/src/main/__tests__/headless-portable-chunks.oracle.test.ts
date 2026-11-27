@@ -5,10 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { buildHeadless } from "../../../scripts/build-headless.mjs";
 
 const execute = promisify(execFile);
 const packageRoot = path.resolve(import.meta.dirname, "../../../../../packages/pwragent");
+const packageDist = path.join(packageRoot, "dist");
 const packageRequire = createRequire(path.join(packageRoot, "package.json"));
 const externalDependencies = Object.keys(JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")).dependencies);
 let root: string;
@@ -27,7 +27,9 @@ beforeAll(async () => {
     fs.mkdirSync(path.dirname(link), { recursive: true });
     fs.symlinkSync(target, link, "junction");
   }
-  await buildHeadless({ outputDirectory: directory, portable: true, sourcemap: false, logLevel: "warning" });
+  // Exercise the exact packaged output prepared by desktop-main's global
+  // setup. Copy it so resolution still starts from an isolated install.
+  await fs.promises.cp(packageDist, directory, { recursive: true });
 });
 
 afterAll(() => {
@@ -63,11 +65,4 @@ it("emits native ESM at every established entry path without wrappers or source 
   expect(files.filter(file => /\.[cm]?js$/.test(file)).sort()).toEqual(Object.keys(manifest.chunks).sort());
   const { stdout } = await execute(process.execPath, [path.join(directory, manifest.entries.index), "--version"]);
   expect(stdout.trim()).toBe(JSON.parse(fs.readFileSync(path.join(directory, "runtime.json"), "utf8")).appVersion);
-});
-
-it("shared Outpost test preparation emits the real package without source maps", () => {
-  const files = fs.readdirSync(path.join(packageRoot, "dist"));
-  expect(files).toContain("index.js");
-  expect(JSON.parse(fs.readFileSync(path.join(packageRoot, "dist/package.json"), "utf8")).type).toBe("module");
-  expect(files.filter(file => file.endsWith(".map"))).toEqual([]);
 });
