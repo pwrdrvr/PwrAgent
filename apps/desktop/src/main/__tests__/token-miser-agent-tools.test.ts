@@ -96,6 +96,39 @@ describe("Token Miser agent tools", () => {
     expect(content.text).not.toContain("retrieval truncated");
   });
 
+  it("recovers exact UTF-8 bytes through the advertised tool using a short handle", async () => {
+    const store = await createStore();
+    const objectId = store.issueOutputHandle();
+    const output = "a".repeat(1023) + "🍋\r\nneedle\n" + "中".repeat(1024);
+    const entry = await store.store({ threadId: "owner", turnId: "turn", toolUseId: "call", toolName: "Bash",
+      handle: objectId, output, replacementCharacters: 10, summary: { summary: "Fixture", usefulDetails: [] } });
+    const router = new AgentToolRouter(buildTokenMiserToolDefinitions(store));
+    const call = (threadId: string, args: Record<string, unknown>, tool = "read_token_miser_output") =>
+      router.handleDynamicToolCall({ backend: "codex", call: {
+        threadId, turnId: "turn", callId: "retrieve", namespace: "pwragent", tool, arguments: { objectId, ...args },
+      } });
+    const bytes = Buffer.from(output);
+    const chunks = [];
+    for (let offset = 0; offset < bytes.length; offset += 1024) {
+      const response = await call("owner", { byteOffset: offset });
+      const content = response.contentItems?.[0];
+      if (content?.type !== "inputText") throw new Error("Missing byte page.");
+      const page = JSON.parse(content.text.match(/\{"offset":[^}]+\}/u)![0]);
+      expect(page).toMatchObject({ offset, totalBytes: bytes.length });
+      chunks.push(Buffer.from(page.base64, "base64"));
+    }
+    expect(Buffer.concat(chunks)).toEqual(bytes);
+    const range = await call("owner", { startLine: 2, endLine: 2 });
+    expect(range.contentItems?.[0]).toMatchObject({ text: expect.stringContaining("needle") });
+    const search = await call("owner", { query: "needle" }, "search_token_miser_output");
+    expect(search.contentItems?.[0]).toMatchObject({ text: expect.stringContaining(objectId) });
+    expect(JSON.stringify(search)).not.toContain(entry.objectId);
+    expect((await call("foreign", { byteOffset: 0 })).success).toBe(false);
+    expect((await call("owner", { byteOffset: 0, endLine: 1 })).success).toBe(false);
+    store.startTurn("owner", "next");
+    expect((await call("owner", { byteOffset: 0 })).success).toBe(false);
+  });
+
   it("describes source access without priming the parent about filtering costs", async () => {
     const store = await createStore();
     const descriptions = buildTokenMiserToolDefinitions(store)

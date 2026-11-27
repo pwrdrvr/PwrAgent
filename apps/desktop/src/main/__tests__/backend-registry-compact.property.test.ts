@@ -97,7 +97,10 @@ describe("DesktopBackendRegistry.compactThread routing and admission", () => {
     const internal = registry as unknown as {
       claudeBackend: {
         startTurn: ClaudeBackend["startTurn"];
-        commandsByCwd: Map<string, Array<{ name: string; backend: "claude"; scope: "session"; source: "provider" }>>;
+        catalogByCwd: Map<string, {
+          commands: Array<{ name: string; backend: "claude"; scope: "session"; source: "provider" }>;
+          skills: [];
+        }>;
         terminalCommands: Set<string>;
         rewinding: Set<string>;
         rewindQueries: Map<string, Promise<void>>;
@@ -149,17 +152,17 @@ describe("DesktopBackendRegistry.compactThread routing and admission", () => {
             }
 
             // Configure observed Claude command availability.
-            internal.claudeBackend.commandsByCwd.clear();
+            internal.claudeBackend.catalogByCwd.clear();
             internal.claudeBackend.terminalCommands = new Set(["doctor", "color", "focus", "reload-plugins"]);
             if (commandAvailability === "with-compact") {
-              internal.claudeBackend.commandsByCwd.set(root, [
+              internal.claudeBackend.catalogByCwd.set(root, { commands: [
                 { name: "compact", backend: "claude", scope: "session", source: "provider" },
                 { name: "init", backend: "claude", scope: "session", source: "provider" },
-              ]);
+              ], skills: [] });
             } else if (commandAvailability === "without-compact") {
-              internal.claudeBackend.commandsByCwd.set(root, [
+              internal.claudeBackend.catalogByCwd.set(root, { commands: [
                 { name: "init", backend: "claude", scope: "session", source: "provider" },
-              ]);
+              ], skills: [] });
             } else if (commandAvailability === "terminal-only") {
               internal.claudeBackend.terminalCommands.add("compact");
             }

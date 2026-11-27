@@ -3722,6 +3722,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("keeps future turns in the primary cwd when a secondary directory is attached", async () => {
+    await mockArchiveWorktreePresence([expectedDir("/repo/pwragent-wt")]);
     const secondaryDirectory = {
       id: expectedDir("/repo/agent-kit"),
       kind: "local" as const,
@@ -3775,6 +3776,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("lets an agent detach a secondary directory from the current thread", async () => {
+    await mockArchiveWorktreePresence([expectedDir("/repo/pwragent-wt")]);
     const secondaryDirectory = {
       id: expectedDir("/repo/agent-kit"),
       kind: "local" as const,

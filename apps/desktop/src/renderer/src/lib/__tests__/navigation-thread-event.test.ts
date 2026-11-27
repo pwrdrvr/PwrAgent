@@ -89,3 +89,25 @@ it("patches a hibernated checkout, its row mark, and Keep it awake from one even
     backend: "codex", notification: { method: "thread/checkoutHibernation/updated", params: { threadId: "other", workspace } },
   } as never)).toBe(thread);
 });
+
+it.each([
+  ["/wt", "/wt"],
+  ["C:/worktrees/wt", "C:\\worktrees\\wt"],
+  ["//share/worktrees/wt", "\\\\share\\worktrees\\wt"],
+])("replaces a stale warning when the owner retries %s at %s", (missingPath, restoredPath) => {
+  const missing = { worktreePath: missingPath, repositoryPath: "/repo", repositoryAvailable: true };
+  const thread: NavigationThreadSummary = {
+    id: "thread", source: "codex", title: "Build", titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: true }, workspaceMissing: missing,
+  };
+  const workspace = { worktreePath: restoredPath, repositoryPath: "/repo", hibernatedAt: 1, restoring: true };
+  const other = applyCheckoutHibernationUpdate(thread, { threadId: thread.id,
+    workspace: { ...workspace, worktreePath: "/unrelated" } });
+  expect(other.workspaceMissing).toEqual(missing);
+  const restoring = applyCheckoutHibernationUpdate(thread, { threadId: thread.id, workspace });
+  expect(restoring.workspaceMissing).toBeUndefined();
+  expect(restoring.workspaceHibernated).toEqual(workspace);
+  const restored = applyCheckoutHibernationUpdate(restoring, { threadId: thread.id, workspace: null });
+  expect(restored.workspaceMissing).toBeUndefined();
+  expect(restored.workspaceHibernated).toBeUndefined();
+});

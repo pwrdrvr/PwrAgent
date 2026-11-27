@@ -19,8 +19,11 @@ export function shortSubAgentThreadId(threadId: string): string {
   return threadId.length > 8 ? threadId.slice(0, 8) : threadId;
 }
 
+/** A Codex native worker's card; the id after it is the worker's thread id. */
+export const CODEX_NATIVE_SUBAGENT_MONITOR_ID_PREFIX = "codex-native:";
+
 export function isCodexNativeSubAgent(subAgent: Pick<ThreadSubAgentSummary, "monitorId">): boolean {
-  return subAgent.monitorId.startsWith("codex-native:");
+  return subAgent.monitorId.startsWith(CODEX_NATIVE_SUBAGENT_MONITOR_ID_PREFIX);
 }
 
 /** A sub-agent Claude Code runs with its Agent tool; the id after it is the task id. */

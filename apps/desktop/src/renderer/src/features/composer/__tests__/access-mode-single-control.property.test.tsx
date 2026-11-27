@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -15,6 +15,13 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { Composer } from "../Composer";
+import {
+  accessStopValues,
+  allowAccessStop,
+  chooseAccessStop,
+  openAccessPicker,
+  queryAccessTriggers,
+} from "../../../test/access-picker";
 
 vi.mock("../dictation-capture", () => ({ startDictationCapture: vi.fn() }));
 
@@ -228,15 +235,15 @@ describe("Composer single access mode control property", () => {
               thread={isLaunchpad ? undefined : makeThread(backend.kind, executionMode)}
             />,
           );
-          const controls = screen.queryAllByLabelText(/^(Access mode|Agent mode)(?::|$)/);
-          expect(controls.length).toBeLessThanOrEqual(1);
+          expect(queryAccessTriggers().length).toBeLessThanOrEqual(1);
+          expect(screen.queryAllByLabelText(/^(Access mode|Agent mode)(?::|$)/)).toHaveLength(0);
         },
       ),
       { numRuns: 30 },
     );
   });
 
-  it("renders one unified Access mode control for Antigravity and confirms + normalizes Plan -> Full Access on launchpad", async () => {
+  it("renders one Access picker for Antigravity, ordered by freedom, and confirms + normalizes Plan -> Full Access inline on launchpad", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
     render(
       <Composer
@@ -247,28 +254,24 @@ describe("Composer single access mode control property", () => {
         skills={[]}
       />,
     );
-    const controls = screen.queryAllByLabelText(/^(Access mode|Agent mode)(?::|$)/);
+    const controls = queryAccessTriggers();
     expect(controls).toHaveLength(1);
-    expect(controls[0]).toHaveAccessibleName(/^Access mode(?::|$)/);
+    expect(controls[0]).toHaveAccessibleName("Access: Plan");
+    expect(controls[0]).toHaveValue("plan");
+    expect(controls[0]).toHaveAttribute("aria-haspopup", "dialog");
+
+    expect(accessStopValues()).toEqual(["plan", "default", "accept-edits", "auto", "full-access"]);
+    expect(within(openAccessPicker()).getByRole("slider", { name: "Access level" }))
+      .toHaveAttribute("aria-valuetext", "Plan");
+
+    chooseAccessStop("full-access");
+    // The bar shows the stop, but nothing changes until Allow, and the
+    // confirmation is inline rather than the modal warning.
+    expect(onUpdateLaunchpad).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Enable Full Access?" })).not.toBeInTheDocument();
     expect(controls[0]).toHaveValue("plan");
 
-    fireEvent.click(controls[0]!);
-    const optionLabels = screen.getAllByRole("option").map((option) =>
-      option.textContent?.replace(/^✓/, "").trim(),
-    );
-    expect(optionLabels).toEqual([
-      "Default Access",
-      "Accept Edits",
-      "Auto",
-      "Plan",
-      "Full Access",
-    ]);
-
-    fireEvent.click(screen.getByRole("option", { name: "Full Access" }));
-    const dialog = screen.getByRole("dialog", { name: "Enable Full Access?" });
-    expect(onUpdateLaunchpad).not.toHaveBeenCalled();
-
-    fireEvent.click(within(dialog).getByRole("button", { name: "I Understand and Accept the Risks" }));
+    allowAccessStop();
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
         "directory:/repo",
@@ -296,12 +299,11 @@ describe("Composer single access mode control property", () => {
         thread={makeThread("acp:antigravity", "full-access", { configValues: { mode: "default" } })}
       />,
     );
-    const controls = screen.queryAllByLabelText(/^(Access mode|Agent mode)(?::|$)/);
+    const controls = queryAccessTriggers();
     expect(controls).toHaveLength(1);
     expect(controls[0]).toHaveValue("full-access");
 
-    fireEvent.click(controls[0]!);
-    fireEvent.click(screen.getByRole("option", { name: "Accept Edits" }));
+    chooseAccessStop("accept-edits");
 
     await waitFor(() => {
       expect(onSetExecutionMode).toHaveBeenCalledWith("default", {

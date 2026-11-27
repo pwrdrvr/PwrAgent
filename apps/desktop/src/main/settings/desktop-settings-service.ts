@@ -1034,6 +1034,7 @@ export class DesktopSettingsService {
       configError: error,
       runtime: {
         tokenMiser: {
+          boundedCommandsSupported: process.platform !== "win32",
           ...(tokenMiserActivation ? { activation: tokenMiserActivation } : {}),
           ...(managedCodexRuntime
             ? {
@@ -1304,6 +1305,11 @@ export class DesktopSettingsService {
           config.experimental?.threadPricingDisplayCodexCredits,
           false,
         ),
+        tokenMiserBoundedCommands: this.resolveConfigBoolean(config.experimental?.tokenMiserBoundedCommands, false),
+        tokenMiserBoundedHelper: {
+          value: config.experimental?.tokenMiserBoundedHelper ?? "deterministic",
+          source: config.experimental?.tokenMiserBoundedHelper === undefined ? "default" : "config",
+        },
         tokenMiserEnabled: this.resolveConfigBoolean(
           config.experimental?.tokenMiserEnabled,
           false,
@@ -2378,6 +2384,14 @@ export class DesktopSettingsService {
         return resolved;
       },
     });
+  }
+
+  resolveTokenMiserBoundedHelper() {
+    return this.configStore.read("experimental").tokenMiserBoundedHelper ?? "deterministic";
+  }
+
+  resolveTokenMiserBoundedCommands(): boolean {
+    return this.configStore.read("experimental").tokenMiserBoundedCommands ?? false;
   }
 
   resolveTokenMiserEnabled(): boolean {

@@ -18,6 +18,12 @@ export type ClaudeTask = {
   progress?: string;
   /** The report Claude settled the task with. */
   summary?: string;
+  /**
+   * What a sub-agent is doing now: the latest progress frame's description
+   * ("Running List files", "Reading app.css"). Held in memory only; it is
+   * command text, and it changes with every tool call.
+   */
+  activity?: string;
   /** When this process first saw the task; held in memory only. */
   startedAt?: number;
   /** The live background set has named this task. */
@@ -34,6 +40,25 @@ export type ClaudeSubAgentCard = {
   lastMessage?: string;
   startedAt?: number;
 };
+
+export type ClaudeSubAgentActivity = { monitorId: string; activity: string };
+
+/** Longest activity line kept; the row shows one ellipsized line of it. */
+export const CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH = 240;
+
+function claudeSubAgentMonitorId(taskId: string): string {
+  return `${CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${taskId}`;
+}
+
+/** One line of a progress description, bounded; undefined when it says nothing. */
+export function claudeSubAgentActivityText(description: string | undefined): string | undefined {
+  const line = description?.replace(/\s+/g, " ").trim();
+  if (!line) return undefined;
+  // Cut between code points: a UTF-16 cut can strand half a surrogate pair.
+  const points = Array.from(line);
+  return points.length > CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH
+    ? `${points.slice(0, CLAUDE_SUB_AGENT_ACTIVITY_MAX_LENGTH - 1).join("")}…` : line;
+}
 
 /** A sub-agent Claude runs for the Agent tool, not a command. */
 export function isClaudeSubAgentTask(task: ClaudeTask): boolean {
@@ -56,6 +81,8 @@ export type ClaudeTaskSettlement = {
  */
 export class ClaudeTaskTracker {
   private readonly tasks = new Map<string, ClaudeTask>();
+  /** Tasks holding an activity line, so reading the lines skips settled history. */
+  private readonly linedTaskIds = new Set<string>();
   private liveBackground?: Set<string>;
 
   constructor(private readonly now: () => number = Date.now) {}
@@ -95,7 +122,15 @@ export class ClaudeTaskTracker {
         const progress = message.summary
           ?? (message.last_tool_name ? `${message.usage.tool_uses} tool uses · last ${message.last_tool_name}` : undefined);
         if (progress) task.progress = progress;
-        if (message.description) task.description = message.description;
+        // A progress frame's description is the worker's latest activity
+        // ("Running cd /Users/…", "Reading app.css"), not its task. Copying it
+        // renamed every sub-agent row to whatever command it ran last; it is
+        // the row's second line instead.
+        const activity = claudeSubAgentActivityText(message.description);
+        if (activity) {
+          task.activity = activity;
+          this.linedTaskIds.add(task.taskId);
+        }
       }
     } else if (message.subtype === "task_notification") {
       const task = this.tasks.get(message.task_id) ?? {
@@ -153,12 +188,10 @@ export class ClaudeTaskTracker {
   subAgentCards(): ClaudeSubAgentCard[] {
     return [...this.tasks.values()].flatMap((task) => {
       if (!isClaudeSubAgentTask(task) || task.ambient) return [];
-      const dropped = task.status === "running" && task.backgrounded && task.namedLive === true
-        && this.liveBackground?.has(task.taskId) === false;
-      const status = dropped ? "success" : CLAUDE_SUB_AGENT_STATUS[task.status];
+      const status = this.cardStatus(task);
       const lastMessage = task.summary;
       return [{
-        monitorId: `${CLAUDE_NATIVE_SUBAGENT_MONITOR_ID_PREFIX}${task.taskId}`,
+        monitorId: claudeSubAgentMonitorId(task.taskId),
         taskId: task.taskId,
         task: task.description || task.subagentType || "Claude sub-agent",
         status,
@@ -167,6 +200,32 @@ export class ClaudeTaskTracker {
         ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
       }];
     });
+  }
+
+  /**
+   * What each running sub-agent is doing now, by card. A card that no longer
+   * runs has no activity: its last one would read as current. Reads only the
+   * tasks holding a line, and forgets those that stopped, so a long session's
+   * settled tasks cost nothing here.
+   */
+  subAgentActivities(): ClaudeSubAgentActivity[] {
+    const lines: ClaudeSubAgentActivity[] = [];
+    for (const taskId of this.linedTaskIds) {
+      const task = this.tasks.get(taskId);
+      if (task && isClaudeSubAgentTask(task) && !task.ambient && task.activity && this.cardStatus(task) === "running") {
+        lines.push({ monitorId: claudeSubAgentMonitorId(task.taskId), activity: task.activity });
+      } else {
+        // Its next progress frame, if it ever runs again, adds it back.
+        this.linedTaskIds.delete(taskId);
+      }
+    }
+    return lines;
+  }
+
+  private cardStatus(task: ClaudeTask): ThreadSubAgentStatus {
+    const dropped = task.status === "running" && task.backgrounded && task.namedLive === true
+      && this.liveBackground?.has(task.taskId) === false;
+    return dropped ? "success" : CLAUDE_SUB_AGENT_STATUS[task.status];
   }
 
   /** Ends every running sub-agent when Claude's process goes away. */

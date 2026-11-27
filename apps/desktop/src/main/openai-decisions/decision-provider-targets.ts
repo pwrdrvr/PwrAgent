@@ -32,7 +32,7 @@ export function isDecisionProviderEnabled(
 
 /** The saved Jev or local decision model, as Settings → AI Providers holds it. */
 export async function readSystemOneTarget(
-  settings: DecisionSettingsReader,
+  settings: Pick<DecisionSettingsReader, "resolveDecisionModelSettings" | "resolveDecisionApiKey">,
   provider: "jev" | "local",
 ): Promise<SystemOneTarget | undefined> {
   const resolved = resolveDecisionModelSettings(settings.resolveDecisionModelSettings());

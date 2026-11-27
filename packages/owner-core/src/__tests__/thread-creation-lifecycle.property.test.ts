@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadCreationLifecycle, type CreatedThreadIdentity, type CreatedThreadParent, type ThreadCreationHost, type ThreadCreationOptions, type ThreadCreationStage } from "../thread-creation-lifecycle";
 
-const backend = fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi", "acp:qwen");
+const backend = fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:antigravity", "acp:kimi", "acp:qwen");
 const options = fc.record({
   backend,
   systemPlaceholder: fc.boolean(), worktree: fc.boolean(), tokenMiserOverride: fc.option(fc.boolean(), { nil: undefined }),
@@ -69,7 +69,7 @@ function script(config: ThreadCreationOptions, migration: boolean, connections: 
   const enabled: Record<string, boolean> = {
     placeholder: config.systemPlaceholder, worktree: config.worktree,
     execution: config.backend === "codex" || config.backend === "claude",
-    "token-miser": config.backend === "codex" && config.tokenMiserOverride !== undefined,
+    "token-miser": ["codex", "claude", "acp:antigravity"].includes(config.backend) && config.tokenMiserOverride !== undefined,
     "pdf-catalog": config.backend === "codex" && config.pdfCatalog, git: config.backend === "codex",
     mcp: config.mcpSelection, agent: config.agent, environment: config.environment,
     model: migration || Object.values(config.modelSettings).some((value) => value !== undefined),
@@ -83,6 +83,14 @@ function script(config: ThreadCreationOptions, migration: boolean, connections: 
 }
 
 describe("thread creation lifecycle contract", () => {
+  it.each(["claude", "acp:antigravity"] as const)("persists a new %s thread's capture opt-in", async (backend) => {
+    const config = { backend, tokenMiserOverride: true, systemPlaceholder: false, worktree: false, pdfCatalog: false,
+      mcpSelection: false, agent: false, environment: false, modelSettings: {}, parent: false };
+    const run = fixture(config, new Set(), false, 0, false, false);
+    await new ThreadCreationLifecycle().start(config, run.host);
+    expect(run.calls.filter((stage) => stage === "token-miser")).toEqual(["token-miser"]);
+  });
+
   it("drains preparation before rejection cleanup and transfers each resource exactly once", async () => {
     await fc.assert(fc.asyncProperty(fc.scheduler(), options, fc.array(fc.boolean(), { minLength: 0, maxLength: 5 }),
       fc.constantFrom("prepare" as const, "branch" as const, "provider" as const, "accepted" as const), fc.boolean(), fc.boolean(),

@@ -121,6 +121,18 @@ export type ExecutionModeSelection = {
    * churn; the latest options are read through a ref.
    */
   requestExecutionModeSelection: (executionMode: ThreadExecutionMode) => void;
+  /**
+   * Whether choosing `executionMode` needs the operator's confirmation:
+   * the test `requestExecutionModeSelection` applies before it opens the
+   * dialog. A surface that confirms inline (the composer's access picker)
+   * asks this first and shows its own Allow and Cancel instead.
+   */
+  requiresConfirmation: (executionMode: ThreadExecutionMode) => boolean;
+  /**
+   * Applies a mode the operator just confirmed inline, such as the access
+   * picker's Allow Full Access. Only call it from that explicit action.
+   */
+  confirmExecutionModeSelection: (executionMode: ThreadExecutionMode) => void;
 };
 
 export function useExecutionModeSelection(
@@ -171,14 +183,25 @@ export function useExecutionModeSelection(
   const dismissedRef = useRef(dismissed);
   dismissedRef.current = dismissed;
 
+  const requiresConfirmation = useCallback(
+    (executionMode: ThreadExecutionMode): boolean =>
+      executionMode === "full-access"
+      && optionsRef.current.currentExecutionMode !== "full-access"
+      && !dismissedRef.current,
+    [],
+  );
+
+  const confirmExecutionModeSelection = useCallback(
+    (executionMode: ThreadExecutionMode): void => {
+      optionsRef.current.applyExecutionMode(executionMode);
+    },
+    [],
+  );
+
   const requestExecutionModeSelection = useCallback(
     (executionMode: ThreadExecutionMode): void => {
       const current = optionsRef.current;
-      if (
-        executionMode === "full-access"
-        && current.currentExecutionMode !== "full-access"
-        && !dismissedRef.current
-      ) {
+      if (requiresConfirmation(executionMode)) {
         setDontWarnAgain(false);
         setError(undefined);
         setDialogOpen(true);
@@ -187,7 +210,7 @@ export function useExecutionModeSelection(
 
       current.applyExecutionMode(executionMode);
     },
-    [],
+    [requiresConfirmation],
   );
 
   const confirm = useCallback(async (): Promise<void> => {
@@ -307,5 +330,10 @@ export function useExecutionModeSelection(
       )
     : null;
 
-  return { fullAccessRiskDialog, requestExecutionModeSelection };
+  return {
+    confirmExecutionModeSelection,
+    fullAccessRiskDialog,
+    requestExecutionModeSelection,
+    requiresConfirmation,
+  };
 }

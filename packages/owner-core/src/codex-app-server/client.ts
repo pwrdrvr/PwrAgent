@@ -10097,7 +10097,9 @@ export class CodexAppServerClient {
     threadId: string;
     turnId: string;
     timeoutMs: number;
+    signal?: AbortSignal;
   }): Promise<Extract<HelperTurnResult, { status: "ok" }>> {
+    params.signal?.throwIfAborted();
     const key = buildHelperTurnKey(params.threadId, params.turnId);
     const completed = this.completedHelperTurnResults.get(key);
     if (completed) {
@@ -10108,7 +10110,15 @@ export class CodexAppServerClient {
       return Promise.resolve(completed);
     }
 
-    return new Promise((resolve, reject) => {
+    const signal = params.signal;
+    const abort = () => {
+      const waiter = this.helperTurnWaiters.get(key);
+      if (!waiter) return;
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(new Error("codex_helper_turn_cancelled"));
+    };
+    return new Promise<Extract<HelperTurnResult, { status: "ok" }>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.helperTurnWaiters.delete(key);
         reject(new Error("codex_title_turn_timeout"));
@@ -10118,7 +10128,8 @@ export class CodexAppServerClient {
         reject,
         timer,
       });
-    });
+      signal?.addEventListener("abort", abort, { once: true });
+    }).finally(() => signal?.removeEventListener("abort", abort));
   }
 
   /**
@@ -11987,6 +11998,7 @@ export class CodexAppServerClient {
    */
   async generateStructuredObject(params: {
     /** Which helper is running, for its per-helper override and effort. */
+    signal?: AbortSignal;
     helper: HelperModelId;
     /** Overrides the row for this call only, when Codex offers it. */
     model?: string;
@@ -12103,6 +12115,7 @@ export class CodexAppServerClient {
   }
 
   private async runHelperStructuredTurn(params: {
+    signal?: AbortSignal;
     helper: HelperModelId;
     model?: string;
     reasoningEffort?: string;
@@ -12263,6 +12276,7 @@ export class CodexAppServerClient {
         this.helperToolTurnThreadIds.add(helperThreadId);
       }
 
+      params.signal?.throwIfAborted();
       const turnStartResult = await requestWithFallbacks({
         client: this.connection,
         methods: ["turn/start"],
@@ -12322,6 +12336,7 @@ export class CodexAppServerClient {
         threadId: helperThreadId,
         turnId: helperTurnId,
         timeoutMs: turnTimeoutMs,
+        signal: params.signal,
       });
       helperTurnCompleted = true;
       const accountKey = await accountKeyRead;

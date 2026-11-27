@@ -77,6 +77,31 @@ export function effortStopForKey(key: string, index: number, count: number): num
 }
 
 /**
+ * `effortStopForKey` on a bar whose disabled stops are drawn but never
+ * chosen. A key that lands on a disabled stop carries on past it the way the
+ * key moves (Home forward from the first stop, End back from the last). When
+ * nothing usable lies that way, it settles on the farthest usable stop
+ * between the current one and where the key landed, else does nothing.
+ */
+export function steppedStopForKey(
+  key: string,
+  index: number,
+  enabled: readonly boolean[],
+): number | undefined {
+  const count = enabled.length;
+  const target = effortStopForKey(key, index, count);
+  if (target === undefined || enabled[target]) return target;
+  const step = key === "Home" ? 1 : key === "End" ? -1 : target >= index ? 1 : -1;
+  for (let stop = target + step; stop >= 0 && stop < count; stop += step) {
+    if (enabled[stop]) return stop;
+  }
+  for (let stop = target - step; stop !== index && stop >= 0 && stop < count; stop -= step) {
+    if (enabled[stop]) return stop;
+  }
+  return undefined;
+}
+
+/**
  * Which stops get a label under the bar. Every stop while they fit (six at
  * the panel's width); past that only the ends and the chosen stop.
  */

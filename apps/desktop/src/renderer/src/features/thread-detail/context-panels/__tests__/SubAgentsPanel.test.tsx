@@ -14,6 +14,8 @@ import type { DesktopApi } from "../../../../lib/desktop-api";
 import * as subAgentFormatting from "../subagent-format";
 import * as railFormatting from "../context-rail-shared";
 import { SubAgentsPanel } from "../SubAgentsPanel";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { resetSubAgentActivityStore } from "../../../../lib/sub-agent-activity";
 
 afterEach(() => {
   cleanup();
@@ -646,4 +648,30 @@ it("updates live timing without rendering the sub-agent list or completed timing
   timestamp.mockClear();
   view.rerender(<SubAgentsPanel thread={thread} />);
   expect(timestamp).not.toHaveBeenCalled();
+});
+
+it("shows a running card's current activity under its task, and none on a finished card", () => {
+  resetSubAgentActivityStore();
+  let deliver: ((event: AgentEvent) => void) | undefined;
+  const desktopApi = {
+    onAgentEvent: (callback: (event: AgentEvent) => void) => {
+      deliver = callback;
+      return () => undefined;
+    },
+  } as unknown as DesktopApi;
+  render(<SubAgentsPanel desktopApi={desktopApi} thread={thread} />);
+  act(() => {
+    deliver?.({ backend: "codex", notification: { method: "thread/subAgentActivity/updated", params: {
+      threadId: "parent-thread",
+      activities: [
+        { monitorId: "monitor-1", activity: "Running kubectl rollout status deploy/api" },
+        { monitorId: "monitor-2", activity: "Reading stale.log" },
+      ],
+    } } });
+  });
+  // Newest first: the running monitor, then the finished one.
+  const [running, finished] = screen.getAllByRole("listitem");
+  expect(running!.querySelector(".rail-card__activity")?.textContent).toBe("Running kubectl rollout status deploy/api");
+  expect(finished!.querySelector(".rail-card__activity")).toBeNull();
+  resetSubAgentActivityStore();
 });

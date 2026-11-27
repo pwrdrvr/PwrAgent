@@ -13,6 +13,16 @@ says when to read this document. Relative links were updated for this location.
   surface that calls the API itself is a one-click, un-gated escalation, which
   is what the Star Map chat card's settings chip was while the dialog lived
   inside `Composer`.
+- The composer's access picker confirms inline instead of opening the
+  dialog: choosing the Full Access stop shows Allow Full Access and Cancel
+  under the level bar, and the level does not change until Allow. It asks the
+  gate's `requiresConfirmation` whether to show them and commits through its
+  `confirmExecutionModeSelection`, so the gate still owns the rule and the
+  dismissed-forever preference (a dismissed warning commits the stop at
+  once). Its stops are ordered by `orderProviderAccessOptions`
+  (`packages/shared/src/provider-access-levels.ts`): Plan < Default <
+  Accept Edits < Auto < Full Access. The Star Map chat card and to-do cards
+  still use the dialog.
 - A surface with a live settings snapshot (the main window's `App`) passes
   `dismissed` / `onDismiss`; anything else lets the gate read and write the
   preference itself.

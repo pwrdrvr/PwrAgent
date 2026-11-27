@@ -24,6 +24,7 @@ import { type BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { ModelDropdown } from "./ModelDropdown";
 import { ModelSettingsPicker, ModelSettingsQuickList, type ModelSettingsPickerProps } from "./ModelSettingsPicker";
+import { AccessPicker } from "./AccessPicker";
 import { useNewThreadRecents } from "./useNewThreadRecents";
 import { newThreadRecents, type NewThreadRecent } from "../../lib/model-settings-recents";
 import { MODEL_DEFAULT_EFFORT, splitEffortChoices } from "./model-settings-picker-model";
@@ -252,7 +253,6 @@ import {
 import { threadJobMonitorControl } from "../../lib/job-monitor-control";
 import {
   formatExecutionModeLabel,
-  describeExecutionModeForBackend,
   getProviderAccessControl,
 } from "../../lib/execution-mode";
 import {
@@ -679,6 +679,7 @@ export type ComposerProps = {
   /** Settings -> General -> Reviews: whether a new review panel opens with Auto-fix on. */
   reviewAutoFixDefault?: boolean;
   /** Token Miser experiment availability gate. */
+  tokenMiserCaptureEnabled?: boolean;
   tokenMiserEnabled?: boolean;
   /** Inherited Token Miser state when a thread has no explicit override. */
   tokenMiserDefaultEnabled?: boolean;
@@ -11987,7 +11988,12 @@ function useComposerController(props: ComposerProps) {
   // surface that can escalate a thread honors it; `App` owns this
   // window's settings snapshot, so the composer hands the preference and
   // its write down rather than letting the gate read them again.
-  const { fullAccessRiskDialog, requestExecutionModeSelection } =
+  const {
+    confirmExecutionModeSelection,
+    fullAccessRiskDialog,
+    requestExecutionModeSelection,
+    requiresConfirmation: requiresExecutionModeConfirmation,
+  } =
     useExecutionModeSelection({
       applyExecutionMode: applyExecutionModeSelection,
       currentExecutionMode:
@@ -12151,9 +12157,11 @@ function useComposerController(props: ComposerProps) {
   function useComposerPresentation() {
     // Remote controls use the owner's feature gate/default, never the viewer's.
     // Older owners omit this metadata, so the override control stays hidden.
+    const miserBackend = props.launchpad?.backend ?? props.thread?.source;
     const tokenMiserEnabled = filesystemFederationTarget?.scope === "remote"
       ? backend?.tokenMiser?.enabled
-      : props.tokenMiserEnabled;
+      : (miserBackend === "codex" && props.tokenMiserEnabled)
+        || (props.tokenMiserCaptureEnabled && ["codex", "claude", "acp:antigravity"].includes(miserBackend ?? ""));
     const tokenMiserDefaultEnabled = filesystemFederationTarget?.scope === "remote"
       ? backend?.tokenMiser?.defaultEnabled
       : props.tokenMiserDefaultEnabled;
@@ -15942,10 +15950,9 @@ function useComposerController(props: ComposerProps) {
               && (providerAccessControl.kind === "acp"
                 ? Boolean(props.onSetAcpRuntimeOption)
                 : Boolean(props.onSetExecutionMode)))) ? (
-            <ComposerDropdown
-              ariaLabel={providerAccessControl.ariaLabel}
-              compact
-              tone={providerAccessControl.selectedOption?.tone}
+            <AccessPicker
+              backend={backend?.kind}
+              control={providerAccessControl}
               disabled={
                 launchpadSubmitting
                 || Boolean(props.updatingExecutionMode)
@@ -15954,27 +15961,15 @@ function useComposerController(props: ComposerProps) {
                     ? !props.onSetAcpRuntimeOption
                     : !props.onSetExecutionMode))
               }
-              value={providerAccessControl.value}
-              options={providerAccessControl.options.map((option) => ({
-                label: option.label,
-                value: option.value,
-                disabled: !option.available,
-                tooltip:
-                  option.kind === "execution"
-                    ? option.unavailableReason
-                      ?? (backend?.kind === "codex" || backend?.kind === "claude"
-                        ? describeExecutionModeForBackend(backend.kind, option.executionMode)
-                        : undefined)
-                    : undefined,
-              }))}
-              onChange={(value) => {
-                const option = providerAccessControl.options.find(
-                  (candidate) => candidate.value === value,
-                );
-                if (!option) return;
+              needsConfirmation={(option) =>
+                option.requiresFullAccessConfirmation
+                && requiresExecutionModeConfirmation(option.executionMode)}
+              scope={props.launchpad ? "new thread" : "this thread"}
+              onCommit={(option, confirmed) => {
                 if (option.requiresFullAccessConfirmation) {
                   pendingAccessOptionRef.current = option;
-                  requestExecutionModeSelection(option.executionMode);
+                  if (confirmed) confirmExecutionModeSelection(option.executionMode);
+                  else requestExecutionModeSelection(option.executionMode);
                   return;
                 }
                 if (props.launchpad) {
@@ -16450,9 +16445,8 @@ function useComposerController(props: ComposerProps) {
                 }
               : {})}
             {...(tokenMiserEnabled === true
-              && ((props.launchpad?.backend === "codex" && props.onUpdateLaunchpad)
-                || (props.thread?.source === "codex"
-                  && props.desktopApi?.setThreadTokenMiser))
+              && ((props.launchpad && props.onUpdateLaunchpad)
+                || (props.thread && props.desktopApi?.setThreadTokenMiser))
               ? {
                   tokenMiser: props.launchpad?.tokenMiserEnabled
                     ?? props.thread?.tokenMiserEnabled

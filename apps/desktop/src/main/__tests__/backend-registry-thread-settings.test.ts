@@ -5,6 +5,7 @@ import {
   waitForCondition,
   createOverlayStoreMock,
   MockBackendClient,
+  mockArchiveWorktreePresence,
   createAcpAgentStoreMock,
   createAcpSessionStoreMock,
   createKimiAgentRecord,
@@ -2959,6 +2960,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("uses submitted launchpad Fast mode instead of stale persisted launchpad settings", async () => {
+    await mockArchiveWorktreePresence(["/repo/app/.worktrees/thread-1/app"]);
     const overlayStore = createOverlayStoreMock();
     await overlayStore.upsertDirectoryLaunchpad({
       directoryKey: "directory:/repo/app",

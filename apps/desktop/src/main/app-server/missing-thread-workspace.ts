@@ -1,4 +1,3 @@
-import { stat } from "node:fs/promises";
 import path from "node:path";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
@@ -7,22 +6,12 @@ import {
   type ThreadHibernatedWorkspace,
   type ThreadMissingWorkspace,
 } from "@pwragent/shared/contracts/normalized-app-server";
+import { checkWorktreeDirectory } from "./worktree-directory-probe";
 
 export type MissingThreadWorkspaceProbe = {
   pathExists: (target: string) => Promise<boolean>;
   readBranch: (repositoryPath: string) => Promise<string | undefined>;
 };
-
-async function defaultPathExists(target: string): Promise<boolean> {
-  try {
-    await stat(target);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    // Anything but a confirmed absence is not evidence the folder is gone.
-    return true;
-  }
-}
 
 function namedBranch(value: string | undefined): string | undefined {
   const branch = value?.trim();
@@ -45,9 +34,8 @@ export function primaryThreadWorktree(
 }
 
 /**
- * Describes a thread whose recorded worktree folder no longer exists, or
- * returns undefined. One `stat` for the common case; the main checkout's
- * branch is read only once the folder is known to be gone.
+ * Describes a thread with no directory at its recorded worktree path.
+ * Read the main checkout only after confirming the worktree is absent.
  */
 export async function detectMissingThreadWorkspace(
   thread: Pick<
@@ -68,10 +56,14 @@ export async function detectMissingThreadWorkspace(
     candidate.state === "hibernated" && samePath(candidate.worktreePath, directory.worktreePath));
   // The next send restores it; the composer stays.
   if (hibernated && !probe.includeHibernated) return undefined;
-  const pathExists = probe.pathExists ?? defaultPathExists;
-  if (await pathExists(directory.worktreePath)) return undefined;
+  const pathExists = probe.pathExists;
+  const checkDirectory = pathExists
+    ? async (target: string) => await pathExists(target) ? "available" as const : "missing" as const
+    : checkWorktreeDirectory;
+  const status = await checkDirectory(directory.worktreePath);
+  if (status !== "missing" && status !== "not-directory") return undefined;
 
-  const repositoryAvailable = await pathExists(directory.path);
+  const repositoryAvailable = (await checkDirectory(directory.path)) === "available";
   const snapshot = [...(thread.worktreeSnapshots ?? [])]
     .filter((candidate) =>
       samePath(candidate.worktreePath, directory.worktreePath)

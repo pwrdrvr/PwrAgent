@@ -9,6 +9,7 @@ import { AcpSessionStore } from "../src/main/storage/acp-session-store";
 import { StateDb } from "../src/main/state/state-db";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { accessTrigger, chooseAccessStop } from "./fixtures/access-picker";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 
@@ -648,16 +649,15 @@ test("renders ACP-native runtime modes and keeps live mode chrome in sync", asyn
     await expect(
       app.window.getByRole("heading", { level: 2, name: "ACP Yolo Thread" }),
     ).toBeVisible();
-    // Access mode is no longer shown in the header (it lives in the composer,
-    // and ACP threads surface the Agent-mode control instead). This test's
-    // focus is that toggling the ACP runtime mode keeps the agent-mode chrome
-    // in sync without leaking a [MODE_UPDATE] marker.
-    const agentMode = app.window.getByLabel(/^Agent mode(?::|$)/);
+    // Access lives in the composer, where an ACP thread's own modes are the
+    // Access picker's stops. This test's focus is that toggling the ACP
+    // runtime mode keeps that control in sync without leaking a
+    // [MODE_UPDATE] marker.
+    const agentMode = accessTrigger(app.window);
     await expect(agentMode).toBeEnabled();
     await expect(agentMode).toHaveAttribute("data-value", "default");
 
-    await agentMode.click();
-    await app.window.getByRole("option", { name: "YOLO" }).click();
+    await chooseAccessStop(app.window, "yolo");
 
     await expect(agentMode).toHaveAttribute("data-value", "yolo");
     await app.window.waitForTimeout(300);
@@ -680,13 +680,12 @@ test("keeps ACP config-option mode controls in sync when the agent echoes stale 
   try {
     await app.window.getByRole("button", { name: /ACP Config Mode Thread/i }).click();
 
-    // Access mode is no longer shown in the header; the Agent-mode control is
-    // the ACP runtime mode surface under test here.
-    const agentMode = app.window.getByLabel(/^Agent mode(?::|$)/);
+    // The composer's Access picker is the ACP runtime mode surface under
+    // test here.
+    const agentMode = accessTrigger(app.window);
     await expect(agentMode).toHaveAttribute("data-value", "default");
 
-    await agentMode.click();
-    await app.window.getByRole("option", { name: "YOLO" }).click();
+    await chooseAccessStop(app.window, "yolo");
 
     await expect(agentMode).toHaveAttribute("data-value", "yolo");
     await app.window.waitForTimeout(300);
