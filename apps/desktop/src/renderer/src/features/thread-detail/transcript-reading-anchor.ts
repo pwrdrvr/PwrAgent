@@ -18,6 +18,7 @@ type ReadingAnchor = {
   element: Element;
   // Content coordinates let us distinguish layout movement from user scroll.
   offset: number;
+  scrollTop: number;
 };
 
 type ReadingBlockIndex = {
@@ -71,23 +72,48 @@ function readingBlock(
   count: number,
   getBlock: (index: number) => Element,
   line: number,
+  rows = false,
 ): Element {
   let low = 0;
   let high = count;
-  let previous: { element: Element; bottom: number } | undefined;
+  let previous: { element: Element; top: number; bottom: number } | undefined;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
     const element = getBlock(middle);
-    const { top, bottom } = element.getBoundingClientRect();
+    const box = rows ? element.firstElementChild ?? element : element;
+    const { top, bottom } = box.getBoundingClientRect();
     if (top <= line) {
       low = middle + 1;
-      previous = { element, bottom };
+      previous = { element, top, bottom };
     } else {
       high = middle;
     }
   }
-  if (previous && (previous.bottom >= line || low === count)) {
-    return previous.element;
+  if (previous) {
+    if (previous.bottom >= line) return previous.element;
+    if (rows) {
+      // The display: contents wrapper has no box. Its first and last bodies
+      // bound the row, including multipart messages with many continuations.
+      const { firstElementChild, lastElementChild } = previous.element;
+      if (lastElementChild && lastElementChild !== firstElementChild
+        && lastElementChild.getBoundingClientRect().bottom >= line) {
+        return previous.element;
+      }
+    } else {
+      const gallery = previous.element.parentElement;
+      if (gallery?.matches(IMAGE_LINES)) {
+        // Tiles share a top but can have different heights. Check only this
+        // physical line, whose width and tile spacing bound the work.
+        for (let index = low - 2; index >= 0; index -= 1) {
+          const tile = getBlock(index);
+          if (tile.parentElement !== gallery) break;
+          const { top, bottom } = tile.getBoundingClientRect();
+          if (top !== previous.top) break;
+          if (bottom >= line) return tile;
+        }
+      }
+    }
+    if (low === count) return previous.element;
   }
   return getBlock(low);
 }
@@ -154,11 +180,12 @@ export function createTranscriptReadingAnchor() {
       if (rowIds.length === 0) return;
       const { top } = scroller.getBoundingClientRect();
       const line = top + Math.min(32, scroller.clientHeight / 2);
-      const firstBox = readingBlock(rowIds.length, (index) => {
-        const row = scroller.ownerDocument.getElementById(rowIds[index])!;
-        return row.firstElementChild ?? row;
-      }, line);
-      const row = firstBox.closest(".transcript-list__item")!;
+      const row = readingBlock(
+        rowIds.length,
+        (index) => scroller.ownerDocument.getElementById(rowIds[index])!,
+        line,
+        true,
+      );
       if (observer) updateBlocks(observer.takeRecords());
       let blocks = rowBlocks.get(row);
       if (!blocks) {
@@ -168,10 +195,11 @@ export function createTranscriptReadingAnchor() {
       }
       const element = blocks.elements.length > 0
         ? readingBlock(blocks.elements.length, (index) => blocks.elements[index], line)
-        : firstBox;
+        : row.firstElementChild ?? row;
       const rect = element.getBoundingClientRect();
       if (rect.height > 0) {
-        anchor = { element, offset: rect.top - top + scroller.scrollTop };
+        const scrollTop = scroller.scrollTop;
+        anchor = { element, offset: rect.top - top + scrollTop, scrollTop };
       }
     },
 
@@ -186,7 +214,8 @@ export function createTranscriptReadingAnchor() {
         }
         anchor.element = replacement;
       }
-      if (scroller.scrollTop <= 0 && !prepending) {
+      const scrollTop = scroller.scrollTop;
+      if (scrollTop <= 0 && !prepending) {
         anchor = undefined;
         return false;
       }
@@ -195,11 +224,23 @@ export function createTranscriptReadingAnchor() {
         anchor = undefined;
         return false;
       }
-      const offset = rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      const offset = rect.top - scroller.getBoundingClientRect().top + scrollTop;
       const shift = offset - anchor.offset;
       if (Math.abs(shift) >= 1) {
-        scroller.scrollTop += shift;
+        let origin = scrollTop;
+        if (shift < 0 && scrollTop < anchor.scrollTop) {
+          // Layout may have clamped the scroll position before this callback.
+          // Keep genuine scroll movement when the reader lands inside the range.
+          const maxScrollTop = scroller.scrollHeight - scroller.clientHeight;
+          if (scrollTop >= maxScrollTop - 1 && anchor.scrollTop > maxScrollTop) {
+            origin = anchor.scrollTop;
+          }
+        }
+        scroller.scrollTop = origin + shift;
         anchor.offset = offset;
+        anchor.scrollTop = scroller.scrollTop;
+      } else {
+        anchor.scrollTop = scrollTop;
       }
       return true;
     },
