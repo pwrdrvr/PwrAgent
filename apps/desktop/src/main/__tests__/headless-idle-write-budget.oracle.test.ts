@@ -200,7 +200,7 @@ async function assertLifecycleBudget(root: string, signal: AbortSignal): Promise
     expect(idle!.tables.filter(table => table.rowsChanged > 0)).toMatchObject([{ table: "meta", rowsChanged: 2 }]);
     try {
       expectSqliteWriteBudget({ scenario: "headless-owner-lifecycle-idle-hour", writes,
-        note: "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. The To-do runtime initializes the review tracking boundary once per profile. Checkout ownership adds one Federation instance ID commit on the first boot. Wait for provider/navigation startup and join the archive sweep." });
+        note: "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. Disabled Token Miser leaves its legacy migration marker untouched at boot. The To-do runtime initializes the review tracking boundary once per profile. Checkout ownership adds one Federation instance ID commit on the first boot. Wait for provider/navigation startup and join the archive sweep." });
     } catch (error) {
       throw new Error(`${error instanceof Error ? error.message : String(error)}\n${JSON.stringify({ lifecycle: writes.tables, boot: boot!.tables, idle: idle!.tables, shutdown: shutdown!.tables }, null, 2)}`, { cause: error });
     }
