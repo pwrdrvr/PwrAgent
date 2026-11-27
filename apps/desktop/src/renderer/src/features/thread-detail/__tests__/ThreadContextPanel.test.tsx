@@ -78,8 +78,15 @@ function cardRowValue(
 // A monitor-scope pricing row for a sub-agent. `sourceItemId` is the join key
 // to a `ThreadSubAgentSummary.monitorId`.
 /** The value cell beside a limit's label on the AI providers tab. */
-function limitValue(label: string): HTMLElement {
-  return screen.getByText(label, { selector: "dt" }).nextElementSibling as HTMLElement;
+/** A limit's figure and reset, found by its scope subheader and window. */
+function limitValue(scope: string, window: string): HTMLElement {
+  const rows = [...document.querySelectorAll<HTMLElement>(".provider-limits__row")].filter((row) => {
+    let node = row.previousElementSibling;
+    while (node && !node.classList.contains("provider-limits__scope")) node = node.previousElementSibling;
+    return row.dataset.window === window && node?.textContent === scope;
+  });
+  expect(rows).toHaveLength(1);
+  return rows[0]!.querySelector<HTMLElement>(".provider-limits__stat")!;
 }
 
 function buildMonitorLine(
@@ -4503,10 +4510,10 @@ describe("ThreadContextPanel", () => {
   it("shows regular and Spark rate limits together on the AI provider info tab", () => {
     renderPanel({ activeTab: "providers", pinned: true });
 
-    expect(limitValue("5h limit")).toHaveTextContent(/^7% used/);
-    expect(limitValue("Weekly limit")).toHaveTextContent(/^12% used/);
-    expect(limitValue("Spark 5h limit")).toHaveTextContent(/^0% used/);
-    expect(limitValue("Spark Weekly limit")).toHaveTextContent(/^0% used/);
+    expect(limitValue("All models", "5h")).toHaveTextContent(/^7% used/);
+    expect(limitValue("All models", "Weekly")).toHaveTextContent(/^12% used/);
+    expect(limitValue("Spark", "5h")).toHaveTextContent(/^0% used/);
+    expect(limitValue("Spark", "Weekly")).toHaveTextContent(/^0% used/);
   });
 
   it("keeps an ordinary Codex thread unchanged when promotion fails", async () => {
@@ -4670,8 +4677,8 @@ describe("ThreadContextPanel", () => {
       ],
     });
 
-    expect(limitValue("Spark 5h limit")).toHaveTextContent(/^2% used/);
-    expect(limitValue("Spark Weekly limit")).toHaveTextContent(/^0% used/);
+    expect(limitValue("Spark", "5h")).toHaveTextContent(/^2% used/);
+    expect(limitValue("Spark", "Weekly")).toHaveTextContent(/^0% used/);
   });
 
   it("renders the Edits tab empty state when no edits accumulated", () => {
