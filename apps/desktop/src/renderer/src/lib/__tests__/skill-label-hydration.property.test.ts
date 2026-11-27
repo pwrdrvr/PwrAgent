@@ -17,6 +17,23 @@ function sequentialMarkdown(draft: string, skills: AppServerSkillSummary[]): str
   return output;
 }
 
+// Count the complete inputs given to each draft scan, including scans of inserted Markdown.
+function measureHydration(draft: string, skills: AppServerSkillSummary[]) {
+  const replace = vi.spyOn(String.prototype, "replace");
+  const matchAll = vi.spyOn(String.prototype, "matchAll");
+  try {
+    const output = hydrateSkillLabelsWithMarkdown(draft, skills);
+    let scanned = matchAll.mock.contexts.reduce<number>((sum, receiver) => sum + String(receiver).length, 0);
+    replace.mock.calls.forEach(([, replacement], i) => {
+      if (typeof replacement === "function") scanned += String(replace.mock.contexts[i]).length;
+    });
+    return { output, scanned };
+  } finally {
+    matchAll.mockRestore();
+    replace.mockRestore();
+  }
+}
+
 const name = fc.oneof(fc.string({ maxLength: 8 }), fc.constantFrom(
   "", "a", "a.b", "a:b", "a $b", "b", "b)", "[x]+", "😀", "$", "a\nb", "__proto__",
 ));
@@ -72,27 +89,42 @@ describe("outgoing skill Markdown", () => {
     expect(hydrateSkillLabelsWithMarkdown("$a $b", skills)).toBe("[$a [$b](/b)](/new)");
   });
 
+  it("can match across the closing parenthesis inserted by an earlier skill", () => {
+    const skills = [{ name: "a", path: "/dir $b" }, { name: "b).x", path: "/later" }];
+    expect(hydrateSkillLabelsWithMarkdown("$a.x", skills)).toBe("[$a](/dir [$b).x](/later)");
+  });
+
+  it("skips a label at the start or end of an inserted path", () => {
+    const skills = [{ name: "a", path: "$b $b! $b" }, { name: "b", path: "/b" }];
+    expect(hydrateSkillLabelsWithMarkdown("$a", skills)).toBe("[$a]($b [$b](/b)! $b)");
+  });
+
+  it("renders only links reached from a bare label in the draft", () => {
+    const skills = Array.from({ length: 40 }, (_, i) => ({ name: "a", path: `/${i} $a $a !` }));
+    // The explicit chip is already Markdown. Eagerly expanding every unused
+    // path would double the previous link at each duplicate catalog entry.
+    expect(hydrateSkillLabelsWithMarkdown("[$a](/0)", skills)).toBe("[$a](/0)");
+  });
+
+  it("reads one draft plus the inserted links for independent multi-word and nested labels", () => {
+    const skills = Array.from({ length: 32 }, (_, i) => ({
+      name: `run s${i}`,
+      path: i % 2 ? "/target" : `/dir $run s${i + 1} !`,
+    }));
+    const draft = skills.map(({ name }) => `$${name}`).join(" ");
+    const { output, scanned } = measureHydration(draft, skills);
+    const inserted = skills.reduce((sum, { name, path }) => sum + name.length + path.length + 5, 0);
+    expect(output).toBe(sequentialMarkdown(draft, skills));
+    expect(scanned).toBeLessThanOrEqual(draft.length + inserted);
+  });
+
   it("scans at most one draft for independent labels as draft length and skill count grow", () => {
     for (const count of [16, 32, 64]) {
       const skills = Array.from({ length: count }, (_, i) => ({ name: `s${i}`, path: `/s/${i}` }));
       const labels = skills.map(({ name }) => `$${name}`).join(" ");
       for (const length of [labels.length, 512, 1024, 2048]) {
         const draft = length === labels.length ? labels : labels + " ".padEnd(length - labels.length, "x");
-        const replace = vi.spyOn(String.prototype, "replace");
-        let scanned = 0;
-        let output: string;
-        try {
-          output = hydrateSkillLabelsWithMarkdown(draft, skills);
-          // Count the receivers of text rewrites. Escaping an individual
-          // regex literal uses a string replacement and never sees the draft.
-          replace.mock.calls.forEach(([, replacement], i) => {
-            if (typeof replacement === "function") {
-              scanned += String(replace.mock.contexts[i]).length;
-            }
-          });
-        } finally {
-          replace.mockRestore();
-        }
+        const { output, scanned } = measureHydration(draft, skills);
         expect(output).toBe(sequentialMarkdown(draft, skills));
         expect(scanned, `${count} skills, ${length} draft characters`).toBeLessThanOrEqual(length);
       }

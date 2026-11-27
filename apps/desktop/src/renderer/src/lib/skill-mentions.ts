@@ -1,6 +1,9 @@
 import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { scanSkillMentionLinks } from "@pwragent/shared/skill-mention-links";
 import { bareMentionedSkills } from "./bare-skill-mentions";
+import { buildSkillLabelToken } from "./skill-label-hydration";
+
+export { buildSkillLabelToken, buildSkillMentionMarkdown, hydrateSkillLabelsWithMarkdown } from "./skill-label-hydration";
 
 export type SkillMentionPart =
   | {
@@ -34,22 +37,6 @@ function escapeRegExp(value: string): string {
 export function skillLabelMatcher(names: readonly string[]): RegExp {
   // Capture the leading boundary separately so a decoration starts at the $.
   return new RegExp(`(^|\\s)(\\$(?:${names.map(escapeRegExp).join("|")}))${SKILL_TOKEN_BOUNDARY}`, "g");
-}
-
-export function buildSkillLabelToken(
-  skill: Pick<AppServerSkillSummary, "name">
-): string {
-  return `$${skill.name}`;
-}
-
-export function buildSkillMentionMarkdown(
-  skill: Pick<AppServerSkillSummary, "name" | "path">
-): string {
-  if (!skill.path) {
-    return buildSkillLabelToken(skill);
-  }
-
-  return `[$${skill.name}](${skill.path})`;
 }
 
 export function parseSkillMentionParts(text: string, work?: { chars: number }): SkillMentionPart[] {
@@ -188,49 +175,6 @@ export function insertSkillLabel(params: {
     nextDraft,
     nextSelection: before.length + mention.length + (needsTrailingSpace ? 1 : 0),
   };
-}
-
-export function hydrateSkillLabelsWithMarkdown(
-  text: string,
-  skills: AppServerSkillSummary[]
-): string {
-  if (skills.length === 0) {
-    return text;
-  }
-
-  let output = text;
-  const markdownByName = new Map<string, string>();
-  const flush = () => {
-    if (markdownByName.size === 0) {
-      return;
-    }
-    // Insertion order decides which alternative wins for e.g. $ce vs $ce:plan.
-    const pattern = skillLabelMatcher([...markdownByName.keys()]);
-    output = output.replace(pattern, (_, prefix: string, label: string) =>
-      prefix + markdownByName.get(label.slice(1))!
-    );
-    markdownByName.clear();
-  };
-
-  for (const skill of skills) {
-    if (!skill.path || markdownByName.has(skill.name)) {
-      continue;
-    }
-
-    // A multi-word name can span a different label or its inserted Markdown.
-    const spansWhitespace = /\s/.test(skill.name);
-    if (spansWhitespace) {
-      flush();
-    }
-    markdownByName.set(skill.name, buildSkillMentionMarkdown(skill));
-    // A later entry can match a fresh label inside this replacement.
-    if (spansWhitespace || /\s\$/.test(skill.path)) {
-      flush();
-    }
-  }
-
-  flush();
-  return output;
 }
 
 export function buildSkillTooltip(skill: AppServerSkillSummary): string {
