@@ -756,6 +756,12 @@ export type ThreadViewProps = {
   >;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
+  /**
+   * The selected thread's configuration (its detail read) has loaded. Until
+   * then the thread is only its sidebar row, which leaves out the
+   * environment and other Details-bound settings.
+   */
+  threadConfigurationReady?: boolean;
   workspaceActionsBlocked?: boolean;
   /** Opens Settings → Environments on a workspace, from the Environment chip. */
   onEditEnvironments?: (workspacePath: string) => void;
@@ -3347,6 +3353,7 @@ export function ThreadView(props: ThreadViewProps) {
               || launchpadMachineOffline !== undefined
             : props.composerDisabled
         }
+        threadConfigurationReady={composerLaunchpad ? undefined : props.threadConfigurationReady}
         unavailableReason={
           composerLaunchpad
             ? launchpadMachineOffline ?? launchpadBackend?.unavailableReason

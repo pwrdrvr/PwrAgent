@@ -522,6 +522,13 @@ export type ComposerProps = {
   /** Threads searchable from the inline `#` reference picker. */
   threads?: NavigationThreadSummary[];
   disabled?: boolean;
+  /**
+   * False while `thread` is only its sidebar row, before its configuration
+   * has loaded. The row leaves out the environment and the other settings
+   * the Details-bound controls show, so those controls wait for it rather
+   * than draw from partial data and change a moment later.
+   */
+  threadConfigurationReady?: boolean;
   autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
@@ -3902,13 +3909,7 @@ function useComposerController(props: ComposerProps) {
     } = useComposerScheduleMenu();
     const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
     // Which control tiers the row has folded into ⋮; see `useComposerRowFold`.
-    const composerRowFold = useComposerRowFold(
-      props.thread
-        ? `thread:${props.thread.source}:${props.thread.id}`
-        : props.launchpad
-          ? `launchpad:${props.launchpad.directoryKey}`
-          : undefined,
-    );
+    const composerRowFold = useComposerRowFold();
     // Folded controls whose popovers open from ⋮ anchor to its trigger.
     const threadOptionsTriggerRef = useRef<HTMLButtonElement>(null);
     const [prMenuOpenRequest, setPrMenuOpenRequest] = useState(0);
@@ -15984,6 +15985,7 @@ function useComposerController(props: ComposerProps) {
     control: ReactNode,
     live = false,
   ): ReactNode {
+    if (tier !== undefined && !composerTierShown(tier)) return null;
     const folded = tier !== undefined
       && isComposerTierFolded(tier, composerRowFold.foldedTierCount);
     return (
@@ -15999,7 +16001,17 @@ function useComposerController(props: ComposerProps) {
   }
 
   function composerTierFolded(tier: ComposerFoldTier): boolean {
-    return isComposerTierFolded(tier, composerRowFold.foldedTierCount);
+    return composerTierShown(tier)
+      && isComposerTierFolded(tier, composerRowFold.foldedTierCount);
+  }
+
+  /**
+   * The Details-bound controls and the environment ▶ show a thread's
+   * configuration, so they wait until it has loaded.
+   */
+  function composerTierShown(tier: ComposerFoldTier): boolean {
+    const configurationPending = Boolean(props.thread) && props.threadConfigurationReady === false;
+    return !configurationPending || (tier !== "details" && tier !== "run");
   }
 
   /** The `skillProfile` row of the control row, read by the row and by ⋮. */

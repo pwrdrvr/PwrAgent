@@ -288,6 +288,44 @@ describe("composer controls layout", () => {
     expect(setCodexThreadEnvironment).not.toHaveBeenCalled();
   });
 
+  it("draws the Details-bound controls and ▶ only once the thread's configuration has loaded", async () => {
+    installRowLayout(345);
+    const props = {
+      backends: [backendSummary()],
+      desktopApi: { runCodexEnvironmentAction: vi.fn(), setCodexThreadEnvironment: vi.fn() },
+      disabled: false,
+      onSetExecutionMode: async () => undefined,
+      skills: [],
+      thread: environmentThread,
+    };
+    // Opening a thread shows its sidebar row first. Whatever that row says
+    // about the environment, the row must not draw these controls from it
+    // and then refold them when the thread's configuration arrives.
+    const { container, rerender } = render(<Composer {...props} threadConfigurationReady={false} />);
+    await settleFold();
+    const setup = container.querySelector(".composer__setup") as HTMLElement;
+    expect(setup.querySelector("[data-composer-fold='details'], [data-composer-fold='run']")).toBeNull();
+    expect(setup.dataset.foldedTiers).toBe("0");
+    fireEvent.click(within(setup).getByRole("button", { name: "Thread options" }));
+    const pendingMenu = screen.getByRole("menu", { name: "Thread options" });
+    expect(within(pendingMenu).queryByRole("menuitemradio", { name: /Demo/ })).toBeNull();
+    fireEvent.keyDown(pendingMenu, { key: "Escape" });
+
+    rerender(<Composer {...props} threadConfigurationReady />);
+    // Folded before a frame could paint: only microtasks run here, as they
+    // do between a commit and the browser's next paint.
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+    const folded = setup.dataset.foldedTiers;
+    for (const slot of setup.querySelectorAll("[data-composer-fold='details']")) {
+      expect(slot).toHaveClass("is-folded");
+    }
+    // A frame later nothing has moved: the row drew its final layout once.
+    await settleFold();
+    expect(setup.dataset.foldedTiers).toBe(folded);
+  });
+
   it("keeps every control in the row when it fits", async () => {
     installRowLayout(2000);
     const { container } = render(
