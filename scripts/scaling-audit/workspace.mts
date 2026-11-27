@@ -10,15 +10,20 @@ for (const project of projects) {
       name: "live-session-retention-work",
       enforce: "pre",
       transform(code, id) {
-        const sites = [
+        const sites = process.env.AUDIT_KEYED_SESSIONS === "1" ? [
+          ["/lib/thread-session-cache.ts", "const previous = this.sessions.get(key);", "retentionVisits"],
+          ["/lib/thread-session-cache.ts", "for (const [key, session] of this.sessions) {", "retentionVisits"],
+          ["/lib/thread-session-cache.ts", "const previous = this.summary;", "indicatorVisits"],
+        ] : [
           ["/lib/useThreadSessionState.ts", "for (const entry of Object.entries(sessions)) {", "retentionVisits"],
           ["/lib/session-indicator-keys.ts", "const included = includes(sessions[key]!);", "indicatorVisits"],
         ];
         for (const [file, site, counter] of sites) {
           if (!id.endsWith(file)) continue;
           if (code.split(site).length !== 2) throw new Error("Inspect the live-thread counter site in " + file);
-          return code.replace(site, site + "\nif (globalThis.liveThreadWork) globalThis.liveThreadWork." + counter + "++;");
+          code = code.replace(site, site + "\nif (globalThis.liveThreadWork) globalThis.liveThreadWork." + counter + "++;");
         }
+        return code;
       },
     }];
   }

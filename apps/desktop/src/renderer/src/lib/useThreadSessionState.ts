@@ -19,7 +19,7 @@ import {
   type SafetyBufferingState,
 } from "./safety-buffering-session";
 import { applyThreadUsageDisplay, readThreadUsageDisplay, useThreadUsageDisplay } from "./useThreadUsageDisplay";
-import { useSessionIndicatorKeys } from "./session-indicator-keys";
+import { ThreadSessionCache } from "./thread-session-cache";
 import {
   anchorTurnUsageEntries,
   reconcileCompletedTurnUsageEntries,
@@ -29,7 +29,7 @@ import {
 } from "@pwragent/shared/thread-usage-display";
 import { finalTurnOutputText } from "@pwragent/shared/turn-output";
 import { readUuidV7Timestamp } from "@pwragent/shared/uuid-v7";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AppServerNotification,
   AppServerBackendKind,
@@ -115,7 +115,6 @@ import { applyCorrespondenceRevision, isCorrespondenceMessage } from "./transcri
 import { normalizeTranscriptText } from "./transcript-review-presentation";
 import { hasMatchingReplayReview, isReviewStartEntry, reviewEntriesMatch, reviewEntryLabels } from "./transcript-review-matching";
 
-const MAX_VIEW_ONLY_THREADS = 10;
 const EMPTY_EXPANDED_TRANSCRIPT_ACTIVITY_IDS: string[] = [];
 const EMPTY_EXPANDED_TRANSCRIPT_WORK_PHASE_GROUP_IDS: string[] = [];
 const OWN_UPDATE_IDLE_GRACE_MS = 1_500;
@@ -268,8 +267,6 @@ type ThinkingStateReason = {
   turnId?: string;
   turnStatus?: string;
 };
-
-type ThreadSessionState = Record<string, ThreadSessionEntry>;
 
 function createEmptyThreadSessionEntry(): ThreadSessionEntry {
   return {
@@ -3171,14 +3168,6 @@ function hasThinkingState(session: ThreadSessionEntry): boolean {
   return Boolean(session.pendingReviewSubmissions) || describeThinkingState(session).length > 0;
 }
 
-function hasPendingApprovalRequest(session: ThreadSessionEntry): boolean {
-  return Boolean(session.pendingRequest);
-}
-
-function hasPendingUserInput(session: ThreadSessionEntry): boolean {
-  return Boolean(session.pendingUserInput);
-}
-
 function hasPendingInteraction(session: ThreadSessionEntry): boolean {
   return Boolean(
     session.pendingMcpInteraction ||
@@ -5777,32 +5766,6 @@ function hasCompletedAssistantMessageForTurn(
   );
 }
 
-function retainSessionCache(
-  sessions: ThreadSessionState,
-  selectedThreadKey?: string
-): ThreadSessionState {
-  const interactedEntries: Array<[string, ThreadSessionEntry]> = [];
-  const viewOnlyEntries: Array<[string, ThreadSessionEntry]> = [];
-
-  for (const entry of Object.entries(sessions)) {
-    const [threadKey, session] = entry;
-    // Background lifecycle state is protected while it drives an indicator.
-    // When it settles, it competes for the same bounded slots as view-only sessions.
-    if (threadKey === selectedThreadKey || session.interacted || session.thinkingSinceAt !== undefined) {
-      interactedEntries.push(entry);
-    } else {
-      viewOnlyEntries.push(entry);
-    }
-  }
-
-  viewOnlyEntries.sort((left, right) => right[1].lastTouchedAt - left[1].lastTouchedAt);
-
-  return Object.fromEntries([
-    ...interactedEntries,
-    ...viewOnlyEntries.slice(0, MAX_VIEW_ONLY_THREADS),
-  ]);
-}
-
 function isApprovalRequestNotification(
   notification: { method: string; params: Record<string, unknown> }
 ): notification is AppServerPendingRequestNotification {
@@ -6121,7 +6084,6 @@ export function useThreadSessionState(params: {
   const previousRetainedRemoteKeysRef = useRef(new Set<string>());
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
-  const [sessions, setSessions] = useState<ThreadSessionState>({});
   // Tool item notifications can outlive turn/completed when a nested command
   // returns a running session. Keep this separate from transcript retention
   // so an observed thread can still show its live work in navigation.
@@ -6132,6 +6094,25 @@ export function useThreadSessionState(params: {
   // Keep owner baselines separate from optimistic/live state so an unchanged
   // recovery read cannot reuse a locally cleared approval. Share entry objects.
   const conditionalReadsRef = useRef(new Map<string, AppServerReadThreadResponse>());
+
+  const discardSessionData = useCallback((key: string) => {
+    if (key !== selectedThreadKeyRef.current) openedTranscriptsRef.current.delete(key);
+    liveLifecycleVersionsRef.current.delete(key);
+    liveContextWindowVersionsRef.current.delete(key);
+    liveAutoCompactionVersionsRef.current.delete(key);
+    liveTranscriptVersionsRef.current.delete(key);
+    liveItemVersionsRef.current.delete(key);
+    conditionalReadsRef.current.delete(key);
+    streamRecoveryVersionsRef.current.delete(key);
+    delete loadedHistoryIndexesRef.current[key];
+    delete retainedLiveEntriesRef.current[key];
+    delete reconciledLaunchpadMessageIdsRef.current[key];
+  }, []);
+  const [sessionCache] = useState(() => new ThreadSessionCache<ThreadSessionEntry>(discardSessionData));
+  const selectedSession = useSyncExternalStore(sessionCache.subscribe, () => sessionCache.get(threadKey));
+  const {
+    thinkingThreadKeys, approvalRequestThreadKeys, inputRequestThreadKeys, staleThinkingRechecks,
+  } = useSyncExternalStore(sessionCache.subscribe, sessionCache.getSummary);
 
   selectedThreadKeyRef.current = threadKey;
   if (launchpadMessageCandidateRef.current?.threadKey !== threadKey) {
@@ -6149,55 +6130,6 @@ export function useThreadSessionState(params: {
   }
 
   useEffect(() => {
-    const retainedThreadKeys = new Set(Object.keys(sessions));
-    for (const key of openedTranscriptsRef.current) {
-      if (key !== selectedThreadKeyRef.current && !retainedThreadKeys.has(key)) {
-        openedTranscriptsRef.current.delete(key);
-      }
-    }
-    for (const key of liveLifecycleVersionsRef.current.keys()) {
-      if (!retainedThreadKeys.has(key)) liveLifecycleVersionsRef.current.delete(key);
-    }
-    for (const key of liveContextWindowVersionsRef.current.keys()) {
-      if (!retainedThreadKeys.has(key)) liveContextWindowVersionsRef.current.delete(key);
-    }
-    for (const key of liveAutoCompactionVersionsRef.current.keys()) {
-      if (!retainedThreadKeys.has(key)) liveAutoCompactionVersionsRef.current.delete(key);
-    }
-    for (const key of liveTranscriptVersionsRef.current.keys()) {
-      if (!retainedThreadKeys.has(key)) liveTranscriptVersionsRef.current.delete(key);
-    }
-    for (const key of liveItemVersionsRef.current.keys()) {
-      if (!retainedThreadKeys.has(key)) liveItemVersionsRef.current.delete(key);
-    }
-    for (const key of conditionalReadsRef.current.keys()) {
-      if (!retainedThreadKeys.has(key)) conditionalReadsRef.current.delete(key);
-    }
-    for (const key of streamRecoveryVersionsRef.current.keys()) {
-      if (!retainedThreadKeys.has(key)) streamRecoveryVersionsRef.current.delete(key);
-    }
-    for (const indexedThreadKey of Object.keys(loadedHistoryIndexesRef.current)) {
-      if (!retainedThreadKeys.has(indexedThreadKey)) {
-        delete loadedHistoryIndexesRef.current[indexedThreadKey];
-      }
-    }
-    for (const retainedThreadKey of Object.keys(retainedLiveEntriesRef.current)) {
-      if (!retainedThreadKeys.has(retainedThreadKey)) {
-        delete retainedLiveEntriesRef.current[retainedThreadKey];
-      }
-    }
-    for (
-      const reconciledThreadKey of Object.keys(
-        reconciledLaunchpadMessageIdsRef.current,
-      )
-    ) {
-      if (!retainedThreadKeys.has(reconciledThreadKey)) {
-        delete reconciledLaunchpadMessageIdsRef.current[reconciledThreadKey];
-      }
-    }
-  }, [sessions]);
-
-  useEffect(() => {
     const keys = new Set<string>(JSON.parse(retainedRemoteKeysJson));
     const evicted = [...previousRetainedRemoteKeysRef.current].filter((key) => !keys.has(key));
     previousRetainedRemoteKeysRef.current = keys;
@@ -6208,42 +6140,34 @@ export function useThreadSessionState(params: {
       hydrationsRef.current.set(key, transitionThreadHydration(hydrationsRef.current.get(key), { type: "invalidate" }));
       conditionalReadsRef.current.delete(key);
     }
-    setSessions((current) => Object.fromEntries(Object.entries(current)
-      .filter(([key]) => !evicted.includes(key) || key === selectedThreadKeyRef.current)));
-  }, [retainedRemoteKeysJson]);
+    sessionCache.remove(evicted, selectedThreadKeyRef.current);
+  }, [retainedRemoteKeysJson, sessionCache]);
 
   const updateSession = useCallback(
     (
       targetThreadKey: string,
-      updater: (current: ThreadSessionEntry) => ThreadSessionEntry
+      updater: (current: ThreadSessionEntry) => ThreadSessionEntry,
     ): void => {
-      setSessions((current) => {
-        const previous = current[targetThreadKey] ?? createEmptyThreadSessionEntry();
-        const previousThinking = hasThinkingState(previous);
-        let next = updater(previous);
-        const nextThinking = hasThinkingState(next);
-        if (next !== previous && previousThinking !== nextThinking) {
-          next = {
-            ...next,
-            thinkingSinceAt: nextThinking
-              ? previous.thinkingSinceAt ?? Date.now()
-              : undefined,
-          };
-        }
-        if (next === previous) {
-          return current;
-        }
-
-        return retainSessionCache(
-          {
-            ...current,
-            [targetThreadKey]: next,
-          },
-          selectedThreadKeyRef.current
-        );
-      });
+      const retained = sessionCache.get(targetThreadKey);
+      const previous = retained ?? createEmptyThreadSessionEntry();
+      let next = updater(previous);
+      if (next === previous) {
+        // A no-op notification for an uncached thread may have recorded a live version.
+        if (!retained) discardSessionData(targetThreadKey);
+        return;
+      }
+      const nextThinking = hasThinkingState(next);
+      if ((sessionCache.getSummary().thinkingThreadKeys[targetThreadKey] === true) !== nextThinking) {
+        next = {
+          ...next,
+          thinkingSinceAt: nextThinking
+            ? previous.thinkingSinceAt ?? Date.now()
+            : undefined,
+        };
+      }
+      sessionCache.set(targetThreadKey, next, selectedThreadKeyRef.current, nextThinking);
     },
-    []
+    [discardSessionData, sessionCache],
   );
 
   const logStaleThinkingState = useCallback(
@@ -6825,7 +6749,7 @@ export function useThreadSessionState(params: {
       remoteDetailInterestRef.current = remoteDetailInterest;
       if (remoteDetailInterest
         && !continuousRemoteInterestsRef.current.has(remoteDetailInterest)
-        && (sessions[remoteDetailInterest] || hydrationsRef.current.get(remoteDetailInterest)?.phase === "loading")) {
+        && (selectedSession || hydrationsRef.current.get(remoteDetailInterest)?.phase === "loading")) {
         // Another window can preserve the process-wide subscription while
         // this window misses events. Renewed local interest must catch up
         // independently of owner acknowledgements or navigation timestamps.
@@ -7017,7 +6941,7 @@ export function useThreadSessionState(params: {
       });
     }
 
-    const session = sessions[threadKey];
+    const session = selectedSession;
     const streamRecoveryVersion = streamRecoveryVersionsRef.current.get(threadKey) ?? 0;
     const hydrationVersion = `${getThreadHydrationVersion(thread)}:${streamRecoveryVersion}`;
     if (hydrationsRef.current.get(threadKey)?.phase === "loading") {
@@ -7134,7 +7058,7 @@ export function useThreadSessionState(params: {
     launchpadMessageCandidate,
     loadLatest,
     retainedRemoteKeysJson,
-    sessions,
+    selectedSession,
     suspended,
     thread,
     threadKey,
@@ -7146,7 +7070,7 @@ export function useThreadSessionState(params: {
       return;
     }
     if (thread.federation?.capabilities?.includes("event_subscriptions")) return;
-    const recheckAt = sessions[threadKey]?.staleThinkingRecheckAt;
+    const recheckAt = selectedSession?.staleThinkingRecheckAt;
     if (typeof recheckAt !== "number") {
       return;
     }
@@ -7162,19 +7086,15 @@ export function useThreadSessionState(params: {
     return () => {
       clearTimeout(timer);
     };
-  }, [loadLatest, sessions, thread, threadKey, updateSession]);
+  }, [loadLatest, selectedSession?.staleThinkingRecheckAt, thread, threadKey, updateSession]);
 
   useEffect(() => {
-    const timers = Object.entries(sessions).flatMap(
-      ([sessionThreadKey, session]) => {
-        if (
-          sessionThreadKey === threadKey
-          || typeof session.staleThinkingRecheckAt !== "number"
-        ) {
+    const timers = Object.entries(staleThinkingRechecks).flatMap(
+      ([sessionThreadKey, recheckAt]) => {
+        if (sessionThreadKey === threadKey) {
           return [];
         }
 
-        const recheckAt = session.staleThinkingRecheckAt;
         return [
           setTimeout(() => {
             updateSession(sessionThreadKey, (current) => {
@@ -7221,7 +7141,7 @@ export function useThreadSessionState(params: {
         clearTimeout(timer);
       }
     };
-  }, [sessions, threadKey, updateSession]);
+  }, [staleThinkingRechecks, threadKey, updateSession]);
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent) {
@@ -7383,9 +7303,8 @@ export function useThreadSessionState(params: {
         }
       };
 
-      // Synchronously allocate the live version before queueing updateSession so
-      // deferred React state updaters (including turn/completed promotions) never
-      // lazily bump liveTranscriptVersionsRef past a subsequent read capture.
+      // Allocate the live version at delivery so reads and terminal promotions
+      // agree on which events the captured owner response can cover.
       if (retainTranscript && (isTranscriptUpdate || event.notification.method === "turn/completed")) {
         eventLiveTranscriptVersion =
           (liveTranscriptVersionsRef.current.get(targetThreadKey) ?? 0) + 1;
@@ -8957,7 +8876,6 @@ export function useThreadSessionState(params: {
     updateSession,
   ]);
 
-  const selectedSession = threadKey ? sessions[threadKey] : undefined;
   const selectedPagination =
     selectedSession?.loadedHistory?.pagination
     ?? selectedSession?.response?.replay.pagination;
@@ -9849,7 +9767,6 @@ export function useThreadSessionState(params: {
     onAuthoritativeList: pruneLiveToolItems,
   });
 
-  const thinkingThreadKeys = useSessionIndicatorKeys(sessions, hasThinkingState);
   // A command that outlives its turn (a dev server, a watcher) is not the
   // agent thinking. Counting it as Thinking kept an Attention scanner lit
   // and held the turn's review promotion until the command exited, which
@@ -9870,8 +9787,6 @@ export function useThreadSessionState(params: {
       ),
     [agentCommandThreadKeyList]
   );
-  const approvalRequestThreadKeys = useSessionIndicatorKeys(sessions, hasPendingApprovalRequest);
-  const inputRequestThreadKeys = useSessionIndicatorKeys(sessions, hasPendingUserInput);
   // A waiting request outranks the hold; the hold outranks plain Thinking.
   const safetyReviewStatus = selectedSession
     ? safetyReviewStatusText(selectedSession)
