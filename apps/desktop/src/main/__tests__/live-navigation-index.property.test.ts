@@ -10,7 +10,7 @@ import { expandNavigationRemoteOwner, navigationQueryPageBudgetBytes } from "@pw
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import { NavigationQueryStore } from "@pwragent/owner-core/navigation-query-store";
-import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
+import { createNavigationQuerySnapshot, projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import { LiveNavigationIndex } from "../app-server/live-navigation-index";
 import { NavigationWindowPageDeltas } from "../app-server/navigation-window-page-deltas";
 import { expandWindowNavigationPage, NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
@@ -118,19 +118,24 @@ async function compareSequence(ops: readonly { kind: string; id: string; on: boo
       }
       if (kind === "pin" || kind === "parent" || kind === "seen") f.persist(id);
       const index = await f.live.read();
-      const reference = { ...f.full(), observedAt: index.observedAt };
+      const reference = createNavigationQuerySnapshot({ ...f.full(), observedAt: index.observedAt });
       for (const query of [
         { kind: "lens", lens: "inbox", roots: "pinned" }, { kind: "directory-index" },
       ] as const) {
         const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query };
         expect(projectNavigationQuery({ index, request })).toEqual(projectNavigationQuery({ index: reference, request }));
       }
+      const comparePage = async (request: NavigationQueryRequest) => {
+        const actual = await actualStore.readPage({ incremental: true, scopeKey: "test", request, loadIndex: async () => index });
+        const expected = await expectedStore.readPage({ incremental: true, scopeKey: "test", request, loadIndex: async () => reference });
+        expect([actual.entries, actual.countsRevision, actual.counts, Boolean(actual.nextCursor)])
+          .toEqual([expected.entries, expected.countsRevision, expected.counts, Boolean(expected.nextCursor)]);
+      };
+      await comparePage({ protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox", roots: "unpinned" }, pageSize: 1 });
       for (const promote of [true, false]) {
         const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "attention" },
           attentionView: { id: String(promote), promoteOnTurnEnd: promote }, pageSize: 2 };
-        const actual = await actualStore.readPage({ scopeKey: "test", request, loadIndex: async () => index });
-        const expected = await expectedStore.readPage({ scopeKey: "test", request, loadIndex: async () => reference });
-        expect([actual.entries, actual.counts, Boolean(actual.nextCursor)]).toEqual([expected.entries, expected.counts, Boolean(expected.nextCursor)]);
+        await comparePage(request);
       }
     }
   } finally { f.close(); }
@@ -192,6 +197,43 @@ it("applies the acknowledged Claude mode and rewind watermark over older cached 
     f.live.event({ backend: "claude", notification: { method: "navigation/thread/seen", params: { threadId: "a" } } });
     expect((await f.live.read()).threads.find((r) => r.id === "a")?.updatedAt).toBe(7);
     expect(f.lists).toEqual(["all"]);
+  } finally { f.close(); }
+});
+
+it("rehashes only the edited Inbox row while an older cursor still sees its original contents", async () => {
+  const f = fixture();
+  const store = new NavigationQueryStore();
+  const request = { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" }, pageSize: 1 } as const;
+  const read = (cursor?: string) => store.readPage({ scopeKey: "window", incremental: true,
+    request: { ...request, cursor }, loadIndex: () => f.live.read() });
+  try {
+    const first = await read();
+    const old = await read(first.nextCursor);
+    const id = old.entries[0]!.row.id;
+    f.overlays.set(id, { inbox: { inInbox: true } });
+    f.emit({ method: "navigation/thread/seen", params: { threadId: id } });
+    await f.live.read();
+    const measured = vi.spyOn(JSON, "stringify");
+    let page: NavigationQueryPage;
+    let rowHashes: number;
+    let entrySerializations: number;
+    try {
+      page = await read();
+      entrySerializations = measured.mock.calls.filter(([value]) => value?.row?.rowRevision && value.orderKey !== undefined).length;
+      rowHashes = measured.mock.calls.filter(([value]) => value?.ref && value.ordinaryChildCount !== undefined && !value.rowRevision).length;
+    } finally { measured.mockRestore(); }
+    expect(rowHashes).toBe(1);
+    // Hash the changed off-page leaf and size the single visible wire entry.
+    expect(entrySerializations).toBe(2);
+    expect(page.countsRevision).not.toBe(first.countsRevision);
+    expect((await read(first.nextCursor)).entries).toEqual(old.entries);
+    expect((await read(page.nextCursor)).entries[0]?.row.inbox.inInbox).toBe(true);
+    page.entries[0]!.row.title = "viewer edit";
+    expect((await read()).entries[0]?.row.title).toBe(first.entries[0]!.row.title);
+    const ack = (revision: string) => store.readPage({ incremental: true, scopeKey: "window",
+      request: { ...request, completeBaselineRevision: revision }, loadIndex: () => f.live.read() });
+    expect((await ack(first.countsRevision)).unchanged).toBeUndefined();
+    expect((await ack(page.countsRevision)).unchanged).toBe(true);
   } finally { f.close(); }
 });
 

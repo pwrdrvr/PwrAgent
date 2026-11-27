@@ -1036,7 +1036,7 @@ it("keeps both owner cursors when only Git proofs exceed the shared generation b
   expect(size()).toBe(16 * 1024 * 1024);
   const index = createNavigationQuerySnapshot(raw);
   const store = new NavigationQueryStore();
-  const read = (scopeKey: string, cursor?: string) => store.readPage({ request: { ...query, cursor }, scopeKey, loadIndex: async () => index });
+  const read = (scopeKey: string, cursor?: string) => store.readPage({ incremental: true, request: { ...query, cursor }, scopeKey, loadIndex: async () => index });
   const first = await read("first");
   const second = await read("second");
   for (const [scope, page] of [["first", first], ["second", second]] as const) {
@@ -1094,7 +1094,7 @@ it.each([
   const canonical = JSON.stringify(overflow ? expected : { ...expected, viewerRowOwners: [] });
   expect(Buffer.byteLength(canonical)).toBeLessThanOrEqual(limit);
   const store = new NavigationQueryStore();
-  const read = (cursor?: string) => store.readPage({ request: { ...query, cursor }, scopeKey: "viewer", loadIndex: async () => index,
+  const read = (cursor?: string) => store.readPage({ incremental: deferredPr, request: { ...query, cursor }, scopeKey: "viewer", loadIndex: async () => index,
     ...(deferredPr ? { pullRequests: { read: async () => [[]], verify: async () => [] } } : {}) });
   const first = await read();
   expect(first.entries).toHaveLength(1);

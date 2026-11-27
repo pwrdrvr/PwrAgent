@@ -2113,6 +2113,7 @@ class DesktopAppServerService {
     }
     const sidebar = isSidebarDisplayQuery(request);
     return await getDesktopNavigationQueryStore().readPage({
+      incremental: sidebar,
       pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal: rpcOptions?.signal, backgroundValidation: sidebar, backend: request.backend }),
       loadIndex: async () => {
         rpcOptions?.signal.throwIfAborted();

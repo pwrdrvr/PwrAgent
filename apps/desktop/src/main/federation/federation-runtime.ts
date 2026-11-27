@@ -7870,6 +7870,7 @@ function localBackendOperations(
           request: { ...request, deadlineAt: rpcOptions?.deadlineAt === undefined ? request.deadlineAt
             : Math.min(request.deadlineAt ?? rpcOptions.deadlineAt, rpcOptions.deadlineAt) },
           load: ({ signal, deadlineAt }) => getDesktopNavigationQueryStore().readPage({
+            incremental: sidebar,
             pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal, backgroundValidation: sidebar, backend: request.backend }),
             loadIndex: async () => {
               await awaitStartupProviderCoverage({ query: request.query, readReason: request.readReason, deadlineAt, signal });

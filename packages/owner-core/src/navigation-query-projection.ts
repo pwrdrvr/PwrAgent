@@ -120,6 +120,7 @@ export type NavigationDirectoryActivity = Pick<NavigationDirectorySummary, "late
 type SnapshotShell = Omit<NavigationQueryIndex, "threads" | "directories" | "stacks" | "inputRequestThreadKeys" | "observedAt">;
 type CertifiedSnapshot = {
   token: symbol;
+  lensOrder: symbol;
   shell: SnapshotShell;
   sharedThreads: readonly NavigationThreadSummary[];
   rowOwners?: readonly string[];
@@ -259,7 +260,8 @@ export function createNavigationQuerySnapshot(index: NavigationQueryIndex, onWor
   const prefix = owned?.sharedThreads;
   const shared = prefix && prefix.length <= copy.threads.length
     && prefix.every((row, position) => row === copy.threads[position]) ? prefix : copy.threads;
-  snapshots.set(copy, { shell, sharedThreads: shared, rowOwners, token: prepared?.token ?? Symbol("navigation-index"), acceleration, bytes, onWork });
+  const token = prepared?.token ?? Symbol("navigation-index");
+  snapshots.set(copy, { shell, sharedThreads: shared, rowOwners, token, lensOrder: prepared?.lensOrder ?? token, acceleration, bytes, onWork });
   return copy;
 }
 
@@ -316,11 +318,13 @@ export function replaceNavigationQueryRows(index: NavigationQueryIndex, replacem
   previous.acceleration.projection = undefined;
   const projection = prepared;
   let ownersChanged = false;
+  let sameLensOrder = true;
   const counts = { ...(previous.counts ?? countsForThreads(index.threads)) };
   for (const position of replacements.keys()) {
     const old = index.threads[position]!;
     const row = detached[position]!;
     ownersChanged ||= row.parentThreadInstanceId !== old.parentThreadInstanceId;
+    sameLensOrder &&= preservesBrowsingLensOrder(old, row);
     const candidateKey = JSON.stringify([null, row.id]);
     const candidates = projection.parentCandidates.get(candidateKey)!;
     const nextCandidates = candidates.map((candidate) => candidate === old ? row : candidate);
@@ -343,7 +347,10 @@ export function replaceNavigationQueryRows(index: NavigationQueryIndex, replacem
         }
       }
       counts.total += sign;
-      if (isActive(member)) counts.active += sign;
+      if (isActive(member)) {
+        counts.active += sign;
+        if (member.federation?.ref.target.scope === "remote") counts.activeRemote = (counts.activeRemote ?? 0) + sign;
+      }
       if (member.inbox.inInbox) {
         counts.unread += sign;
         if (!isActive(member)) counts.review += sign;
@@ -351,11 +358,11 @@ export function replaceNavigationQueryRows(index: NavigationQueryIndex, replacem
       if (member.pinnedRank) counts.pinned = (counts.pinned ?? 0) + sign;
     }
   }
-  if (!counts.pinned) delete counts.pinned;
   const next = Object.freeze({ ...index, threads: detached, directories: detachedDirectories, observedAt,
     inputRequestThreadKeys: sameKeys ? index.inputRequestThreadKeys : detachSnapshotKeys(inputRequestThreadKeys) });
-  snapshots.set(next, { ...previous, token: Symbol("navigation-index"), sharedThreads: detached,
-    acceleration: { projection }, counts, rowOwners: ownersChanged ? snapshotRowOwners(next) : previous.rowOwners });
+  const token = Symbol("navigation-index");
+  snapshots.set(next, { ...previous, token, lensOrder: sameLensOrder ? previous.lensOrder : token, sharedThreads: detached,
+    acceleration: { projection }, counts: compactThreadCounts(counts), rowOwners: ownersChanged ? snapshotRowOwners(next) : previous.rowOwners });
   return next;
 }
 
@@ -584,6 +591,11 @@ function isActive(thread: NavigationThreadSummary): boolean {
   return isNavigationThreadRunning(thread);
 }
 
+/** Use the same optional fields and JSON field order for fresh and patched counts. */
+function compactThreadCounts({ total, active, activeRemote, pinned, unread, review }: NavigationCounts): NavigationCounts {
+  return { total, active, ...(activeRemote ? { activeRemote } : {}), ...(pinned ? { pinned } : {}), unread, review };
+}
+
 function countsForThreads(
   threads: readonly NavigationThreadSummary[],
   options: { backends?: boolean } = {},
@@ -621,12 +633,7 @@ function countsForThreads(
     ? [...new Set([...distinct.values()].map((thread) => threadProviderIdentity(thread.source, thread.model)))].sort()
     : undefined;
   return {
-    total: distinct.size,
-    active,
-    ...(activeRemote ? { activeRemote } : {}),
-    ...(pinned ? { pinned } : {}),
-    unread,
-    review,
+    ...compactThreadCounts({ total: distinct.size, active, activeRemote, pinned, unread, review }),
     ...(backends ? { backends } : {}),
     ...(providers ? { providers } : {}),
   };
@@ -1213,6 +1220,17 @@ function rowOrderKey(index: number): string {
   return index.toString(36).padStart(10, "0");
 }
 
+/** Inputs to Inbox/Recents filtering, root placement and ordering in selectQueryThreads.
+ * Attention has its own per-view membership and rank and always selects afresh. */
+function preservesBrowsingLensOrder(old: NavigationThreadSummary, row: NavigationThreadSummary): boolean {
+  return old.id === row.id && old.source === row.source && old.title === row.title
+    && old.createdAt === row.createdAt && old.updatedAt === row.updatedAt && old.pinnedRank === row.pinnedRank
+    && old.parentThreadId === row.parentThreadId && old.parentThreadBackend === row.parentThreadBackend
+    && old.parentThreadInstanceId === row.parentThreadInstanceId && isOrdinaryThread(old) === isOrdinaryThread(row)
+    && isDeepStrictEqual(old.federation, row.federation) && isDeepStrictEqual(old.handoffOrigin, row.handoffOrigin)
+    && isDeepStrictEqual(old.linkedDirectories, row.linkedDirectories);
+}
+
 function compareUpdated(left: NavigationThreadSummary, right: NavigationThreadSummary): number {
   return (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
     || threadKey(left).localeCompare(threadKey(right));
@@ -1737,6 +1755,15 @@ function collectionDirectoryGitProof(params: {
   return Object.freeze({ version: 1, directories: Object.freeze(directories) });
 }
 
+/** Per-generation provenance for private sidebar materializations. Weak keys
+ * keep a retained cursor from holding its source inventory alive. */
+export type NavigationEntrySources = {
+  geometry?: WeakRef<object>;
+  lensOrder?: symbol;
+  orderedEntries?: NavigationQueryEntry[];
+  entries: WeakMap<NavigationThreadSummary, NavigationQueryEntry>;
+};
+
 export function projectNavigationQuery(params: {
   index: NavigationQueryIndex;
   request: NavigationQueryRequest;
@@ -1744,6 +1771,8 @@ export function projectNavigationQuery(params: {
   onIndexWork?: NavigationProjectionWork;
   deferPullRequests?: boolean;
   includeDirectoryGitProof?: boolean;
+  entrySources?: NavigationEntrySources;
+  previousSources?: NavigationEntrySources;
 }): NavigationQueryMaterialization & { directoryGitProof?: NavigationDirectoryGitProof } {
   const query = params.request.query;
   const inventory = params.request.inventory ?? "owner";
@@ -1763,7 +1792,15 @@ export function projectNavigationQuery(params: {
     : snapshot?.acceleration.projection ?? buildChildCounts(params.index.threads, prepared, onWork);
   const lensRootOf = query.kind === "lens" && query.roots
     ? lensRootResolver({ threadsByIdentity, parentCandidates }) : undefined;
-  const selectedThreads = selectQueryThreads({
+  // Stable row patches transfer the projection maps only while directory geometry
+  // is unchanged. A new inventory or an uncertified input must establish fresh provenance.
+  const entrySources = snapshot?.acceleration.projection && params.entrySources;
+  if (entrySources) entrySources.geometry = new WeakRef(prepared);
+  const previousSources = entrySources && params.previousSources?.geometry?.deref() === prepared ? params.previousSources : undefined;
+  const previousOrder = query.kind === "lens" && (query.lens === "inbox" || query.lens === "recents")
+    && previousSources && previousSources.lensOrder === snapshot?.lensOrder && threadsByIdentity.size === params.index.threads.length
+    ? previousSources.orderedEntries : undefined;
+  const selectedThreads = previousOrder ? previousOrder.map(({ row }) => threadsByIdentity.get(identityKey(row.ref))!) : selectQueryThreads({
     query,
     index: params.index,
     threadsByIdentity,
@@ -1859,31 +1896,40 @@ export function projectNavigationQuery(params: {
       : directoryParentOf ? directoryParentOf(thread)
       : query.kind === "exact" && query.includeAncestry
       ? availableParentIdentity(thread, parentCandidates, params.index.coverage) : parent;
-    return {
-      row: projectNavigationRow({
-        childCount: childCountByParent.get(threadKey(thread)) ?? 0,
-        ...(params.request.inventory === "viewer" && navigationIdentity(thread).ownerInstanceId
-          ? { viewerChildCount: viewerChildCountByParent.get(threadKey(thread)) ?? 0 } : {}),
-        needsInput: threadNeedsInput(thread, params.index),
-        repositories,
-        thread: parent?.ownerInstanceId && !thread.parentThreadInstanceId
-          ? { ...thread, parentThreadInstanceId: parent.ownerInstanceId } : thread,
-        homeProject: homeProjects?.get(thread),
-        checkoutProject: query.kind === "star-map"
-          ? starMapProjectForThread(thread, prepared)
-          : checkoutProjectForThread(thread, checkoutProjects),
+    const identity = threadKey(thread);
+    const childCount = childCountByParent.get(identity) ?? 0;
+    const viewerChildCount = params.request.inventory === "viewer" && navigationIdentity(thread).ownerInstanceId
+      ? viewerChildCountByParent.get(identity) ?? 0 : undefined;
+    const needsInput = threadNeedsInput(thread, params.index);
+    const parentOwner = thread.parentThreadInstanceId ?? parent?.ownerInstanceId;
+    const homeProject = homeProjects?.get(thread);
+    const old = previousSources?.entries.get(thread);
+    const row = old && old.row.ordinaryChildCount === childCount && old.row.viewerChildCount === viewerChildCount
+      && old.row.needsInput === needsInput && old.row.parentThreadInstanceId === parentOwner
+      && isDeepStrictEqual(old.row.homeProject, homeProject) ? old.row : projectNavigationRow({
+        childCount, viewerChildCount, needsInput, repositories, homeProject,
+        thread: parentOwner && !thread.parentThreadInstanceId ? { ...thread, parentThreadInstanceId: parentOwner } : thread,
+        checkoutProject: query.kind === "star-map" ? starMapProjectForThread(thread, prepared) : checkoutProjectForThread(thread, checkoutProjects),
         omitPullRequests: membershipOnly || defer,
-      }),
-      orderKey: rowOrderKey(index),
-      ...(siblingOrders.has(threadKey(thread)) ? { siblingOrder: siblingOrders.get(threadKey(thread))! } : {}),
-      ...(params.attentionOrder?.members.has(navigationAttentionIdentity(thread))
-        ? { attentionRank: params.attentionOrder.members.get(navigationAttentionIdentity(thread))!.rank }
-        : {}),
-      placement: placementParent
-        ? { kind: "child", parent: placementParent }
-        : { kind: "root" },
-    };
+      });
+    const orderKey = rowOrderKey(index);
+    const siblingOrder = siblingOrders.get(identity);
+    const attentionRank = params.attentionOrder?.members.get(navigationAttentionIdentity(thread))?.rank;
+    const placement: NavigationQueryEntry["placement"] = placementParent ? { kind: "child", parent: placementParent } : { kind: "root" };
+    const entry = old && old.row === row && old.orderKey === orderKey && old.siblingOrder === siblingOrder
+      && old.attentionRank === attentionRank && isDeepStrictEqual(old.placement, placement) ? old : {
+        row, orderKey,
+        ...(siblingOrder !== undefined ? { siblingOrder } : {}),
+        ...(attentionRank !== undefined ? { attentionRank } : {}),
+        placement,
+      };
+    entrySources?.entries.set(thread, entry);
+    return entry;
   });
+  if (entrySources && query.kind === "lens" && (query.lens === "inbox" || query.lens === "recents")) {
+    entrySources.lensOrder = snapshot!.lensOrder;
+    entrySources.orderedEntries = entries;
+  }
   const includeDirectories = query.kind === "directory-index"
     || query.kind === "star-map-geometry";
   const countsThreads = query.kind === "directory"
