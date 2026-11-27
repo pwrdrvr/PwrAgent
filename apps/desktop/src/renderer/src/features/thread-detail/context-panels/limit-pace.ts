@@ -19,8 +19,8 @@ export type LimitRowPace = {
 
 /**
  * The pace a limit row shows, if its recorded history still describes the
- * reading on screen. Every surface that draws a limit's pace, and the gauge
- * peek's 5-hour latch, reads it here so they cannot disagree.
+ * reading on screen. The panel's limit rows and the Pricing card's rows both
+ * read it here so they cannot disagree.
  */
 export function limitRowPace(
   limit: BackendRateLimitSummary,

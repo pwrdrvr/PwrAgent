@@ -3,7 +3,7 @@ import { describeRateLimitRow } from "../../../lib/backend-status-format";
 import type { RateLimitScopeGroup, ScopedRateLimit } from "../../../lib/rate-limit-scopes";
 import type { LimitAccount } from "../../federation-activity/usage-limits";
 import { limitPaceOutcome } from "../../federation-activity/usage-activity-presentation";
-import { limitRowPace, type LimitRowPace } from "./limit-pace";
+import { limitRowPace } from "./limit-pace";
 
 /**
  * A provider's limits as their own block under its facts: a scope subheader
@@ -32,23 +32,17 @@ export function ProviderLimitScopes({ scopes, children }: {
  * One limit, labelled by its window alone: the figure and reset on the row
  * line, the meter under them, and the pace line, rate first.
  */
-export function ProviderLimitRow({ entry, now, account, terse = false, pace: givenPace, warn = false }: {
+export function ProviderLimitRow({ entry, now, account }: {
   entry: ScopedRateLimit;
   now: number;
   account?: LimitAccount;
-  /** The peek's shorter pace line, without the rate. */
-  terse?: boolean;
-  /** The pace, when the caller already read it. */
-  pace?: LimitRowPace | null;
-  /** Warn even when the pace does not run out before the reset. */
-  warn?: boolean;
 }) {
   const { limit } = entry;
   const row = describeRateLimitRow(limit, now);
-  const pace = givenPace === undefined ? limitRowPace(limit, row.usedPercent, account, now) : givenPace ?? undefined;
+  const pace = limitRowPace(limit, row.usedPercent, account, now);
   const used = row.usedPercent === undefined ? undefined : Math.min(100, Math.max(0, row.usedPercent));
   const projected = pace?.projectedPercent;
-  const short = warn || (pace?.described.short ?? false);
+  const short = pace?.described.short ?? false;
   // A window name the fields and the name could not shorten ("Cloud session
   // credits") takes the row line, so the window column stays narrow.
   const window = entry.window.label;
@@ -75,8 +69,9 @@ export function ProviderLimitRow({ entry, now, account, terse = false, pace: giv
       ) : null}
       {pace && pace.sentence ? (
         <span className={`usage-pace provider-limits__pace${short ? " is-short" : ""}`}>
-          {terse ? null : <><span>{pace.described.rate}</span>{" "}</>}
-          {limitPaceOutcome(pace.described.projection, pace.series.latest, now, terse)}
+          <span>{pace.described.rate}</span>
+          {" "}
+          {limitPaceOutcome(pace.described.projection, pace.series.latest, now)}
         </span>
       ) : null}
     </div>

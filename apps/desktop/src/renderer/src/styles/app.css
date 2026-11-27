@@ -44620,8 +44620,7 @@ div.composer-error-row__toggle {
    an optional scope subheader, then one row per window. The window sits in
    the label column; the figure, meter and pace share the value column, so
    every meter starts at the same edge and runs to the panel's. In the
-   provider list the window column is the facts' label column; on its own it
-   is wide enough for "Weekly" beside its 10px gutter. */
+   provider list the window column is the facts' label column. */
 .provider-limits {
   display: grid;
   grid-template-columns: 56px minmax(0, 1fr);

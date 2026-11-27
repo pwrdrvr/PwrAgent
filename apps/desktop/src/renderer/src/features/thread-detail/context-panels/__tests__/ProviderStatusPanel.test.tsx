@@ -309,6 +309,12 @@ describe("ProviderStatusPanel", () => {
     expect(valueFor("Plan")).toHaveTextContent(/^Free · 100 credits$/);
   });
 
+  it("keeps a credit balance off a Plan line that names no plan", () => {
+    render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { type: "apiKey", requiresOpenaiAuth: true } }]} />);
+    expect(valueFor("Plan")).toHaveTextContent(/^API billing$/);
+    expect(valueFor("Credits")).toHaveTextContent(/^100 credits$/);
+  });
+
   it("identifies a signed-out account without implying a Free plan", () => {
     render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { requiresOpenaiAuth: true }, rateLimits: undefined }]} />);
     expect(valueFor("Account")).toHaveTextContent(/^Not signed in$/);

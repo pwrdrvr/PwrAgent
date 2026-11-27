@@ -66,17 +66,15 @@ export function describeLimitPace(series: LimitSeries, now: number, compact = fa
 
 /**
  * Where the pace lands, without the "On pace" lead-in: the line it ends
- * starts with the rate. `terse` is the peek's still shorter form.
+ * starts with the rate.
  */
-export function limitPaceOutcome(projection: LimitProjection, latest: LimitPoint, now: number, terse = false): string {
+export function limitPaceOutcome(projection: LimitProjection, latest: LimitPoint, now: number): string {
   if (projection.kind === "atReset") {
-    const percent = Math.round(projection.percent);
-    return terse ? `≈ ${percent}% at reset` : `on pace for about ${percent}% at the reset`;
+    return `on pace for about ${Math.round(projection.percent)}% at the reset`;
   }
   const when = usageWhen(projection.at, now, true);
   if (latest.resetAt !== undefined) {
-    const early = usageDuration(latest.resetAt - projection.at);
-    return terse ? `hits 100% ${when}, ${early} early` : `hits 100% ${when}, ${early} before the reset`;
+    return `hits 100% ${when}, ${usageDuration(latest.resetAt - projection.at)} before the reset`;
   }
   return `100% in about ${usageDuration(projection.at - latest.at)} (${when})`;
 }

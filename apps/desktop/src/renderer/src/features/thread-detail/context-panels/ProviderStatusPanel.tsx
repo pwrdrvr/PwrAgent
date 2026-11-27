@@ -120,9 +120,12 @@ function ProviderFacts({ backend, now, account }: {
 }) {
   const visible = selectVisibleRateLimits(backend);
   const credits = visible.find(isCreditsRateLimit);
-  const scopes = panelLimitScopes(visible);
+  const scopes = panelLimitScopes(visible, credits);
   const version = backendVersion(backend);
   const showsPlan = backend.kind === "codex" || Boolean(backend.account?.planType);
+  // A balance follows a named plan ("Pro · 100 credits"), never a status such
+  // as "Not signed in", which would read as the credits' state.
+  const creditsOnPlan = credits && backend.account?.planType ? credits : undefined;
   return (
     <>
       <dl className="backend-status-list__metadata-grid">
@@ -152,10 +155,11 @@ function ProviderFacts({ backend, now, account }: {
             <dt>Plan</dt>
             <dd>
               {providerPlanText(backend)}
-              {credits ? <> · <CreditsText credits={credits} now={now} /></> : null}
+              {creditsOnPlan ? <> · <CreditsText credits={creditsOnPlan} now={now} /></> : null}
             </dd>
           </div>
-        ) : credits ? (
+        ) : null}
+        {credits && !creditsOnPlan ? (
           <div>
             <dt>Credits</dt>
             <dd><CreditsText credits={credits} now={now} /></dd>
@@ -182,13 +186,16 @@ function ProviderFacts({ backend, now, account }: {
  * The panel shows every limit a provider reports. The shared grouping leaves
  * out a limit with no window ("Included credits", "Extra usage", an
  * individual cap); those join the provider's unscoped allowance, named for
- * themselves. Credits are a balance and ride on the Plan line instead.
+ * themselves. The credit balance the facts show is left out here.
  */
-function panelLimitScopes(limits: readonly BackendRateLimitSummary[]): RateLimitScopeGroup[] {
+function panelLimitScopes(
+  limits: readonly BackendRateLimitSummary[],
+  credits: BackendRateLimitSummary | undefined,
+): RateLimitScopeGroup[] {
   const scopes = groupRateLimitsByScope(limits);
   const grouped = new Set(scopes.flatMap((scope) => scope.windows.map((entry) => entry.limit)));
   const rest = limits
-    .filter((limit) => !grouped.has(limit) && !isCreditsRateLimit(limit))
+    .filter((limit) => !grouped.has(limit) && limit !== credits)
     .map((limit) => ({ limit, window: { label: limitNameWithoutLimit(limit.name) } }));
   if (!rest.length) return scopes;
   const unscoped = scopes.find((scope) => scope.scope === null || scope.scope === UNSCOPED_RATE_LIMIT_LABEL);
