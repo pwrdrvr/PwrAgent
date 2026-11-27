@@ -340,6 +340,7 @@ import {
   createComposerThreadToken,
   filterSkillAutocompleteCandidates,
   getComposerSkillTokensSignature,
+  resolveComposerDirectoryTokens,
   resolveThreadSummaryReference,
   serializeDraftWithSkillTokens,
 } from "./composer-mention-tokens";
@@ -6405,32 +6406,7 @@ function useComposerController(props: ComposerProps) {
       ]),
     ].filter((path): path is string => Boolean(path));
     const excluded = new Set(excludePaths.map(normalizeDirectoryReferencePath));
-    const seenPaths = new Set<string>();
-    const fromTokens: NavigationDirectorySummary[] = [];
-    for (const token of tokens ?? []) {
-      // Only directory-kind tokens are attachable directories. File-kind
-      // tokens are excluded here — a file chip's containing repo still
-      // links through `listReferencedDirectories` below.
-      if (token.kind !== "directory" || !token.path) {
-        continue;
-      }
-      const path = normalizeDirectoryReferencePath(token.path);
-      if (!path || seenPaths.has(path) || excluded.has(path)) {
-        continue;
-      }
-      seenPaths.add(path);
-      const tracked = (props.directories ?? []).find(
-        (directory) => directory.path && normalizeDirectoryReferencePath(directory.path) === path,
-      );
-      fromTokens.push(
-        tracked ?? {
-          key: `directory-reference:${path}`,
-          kind: "directory",
-          label: token.name,
-          path: token.path,
-        },
-      );
-    }
+    const fromTokens = resolveComposerDirectoryTokens(tokens, props.directories ?? [], excluded);
     // Mention queries and the loaded navigation page can contain different
     // directories. Resolve against the authoritative chip targets as well so
     // a tracked ancestor cannot replace a project absent from that page.

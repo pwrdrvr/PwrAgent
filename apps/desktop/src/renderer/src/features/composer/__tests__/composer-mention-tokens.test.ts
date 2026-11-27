@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   applySkillOriginVisibility,
+  createComposerDirectoryToken,
   createComposerSkillToken,
+  resolveComposerDirectoryTokens,
 } from "../composer-mention-tokens";
 
 const releasePath = (project: string) =>
@@ -87,4 +89,47 @@ describe("applySkillOriginVisibility", () => {
     ];
     expect(applySkillOriginVisibility(tokens, [release("Harbor", 1)])).toBe(tokens);
   });
+});
+
+describe("resolveComposerDirectoryTokens", () => {
+  it("keeps the first token and first loaded row for each non-excluded path", () => {
+    const first = { key: "first", kind: "workspace" as const, label: "repo", path: "C:/work/repo" };
+    const duplicate = { ...first, key: "second", path: "C:\\work\\repo" };
+    const tokens = ["/outside/", first.path, "/outside", duplicate.path, "/linked"].map((path, i) =>
+      createComposerDirectoryToken({ label: `chip-${i}`, path }, i));
+
+    const rows = resolveComposerDirectoryTokens(tokens, [first, duplicate], new Set(["/linked"]));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual({
+      key: "directory-reference:/outside", kind: "directory", label: "chip-0", path: "/outside/",
+    });
+    expect(rows[1]).toBe(first);
+  });
+
+  it.each([[8, 16], [16, 8], [16, 16]])(
+    "visits each of %i loaded directory paths at most once for %i tokens",
+    (directoryCount, tokenCount) => {
+      let reads = 0;
+      const rows = Array.from({ length: directoryCount }, (_, i) => ({
+        key: `row-${i}`,
+        kind: "directory" as const,
+        label: `repo-${i}`,
+        get path() {
+          reads += 1;
+          return `/work/repo-${i}`;
+        },
+      }));
+      const tokens = Array.from({ length: tokenCount }, (_, i) =>
+        createComposerDirectoryToken({ label: `repo-${i}`, path: `/work/repo-${i}` }, i)).reverse();
+
+      const resolved = resolveComposerDirectoryTokens(tokens, rows, new Set());
+      expect(reads).toBeGreaterThan(0);
+      expect(reads).toBeLessThanOrEqual(directoryCount);
+      expect(resolved.map((row) => row.key)).toEqual(tokens.map((token) =>
+        rows[token.index]?.key ?? `directory-reference:${token.path}`));
+      for (const [i, token] of tokens.entries()) {
+        if (rows[token.index]) expect(resolved[i]).toBe(rows[token.index]);
+      }
+    },
+  );
 });
