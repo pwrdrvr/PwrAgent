@@ -109,7 +109,7 @@ async function openRelay(path: string, executable: string, signal: AbortSignal):
       clearTimeout(timer);
       signal.removeEventListener("abort", abort);
       child.removeListener("error", failed);
-      child.removeListener("exit", exited);
+      child.removeListener("close", closed);
       child.stdout.removeListener("readable", ready);
     };
     const failed = (error: Error): void => {
@@ -118,8 +118,13 @@ async function openRelay(path: string, executable: string, signal: AbortSignal):
       child.stdin.destroy(); child.stdout.destroy();
       reject(error);
     };
-    const exited = (): void => failed(new Error(detail.trim() || "Cannot verify the MCP IPC peer. Build/install the native MCP IPC helper and check endpoint permissions."));
+    const closed = (): void => failed(new Error(detail.trim() || "Cannot verify the MCP IPC peer. Build/install the native MCP IPC helper and check endpoint permissions."));
     const ready = (): void => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        child.stdout.removeListener("readable", ready);
+        child.stdout.resume();
+        return;
+      }
       const marker: Buffer | null = child.stdout.read(1);
       if (!marker) return;
       if (marker[0] !== 1) { failed(new Error("Invalid MCP IPC helper readiness marker.")); return; }
@@ -129,7 +134,8 @@ async function openRelay(path: string, executable: string, signal: AbortSignal):
     };
     child.stderr.on("data", (bytes: Buffer) => { detail = (detail + bytes.toString()).slice(0, 1024); });
     child.once("error", failed);
-    child.once("exit", exited);
+    // The process can exit before Node delivers its final stderr bytes.
+    child.once("close", closed);
     child.stdout.on("readable", ready);
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) abort();
