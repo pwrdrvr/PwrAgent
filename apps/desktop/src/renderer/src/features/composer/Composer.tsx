@@ -245,6 +245,7 @@ import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
+import type { ComposerConfigurationPreview } from "../../lib/useComposerConfigurationPreview";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import { LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
@@ -523,13 +524,9 @@ export type ComposerProps = {
   /** Threads searchable from the inline `#` reference picker. */
   threads?: NavigationThreadSummary[];
   disabled?: boolean;
-  /**
-   * False while `thread` is only its sidebar row, before its configuration
-   * has loaded. The row leaves out the environment and the other settings
-   * the Details-bound controls show, so those controls wait for it rather
-   * than draw from partial data and change a moment later.
-   */
+  /** A preview supplies labels for the disabled controls until the owner confirms this selection. */
   threadConfigurationReady?: boolean;
+  threadConfigurationPreview?: ComposerConfigurationPreview;
   autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
@@ -3508,6 +3505,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 });
 
 function useComposerController(props: ComposerProps) {
+  const configurationReadOnly = Boolean(props.thread) && props.threadConfigurationReady === false;
+  const preview = configurationReadOnly ? props.threadConfigurationPreview : undefined;
+  const controlRuntime = props.thread?.codexEnvironmentRuntime ?? preview?.codexEnvironmentRuntime;
+  const controlSkillProfile = props.thread?.codexSkillProfile ?? preview?.codexSkillProfile;
   const [agentPresetScope, setAgentPresetScope] = useState<string>();
   const [jobMonitorCreationError, setJobMonitorCreationError] = useState<{ scopeKey?: string; message: string }>();
   // These unconditional local hooks keep the original controller lifetime
@@ -11892,6 +11893,7 @@ function useComposerController(props: ComposerProps) {
     chosenAction: (typeof threadCodexEnvironmentActions)[number] | undefined = selectedThreadCodexAction,
   ): Promise<void> => {
     if (
+      configurationReadOnly ||
       !props.thread ||
       !props.desktopApi?.runCodexEnvironmentAction ||
       !chosenAction
@@ -11937,6 +11939,7 @@ function useComposerController(props: ComposerProps) {
     actionId?: string,
   ): Promise<void> => {
     if (
+      configurationReadOnly ||
       !props.thread ||
       !props.desktopApi?.setCodexThreadEnvironment
     ) {
@@ -12739,25 +12742,25 @@ function useComposerController(props: ComposerProps) {
       (environment) => environment.id === props.launchpad?.codexEnvironmentId,
     );
     const threadCodexEnvironmentOptions =
-      props.thread?.codexEnvironmentOptions ?? [];
+      props.thread?.codexEnvironmentOptions ?? preview?.codexEnvironmentOptions ?? [];
     const selectedThreadCodexEnvironmentOption = threadCodexEnvironmentOptions.find(
       (environment) =>
-        environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
+        environment.id === controlRuntime?.environmentId,
     );
     const runtimeThreadCodexEnvironmentActions =
-      props.thread?.codexEnvironmentRuntime?.actions ?? [];
+      controlRuntime?.actions ?? [];
     const threadCodexEnvironmentActions =
       runtimeThreadCodexEnvironmentActions.length > 0
         ? runtimeThreadCodexEnvironmentActions
         : selectedThreadCodexEnvironmentOption?.actions ?? [];
     const selectedThreadCodexEnvironmentForAction =
       selectedThreadCodexEnvironmentOption ??
-      (props.thread?.codexEnvironmentRuntime?.environmentId
+      (controlRuntime?.environmentId
         ? {
-            id: props.thread.codexEnvironmentRuntime.environmentId,
-            name: props.thread.codexEnvironmentRuntime.environmentName
-              ?? props.thread.codexEnvironmentRuntime.environmentId,
-            sourcePath: props.thread.codexEnvironmentRuntime.sourcePath ?? "",
+            id: controlRuntime.environmentId,
+            name: controlRuntime.environmentName
+              ?? controlRuntime.environmentId,
+            sourcePath: controlRuntime.sourcePath ?? "",
             actions: threadCodexEnvironmentActions,
           }
         : undefined);
@@ -12773,13 +12776,13 @@ function useComposerController(props: ComposerProps) {
     const selectedThreadCodexActionId = resolveSelectedCodexEnvironmentActionId({
       environment: selectedThreadCodexEnvironmentForAction,
       actionId:
-        props.thread?.codexEnvironmentRuntime?.environmentId
-          ? props.thread.codexEnvironmentRuntime.selectedActionIdByEnvironmentId?.[
-              props.thread.codexEnvironmentRuntime.environmentId
+        controlRuntime?.environmentId
+          ? controlRuntime.selectedActionIdByEnvironmentId?.[
+              controlRuntime.environmentId
             ]
           : undefined,
       actionIdByEnvironmentId:
-        props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId,
+        controlRuntime?.selectedActionIdByEnvironmentId,
     });
     const selectedThreadCodexAction =
       threadCodexEnvironmentActions.find(
@@ -12831,11 +12834,11 @@ function useComposerController(props: ComposerProps) {
     const threadEnvironmentValue = currentThreadEnvSelecting
       ? currentThreadEnvSelecting.environmentId ?? ""
       : runningThreadEnvSetup?.environmentId
-        ?? props.thread?.codexEnvironmentRuntime?.environmentId
+        ?? controlRuntime?.environmentId
         ?? "";
     const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
     const showPrAutoDispatchToggle = Boolean(
-      props.thread && getPrimaryWorkspaceRepository(props.thread),
+      props.thread && (getPrimaryWorkspaceRepository(props.thread) || preview?.primaryGitRepository),
     );
     const hasAttachedPullRequest = props.thread
       ? hasPrimaryWorkspacePullRequest(props.thread)
@@ -15971,7 +15974,9 @@ function useComposerController(props: ComposerProps) {
         data-composer-fold={tier}
         inert={folded && !live}
       >
-        {control}
+        {configurationReadOnly && (tier === "details" || tier === "run") ? (
+          <fieldset className="composer__pending-controls" disabled>{control}</fieldset>
+        ) : control}
       </span>
     );
   }
@@ -15981,12 +15986,9 @@ function useComposerController(props: ComposerProps) {
       && isComposerTierFolded(tier, composerRowFold.foldedTierCount);
   }
 
-  /**
-   * The Details-bound controls and the environment ▶ show a thread's
-   * configuration, so they wait until it has loaded.
-   */
+  /** A cold selection has no configuration to display. A warm selection can show its preview. */
   function composerTierShown(tier: ComposerFoldTier): boolean {
-    const configurationPending = Boolean(props.thread) && props.threadConfigurationReady === false;
+    const configurationPending = configurationReadOnly && !preview;
     return !configurationPending || (tier !== "details" && tier !== "run");
   }
 
@@ -15996,7 +15998,7 @@ function useComposerController(props: ComposerProps) {
       profiles: props.codexSkillProfiles,
       selected: launchpadSkillProfile,
       selectionId: props.launchpad?.codexSkillProfileId,
-      snapshot: threadSkillProfile,
+      snapshot: controlSkillProfile,
       disabled: launchpadSubmitting || composerDisabled,
       onChange: props.launchpad
         ? (id: string | null) => handleLaunchpadPatch({ codexSkillProfileId: id })
@@ -16037,6 +16039,8 @@ function useComposerController(props: ComposerProps) {
         {text}
       </button>
     );
+    const configurationAction = (key: string, text: string, onSelect: () => void, disabled = false) =>
+      action(key, text, onSelect, configurationReadOnly || disabled);
     const choices = (
       key: string,
       title: string,
@@ -16050,7 +16054,7 @@ function useComposerController(props: ComposerProps) {
         <button
           aria-checked={option.value === value}
           className="composer-dropdown__option"
-          disabled={disabled || option.disabled}
+          disabled={configurationReadOnly || disabled || option.disabled}
           key={`${key}:${option.value}`}
           role="menuitemradio"
           type="button"
@@ -16071,7 +16075,7 @@ function useComposerController(props: ComposerProps) {
       if (props.thread && props.onPickAndAttachDirectoryToThread) {
         // The row's control explains in a tooltip why a remote thread can't
         // add one; a menu row has no tooltip, so it says so itself.
-        actions.push(action("add-directory", filesystemFederationTarget
+        actions.push(configurationAction("add-directory", filesystemFederationTarget
           ? "Add directory… (local instance only)"
           : "Add directory…", () => {
           props.onClearPickDirectoryError?.();
@@ -16081,21 +16085,21 @@ function useComposerController(props: ComposerProps) {
       if (!props.launchpad && workspaceLabel && threadWorkspace) {
         const workspace: ReactNode[] = [label(`Workspace · ${workspaceLabel}`)];
         if (threadWorkspace.mode === "worktree") {
-          workspace.push(action("handoff-worktree", "Handoff to New Worktree",
+          workspace.push(configurationAction("handoff-worktree", "Handoff to New Worktree",
             () => openHandoffDialog("worktree-to-worktree"), !canHandoffThreadWorkspace));
         }
-        workspace.push(action(
+        workspace.push(configurationAction(
           "handoff",
           threadWorkspace.mode === "worktree" ? "Handoff to Local" : "Handoff to New Worktree",
           () => openHandoffDialog(threadWorkspace.mode === "worktree" ? "worktree-to-local" : "local-to-worktree"),
           !canHandoffThreadWorkspace,
         ));
-        workspace.push(action("move-project", "Move to Project",
+        workspace.push(configurationAction("move-project", "Move to Project",
           () => openHandoffDialog("to-project"), !canMoveThreadProject));
         groups.push(workspace);
       }
       if (props.thread && showPrAutoDispatchToggle) {
-        actions.push(action("pr-automation", "Pull request automation…",
+        actions.push(configurationAction("pr-automation", "Pull request automation…",
           () => setPrMenuOpenRequest((current) => current + 1)));
       }
       if ((props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length) {
@@ -16111,7 +16115,7 @@ function useComposerController(props: ComposerProps) {
           launchpadSubmitting,
         ));
       }
-      if (threadSkillProfile || props.launchpad?.backend === "codex") {
+      if (controlSkillProfile || props.launchpad?.backend === "codex") {
         const skillProfile = composerSkillProfileProps();
         if (skillProfile.snapshot) {
           const { label: snapshotLabel } = describeCodexSkillProfileSnapshot(skillProfile.snapshot, skillProfile.profiles);
@@ -16128,7 +16132,7 @@ function useComposerController(props: ComposerProps) {
               skillProfile.disabled,
             );
             if (skillProfile.onEdit) {
-              skillGroup.push(action("skill-profile-edit", "Edit skill profiles…", skillProfile.onEdit));
+              skillGroup.push(configurationAction("skill-profile-edit", "Edit skill profiles…", skillProfile.onEdit));
             }
             groups.push(skillGroup);
           }
@@ -16183,11 +16187,11 @@ function useComposerController(props: ComposerProps) {
           !props.desktopApi?.setCodexThreadEnvironment,
         ));
       }
-      if (props.thread?.codexEnvironmentRuntime && threadCodexEnvironmentActions.length > 0) {
+      if (props.thread && controlRuntime && threadCodexEnvironmentActions.length > 0) {
         // Choosing a command sets what the row's ▶ runs; each command's own
         // ▶ runs it now and leaves that choice alone.
         const thread = props.thread;
-        const runUnavailable = threadEnvironmentBusy || !props.desktopApi?.runCodexEnvironmentAction;
+        const runUnavailable = configurationReadOnly || threadEnvironmentBusy || !props.desktopApi?.runCodexEnvironmentAction;
         commandGroup = [
           label("Command"),
           ...threadCodexEnvironmentActions.map((environmentAction) => {
@@ -16202,7 +16206,7 @@ function useComposerController(props: ComposerProps) {
                 <button
                   aria-checked={selected}
                   className="composer-dropdown__option"
-                  disabled={threadEnvironmentBusy || !props.desktopApi?.runCodexEnvironmentAction}
+                  disabled={runUnavailable}
                   role="menuitemradio"
                   type="button"
                   onClick={() => {
@@ -16243,21 +16247,21 @@ function useComposerController(props: ComposerProps) {
         ];
       }
       if (workspaceOpenPath && editorApplication) {
-        actions.push(action("editor", `Open in ${editorApplication.name}`,
+        actions.push(configurationAction("editor", `Open in ${editorApplication.name}`,
           () => void openWorkspaceApplication(editorApplication)));
       }
       if (workspaceOpenPath && terminalApplication) {
-        actions.push(action("terminal-app", `Open in ${terminalApplication.name}`,
+        actions.push(configurationAction("terminal-app", `Open in ${terminalApplication.name}`,
           () => void openWorkspaceApplication(terminalApplication)));
       }
       if (localPresetLaunchpadForRow()?.agent) {
         const presetLaunchpad = localPresetLaunchpadForRow()!;
-        actions.push(action("agent-preset", `Agent · ${presetLaunchpad.agent!.name}…`,
+        actions.push(configurationAction("agent-preset", `Agent · ${presetLaunchpad.agent!.name}…`,
           () => setAgentPresetScope(presetLaunchpad.directoryKey), launchpadSubmitting));
       }
     }
-    if (composerTierFolded("run") && props.thread?.codexEnvironmentRuntime && !commandGroup) {
-      actions.push(action(
+    if (composerTierFolded("run") && controlRuntime && !commandGroup) {
+      actions.push(configurationAction(
         "run",
         selectedThreadCodexAction ? `Run ${selectedThreadCodexAction.name}` : "Run command",
         () => void runThreadCodexEnvironmentAction(),
@@ -16666,7 +16670,7 @@ function useComposerController(props: ComposerProps) {
             </div>
           )) : null}
 
-          {threadSkillProfile || props.launchpad?.backend === "codex"
+          {controlSkillProfile || props.launchpad?.backend === "codex"
             ? renderFoldSlot("details", <CodexSkillProfileControl {...skillProfile} />)
             : null}
 
@@ -16929,7 +16933,7 @@ function useComposerController(props: ComposerProps) {
     const hasApplicationActions = Boolean(
       launchpadCodexEnvironmentOptions.length > 0
       || threadCodexEnvironmentOptions.length > 0
-      || props.thread?.codexEnvironmentRuntime
+      || controlRuntime
       || (workspaceOpenPath && (editorApplication || terminalApplication)),
     );
     return (
@@ -17042,7 +17046,7 @@ function useComposerController(props: ComposerProps) {
               />
             )) : null}
 
-            {props.thread?.codexEnvironmentRuntime ? renderFoldSlot("details", (
+            {controlRuntime ? renderFoldSlot("details", (
               // The command the ▶ beside the moon runs. Choosing one here
               // only selects it.
               <ComposerDropdown
@@ -17071,7 +17075,7 @@ function useComposerController(props: ComposerProps) {
               />
             )) : null}
 
-            {props.thread?.codexEnvironmentRuntime ? renderFoldSlot("run", (
+            {controlRuntime ? renderFoldSlot("run", (
               <button
                 aria-busy={currentThreadEnvActionStarting || undefined}
                 aria-label="Run"
