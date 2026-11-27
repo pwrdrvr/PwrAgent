@@ -6,7 +6,7 @@ import {
   preferTurnUsageLine,
   reconcileCompletedTurnUsageEntries,
 } from "@pwragent/shared/thread-usage-display";
-import { buildThreadPricingDisplay } from "@pwragent/shared/thread-pricing-display";
+import { buildThreadPricingDisplay, type PricingHistoryPage } from "@pwragent/shared/thread-pricing-display";
 import {
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
   isThreadSubAgentVisibleInPanel,
@@ -39,6 +39,7 @@ export type ThreadSubAgentPanel = {
 
 /** The cards a display read needs, already narrowed by the owner. None of them is every card. */
 export type ThreadDisplayCards = {
+  pricingHistoryPage?: PricingHistoryPage;
   /** The cards the pricing ledger's lines name, with live state merged in. */
   pricingSubAgents?: ThreadSubAgentSummary[];
   /** Sums over every gate card, for the savings fallback the named cards cannot give. */
@@ -57,10 +58,14 @@ export function threadDisplayRevision(demand: ThreadDisplayRead, revisionSource:
 
 /** The page a demand asks for, once its cursor is checked against the revision it was issued under. */
 export function threadDisplayPage(demand: ThreadDisplayRead, revision: string | undefined): { offset: number; limit: number } {
+  if (demand.cursor && demand.cursor.split(":")[0] !== revision) throw new Error("Thread display history changed. Refresh the panel before loading more.");
+  return threadDisplayRange(demand);
+}
+
+export function threadDisplayRange(demand: ThreadDisplayRead): { offset: number; limit: number } {
   let offset = 0;
   if (demand.cursor) {
-    const [cursorRevision, cursorOffset] = demand.cursor.split(":");
-    if (cursorRevision !== revision) throw new Error("Thread display history changed. Refresh the panel before loading more.");
+    const [, cursorOffset] = demand.cursor.split(":");
     offset = Number(cursorOffset);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid thread display cursor.");
   }
@@ -164,7 +169,7 @@ export function projectThreadDisplay(
   const revisionSource = demand.resource === "tools" ? response.toolAccounting
     : demand.resource === "subagents" ? panel?.revisionSource
       : demand.resource === "subagent" ? thread?.subAgent
-        : { pricing: response.pricing, tokenMiser: response.toolAccounting?.tokenMiser,
+        : { pricing: thread?.pricingHistoryPage?.revision ?? response.pricing, tokenMiser: response.toolAccounting?.tokenMiser,
           subAgents: thread?.pricingSubAgents, gateTotals: thread?.tokenMiserGateTotals,
           turnFailures: thread?.turnFailureLog,
           reasoningEffort: thread?.reasoningEffort, activeTurnId: thread?.activeTurnId };
@@ -175,6 +180,7 @@ export function projectThreadDisplay(
   const { offset, limit } = threadDisplayPage(demand, revision);
   const pricing = buildThreadPricingDisplay(demand.resource === "accounting" ? {} : {
     pricing: response.pricing,
+    historyPage: thread?.pricingHistoryPage,
     subAgents: thread?.pricingSubAgents,
     tokenMiserGateTotals: thread?.tokenMiserGateTotals,
     tokenMiserAccounting: response.toolAccounting?.tokenMiser,

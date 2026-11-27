@@ -6,6 +6,7 @@ import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind, AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildTurnUsageActivityEntryFromLine } from "@pwragent/shared/thread-usage-display";
+import { PricingRunningTotals } from "@pwragent/shared/thread-pricing-display";
 import { estimateHistoricalThreadUsageGapLines } from "@pwragent/shared/thread-pricing-projection";
 import { FederationAccountingStream } from "../federation/federation-event-stream";
 import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
@@ -145,6 +146,176 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     registry.publishLocalEvent({ backend, notification: { method: "turn/completed",
       params: { threadId: "thread-1", turnId, turn: { id: turnId, status: "completed", output: [] } },
     } });
+
+  it("refreshes an open historical Pricing page with bounded ledger reads", async () => {
+    const registry = createRegistry();
+    const backend = "acp:antigravity";
+    const request = { backend, threadId: "thread-1", display: { resource: "pricing", limit: 4, deferPricingGates: true },
+      includeTurns: false, viewOnly: true } as const;
+    let measuring = false;
+    let rows = 0;
+    const prepare = stateDb.raw.prepare.bind(stateDb.raw);
+    vi.spyOn(stateDb.raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (/SELECT/i.test(sql) && /thread_usage_lines/.test(sql)) {
+        for (const method of ["get", "all"] as const) {
+          const read = statement[method].bind(statement);
+          Object.assign(statement, { [method]: (...args: unknown[]) => {
+            const value = read(...args);
+            if (measuring) {
+              for (const row of Array.isArray(value) ? value : [value]) {
+                if (row && typeof row === "object" && "usage_line_id" in row) rows++;
+              }
+            }
+            return value;
+          } });
+        }
+      }
+      return statement;
+    });
+    const folds = vi.spyOn(PricingRunningTotals.prototype, "add");
+    const measurements: number[] = [];
+    for (let n = 1; n <= 6; n++) {
+      const id = `turn-${n}`;
+      await registry.publishLocalEvent(started(backend, id));
+      await registry.publishLocalEvent(usage(backend, id));
+      await complete(registry, backend, id);
+      folds.mockClear();
+      rows = 0;
+      measuring = true;
+      const { display } = await registry.readThread(request);
+      measuring = false;
+      measurements.push(rows);
+      expect(folds).toHaveBeenCalledTimes(1);
+      expect(display?.pricingPage?.rows.map(({ line }) => line.turnId))
+        .toEqual(Array.from({ length: Math.min(n, 4) }, (_, i) => `turn-${n - i}`));
+      expect(display?.pricingPage?.totalRows).toBe(n);
+      expect(display?.pricingPage?.summary?.usageLineCount).toBe(n);
+    }
+    expect(measurements).toEqual([1, 1, 1, 1, 1, 1]);
+    rows = 0;
+    folds.mockClear();
+    measuring = true;
+    await readThreadForPeer(registry, request);
+    measuring = false;
+    expect(rows).toBe(0);
+    expect(folds).not.toHaveBeenCalled();
+    // A freshly constructed owner must reconstruct the same page from SQLite.
+    store = new SqliteOverlayStore(stateDb);
+    const cold = createRegistry();
+    rows = 0;
+    folds.mockClear();
+    measuring = true;
+    const recovered = await cold.readThread(request);
+    measuring = false;
+    expect(rows).toBe(6);
+    expect(folds).toHaveBeenCalledTimes(6);
+    expect(recovered.display).toEqual((await registry.readThread(request)).display);
+    folds.mockRestore();
+  });
+
+  it("matches a full Pricing projection across pages, gap estimates, marker attribution and recovery", async () => {
+    const owner = createRegistry();
+    const backend = "acp:antigravity";
+    const threadId = "thread-1";
+    const request = { backend, threadId, display: { resource: "pricing", limit: 2, deferPricingGates: true },
+      includeTurns: false, viewOnly: true } as const;
+    const comparePages = async () => {
+      const readAll = async (peer: boolean) => {
+        const pages = [];
+        let cursor: string | undefined;
+        do {
+          const pageRequest = { ...request, display: { ...request.display, cursor } };
+          const result = peer ? await readThreadForPeer(owner, pageRequest) : await owner.readThread(pageRequest);
+          pages.push(result.display!.pricingPage!);
+          cursor = result.display!.nextCursor;
+        } while (cursor);
+        return pages;
+      };
+      const actual = await readAll(true);
+      const full = vi.spyOn(store, "readThreadPricingPage").mockResolvedValue(undefined);
+      try { expect(actual).toEqual(await readAll(false)); } finally { full.mockRestore(); }
+      return actual;
+    };
+    for (let i = 1; i <= 3; i++) {
+      const turnId = `priced-${i}`;
+      await owner.publishLocalEvent(started(backend, turnId));
+      await owner.publishLocalEvent({ backend, notification: { method: "thread/tokenUsage/updated", params: {
+        threadId, turnId, model: i === 2 ? "gpt-5.4" : "gpt-5.5", tokenUsage: {
+          last: { inputTokens: 1000, cachedInputTokens: 100, outputTokens: 20, totalTokens: 1020 },
+          total: { inputTokens: 10_000 + 1000 * i, cachedInputTokens: i * 100,
+            outputTokens: 20 * i, totalTokens: 10_000 + 1020 * i },
+        },
+      } } });
+      await complete(owner, backend, turnId);
+      await comparePages();
+    }
+    const first = await owner.readThread(request);
+    expect(first.display!.pricingPage!.totalRows).toBeGreaterThan(3);
+    const stale = first.display!.nextCursor!;
+    await store.recordThreadCompaction({ compaction: { backend, threadId, compactionId: "later", turnId: "priced-1",
+      observedAt: 20, updatedAt: 20 } });
+    await expect(readThreadForPeer(owner, { ...request, display: { ...request.display, cursor: stale } }))
+      .rejects.toThrow("Thread display history changed");
+    const marked = (await comparePages()).flatMap((page) => page.rows);
+    expect(marked.filter((row) => row.rowCompactions.length)).toHaveLength(1);
+    const target = marked.find((row) => row.line.turnId === "priced-2")!.line;
+    stateDb.raw.prepare("UPDATE thread_compactions SET cold_usage_line_id = ? WHERE compaction_id = ?").run(target.usageLineId, "later");
+    expect((await comparePages()).flatMap((page) => page.rows).find((row) => row.rowCompactions.length)?.line.usageLineId)
+      .toBe(target.usageLineId);
+    stateDb.raw.prepare("UPDATE thread_usage_lines SET created_at = created_at - 100 WHERE usage_line_id = ?").run(target.usageLineId);
+    await comparePages();
+
+    // Gate grouping needs the helper's parent card, even when the parent is on
+    // an older page. Switch from the cached turn ledger to a ledger with a gate.
+    const monitorId = "system:token-miser:priced";
+    await store.upsertThreadUsageLine({ line: {
+      ...target, usageLineId: "priced-gate", sourceItemId: monitorId, scope: "monitor", source: "monitor",
+      usageTurnId: undefined, turnId: "helper", createdAt: target.createdAt + 1,
+    } });
+    await store.upsertThreadSubAgent({ backend, threadId, subAgent: {
+      backend, monitorId, parentTurnId: target.turnId, monitorTurnId: "helper",
+      task: "Gate", status: "success", createdAt: 1, updatedAt: 1,
+    } });
+    const parent = (await comparePages()).flatMap((page) => page.rows)
+      .find((row) => row.line.usageLineId === target.usageLineId)!;
+    expect(parent.gatesDeferred).toBe(true);
+    expect(parent.gateSummary?.gateCount).toBe(1);
+    const expanded = await readThreadForPeer(owner, { ...request, display: { ...request.display, deferPricingGates: false, limit: 20 } });
+    expect(expanded.display!.pricingPage!.rows.find((row) => row.line.usageLineId === target.usageLineId)?.gates[0]?.line.usageLineId)
+      .toBe("priced-gate");
+  });
+
+  it("recovers open pricing pages after a rollback and a second owner commit", async () => {
+    measureOnFileStateDb();
+    const owner = createRegistry();
+    const backend = "acp:antigravity";
+    const request = { backend, threadId: "thread-1", display: { resource: "pricing", limit: 1 }, includeTurns: false, viewOnly: true } as const;
+    for (const id of ["first", "second"]) {
+      await owner.publishLocalEvent(started(backend, id));
+      await owner.publishLocalEvent(usage(backend, id));
+      await complete(owner, backend, id);
+    }
+    const first = (await owner.readThread(request)).display!;
+    const next = { ...request, display: { ...request.display, cursor: first.nextCursor! } };
+    const expected = (await readThreadForPeer(owner, next)).display!;
+    const update = "UPDATE thread_usage_turns SET model_context_window = 123456 WHERE turn_id = 'first'";
+    expect(() => stateDb.raw.transaction(() => {
+      stateDb.raw.exec(update);
+      throw new Error("roll back");
+    })()).toThrow("roll back");
+    expect((await readThreadForPeer(owner, next)).display).toEqual(expected);
+    const other = StateDb.open(stateDb.raw.name);
+    try {
+      other.raw.exec(update);
+      await expect(readThreadForPeer(owner, next)).rejects.toThrow("Thread display history changed");
+      const fresh = (await owner.readThread(request)).display!;
+      const recovered = (await readThreadForPeer(owner, { ...next, display: { ...next.display, cursor: fresh.nextCursor! } })).display!;
+      expect(recovered.pricingPage!.rows[0]?.line.modelContextWindow).toBe(123456);
+    } finally {
+      other.close();
+    }
+  });
 
   it("projects and publishes only the changed turn as owner history grows", async () => {
     const registry = createRegistry();
