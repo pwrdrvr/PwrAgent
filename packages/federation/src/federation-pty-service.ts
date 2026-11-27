@@ -200,6 +200,7 @@ export type FederationPtySpawn = (params: {
 }) => Promise<{
   pty: FederationPtyProcess;
   cwd: string;
+  startupNotice?: string;
   shell: { file: string; args: string[] };
 }>;
 
@@ -528,6 +529,7 @@ export class FederationPtyService {
       session.seq = session.replay.append(restoredHistoryPrelude(resumed.snapshot), this.now()).seq;
       this.archived.delete(resumed.summary.sessionId);
     }
+    if (spawned.startupNotice) session.seq = session.replay.append(spawned.startupNotice, this.now()).seq;
     session.foregroundCommand = this.detectForegroundCommand(session);
     session.foregroundCheckedAt = this.now();
     this.sessionsById.set(session.sessionId, session);

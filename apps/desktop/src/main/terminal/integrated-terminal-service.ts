@@ -420,11 +420,9 @@ export class IntegratedTerminalService {
     // then addressed by the same id the finished terminal answers to.
     const sessionId = requestedId || randomUUID();
     this.spawningThreadKeyBySessionId.set(sessionId, threadKey);
-    let ptyProcess: IPty;
-    let cwd: string;
-    let shell: { file: string; args: string[] };
+    let spawned: SpawnedTerminalPty;
     try {
-      const spawned = await spawnTerminalPty({
+      spawned = await spawnTerminalPty({
         // A resumed terminal starts where it was launched, not wherever the
         // pane happens to suggest.
         cwd: archived?.summary.cwd ?? request.cwd,
@@ -433,9 +431,6 @@ export class IntegratedTerminalService {
         platform: this.platform,
         loadNodePty: this.loadNodePty,
       });
-      ptyProcess = spawned.pty;
-      cwd = spawned.cwd;
-      shell = spawned.shell;
     } catch (error) {
       const message = terminalStartErrorMessage(error);
       this.logger.warn("start-failed", {
@@ -450,6 +445,7 @@ export class IntegratedTerminalService {
     } finally {
       this.spawningThreadKeyBySessionId.delete(sessionId);
     }
+    const { pty: ptyProcess, cwd, shell } = spawned;
     const session: TerminalSession = {
       sessionId,
       threadKey,
@@ -487,6 +483,7 @@ export class IntegratedTerminalService {
       session.replay.append(restoredHistoryPrelude(archived.snapshot));
       this.archived.delete(sessionId);
     }
+    if (spawned.startupNotice) session.replay.append(spawned.startupNotice);
     this.sessionsById.set(session.sessionId, session);
     this.subscribe(session, webContents);
     session.disposables.push(
@@ -984,6 +981,7 @@ async function loadNodePty(): Promise<Pick<NodePtyModule, "spawn">> {
 export type SpawnedTerminalPty = {
   pty: IPty;
   cwd: string;
+  startupNotice?: string;
   shell: { file: string; args: string[] };
 };
 
@@ -1017,7 +1015,7 @@ export async function spawnTerminalPty(params: {
     runtimeCommands,
     platform,
   );
-  const cwd = resolveTerminalCwd(params.cwd);
+  const directory = resolveTerminalCwd(params.cwd);
   const shell = resolveTerminalShell({
     env,
     platform,
@@ -1033,13 +1031,13 @@ export async function spawnTerminalPty(params: {
     name: "xterm-256color",
     cols: clampTerminalColumns(params.cols),
     rows: clampTerminalRows(params.rows),
-    cwd,
+    cwd: directory.cwd,
     env: buildPwrAgentChildProcessEnv(env, {
       TERM: "xterm-256color",
       COLORTERM: "truecolor",
     }),
   });
-  return { pty, cwd, shell };
+  return { pty, shell, ...directory };
 }
 
 // The bundled binary's location is fixed for the life of the app.
@@ -1235,18 +1233,23 @@ function terminalStartErrorMessage(error: unknown): string {
     : "Terminal failed to start.";
 }
 
-function resolveTerminalCwd(requestedCwd: string | undefined): string {
+function resolveTerminalCwd(requestedCwd: string | undefined): Pick<SpawnedTerminalPty, "cwd" | "startupNotice"> {
   const candidate = requestedCwd?.trim();
-  if (candidate) {
-    try {
-      if (existsSync(candidate) && statSync(candidate).isDirectory()) {
-        return candidate;
-      }
-    } catch {
-      // Fall through to the user home directory.
-    }
+  if (candidate && isTerminalDirectory(candidate)) return { cwd: candidate };
+  const home = homedir();
+  if (!isTerminalDirectory(home)) throw new Error("Home directory unavailable.");
+  return {
+    cwd: home,
+    ...(candidate ? { startupNotice: "Workspace unavailable. Shell opened in your home directory.\r\n" } : {}),
+  };
+}
+
+function isTerminalDirectory(directory: string): boolean {
+  try {
+    return statSync(directory).isDirectory();
+  } catch {
+    return false;
   }
-  return homedir();
 }
 
 export function resolveTerminalShell(options: {
