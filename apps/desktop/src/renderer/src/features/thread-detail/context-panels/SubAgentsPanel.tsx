@@ -98,8 +98,9 @@ export const SubAgentsPanel = memo(function SubAgentsPanel(props: SubAgentsPanel
   // streams another update, and the dialog would sit on frozen status, timing,
   // and usage until it was closed and reopened.
   const [detailsForId, setDetailsForId] = useState<string | null>(null);
-  const detailsFor =
-    subAgents.find((subAgent) => subAgent.monitorId === detailsForId) ?? null;
+  const detailsFor = detailsForId
+    ? subAgents.find((subAgent) => subAgent.monitorId === detailsForId) ?? null
+    : null;
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set());
   const [stopErrors, setStopErrors] = useState<Record<string, string>>({});
 

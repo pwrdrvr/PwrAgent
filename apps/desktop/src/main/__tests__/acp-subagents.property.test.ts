@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import type { ThreadSubAgentStatus } from "@pwragent/shared/contracts/navigation";
 import { ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX } from "@pwragent/shared/subagent-kind";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AcpSubAgentTracker,
   formatAcpInvokeSubAgentLabel,
@@ -627,5 +627,88 @@ describe("AcpSessionReplayNormalizer turn-index differential oracle", () => {
       entry.id.startsWith("agent-waiting:"),
     );
     expect(waiting).toEqual([]);
+  });
+
+  it("removes waiting rows in O(1) without rebuilding entry indexes when subagent_spawned or compaction arrives before assistant text", () => {
+    // Counterexample from the scaling audit: previously, subagent_spawned and
+    // auto_compact_started appended after agent-waiting:<turnId>, forcing an
+    // O(n) filter + rebuildEntryIndexes() per turn (O(n²) across multi-turn
+    // streams and rollouts).
+    const normalizer = new AcpSessionReplayNormalizer();
+    const proto = AcpSessionReplayNormalizer.prototype as unknown as {
+      rebuildEntryIndexes: () => void;
+    };
+    const rebuildSpy = vi.spyOn(proto, "rebuildEntryIndexes");
+    try {
+      for (let i = 0; i < 20; i += 1) {
+        const turnId = `turn-${i}`;
+        normalizer.recordUserPrompt({
+          sessionId: "s1",
+          prompt: `Prompt ${i}`,
+          turnId,
+          receivedAt: 1_000 + i * 100,
+          waitingForAgent: true,
+        });
+        normalizer.apply({
+          sessionId: "s1",
+          receivedAt: 1_010 + i * 100,
+          update: i % 2 === 0
+            ? {
+                sessionUpdate: "subagent_spawned",
+                subagent_id: `sub-${i}`,
+                description: `Worker ${i}`,
+                subagent_type: "research",
+              }
+            : {
+                sessionUpdate: "auto_compact_started",
+                percentage: 85,
+              },
+        });
+        normalizer.apply({
+          sessionId: "s1",
+          receivedAt: 1_020 + i * 100,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: `Reply ${i}` },
+          },
+        });
+        normalizer.recordTurnFinished(turnId, 1_030 + i * 100);
+      }
+      expect(rebuildSpy).not.toHaveBeenCalled();
+      expect(normalizer.replay().entries.filter((e) => e.id.startsWith("agent-waiting:"))).toEqual([]);
+    } finally {
+      rebuildSpy.mockRestore();
+    }
+  });
+
+  it("drains only dirty sub-agent cards per flush and re-queues failed IDs via markDirty", () => {
+    let clock = 1_000;
+    const tracker = new AcpSubAgentTracker(() => (clock += 10));
+    for (let i = 0; i < 30; i += 1) {
+      const turnId = `turn-${i}`;
+      tracker.apply({
+        turnId,
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: `call-${i}`,
+          title: "Run invoke_subagent",
+          status: "in_progress",
+          rawInput: { Role: `Worker ${i}`, TypeName: "research", Prompt: `Task ${i}` },
+        },
+      });
+      const launched = tracker.takeDirtySubAgentCards();
+      expect(launched).toHaveLength(1);
+      expect(launched[0]?.subAgentId).toBe(`call-${i}`);
+      expect(tracker.activeCount()).toBe(1);
+
+      tracker.settleTurn({ turnId, outcome: "completed" });
+      const settled = tracker.takeDirtySubAgentCards();
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.status).toBe("success");
+      expect(tracker.activeCount()).toBe(0);
+      expect(tracker.takeDirtySubAgentCards()).toEqual([]);
+    }
+    tracker.markDirty(["call-29"]);
+    expect(tracker.takeDirtySubAgentCards().map((c) => c.subAgentId)).toEqual(["call-29"]);
   });
 });

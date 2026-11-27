@@ -169,6 +169,24 @@ function isTerminalStatus(status: ThreadSubAgentStatus): boolean {
 }
 
 /**
+ * Cheap O(1) pre-filter for whether an ACP `session/update` can create or
+ * mutate sub-agent state on a session that has no tracked sub-agents yet.
+ * Ordinary tool calls (`read_file`, `run_command`, etc.) return `false` so
+ * they never allocate per-session tracker state.
+ */
+export function isAcpSubAgentRelevantUpdate(update: Record<string, unknown>): boolean {
+  const kind = readUpdateKind(update);
+  if (kind === "subagent_spawned" || kind === "subagent_finished") {
+    return true;
+  }
+  if (kind === "tool_call" || kind === "tool_call_update") {
+    const toolName = readToolName(update);
+    return toolName === "invoke_subagent" || toolName === "manage_subagents";
+  }
+  return false;
+}
+
+/**
  * Extracts Antigravity (or compatible ACP) `invoke_subagent` parameters from a
  * `tool_call` / `tool_call_update` payload. Returns `undefined` for unrelated
  * tool calls.
@@ -290,6 +308,8 @@ function buildCard(agent: AcpTrackedSubAgent): AcpSubAgentCard {
 export class AcpSubAgentTracker {
   private readonly agents = new Map<string, AcpTrackedSubAgent>();
   private readonly byConversationId = new Map<string, string>();
+  private readonly runningIds = new Set<string>();
+  private readonly dirtyIds = new Set<string>();
   private readonly activeTurnBoundIds = new Set<string>();
   private readonly pendingManageSubAgents = new Map<
     string,
@@ -404,10 +424,15 @@ export class AcpSubAgentTracker {
 
   /** Ends every still-running sub-agent when the ACP session closes or disconnects. */
   endRunningSubAgents(status: "cancelled" | "failure", at?: number): boolean {
+    if (this.runningIds.size === 0) {
+      return false;
+    }
     const timestamp = at ?? this.now();
     let changed = false;
-    for (const agent of this.agents.values()) {
-      if (isTerminalStatus(agent.status)) {
+    for (const id of [...this.runningIds]) {
+      const agent = this.agents.get(id);
+      if (!agent || isTerminalStatus(agent.status)) {
+        this.runningIds.delete(id);
         continue;
       }
       this.settleAgent(agent, status, undefined, timestamp);
@@ -425,15 +450,38 @@ export class AcpSubAgentTracker {
     return cards;
   }
 
-  /** Number of currently running sub-agents tracked for this session. */
-  activeCount(): number {
-    let count = 0;
-    for (const agent of this.agents.values()) {
-      if (!isTerminalStatus(agent.status)) {
-        count += 1;
+  /**
+   * Builds and drains cards for only the sub-agents that changed since the
+   * last call, avoiding O(n) scans across unchanged session history on each
+   * flush. Call `markDirty` if persistence fails and a card must be retried.
+   */
+  takeDirtySubAgentCards(): AcpSubAgentCard[] {
+    if (this.dirtyIds.size === 0) {
+      return [];
+    }
+    const cards: AcpSubAgentCard[] = [];
+    for (const id of this.dirtyIds) {
+      const agent = this.agents.get(id);
+      if (agent) {
+        cards.push(buildCard(agent));
       }
     }
-    return count;
+    this.dirtyIds.clear();
+    return cards;
+  }
+
+  /** Re-marks sub-agent IDs dirty so a later flush retries failed writes. */
+  markDirty(subAgentIds: readonly string[]): void {
+    for (const id of subAgentIds) {
+      if (this.agents.has(id)) {
+        this.dirtyIds.add(id);
+      }
+    }
+  }
+
+  /** Number of currently running sub-agents tracked for this session. */
+  activeCount(): number {
+    return this.runningIds.size;
   }
 
   private applyProtocolSubAgentUpdate(
@@ -472,6 +520,8 @@ export class AcpSubAgentTracker {
           status: "running",
           startedAt: timestamp,
         });
+        this.runningIds.add(mappedId);
+        this.dirtyIds.add(mappedId);
         this.byConversationId.set(rawId, mappedId);
         return true;
       }
@@ -491,6 +541,9 @@ export class AcpSubAgentTracker {
       if (model && model !== existing.model) {
         existing.model = model;
         changed = true;
+      }
+      if (changed) {
+        this.dirtyIds.add(existing.id);
       }
       return changed;
     }
@@ -531,13 +584,12 @@ export class AcpSubAgentTracker {
     const existingByToolCall = toolCallId ? this.agents.get(toolCallId) : undefined;
     // Antigravity's sparse `tool_call_update` omits `name`/`title`/`args` and
     // carries only `toolCallId`, `status`, and optional output.
+    const sparseConversationId = !parsedDetails && existingByToolCall && !existingByToolCall.conversationId
+      ? readConversationIdFromOutput(update)
+      : undefined;
     const details: AcpInvokeSubAgentDetails | undefined = parsedDetails
       ?? (existingByToolCall
-        ? {
-            ...(readConversationIdFromOutput(update)
-              ? { conversationId: readConversationIdFromOutput(update) }
-              : {}),
-          }
+        ? (sparseConversationId ? { conversationId: sparseConversationId } : {})
         : undefined);
     if (!details) {
       return false;
@@ -572,6 +624,7 @@ export class AcpSubAgentTracker {
         startedAt: timestamp,
       };
       this.agents.set(id, agent);
+      this.runningIds.add(id);
       this.activeTurnBoundIds.add(id);
       if (details.conversationId) {
         this.byConversationId.set(details.conversationId, id);
@@ -612,6 +665,10 @@ export class AcpSubAgentTracker {
         timestamp,
       );
       return true;
+    }
+
+    if (changed) {
+      this.dirtyIds.add(agent.id);
     }
 
     return changed;
@@ -692,5 +749,7 @@ export class AcpSubAgentTracker {
       agent.lastMessage = lastMessage;
     }
     this.activeTurnBoundIds.delete(agent.id);
+    this.runningIds.delete(agent.id);
+    this.dirtyIds.add(agent.id);
   }
 }

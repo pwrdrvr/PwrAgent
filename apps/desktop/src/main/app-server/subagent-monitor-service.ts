@@ -36,6 +36,7 @@ import {
 import { codexNativeSubAgentName } from "@pwragent/shared/subagent-activity";
 import { deriveTaskMonitorDisplayTitle } from "@pwragent/shared/task-monitor-display-title";
 import {
+  CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
   isCodexNativeSubAgentVisibleInNavigation,
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
 } from "@pwragent/shared/subagent-visibility";
@@ -2505,12 +2506,13 @@ export class SubAgentMonitorService {
     threads: AppServerThreadSummary[],
   ): Promise<AppServerThreadSummary[]> {
     if (threads.length === 0) return threads;
+    const now = Date.now();
     const cardsByThreadId = await this.context.stores.subAgents.listThreadSubAgentsByMonitorIdPrefix({
       backend,
       threadIds: threads.map((thread) => thread.id),
       monitorIdPrefix: ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX,
+      visibleSince: now - CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
     });
-    const now = Date.now();
     return threads.map((thread) => {
       const agents = (cardsByThreadId[thread.id] ?? [])
         .map((card) => nativeSubAgentRowFromCard(card, card.monitorId))

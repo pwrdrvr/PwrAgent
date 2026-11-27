@@ -627,6 +627,7 @@ export class AcpSessionReplayNormalizer {
     this.activeAssistantMessagePhase = undefined;
     this.assistantMessageSequence = 0;
     this.knownToolCallIds.clear();
+    this.invokeSubAgents.clear();
     this.openRetry = undefined;
     this.openCompactionId = undefined;
     this.subAgents.clear();
@@ -710,16 +711,19 @@ export class AcpSessionReplayNormalizer {
       // for an unrecognized kind.
       this.upsertRetryActivity(update, createdAt);
     } else if (kind === "image_dropped") {
+      this.removeCurrentAgentWaitingActivity();
       this.upsertActivity(imageDroppedActivity(update, createdAt));
     } else if (
       kind === "auto_compact_started" || kind === "auto_compact_completed"
     ) {
+      this.removeCurrentAgentWaitingActivity();
       this.upsertCompactionActivity(update, kind, createdAt);
     } else if (
       kind === "subagent_spawned"
       || kind === "subagent_progress"
       || kind === "subagent_finished"
     ) {
+      this.removeCurrentAgentWaitingActivity();
       this.upsertSubAgentActivity(update, kind, createdAt);
     } else if (kind === "turn_completed" || kind === "turn_finished") {
       // Some agents persist a durable replay terminal before the live

@@ -762,4 +762,91 @@ describe("thread sub-agent table", () => {
     expect(await store.readThreadSubAgentRevision({ backend: "codex", threadId: "thread-1" }))
       .toEqual({ count: 0, revision: 0 });
   });
+
+  it("batches listThreadSubAgentsByMonitorIdPrefix into one query and skips expired cards in SQL when visibleSince is set", async () => {
+    const { stateDb, store } = openStore();
+    const now = 1_800_000_000_000;
+    const visibleSince = now - 60 * 60 * 1000;
+    const expiredAt = visibleSince - 60_000;
+    const threadIds: string[] = [];
+
+    for (let t = 0; t < 25; t += 1) {
+      const threadId = `acp-thread-${t}`;
+      threadIds.push(threadId);
+      const cards: ThreadSubAgentSummary[] = Array.from({ length: 20 }, (_, h) => ({
+        monitorId: `acp-native:hist-${t}-${h}`,
+        task: `Expired worker ${h}`,
+        status: "success",
+        outcome: "success",
+        createdAt: expiredAt - 5_000,
+        updatedAt: expiredAt,
+        completedAt: expiredAt,
+        backend: "acp:antigravity",
+      }));
+      if (t === 0) {
+        cards.push(
+          {
+            monitorId: "acp-native:live-1",
+            task: "Running worker",
+            status: "running",
+            createdAt: expiredAt - 10_000,
+            updatedAt: expiredAt - 5_000,
+            backend: "acp:antigravity",
+          },
+          {
+            monitorId: "acp-native:recent-1",
+            task: "Recently completed worker",
+            status: "success",
+            outcome: "success",
+            createdAt: now - 120_000,
+            updatedAt: now - 60_000,
+            completedAt: now - 60_000,
+            backend: "acp:antigravity",
+          },
+        );
+      }
+      await store.upsertThreadSubAgents({
+        backend: "acp:antigravity",
+        threadId,
+        subAgents: cards,
+      });
+    }
+
+    let jsonParseCalls = 0;
+    const origParse = JSON.parse;
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((...args: Parameters<typeof JSON.parse>) => {
+      jsonParseCalls += 1;
+      return origParse(...args);
+    });
+    let sqlAllCalls = 0;
+    const origPrepare = stateDb.raw.prepare.bind(stateDb.raw);
+    const prepareSpy = vi.spyOn(stateDb.raw, "prepare").mockImplementation((...args: Parameters<typeof stateDb.raw.prepare>) => {
+      const stmt = origPrepare(...args);
+      const origAll = stmt.all.bind(stmt);
+      stmt.all = (...allArgs: unknown[]) => {
+        sqlAllCalls += 1;
+        return origAll(...allArgs);
+      };
+      return stmt;
+    });
+
+    try {
+      const visible = await store.listThreadSubAgentsByMonitorIdPrefix({
+        backend: "acp:antigravity",
+        threadIds,
+        monitorIdPrefix: "acp-native:",
+        visibleSince,
+      });
+      expect(sqlAllCalls).toBe(1);
+      expect(jsonParseCalls).toBe(2);
+      expect(Object.keys(visible)).toEqual(["acp-thread-0"]);
+      expect(visible["acp-thread-0"]?.map((entry) => entry.monitorId).sort()).toEqual([
+        "acp-native:live-1",
+        "acp-native:recent-1",
+      ]);
+    } finally {
+      parseSpy.mockRestore();
+      prepareSpy.mockRestore();
+    }
+  });
 });

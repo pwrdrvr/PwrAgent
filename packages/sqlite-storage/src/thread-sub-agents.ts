@@ -706,16 +706,44 @@ export class ThreadSubAgentTable {
     };
   }
 
-  /** Cards whose `monitorId` starts with `prefix`, per thread, from the primary-key range. */
-  listByMonitorIdPrefix(storageKeys: readonly string[], prefix: string): Map<string, ThreadSubAgentSummary[]> {
+  /**
+   * Cards whose `monitorId` starts with `prefix`, per thread, from the
+   * primary-key range in a single batched query. When `visibleSince` is set,
+   * terminal cards whose latest activity predates `visibleSince` are filtered
+   * in SQL so navigation refreshes never deserialize expired history.
+   */
+  listByMonitorIdPrefix(
+    storageKeys: readonly string[],
+    prefix: string,
+    options?: { visibleSince?: number },
+  ): Map<string, ThreadSubAgentSummary[]> {
+    const uniqueKeys = [...new Set(storageKeys)];
+    if (uniqueKeys.length === 0) return new Map();
     const end = monitorIdPrefixEnd(prefix);
-    const statement = this.db.prepare(`SELECT card FROM thread_sub_agents
-      WHERE thread_id = ? AND monitor_id >= ? AND monitor_id < ?
-      ORDER BY created_at DESC, monitor_id`);
+    const rows = options?.visibleSince !== undefined
+      ? prepareSqliteRead(this.db, `SELECT thread_id, card FROM thread_sub_agents
+          WHERE thread_id IN (SELECT value FROM json_each(?))
+            AND monitor_id >= ? AND monitor_id < ?
+            AND (
+              status NOT IN ('success', 'failure', 'cancelled')
+              OR updated_at >= ?
+              OR (updated_at = 0 AND created_at >= ?)
+              OR (updated_at = 0 AND created_at = 0)
+            )
+          ORDER BY created_at DESC, monitor_id`)
+        .all(JSON.stringify(uniqueKeys), prefix, end, options.visibleSince, options.visibleSince) as Array<{ thread_id: string; card: string }>
+      : prepareSqliteRead(this.db, `SELECT thread_id, card FROM thread_sub_agents
+          WHERE thread_id IN (SELECT value FROM json_each(?))
+            AND monitor_id >= ? AND monitor_id < ?
+          ORDER BY created_at DESC, monitor_id`)
+        .all(JSON.stringify(uniqueKeys), prefix, end) as Array<{ thread_id: string; card: string }>;
     const result = new Map<string, ThreadSubAgentSummary[]>();
-    for (const key of storageKeys) {
-      const cards = parseCards(statement.all(key, prefix, end) as CardRow[]);
-      if (cards.length > 0) result.set(key, cards);
+    for (const row of rows) {
+      const card = parseCard(row);
+      if (!card) continue;
+      const existing = result.get(row.thread_id);
+      if (existing) existing.push(card);
+      else result.set(row.thread_id, [card]);
     }
     return result;
   }

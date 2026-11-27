@@ -100,6 +100,7 @@ import {
 } from "../acp/acp-live-notifications";
 import {
   AcpSubAgentTracker,
+  isAcpSubAgentRelevantUpdate,
   type AcpSubAgentCard,
 } from "../acp/acp-subagents";
 import {
@@ -4406,7 +4407,7 @@ export class AcpBackendAdapter {
       || kind === "subagent_finished"
       || kind === "tool_call"
       || kind === "tool_call_update";
-    if (!existing && !isRelevantUpdate) {
+    if (!existing && (!isRelevantUpdate || !isAcpSubAgentRelevantUpdate(params.update))) {
       return;
     }
     const state = existing ?? this.getOrCreateSubAgentSession(params.backend, params.sessionId, params.client);
@@ -4535,7 +4536,7 @@ export class AcpBackendAdapter {
       return;
     }
     const { backend, sessionId } = state;
-    const changed = state.tracker.subAgentCards().flatMap((card) => {
+    const changed = state.tracker.takeDirtySubAgentCards().flatMap((card) => {
       const fingerprint = JSON.stringify(card);
       return state.recordedKeys.get(card.monitorId) === fingerprint
         ? []
@@ -4549,6 +4550,7 @@ export class AcpBackendAdapter {
     // update can retry.
     const previousFingerprints = changed.map(({ card, fingerprint }) => ({
       monitorId: card.monitorId,
+      subAgentId: card.subAgentId,
       fingerprint,
       previous: state.recordedKeys.get(card.monitorId),
     }));
@@ -4564,7 +4566,8 @@ export class AcpBackendAdapter {
           subAgents,
         });
       } catch (error) {
-        for (const { monitorId, fingerprint, previous } of previousFingerprints) {
+        const retryIds: string[] = [];
+        for (const { monitorId, subAgentId, fingerprint, previous } of previousFingerprints) {
           if (state.recordedKeys.get(monitorId) !== fingerprint) {
             continue;
           }
@@ -4573,6 +4576,10 @@ export class AcpBackendAdapter {
           } else {
             state.recordedKeys.set(monitorId, previous);
           }
+          retryIds.push(subAgentId);
+        }
+        if (retryIds.length > 0) {
+          state.tracker.markDirty(retryIds);
         }
         acpBackendAdapterLog.warn("acp_subagents_record_failed", {
           backend,

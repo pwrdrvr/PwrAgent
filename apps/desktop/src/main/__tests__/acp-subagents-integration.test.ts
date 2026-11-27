@@ -8,7 +8,7 @@ import { ACP_NATIVE_SUBAGENT_MONITOR_ID_PREFIX } from "@pwragent/shared/subagent
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AcpBackendAdapter, type AcpSessionMetadata } from "../app-server/acp-backend-adapter";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
-import type { AcpSubAgentCard } from "../acp/acp-subagents";
+import { AcpSubAgentTracker, type AcpSubAgentCard } from "../acp/acp-subagents";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -647,6 +647,101 @@ describe("ACP sub-agent cards persistence & navigation projection", () => {
         expect(latest?.status).toBe("success");
       });
     } finally {
+      await adapter.close();
+    }
+  });
+
+  it("flushes only dirty cards in O(k), retries failed flushes via markDirty, and skips tracker allocation for ordinary tool calls", async () => {
+    let cardsBuiltInFlushes = 0;
+    const origSubAgentCards = AcpSubAgentTracker.prototype.subAgentCards;
+    const origDirtyCards = AcpSubAgentTracker.prototype.takeDirtySubAgentCards;
+    const allSpy = vi.spyOn(AcpSubAgentTracker.prototype, "subAgentCards").mockImplementation(function (this: AcpSubAgentTracker) {
+      const cards = origSubAgentCards.call(this);
+      cardsBuiltInFlushes += cards.length;
+      return cards;
+    });
+    const dirtySpy = vi.spyOn(AcpSubAgentTracker.prototype, "takeDirtySubAgentCards").mockImplementation(function (this: AcpSubAgentTracker) {
+      const cards = origDirtyCards.call(this);
+      cardsBuiltInFlushes += cards.length;
+      return cards;
+    });
+
+    let failOnce = true;
+    const persisted: AcpSubAgentCard[] = [];
+    const adapter = new AcpBackendAdapter({
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+      recordSubAgents: async ({ subAgents }) => {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error("transient sqlite busy");
+        }
+        persisted.push(...subAgents);
+      },
+    });
+    const internal = adapter as unknown as {
+      observeAcpSubAgentUpdate: (p: Record<string, unknown>) => void;
+      settleAcpSessionSubAgents: (p: Record<string, unknown>) => void;
+      drainAcpSessionSubAgentFlush: (s: unknown) => void;
+      subAgentSessions: Map<string, { flushChain: Promise<void> }>;
+    };
+
+    try {
+      // 50 ordinary sessions that run read_file must allocate 0 tracker entries.
+      for (let i = 0; i < 50; i += 1) {
+        internal.observeAcpSubAgentUpdate({
+          backend: "acp:antigravity",
+          sessionId: `ord-${i}`,
+          turnId: "t1",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: `read-${i}`,
+            name: "read_file",
+            status: "completed",
+          },
+        });
+      }
+      expect(internal.subAgentSessions.size).toBe(0);
+
+      // 20 sequential sub-agent turns on one session: launch + flush + settle.
+      // First flush throws once; settling the same worker retries and persists it.
+      for (let i = 0; i < 20; i += 1) {
+        const turnId = `turn-${i}`;
+        internal.observeAcpSubAgentUpdate({
+          backend: "acp:antigravity",
+          sessionId: "subagent-sess",
+          turnId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: `call-${i}`,
+            title: "Run invoke_subagent",
+            status: "in_progress",
+            rawInput: { Role: `Worker ${i}`, TypeName: "research", Prompt: `Task ${i}` },
+          },
+        });
+        const state = internal.subAgentSessions.get("acp:antigravity:subagent-sess")!;
+        internal.drainAcpSessionSubAgentFlush(state);
+        await state.flushChain;
+        internal.settleAcpSessionSubAgents({
+          backend: "acp:antigravity",
+          sessionId: "subagent-sess",
+          turnId,
+          outcome: "completed",
+        });
+        await state.flushChain;
+      }
+
+      // Linear O(N): 20 launches + 20 settlements = 40 dirty cards built
+      // (previously O(N²): 20 * 21 = 420 cards rebuilt and JSON-stringified).
+      expect(allSpy).not.toHaveBeenCalled();
+      expect(cardsBuiltInFlushes).toBe(40);
+      expect(persisted.filter((c) => c.monitorId === "acp-native:call-0").at(-1)?.status).toBe("success");
+      expect(persisted.filter((c) => c.monitorId === "acp-native:call-19").at(-1)?.status).toBe("success");
+    } finally {
+      allSpy.mockRestore();
+      dirtySpy.mockRestore();
       await adapter.close();
     }
   });
