@@ -835,6 +835,35 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("still delivers a Codex worker's own step when its activity line cannot be published", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [{ id: "thread-parent", source: "codex", title: "Inspect", titleSource: "explicit", linkedDirectories: [] }],
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const internals = registry as unknown as { emit: (event: AgentEvent, ...rest: unknown[]) => Promise<void> };
+    const emit = internals.emit.bind(registry);
+    // The activity line is live only; losing it must not cost the step itself.
+    internals.emit = async (event, ...rest) => {
+      if (event.notification.method === "thread/subAgentActivity/updated") throw new Error("renderer gone");
+      await emit(event, ...rest);
+    };
+    const events: AgentEvent[] = [];
+    const stopEvents = registry.onEvent((event) => { events.push(event); });
+    try {
+      await codexClient.emit({ method: "item/completed", params: { threadId: "thread-parent", turnId: "turn-parent",
+        item: { type: "subAgentActivity", id: "activity-started", kind: "started",
+          agentThreadId: "worker-inspect", agentPath: "/root/folder_inspector" } } } as AppServerNotification);
+      await codexClient.emit({ method: "item/started", params: { threadId: "worker-inspect", turnId: "turn-worker",
+        item: { type: "commandExecution", id: "call-1", command: "/bin/zsh -lc 'ls -la'",
+          commandActions: [{ type: "listFiles", command: "ls -la", path: null }], status: "inProgress" } } } as AppServerNotification);
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "item/started"
+        && (event.notification.params as { threadId?: string }).threadId === "worker-inspect")).toBe(true));
+    } finally {
+      stopEvents();
+      await registry.close();
+    }
+  });
+
   it("reads a path-based worker's model from Codex before pricing its usage", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

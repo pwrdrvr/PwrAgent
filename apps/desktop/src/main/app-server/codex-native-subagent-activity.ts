@@ -94,14 +94,21 @@ export class CodexNativeSubAgentActivityTracker {
     if (!worker) return undefined;
     const current = this.lines.get(worker);
     if (notification.method === "item/started") {
-      const parent = current?.parent ?? parentOf(worker);
-      if (!parent) return undefined;
+      // Ask every step: a thread later found to be an ordinary handoff is no
+      // longer a worker, and its line leaves the card it was under.
+      const parent = parentOf(worker);
+      if (!parent || (current && current.parent !== parent)) {
+        if (!current) return undefined;
+        this.lines.delete(worker);
+        return { parentThreadId: current.parent, changes: { activities: [], cleared: [codexNativeSubAgentId(worker)] } };
+      }
       const line = codexNativeSubAgentActivityText((params?.item ?? {}) as Item);
       if (!line || line === current?.line) return undefined;
       this.lines.set(worker, { parent, line });
       return { parentThreadId: parent, changes: { activities: [{ monitorId: codexNativeSubAgentId(worker), activity: line }] } };
     }
     if (TURN_ENDS.has(notification.method) || notification.method === "turn/started"
+      || notification.method === "thread/archived"
       || (notification.method === "thread/status/changed"
         && (params?.status as { type?: unknown } | undefined)?.type !== "active")) {
       // A new turn has done nothing yet; an ended or idle one does nothing now.

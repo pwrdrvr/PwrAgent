@@ -15,7 +15,9 @@ import {
  * - A worker whose turn ended, or that went idle, shows no line; a new turn
  *   shows none until its first step.
  * - Lines belong to the worker's parent. A parent's own steps, and a thread
- *   with no known parent, publish nothing.
+ *   with no known parent, publish nothing. A worker whose parent link is
+ *   dropped (it turned out to be an ordinary handoff) loses its line at its
+ *   next step; an archived worker loses it at once.
  * - Each event names only what changed: one step costs one line.
  *
  * The oracle replays the same stream from those rules alone; a window that
@@ -25,12 +27,14 @@ import {
 type Step =
   | { type: "item"; thread: number; item: "command" | "read" | "message" | "reasoning"; n: number }
   | { type: "turn"; thread: number; edge: "started" | "completed" | "failed" | "cancelled" }
-  | { type: "status"; thread: number; status: "active" | "idle" | "systemError" };
+  | { type: "status"; thread: number; status: "active" | "idle" | "systemError" }
+  | { type: "archived"; thread: number }
+  | { type: "link"; thread: number; linked: boolean };
 
 const PARENTS = ["parent-a", "parent-b"];
 // Workers 0-2 belong to parent-a, 3-4 to parent-b; thread 5 is parent-a itself; 6 has no parent.
 const threadId = (thread: number) => thread === 5 ? "parent-a" : thread === 6 ? "stranger" : `worker-${thread}`;
-const parentOf = (worker: string) => {
+const homeParentOf = (worker: string) => {
   const index = Number(worker.replace("worker-", ""));
   if (!worker.startsWith("worker-")) return undefined;
   return index < 3 ? "parent-a" : "parent-b";
@@ -43,10 +47,15 @@ const step: fc.Arbitrary<Step> = fc.oneof(
     edge: fc.constantFrom("started" as const, "completed" as const, "failed" as const, "cancelled" as const) }) },
   { weight: 1, arbitrary: fc.record({ type: fc.constant("status" as const), thread: fc.nat({ max: 6 }),
     status: fc.constantFrom("active" as const, "idle" as const, "systemError" as const) }) },
+  { weight: 1, arbitrary: fc.record({ type: fc.constant("archived" as const), thread: fc.nat({ max: 6 }) }) },
+  { weight: 1, arbitrary: fc.record({ type: fc.constant("link" as const), thread: fc.nat({ max: 6 }), linked: fc.boolean() }) },
 );
 
-function notification(entry: Step): AppServerNotification {
+function notification(entry: Exclude<Step, { type: "link" }>): AppServerNotification {
   const id = threadId(entry.thread);
+  if (entry.type === "archived") {
+    return { method: "thread/archived", params: { threadId: id } } as unknown as AppServerNotification;
+  }
   if (entry.type === "turn") {
     return { method: `turn/${entry.edge}`, params: { threadId: id, turn: { id: "turn" } } } as unknown as AppServerNotification;
   }
@@ -68,18 +77,26 @@ describe("Codex native worker activity lines", () => {
   it("keep each running worker's latest step, one changed line per event", () => {
     fc.assert(fc.property(fc.array(step, { maxLength: 60 }), (steps) => {
       const tracker = new CodexNativeSubAgentActivityTracker();
+      const unlinked = new Set<string>();
+      const parentOf = (worker: string) => unlinked.has(worker) ? undefined : homeParentOf(worker);
       const oracle = new Map<string, string>();
       const windows = new Map<string, ReadonlyMap<string, string>>(PARENTS.map((parent) => [parent, new Map()]));
       for (const entry of steps) {
-        const update = tracker.observe(notification(entry), parentOf);
         const worker = threadId(entry.thread);
-        if (parentOf(worker)) {
-          if (entry.type === "item") {
-            const line = expectedLine(entry);
-            if (line) oracle.set(worker, line);
-          } else if (entry.type === "turn" || entry.status !== "active") {
-            oracle.delete(worker);
-          }
+        if (entry.type === "link") {
+          if (entry.linked) unlinked.delete(worker);
+          else unlinked.add(worker);
+          continue;
+        }
+        const update = tracker.observe(notification(entry), parentOf);
+        if (!parentOf(worker)) {
+          if (entry.type === "item") oracle.delete(worker);
+        } else if (entry.type === "item") {
+          const line = expectedLine(entry);
+          if (line) oracle.set(worker, line);
+        }
+        if (entry.type === "turn" || entry.type === "archived" || (entry.type === "status" && entry.status !== "active")) {
+          oracle.delete(worker);
         }
         if (update) {
           // Only the worker that moved is named.
@@ -87,12 +104,17 @@ describe("Codex native worker activity lines", () => {
           windows.set(update.parentThreadId, applySubAgentActivityChanges(windows.get(update.parentThreadId)!, update.changes));
         }
         for (const parent of PARENTS) {
-          const expected = new Map([...oracle].filter(([worker]) => parentOf(worker) === parent)
+          const expected = new Map([...oracle].filter(([worker]) => homeParentOf(worker) === parent)
             .map(([worker, line]) => [`codex-native:${worker}`, line]));
           expect(new Map(windows.get(parent))).toEqual(expected);
         }
       }
-    }));
+    }), { examples: [
+      // Counterexamples from before archiving and dropped links cleared a line.
+      [[{ type: "item", thread: 0, item: "command", n: 0 }, { type: "archived", thread: 0 }]],
+      [[{ type: "item", thread: 0, item: "command", n: 0 }, { type: "link", thread: 0, linked: false },
+        { type: "item", thread: 0, item: "read", n: 1 }]],
+    ] });
   });
 
   it("names the command a worker wrote, not Codex's shell wrapper (codex-cli 0.169.0 capture)", () => {

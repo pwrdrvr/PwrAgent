@@ -2475,7 +2475,9 @@ export class ClaudeBackend {
     const changes = subAgentActivityChanges(live.publishedActivities, current);
     if (!changes) return;
     live.publishedActivities = new Map(current.map((line) => [line.monitorId, line.activity]));
-    await this.emit({ method: "thread/subAgentActivity/updated", params: { threadId: live.session.thread.id, ...changes } });
+    // A live line must never cost the task rows published after it.
+    await this.emit({ method: "thread/subAgentActivity/updated", params: { threadId: live.session.thread.id, ...changes } })
+      .catch((error: unknown) => claudeBackendLog.warn("Could not publish Claude sub-agent activity", error));
   }
 
   /**

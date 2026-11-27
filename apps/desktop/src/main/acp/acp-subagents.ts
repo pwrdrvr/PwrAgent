@@ -170,6 +170,8 @@ const ACP_STEP_VERBS: Record<string, string> = {
   move: "Moving", search: "Searching", fetch: "Fetching",
 };
 const ACP_STEP_MAX_LENGTH = 240;
+/** A child conversation id, which prefixes a worker's tool-call ids. */
+const ACP_CHILD_CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * A worker's tool call as one line, in the words Claude's progress frames use
@@ -340,7 +342,11 @@ export class AcpSubAgentTracker {
   private readonly stepLines = new Map<string, string>();
   /** The agent whose steps a child conversation reports, for step lines only. */
   private readonly stepConversations = new Map<string, string>();
-  /** Agents a child conversation is tied to for step lines. */
+  /**
+   * Agents a child conversation is tied to for step lines. Ties outlive the
+   * agent: dropping one would let a finished worker's late step tie its
+   * conversation to the next untied launch and show under the wrong card.
+   */
   private readonly stepTiedAgents = new Set<string>();
   private stepLinesRevision = 0;
 
@@ -778,8 +784,11 @@ export class AcpSubAgentTracker {
     if (readUpdateKind(update) !== "tool_call") return false;
     const toolCallId = readToolCallId(update);
     const separator = toolCallId?.lastIndexOf(":") ?? -1;
-    if (!toolCallId || separator < 8) return false;
+    if (!toolCallId || separator < 0) return false;
     const conversationId = toolCallId.slice(0, separator);
+    // Antigravity names a child conversation by UUID; a parent call id that
+    // merely contains a colon is the parent's own step.
+    if (!ACP_CHILD_CONVERSATION_ID.test(conversationId)) return false;
     let agentId = this.byConversationId.get(conversationId) ?? this.stepConversations.get(conversationId);
     if (!agentId) {
       // Only running launches are candidates: a scan of the running set, not

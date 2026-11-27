@@ -39,7 +39,7 @@ describe("ACP sub-agent step lines", () => {
     const tracker = new AcpSubAgentTracker(() => 1_000);
     tracker.apply({ backendId: "acp:antigravity", turnId: "turn-1", update: launch("call_a", "Reader", "in_progress") });
     tracker.apply({ backendId: "acp:antigravity", turnId: "turn-1", update: launch("call_b", "Writer", "in_progress") });
-    expect(tracker.observeStep(step("11111111-aaaa", "call_1", "ls -la"))).toBe(false);
+    expect(tracker.observeStep(step("11111111-aaaa-4bbb-8ccc-dddddddddddd", "call_1", "ls -la"))).toBe(false);
     expect(tracker.subAgentActivities()).toEqual([]);
   });
 
@@ -49,5 +49,20 @@ describe("ACP sub-agent step lines", () => {
     expect(tracker.observeStep({ sessionUpdate: "tool_call", toolCallId: "call_9", title: "git status", kind: "execute" }))
       .toBe(false);
     expect(tracker.subAgentActivities()).toEqual([]);
+  });
+
+  it("ignores a parent call whose id merely contains a colon", () => {
+    // Only a child conversation's UUID prefixes a worker's step; another
+    // agent may name its own calls `functions.run:12`.
+    const tracker = new AcpSubAgentTracker(() => 1_000);
+    tracker.apply({ backendId: "acp:antigravity", turnId: "turn-1", update: launch("call_a", "Reader", "in_progress") });
+    for (const toolCallId of ["functions.run:12", "toolu_abcdefgh:1", "32e00c43-8734-4a37-be08:call_1"]) {
+      expect(tracker.observeStep({ sessionUpdate: "tool_call", toolCallId, title: "git status", kind: "execute" }))
+        .toBe(false);
+    }
+    expect(tracker.subAgentActivities()).toEqual([]);
+    // The worker's own step still ties to the one running launch.
+    expect(tracker.observeStep(step("32e00c43-8734-4a37-be08-6f79fda02d23", "call_7264", "ls -la"))).toBe(true);
+    expect(tracker.subAgentActivities()).toEqual([{ monitorId: "acp-native:call_a", activity: "Running ls -la" }]);
   });
 });

@@ -2225,8 +2225,13 @@ export class SubAgentMonitorService {
     const update = this.codexNativeSubAgentActivity.observe(event.notification,
       (workerThreadId) => this.codexNativeSubAgentParents.get(workerThreadId));
     if (!update) return;
+    // A live line must never cost the durable records this event still owes.
     await this.context.emit({ backend: "codex", notification: { method: "thread/subAgentActivity/updated",
-      params: { threadId: update.parentThreadId, ...update.changes } } });
+      params: { threadId: update.parentThreadId, ...update.changes } } }).catch((error: unknown) => {
+      backendRegistryLog.warn("Codex worker activity line could not be published", {
+        error: String(error), parentThreadId: update.parentThreadId,
+      });
+    });
   }
 
   async recordCodexNativeSubAgentNames(event: AgentEvent): Promise<void> {

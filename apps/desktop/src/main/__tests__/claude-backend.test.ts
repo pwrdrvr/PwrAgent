@@ -3852,6 +3852,32 @@ describe("Claude SDK backend", () => {
       cleared: ["claude-native:agent-1", "claude-native:agent-2", "claude-native:agent-3"] });
   });
 
+  it("keeps a sub-agent's card and task rows when its activity line cannot be published", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13df" } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent-1", description: "Audit agent-1",
+        task_type: "local_agent", subagent_type: "general-purpose", is_backgrounded: true } as SDKMessage;
+      yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent-1", description: "Reading a.ts",
+        usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 }, last_tool_name: "Read" } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent-1",
+        status: "completed", output_file: "", summary: "Audit done" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    // The line is live only; losing it must not cost what is recorded or listed.
+    const backend = f.openBackend({ ...f.backendOptions, emit: async (event) => {
+      if (event.notification.method === "thread/subAgentActivity/updated") throw new Error("renderer gone");
+      await f.backendOptions.emit(event);
+    } });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await vi.waitFor(() => expect(backend.liveSessionThreadIds()).toEqual([]));
+    expect(f.subAgentRecords.flatMap((record) => record.subAgents).at(-1)).toMatchObject({
+      monitorId: "claude-native:agent-1", status: "success",
+    });
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")
+      .map((event) => (event.notification.params as { turn?: { status?: string } }).turn?.status)).toEqual(["completed"]);
+  });
+
   it("retries a sub-agent card whose write failed", async () => {
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
