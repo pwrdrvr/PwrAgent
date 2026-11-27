@@ -282,7 +282,6 @@ type NavigationRefreshOptions = {
   includeDirectoryIndex?: boolean;
   invalidatedOnly?: boolean;
   owners?: FederationTarget[];
-  forceRefresh?: boolean;
 };
 
 function mergeNavigationRefreshOwners(left: FederationTarget[] | undefined, right: FederationTarget[] | undefined): FederationTarget[] | undefined {
@@ -3947,7 +3946,6 @@ export function useThreadNavigation(
   const actionAbortControllerRef = useRef(new AbortController());
   const queuedRefreshRef = useRef<
     | {
-        forceRefresh?: boolean;
         forcePreferredSelection?: boolean;
         preferredOptimisticThread?: NavigationThreadSummary;
         preferredSelectionKey?: string;
@@ -3982,6 +3980,7 @@ export function useThreadNavigation(
     removedDirectoryKeysRef.current = next;
   }, []);
   const scheduledRefreshTaskRef = useRef<(() => void) | undefined>(undefined);
+  const scheduledRefreshRef = useRef<NavigationRefreshOptions | undefined>(undefined);
   const scheduleNavigationRefresh = options.scheduleNavigationRefresh ?? scheduleNavigationRefreshTask;
   const remotePeerDisconnectedRef = useRef(false);
   const lastNavigationActivityAtRef = useRef(Date.now());
@@ -4438,7 +4437,7 @@ export function useThreadNavigation(
     if (preferredOptimisticThread) setOptimisticThread(preferredOptimisticThread);
     if (preferredSelectionKey) setSelectedItemKey((current) => forcePreferredSelection || !current ? preferredSelectionKey : current);
     await refreshBoundedNavigation(options?.owners, options?.invalidatedOnly === true, options?.diagnosticCause,
-      options?.diagnosticTrigger, options?.includeDirectoryIndex);
+      options?.diagnosticTrigger, options?.includeDirectoryIndex, true);
   }, [refreshBoundedNavigation, setSelectedItemKey]);
 
   const refresh = useCallback(
@@ -4452,7 +4451,6 @@ export function useThreadNavigation(
         diagnosticCause: options?.diagnosticCause,
         diagnosticTrigger: options?.diagnosticTrigger,
         includeDirectoryIndex: options?.includeDirectoryIndex,
-        forceRefresh: options?.forceRefresh === true,
         forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
@@ -4490,7 +4488,6 @@ export function useThreadNavigation(
               diagnosticCause: nextRequest.diagnosticCause,
               diagnosticTrigger: nextRequest.diagnosticTrigger,
               includeDirectoryIndex: nextRequest.includeDirectoryIndex,
-              forceRefresh: nextRequest.forceRefresh,
               owners: nextRequest.owners,
               invalidatedOnly: nextRequest.invalidatedOnly,
             }
@@ -4547,24 +4544,15 @@ export function useThreadNavigation(
   );
 
   const scheduleRefresh = useCallback(
-    (
-      preferredSelectionKey?: string,
-      preferredOptimisticThread?: NavigationThreadSummary,
-      forcePreferredSelection = false,
-      options?: NavigationRefreshOptions
-    ): void => {
+    (options?: NavigationRefreshOptions): void => {
       const owners = options?.owners ?? [readRendererFederationTarget() ?? { scope: "local" }];
-      queuedRefreshRef.current = {
-        diagnosticCause: options?.diagnosticCause ?? queuedRefreshRef.current?.diagnosticCause,
-        diagnosticTrigger: options?.diagnosticTrigger ?? queuedRefreshRef.current?.diagnosticTrigger,
-        includeDirectoryIndex: options?.includeDirectoryIndex || queuedRefreshRef.current?.includeDirectoryIndex,
-        invalidatedOnly: options?.invalidatedOnly === true && (!queuedRefreshRef.current || queuedRefreshRef.current.invalidatedOnly === true),
-        owners: queuedRefreshRef.current ? mergeNavigationRefreshOwners(queuedRefreshRef.current.owners, owners) : owners,
-        forceRefresh:
-          options?.forceRefresh === true || queuedRefreshRef.current?.forceRefresh === true,
-        forcePreferredSelection,
-        preferredOptimisticThread,
-        preferredSelectionKey,
+      const scheduled = scheduledRefreshRef.current;
+      scheduledRefreshRef.current = {
+        diagnosticCause: options?.diagnosticCause ?? scheduled?.diagnosticCause,
+        diagnosticTrigger: options?.diagnosticTrigger ?? scheduled?.diagnosticTrigger,
+        includeDirectoryIndex: options?.includeDirectoryIndex || scheduled?.includeDirectoryIndex,
+        invalidatedOnly: options?.invalidatedOnly === true && (!scheduled || scheduled.invalidatedOnly === true),
+        owners: scheduled ? mergeNavigationRefreshOwners(scheduled.owners, owners) : owners,
       };
 
       if (scheduledRefreshTaskRef.current !== undefined) {
@@ -4573,28 +4561,15 @@ export function useThreadNavigation(
 
       scheduledRefreshTaskRef.current = scheduleNavigationRefresh(() => {
         scheduledRefreshTaskRef.current = undefined;
-        const nextRequest = queuedRefreshRef.current;
-        queuedRefreshRef.current = undefined;
-        if (!nextRequest) {
-          return;
-        }
-
-        void refresh(
-          nextRequest.preferredSelectionKey,
-          nextRequest.preferredOptimisticThread,
-          nextRequest.forcePreferredSelection,
-          {
-            diagnosticCause: nextRequest.diagnosticCause,
-            diagnosticTrigger: nextRequest.diagnosticTrigger,
-            includeDirectoryIndex: nextRequest.includeDirectoryIndex,
-            forceRefresh: nextRequest.forceRefresh,
-            owners: nextRequest.owners,
-            invalidatedOnly: nextRequest.invalidatedOnly,
-          }
-        );
+        const nextRequest = scheduledRefreshRef.current;
+        scheduledRefreshRef.current = undefined;
+        // The page controller already joins queued and in-flight reads.
+        // Scheduled observations don't need the mutation receipt queue.
+        if (nextRequest) void refreshBoundedNavigation(nextRequest.owners, nextRequest.invalidatedOnly,
+          nextRequest.diagnosticCause, nextRequest.diagnosticTrigger, nextRequest.includeDirectoryIndex);
       });
     },
-    [refresh, scheduleNavigationRefresh]
+    [refreshBoundedNavigation, scheduleNavigationRefresh]
   );
 
   const markNavigationActivity = useCallback(
@@ -4615,9 +4590,7 @@ export function useThreadNavigation(
         return;
       }
 
-      scheduleRefresh(undefined, undefined, false, {
-        forceRefresh: true,
-      });
+      scheduleRefresh();
     },
     [
       desktopApi?.getNavigationQueryPage,
@@ -4630,6 +4603,8 @@ export function useThreadNavigation(
     return () => {
       if (scheduledRefreshTaskRef.current !== undefined) {
         scheduledRefreshTaskRef.current();
+        scheduledRefreshTaskRef.current = undefined;
+        scheduledRefreshRef.current = undefined;
       }
     };
   }, []);
@@ -4694,9 +4669,7 @@ export function useThreadNavigation(
         return;
       }
 
-      scheduleRefresh(undefined, undefined, false, {
-        forceRefresh: true, diagnosticCause: "timer",
-      });
+      scheduleRefresh({ diagnosticCause: "timer" });
     }, NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS);
 
     return () => {
@@ -4735,7 +4708,7 @@ export function useThreadNavigation(
       const method = event.notification.method as string;
       const owners: FederationTarget[] = [event.federationTarget ?? { scope: "local" }];
       if (event.federationTarget?.scope === "remote" && windowTarget?.scope !== "remote") owners.push({ scope: "local" });
-      const scheduleEventRefresh: typeof scheduleRefresh = (selection, optimistic, forceSelection, options) => {
+      const scheduleEventRefresh = () => {
         if (archiveRefreshBatchesRef.current > 0
           && (method === "thread/archived" || method === "navigation/remoteThreadPins/changed")) {
           // Archive replies and their notifications are one sidebar action.
@@ -4744,7 +4717,7 @@ export function useThreadNavigation(
           for (const owner of owners) archiveEventRefreshOwnersRef.current.set(JSON.stringify(owner), owner);
           return;
         }
-        scheduleRefresh(selection, optimistic, forceSelection, { ...options, owners,
+        scheduleRefresh({ owners,
           invalidatedOnly: navigationQueryEventRequiresRefresh(method, event.notification.params) });
       };
       if (federationTargetsEqual(event.federationTarget, windowTarget) && navigationQueryEventRequiresRefresh(method, event.notification.params)) {
@@ -4881,7 +4854,7 @@ export function useThreadNavigation(
           // revision did not move would answer `unchanged` and keep it.
           // Invalidating first makes every page read in full.
           invalidateNavigation(owners, event);
-          scheduleRefresh(undefined, undefined, false, { owners, invalidatedOnly: true });
+          scheduleRefresh({ owners, invalidatedOnly: true });
           return;
         }
         setState((current) => ({
@@ -5858,9 +5831,11 @@ export function useThreadNavigation(
     }
     return desktopApi.onMessagingBindingsChanged(() => {
       markNavigationActivity({ refreshOnIdleResume: false });
-      scheduleRefresh();
+      const owners: FederationTarget[] = [readRendererFederationTarget() ?? { scope: "local" }];
+      invalidateNavigation(owners);
+      scheduleRefresh({ owners, invalidatedOnly: true });
     });
-  }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh]);
+  }, [desktopApi, enabled, invalidateNavigation, markNavigationActivity, scheduleRefresh]);
 
   const threads = useMemo(() => {
     const retainedKey = browseMode !== "attention" && retainedUnreadThread ? threadSummaryIdentityKey(retainedUnreadThread) : undefined;
@@ -8507,10 +8482,14 @@ export function useThreadNavigation(
 
   const markDirectoriesSeen = useCallback(async (directoryKeys: string[]): Promise<void> => {
     onThreadActionErrorRef.current?.({ kind: "mark-directory-read", message: undefined });
+    const displayed = stateRef.current.rows?.directoryRows;
     try {
       if (!desktopApi?.markNavigationDirectorySeen) throw new Error("Upgrade this instance to mark directory membership read on its owner.");
       for (const directoryKey of new Set(directoryKeys)) {
-        await desktopApi.markNavigationDirectorySeen({ directoryKey, federationTarget: readRendererFederationTarget() });
+        const displayedMembershipRevision = displayed?.get(directoryKey)?.ownerMembershipRevision;
+        await desktopApi.markNavigationDirectorySeen({ directoryKey, federationTarget: readRendererFederationTarget(),
+          ...(displayedMembershipRevision !== undefined ? { displayedMembershipRevision } : {}),
+        });
       }
       await refresh();
     } catch (error) {
@@ -8521,12 +8500,15 @@ export function useThreadNavigation(
   const archiveDirectories = useCallback(async (directoryKeys: string[]): Promise<void> => {
     setArchiveThreadError(undefined);
     setArchiveThreadNotice(undefined);
+    const displayed = stateRef.current.rows?.directoryRows;
     const failures: string[] = [];
     for (const directoryKey of new Set(directoryKeys)) {
       try {
         if (!desktopApi?.removeNavigationDirectory) throw new Error("Upgrade this instance to archive projects through owner navigation.");
+        const displayedMembershipRevision = displayed?.get(directoryKey)?.ownerMembershipRevision;
         const response = await desktopApi.removeNavigationDirectory({
           directoryKey, archiveThreads: true, federationTarget: readRendererFederationTarget(),
+          ...(displayedMembershipRevision !== undefined ? { displayedMembershipRevision } : {}),
         });
         const notice = formatArchiveCleanupNotice(response.cleanup ?? []);
         if (notice) setArchiveThreadNotice(notice);

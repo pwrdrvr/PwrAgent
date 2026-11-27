@@ -61,6 +61,7 @@ import { resolveWorktreeRepositoryDirectory } from "../git-info/worktree-store";
 import { NavigationQueryPool } from "../app-server/navigation-query-pool";
 import { NavigationQueryStore } from "../app-server/navigation-query-store";
 import { NavigationDirectoryScope } from "@pwragent/owner-core/navigation-directory-scope";
+import * as namedBindings from "../messaging/named-messaging-bindings";
 import { NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
 import { navigationDirectoryGitRevisions, projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 
@@ -97,6 +98,58 @@ function createSource(coverage: "complete" | "checking" | "degraded" = "complete
     },
   };
 }
+
+it("serves a warm Attention filter from the existing sidebar index until the owner changes", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const source = createSource();
+  const store = new NavigationQueryStore();
+  const project = vi.fn(() => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query" }));
+  const read = (query: NavigationQueryRequest["query"]) => store.readPage({
+    scopeKey: "warm-sidebar", request: { protocol: 2, consumer: "main-sidebar", query }, loadIndex: project,
+  });
+  try {
+    source.finish();
+    await read({ kind: "lens", lens: "attention" });
+    const projected = await project.mock.results[0]!.value;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await read({ kind: "lens", lens: "attention", attention: "active" });
+    expect(await project.mock.results[1]!.value).toBe(projected);
+    expect(source.listThreads).toHaveBeenCalledTimes(1);
+
+    source.emit("thread/status/changed");
+    await read({ kind: "lens", lens: "attention", attention: "active" });
+    expect(source.listThreads).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(15_001);
+    await read({ kind: "lens", lens: "attention" });
+    expect(source.listThreads).toHaveBeenCalledTimes(3);
+  } finally { vi.useRealTimers(); }
+});
+
+it("drops a revoked named messaging binding from the next warm sidebar read", async () => {
+  const source = createSource();
+  const thread: NavigationThreadSummary = { id: "thread", source: "codex", title: "Thread", titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: false } };
+  const binding = { id: "named-binding", backend: "codex", threadId: thread.id, createdAt: 1,
+    channel: { channel: "telegram", connectionId: "bot", conversation: { kind: "topic", id: "topic" } },
+  } as MessagingBindingRecord;
+  const previous = mocks.store.readNavigationQueryIndex.getMockImplementation()!;
+  mocks.store.readNavigationQueryIndex.mockImplementation(() => ({ threads: [thread], directories: [] }));
+  let bindings = [binding];
+  namedBindings.setNamedMessagingBindingReader(async () => bindings);
+  const read = () => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "renderer-navigation-query" });
+  try {
+    source.finish();
+    expect((await read()).threads[0]?.messagingBindings).toHaveLength(1);
+    bindings = [];
+    namedBindings.noteMessagingBindingsChange();
+    expect((await read()).threads[0]?.messagingBindings ?? []).toEqual([]);
+    expect(source.listThreads).toHaveBeenCalledTimes(2);
+  } finally {
+    namedBindings.setNamedMessagingBindingReader(undefined);
+    mocks.store.readNavigationQueryIndex.mockImplementation(previous);
+  }
+});
 
 it("stores only serviceable stacks and pages past the compact membership preview", () => {
   fc.assert(fc.property(fc.integer({ min: 9, max: 36 }), fc.integer({ min: 1, max: 24 }), (selected, unrelated) => {

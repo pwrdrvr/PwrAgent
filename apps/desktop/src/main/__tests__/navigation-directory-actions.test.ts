@@ -1,10 +1,13 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { buildFederatedThreadRef, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
 import { deriveInboxState } from "@pwragent/shared/inbox";
+import { projectNavigationQuery } from "@pwragent/owner-core/navigation-query-projection";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { markAgentProjectRead } from "../app-server/agent-project-read";
 import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";
@@ -18,7 +21,9 @@ import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 const mocks = vi.hoisted(() => ({ loadIndex: vi.fn(), publish: vi.fn(),
   listeners: new Set<(event: AgentEvent) => void>(), store: undefined as SqliteOverlayStore | undefined,
 }));
-vi.mock("../app-server/navigation-query-source", () => ({ loadLocalNavigationQueryIndex: mocks.loadIndex }));
+vi.mock("../app-server/navigation-query-source", () => ({
+  loadLocalNavigationQueryIndex: mocks.loadIndex, loadSidebarNavigationQueryIndex: mocks.loadIndex,
+}));
 vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({
   publishLocalEvent: mocks.publish,
@@ -201,6 +206,30 @@ it("keeps unread state when verified membership includes a thread displayed unde
   });
   expect(writes.commits).toBe(0);
   expect(mocks.publish).not.toHaveBeenCalled();
+});
+
+it.each(["archive", "mark read"])("refuses to %s a project when its displayed membership differs from the fresh owner reads", async (action) => {
+  const threads = ["shown", "moved"].map((id): NavigationThreadSummary => ({ id, source: "codex", title: id, titleSource: "derived",
+    linkedDirectories: [], updatedAt: 1, inbox: { inInbox: true } }));
+  mocks.loadIndex.mockResolvedValue({ threads, directories: [{ ...directory, threadKeys: ["codex:shown", "codex:moved"] }] });
+  const ref = buildFederatedThreadRef({ backend: "codex", instanceId: "peer", threadId: "mounted" });
+  const visible = projectNavigationQuery({
+    index: { threads: [threads[0]!, { ...threads[0]!, id: "mounted", federation: { ref, instanceLabel: "Peer" } }],
+      directories: [{ ...directory, threadKeys: ["codex:shown", federatedThreadIdentityKey(ref)] }] },
+    request: { protocol: 2, consumer: "main-sidebar", inventory: "viewer", query: { kind: "directory-index" } },
+  }).directories[0];
+  expect(visible?.counts.total).toBe(2);
+  expect(visible?.ownerMembershipRevision).toBe(createHash("sha256")
+    .update(JSON.stringify([key, ["codex:shown"]])).digest("base64url"));
+  const archive = vi.fn();
+  const request = { directoryKey: key, displayedMembershipRevision: visible?.ownerMembershipRevision };
+  const { writes } = await measureSqliteWrites(async () => {
+    const result = action === "archive" ? removeLocalNavigationDirectory({ ...request, archiveThreads: true }, archive)
+      : markLocalNavigationDirectorySeen(request);
+    await expect(result).rejects.toThrow("Directory membership changed");
+  });
+  expect(archive).not.toHaveBeenCalled();
+  expect(writes.commits).toBe(0);
 });
 
 it("does not mark unread state when owner directory membership is incomplete", async () => {

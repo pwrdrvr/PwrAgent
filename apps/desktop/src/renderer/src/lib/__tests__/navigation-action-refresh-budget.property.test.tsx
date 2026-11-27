@@ -1,9 +1,10 @@
 import { Profiler } from "react";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
   NavigationLaunchpadDraft,
+  NavigationQueryPage,
   NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
@@ -15,6 +16,48 @@ import { NavigationWindowQueries } from "../navigation-window-queries";
 import { useThreadNavigation } from "../useThreadNavigation";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("joins staggered window refreshes to the current sidebar read", async () => {
+  const thread: NavigationThreadSummary = { id: "thread", source: "codex", title: "Thread", titleSource: "explicit",
+    inbox: { inInbox: false }, linkedDirectories: [] };
+  const replies: Array<() => void> = [];
+  const tasks = new Set<() => void>();
+  let focus: (() => void) | undefined;
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => navigationQueryFixture(request, { threads: [thread] }));
+  const api: DesktopApi = { getNavigationQueryPage: read, onWindowFocus: (callback) => { focus = callback; return () => { focus = undefined; }; } };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api, { scheduleNavigationRefresh: (task) => {
+    tasks.add(task); return () => { tasks.delete(task); };
+  } }));
+  const runTasks = () => {
+    const scheduled = [...tasks];
+    tasks.clear();
+    scheduled.forEach((task) => task());
+  };
+  const drain = async () => {
+    for (let i = 0; i < 48; i++) {
+      await act(async () => { runTasks(); replies.splice(0).forEach((reply) => reply()); });
+      if (!tasks.size && !replies.length && result.current.pagedNavigation.resources.size
+        && [...result.current.pagedNavigation.resources.values()].every(({ loading }) => !loading)) return;
+    }
+    throw new Error("The sidebar did not settle");
+  };
+  try {
+    await drain();
+    const pages = result.current.pagedNavigation.resources.size;
+    read.mockClear();
+    read.mockImplementation((request) => {
+      const snapshot = navigationQueryFixture(request, { threads: [thread] });
+      return new Promise<NavigationQueryPage>((resolve) => replies.push(() => resolve(snapshot)));
+    });
+    for (let i = 0; i < 16; i++) await act(async () => { focus?.(); runTasks(); });
+    expect(replies.length).toBeGreaterThan(0);
+    await drain();
+    expect(read).toHaveBeenCalledTimes(pages);
+  } finally {
+    unmount();
+    replies.splice(0).forEach((reply) => reply());
+  }
+});
 
 // Metamorphic property: doubling unrelated expanded directories and child
 // collections cannot increase the revalidation cost of one completed action.

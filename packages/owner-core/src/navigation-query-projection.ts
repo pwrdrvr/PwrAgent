@@ -304,6 +304,10 @@ function hashValue(value: unknown): string {
     .digest("base64url");
 }
 
+export function navigationDirectoryMembershipRevision(directoryKey: string, threadKeys: Iterable<string>): string {
+  return hashValue([directoryKey, [...new Set(threadKeys)].sort()]);
+}
+
 function navigationIdentity(thread: NavigationThreadSummary): NavigationIdentity {
   return {
     backend: thread.source,
@@ -837,6 +841,7 @@ function buildDirectoryRows(params: {
   snapshot: NavigationQueryIndex;
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
   parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
+  includeMembershipRevision?: boolean;
 }): NavigationDirectoryRow[] {
   return params.snapshot.directories.map((directory) => {
     const memberThreads = directoryMemberThreads(directory, params.threadsByLegacyKey);
@@ -886,6 +891,8 @@ function buildDirectoryRows(params: {
         ? { localAvailability: directory.localAvailability }
         : {}),
       counts: countsForThreads(memberThreads),
+      ...(params.includeMembershipRevision ? { ownerMembershipRevision: navigationDirectoryMembershipRevision(directory.key,
+        memberThreads.filter((thread) => !thread.federation).map((thread) => buildThreadIdentityKey(thread.source, thread.id))) } : {}),
       pinnedRootCount,
       unpinnedRootCount: rootThreads.length - pinnedRootCount,
       unpinnedThreadCount,
@@ -1818,7 +1825,9 @@ export function projectNavigationQuery(params: {
         || (query.kind === "star-map" && query.projectKey === undefined),
     }),
     ...(descriptor ? { selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index, directories: [descriptor] },
-      threadsByLegacyKey, parentCandidates })[0] } : {}),
+      threadsByLegacyKey, parentCandidates,
+      includeMembershipRevision: query.kind === "exact" && params.request.consumer === "main-sidebar",
+    })[0] } : {}),
     // The split's acknowledgment as well as its size: an owner that predates
     // `roots` sets no collection size on a lens page, so the viewer knows to
     // filter that page itself.
@@ -1838,6 +1847,7 @@ export function projectNavigationQuery(params: {
         snapshot: { ...params.index, directories: indexedDirectories },
         threadsByLegacyKey,
         parentCandidates,
+        includeMembershipRevision: params.request.consumer === "main-sidebar",
       }) : [],
     entries,
     ...(pullRequestPositions.length ? { pullRequestPositions } : {}),
