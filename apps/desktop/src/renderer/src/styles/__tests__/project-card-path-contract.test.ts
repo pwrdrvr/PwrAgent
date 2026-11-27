@@ -29,8 +29,24 @@ describe("project header card path", () => {
   });
 
   it("still shrinks the head before the folder name", () => {
-    expect(ruleBody(".project-card__path-head")).toMatch(/flex:\s*0 1 auto;/);
+    expect(ruleBody(".project-card__path-head")).toMatch(/flex:\s*1 1 12ch;/);
     expect(ruleBody(".project-card__path-tail")).toMatch(/flex:\s*0 0 auto;/);
+  });
+
+  /*
+   * A folder name wider than the card used to squeeze the head to 0px, so the
+   * line showed only the truncated name: a copy of the title that no longer
+   * said where the project lives. The line now wraps the name onto its own
+   * row whenever it cannot share one with 12ch of the head. The head's
+   * `max-width: max-content` is what keeps a short path on one line with the
+   * name beside it: without it the head's flex-grow fills the row and pushes
+   * the name to the right edge.
+   */
+  it("wraps a long folder name below the head so the location stays visible", () => {
+    expect(ruleBody(".project-card__path")).toMatch(/flex-wrap:\s*wrap;/);
+    const head = ruleBody(".project-card__path-head");
+    expect(head).toMatch(/max-width:\s*max-content;/);
+    expect(head).toMatch(/min-width:\s*0;/);
   });
 
   it("wraps a title with no break opportunity inside the card", () => {
