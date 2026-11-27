@@ -1,4 +1,4 @@
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
@@ -36,6 +36,11 @@ export function ComposerPrMenu(props: {
   className: string;
   tooltip: string;
   ariaDescription?: string;
+  /** Text in place of the PR icon, where a row already names the PR. */
+  triggerText?: string;
+  testId?: string;
+  /** The menu is portaled; a hover-revealed rail stays open while it is. */
+  onOpenChange?: (open: boolean) => void;
   autoFix: {
     checked: boolean;
     available: boolean;
@@ -72,6 +77,12 @@ export function ComposerPrMenu(props: {
     setOpen(true);
   }, []);
   useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
+  const onOpenChange = props.onOpenChange;
+  useEffect(() => {
+    if (!open) return undefined;
+    onOpenChange?.(true);
+    return () => onOpenChange?.(false);
+  }, [onOpenChange, open]);
   useCloseOnOutsidePointer({ open, triggerRef, menuRef, onClose: close });
   const position = useTodoFactMenuPlacement({ open, triggerRef, menuRef, width: 340 });
   const owner: FederationTarget | undefined = props.thread.federation?.ref.target;
@@ -128,13 +139,13 @@ export function ComposerPrMenu(props: {
         aria-controls={open ? id : undefined}
         aria-description={props.ariaDescription}
         data-tooltip={open ? undefined : props.tooltip}
-        data-testid="composer-pr-menu"
+        data-testid={props.testId ?? "composer-pr-menu"}
         onClick={() => {
           if (open) close();
           else openMenu();
         }}
       >
-        <PullRequestIcon size={15} aria-hidden="true" />
+        {props.triggerText ?? <PullRequestIcon size={15} aria-hidden="true" />}
       </button>
       {open ? createPortal(
         <div

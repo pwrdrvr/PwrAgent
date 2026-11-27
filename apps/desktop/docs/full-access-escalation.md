@@ -13,16 +13,16 @@ says when to read this document. Relative links were updated for this location.
   surface that calls the API itself is a one-click, un-gated escalation, which
   is what the Star Map chat card's settings chip was while the dialog lived
   inside `Composer`.
-- The composer's access picker confirms inline instead of opening the
-  dialog: choosing the Full Access stop shows Allow Full Access and Cancel
+- The access picker (`AccessPicker`) confirms inline instead of opening the
+  dialog. The composer and the Star Map chat card's strip use it: choosing the Full Access stop shows Allow Full Access and Cancel
   under the level bar, and the level does not change until Allow. It asks the
   gate's `requiresConfirmation` whether to show them and commits through its
   `confirmExecutionModeSelection`, so the gate still owns the rule and the
   dismissed-forever preference (a dismissed warning commits the stop at
   once). Its stops are ordered by `orderProviderAccessOptions`
   (`packages/shared/src/provider-access-levels.ts`): Plan < Default <
-  Accept Edits < Auto < Full Access. The Star Map chat card and to-do cards
-  still use the dialog.
+  Accept Edits < Auto < Full Access. The dialog remains for a surface that
+  does not confirm inline, such as Start on a to-do card.
 - A surface with a live settings snapshot (the main window's `App`) passes
   `dismissed` / `onDismiss`; anything else lets the gate read and write the
   preference itself.
@@ -34,7 +34,8 @@ says when to read this document. Relative links were updated for this location.
   the window's copy of the card, so the run carries the access it showed
   (`seenExecutionMode`) and the owner refuses the start if the stored card
   changed since; an agent's `update_todo` cannot slip a raise in between.
-- A start card's Access menu shows the access the new thread gets, derived by
+- A start card's access picker (`AccessPicker` at `size="card"`, its options
+  adapted by `todoAccessControl`) shows the access the new thread gets, derived by
   `resolveThreadTodoStartAccess` (`packages/shared/src/thread-todo-access.ts`),
   the same function the owner's start runs, and offers only the destination's
   modes: PwrAgent modes, an agent's own modes (Kimi's Yolo), or Antigravity's
@@ -45,7 +46,9 @@ says when to read this document. Relative links were updated for this location.
   two overlapping access/mode controls. Antigravity's Full Access runs on the
   Full Access process in default native mode (never silently in Plan). A pick
   is stored on the card through `setThreadTodoAccess`, never held only in the
-  window. A native pick stores its level as the card's mode, so Yolo is stored
+  window. Choosing a stop never asks: it only stores the level, and Start
+  confirms it through the gate. Each stop stores exactly the level it shows,
+  so the stops drawn as Full Access are the ones Start confirms. A native pick stores its level as the card's mode, so Yolo is stored
   at Full Access and the start passes this gate; `seenNativeAccessMode` makes
   the owner refuse a start whose stored pick changed. An agent's `update_todo`
   that names a mode drops the operator's native pick.

@@ -5,6 +5,7 @@ import type {
   AppServerThreadMessageEntry,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
+import { applyCorrespondenceRevision, isCorrespondenceEntry } from "./transcript-correspondence";
 import { isTurnAnswer, lateWorkBelongsAboveAnswer } from "../features/thread-detail/turn-answer-placement";
 import {
   addTranscriptReviewSegmentToIndex,
@@ -67,6 +68,7 @@ export type TranscriptHistoryIndex = {
   warmMessageIds: Set<string>;
   warmEntryOverrides: Map<string, TranscriptRevision<AppServerThreadEntry>>;
   warmMessageOverrides: Map<string, TranscriptRevision<AppServerThreadMessage>>;
+  correspondenceById: Map<string, AppServerThreadMessageEntry>;
   warmRevisionVersion: number;
   activityRevision: number;
   promptsById: Map<string, AppServerThreadMessageEntry>;
@@ -84,6 +86,7 @@ export function createTranscriptHistoryIndex(): TranscriptHistoryIndex {
     warmMessageIds: new Set(),
     warmEntryOverrides: new Map(),
     warmMessageOverrides: new Map(),
+    correspondenceById: new Map(),
     warmRevisionVersion: 0,
     activityRevision: 0,
     promptsById: new Map(),
@@ -158,31 +161,39 @@ export function appendTranscriptHistoryPage(params: TranscriptHistoryPageInput):
 
 function retainTranscriptPage(params: TranscriptHistoryPageInput, position: "older" | "newer"): LoadedTranscriptHistory {
   const tailEntryIds = new Set(params.tailEntries.map((entry) => entry.id));
+  const correspondence = params.index.correspondenceById;
   if (position === "newer") {
     const revisions = params.page.replay.entries.filter((entry) => params.index.entryIds.has(entry.id) && !tailEntryIds.has(entry.id));
     if (revisions.length > 0) {
       // Record only the touched IDs. An existing view captures its revision
       // version, so later updates need no copies of its historical overrides.
       const version = ++params.index.warmRevisionVersion;
-      for (const entry of revisions) {
+      const updated = revisions.map((entry) => {
+        const original = correspondence.get(entry.id);
+        if (entry.type !== "message" || !original) return entry;
+        const latest = params.index.warmEntryOverrides.get(entry.id)?.value;
+        return applyCorrespondenceRevision(latest?.type === "message" ? latest : original, entry, true);
+      });
+      for (const entry of updated) {
         if (entry.type === "activity") params.index.activityRevision++;
         params.index.warmEntryIds.add(entry.id);
         const entries = params.index.warmEntryOverrides;
         entries.set(entry.id, { value: entry, version, previous: entries.get(entry.id) });
       }
-      const revisedMessages = messagesForEntries(revisions, params.page.replay.messages);
+      const revisedMessages = messagesForEntries(updated,
+        params.page.replay.messages.filter((message) => !correspondence.has(message.id)));
       for (const message of revisedMessages) {
         if (!params.index.messageIds.has(message.id)) continue;
         params.index.warmMessageIds.add(message.id);
         const messages = params.index.warmMessageOverrides;
         messages.set(message.id, { value: message, version, previous: messages.get(message.id) });
       }
-      reviseArchivedAssistantReviewEvidence(params.index.review, revisions, revisedMessages);
+      reviseArchivedAssistantReviewEvidence(params.index.review, updated, revisedMessages);
     }
   }
   const entries = params.page.replay.entries.filter(
     (entry) =>
-      !tailEntryIds.has(entry.id)
+      (!tailEntryIds.has(entry.id) || isCorrespondenceEntry(entry))
       && !params.index.entryIds.has(entry.id),
   );
   const prompts: AppServerThreadMessageEntry[] = [];
@@ -191,11 +202,12 @@ function retainTranscriptPage(params: TranscriptHistoryPageInput, position: "old
 
   for (const entry of entries) {
     params.index.entryIds.add(entry.id);
-    if (position === "newer") params.index.warmEntryIds.add(entry.id);
+    if (isCorrespondenceEntry(entry)) correspondence.set(entry.id, entry);
+    if (position === "newer" || correspondence.has(entry.id)) params.index.warmEntryIds.add(entry.id);
   }
   for (const message of messages) {
     params.index.messageIds.add(message.id);
-    if (position === "newer") params.index.warmMessageIds.add(message.id);
+    if (position === "newer" || correspondence.has(message.id)) params.index.warmMessageIds.add(message.id);
   }
   addTranscriptReviewSegmentToIndex(
     params.index.review, reviewSummary, position,
@@ -682,6 +694,13 @@ export function combineTranscriptEntries(
   );
   const warmOverrides = index.warmEntryOverrides;
   const warmRevisionVersion = index.warmRevisionVersion;
+  for (const [id, tailRevision] of revisions) {
+    const historical = index.correspondenceById.get(id);
+    if (historical && tailRevision.type === "message") {
+      const warmRevision = transcriptRevisionAt(warmOverrides, id, warmRevisionVersion);
+      revisions.set(id, applyCorrespondenceRevision(warmRevision?.type === "message" ? warmRevision : historical, tailRevision, true));
+    }
+  }
   const historyInsertions = placeRetainedArtifactsInHistory(
     retainedEntries,
     index,
@@ -1025,6 +1044,13 @@ export function combineTranscriptMessages(
   );
   const warmOverrides = index.warmMessageOverrides;
   const warmRevisionVersion = index.warmRevisionVersion;
+  for (const [id, live] of revisions) {
+    const historical = index.correspondenceById.get(id);
+    if (historical) {
+      const stored = transcriptRevisionAt(warmOverrides, id, warmRevisionVersion);
+      revisions.set(id, applyCorrespondenceRevision(stored ?? historical, live, true));
+    }
+  }
   return createSegmentedArray({
     excludedHistoryIds,
     historyCount: history.messageCount,

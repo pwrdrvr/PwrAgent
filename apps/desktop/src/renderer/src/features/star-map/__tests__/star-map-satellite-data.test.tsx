@@ -230,7 +230,9 @@ describe("star map context satellite data", () => {
     const desktopApi = buildApi();
     renderCardWithContextSatellite(desktopApi);
 
-    expect(await satellite().findByText("darwin")).toBeTruthy();
+    // Details › Thread keeps it in the Agent section's execution context.
+    fireEvent.click(await satellite().findByRole("button", { name: "Execution context" }));
+    expect(within(screen.getByRole("menu", { name: "Execution context" })).getByText("darwin")).toBeTruthy();
   });
 
   it("shows the host instance's AI providers, not an unavailable rail", async () => {
@@ -299,7 +301,9 @@ describe("star map context satellite data", () => {
       expect(desktopApi.readThread).toHaveBeenCalled();
     });
 
-    fireEvent.click(satellite().getByRole("tab", { name: "Edits" }));
+    // Edits is Details › Changes.
+    fireEvent.click(satellite().getByRole("tab", { name: /^Details/ }));
+    fireEvent.click(satellite().getByRole("tab", { name: /^Changes/ }));
 
     const dockToggle = await satellite().findByRole("button", {
       name: "Show above composer",
@@ -315,7 +319,9 @@ describe("star map context satellite data", () => {
       expect(desktopApi.readThread).toHaveBeenCalled();
     });
 
-    fireEvent.click(satellite().getByRole("tab", { name: "Edits" }));
+    // Edits is Details › Changes.
+    fireEvent.click(satellite().getByRole("tab", { name: /^Details/ }));
+    fireEvent.click(satellite().getByRole("tab", { name: /^Changes/ }));
 
     expect(await satellite().findByText("Edited 1 file")).toBeTruthy();
     expect(

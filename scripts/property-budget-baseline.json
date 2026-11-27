@@ -1239,9 +1239,6 @@
     "apps/desktop/src/renderer/src/features/thread-detail/__tests__/work-phase-activity-runs.property.test.tsx": {
       "heavyFixture": 2
     },
-    "apps/desktop/src/renderer/src/features/thread-detail/context-panels/__tests__/LinkedProjectsPanel.property.test.tsx": {
-      "heavyFixture": 2
-    },
     "apps/desktop/src/renderer/src/features/thread-detail/context-panels/__tests__/ProviderStatusPanel.test.tsx": {
       "heavyFixture": 2
     },

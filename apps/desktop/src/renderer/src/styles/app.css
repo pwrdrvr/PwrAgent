@@ -27085,7 +27085,18 @@ button.stack-display__thread,
   flex: 1 1 auto;
 }
 
+/* On a narrow card the model pill gives way first, down to a floor that
+   still shows the start of the model's name; only then does the access
+   chip's level name shorten. Flex shrinks in proportion to basis × factor,
+   so the pill's large factor leaves the chip whole (to the pixel) while the
+   pill is above its floor. */
 .compact-composer__model {
+  display: flex;
+  flex: 0 100000 auto;
+  min-width: 72px;
+}
+
+.compact-composer__access {
   display: flex;
   flex: 0 1 auto;
   min-width: 0;
@@ -46369,64 +46380,459 @@ button.pricing-token-miser__folded:focus-visible {
   white-space: nowrap;
 }
 
-/* Linked Projects panel. */
-.linked-projects__header {
+/* Details tab: a segmented control over Thread, Changes, PRs and Jobs, and
+   the Thread view's short sections of actionable rows. */
+.details-panel {
+  container: details-panel / inline-size;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.linked-projects__header h3 {
-  margin: 0;
+/* Each segment is as wide as its label and count, and the four share what
+   is left over. Equal columns clipped "Changes 99+" under "PRs" well before
+   the rail's narrowest width. */
+.details-segments {
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  gap: 2px;
+  margin: 12px 12px 0;
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
 }
 
-.linked-projects__header .context-list__action {
+.details-segments__button {
+  position: relative;
   display: inline-flex;
+  height: 26px;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
   white-space: nowrap;
 }
 
-.linked-projects-list {
-  gap: 14px;
+.details-segments__button:hover,
+.details-segments__button:focus-visible {
+  color: var(--text-primary);
 }
 
-.linked-project {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.details-segments__button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
-.linked-project__heading {
+.details-segments__button.is-active {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+}
+
+.details-segments__count {
+  min-width: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+}
+
+.details-segments__icon {
+  display: none;
+  flex: 0 0 auto;
+}
+
+/* Too narrow for every label beside its count: each segment shows its icon
+   and count, and its label stays as the tab's name (and its tooltip). The
+   width is where the labels with three-character counts stop fitting. */
+@container details-panel (max-width: 359px) {
+  .details-segments__icon {
+    display: block;
+  }
+
+  .details-segments__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+.details-segments__button.is-active .details-segments__count {
+  border-color: var(--accent-border-soft);
+  color: var(--accent-bright);
+}
+
+.details-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-width: 0;
 }
 
-.linked-project__facts {
+.details-section .details-section__heading {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.details-section__header .details-section__heading {
+  margin-bottom: 0;
+}
+
+.details-section__header + * {
+  margin-top: 6px;
+}
+
+.details-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.details-rows + .details-rows {
+  margin-top: 2px;
+}
+
+.details-row {
+  display: flex;
+  min-width: 0;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+.details-row--primary {
+  background: var(--bg-panel-hover);
+}
+
+.details-row--folder.is-selected {
+  border-color: var(--accent-border-soft);
+}
+
+.details-row__icon {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.details-row__text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.details-row__title {
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.details-row__title-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.details-row__title-button:hover {
+  color: var(--accent-bright);
+}
+
+.details-row__title-button:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.details-row__subtitle {
+  display: block;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.details-row__mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.details-row__muted {
+  color: var(--text-muted);
+}
+
+.details-row__meta {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.details-row__meta--running {
+  color: var(--success-text);
+}
+
+.details-row__meta--failed {
+  color: var(--danger-text);
+}
+
+.details-row__add {
+  color: var(--success-text);
+}
+
+.details-row__del {
+  color: var(--danger-text);
+}
+
+/* A whole row that does one thing: open, toggle, show. */
+.details-row__action {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.details-row:has(> .details-row__action):hover,
+button.details-row:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+}
+
+.details-row__action:focus-visible,
+.details-row__more:focus-visible,
+.details-row__run:focus-visible,
+.details-row__badge-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+button.details-row {
+  width: 100%;
+  margin-top: 2px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.details-row--add .details-row__title {
+  color: var(--text-secondary);
+}
+
+.details-row--add:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* Attach folder opens the composer's project picker; its wrapper is an
+   inline pill in the composer, so let the row span the section here. */
+.project-picker:has(> .details-row--add) {
+  display: flex;
+}
+
+.details-row__badge {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.details-row__badge--accent,
+.details-row__badge-button.is-active {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
+.details-row__badge-button {
+  background: transparent;
+  cursor: pointer;
+}
+
+.details-row__badge-button.is-project-overridden,
+.details-row__badge-button.is-idle {
+  border-style: dashed;
+}
+
+.details-row__more {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.details-row__more:hover,
+.details-row__more[aria-expanded="true"] {
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.details-row--split .details-row__more--chevron {
+  margin-left: auto;
+}
+
+.details-row__run {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.details-row__run:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
+.details-row__run.is-running {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
+.details-row__run:disabled:not(.is-running) {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.details-rule {
+  margin: 6px 2px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.details-facts {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 4px 12px;
-  margin: 0;
+  gap: 3px 12px;
+  margin: 8px 0 0;
+  padding: 0 6px;
 }
 
-.linked-project__facts div {
+.details-facts div {
   display: contents;
 }
 
-.linked-project__facts dt {
+.details-facts dt {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 11.5px;
 }
 
-.linked-project__facts dd {
+.details-facts dd {
   margin: 0;
-  color: var(--text-secondary);
-  font-size: 11px;
   overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+/* A Select trigger draws its own chevron element; drop the
+   `.settings-select` background pair so it shows one. */
+.details-select {
+  height: 28px;
+  margin-bottom: 4px;
+  padding-inline: 10px;
+  background-image: none;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+}
+
+.pr-activity .details-select {
+  margin: 0 0 8px;
+}
+
+.details-row-menu {
+  position: fixed;
+  right: auto;
+  z-index: 150;
+  width: 280px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  font-family: var(--font-sans);
+}
+
+.details-row-menu__heading {
+  margin: 6px 8px 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.details-row-menu__item .todo-split__item-label {
+  flex: none;
+}
+
+.details-row-menu__detail {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.details-row-menu__item--danger {
+  color: var(--danger-text);
 }
 
 .composer {
@@ -50765,6 +51171,15 @@ button.composer__subthread-source-parent:hover {
   overflow: hidden;
 }
 
+/* Portalled for a host that would clip it (the context rail): placed
+   against the trigger in viewport coordinates by the picker itself. */
+.project-picker__pop--portal {
+  position: fixed;
+  bottom: auto;
+  z-index: 150;
+  max-width: calc(100vw - 16px);
+}
+
 .project-picker__list {
   /* Only the directories list scrolls; it's the sole flex-grow child of
      the fixed-height panel, so the "Add directory…" row stays pinned to
@@ -52985,6 +53400,42 @@ button.stepped-bar__tick:focus-visible {
   opacity: 0.9;
 }
 
+/* A to-do card's or Star Map chat card's 22px chip: the shield, then the
+   level by name, the same height and type as the card's model pill. */
+.access-picker--card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.access-picker--card .access-picker__trigger {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  min-height: 22px;
+  box-sizing: border-box;
+  gap: 5px;
+  padding: 0 7px 0 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.access-picker__trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.access-picker__trigger-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: inherit;
+  line-height: 0;
+  opacity: 0.7;
+}
+
 .access-picker__panel {
   position: absolute;
   z-index: 30;
@@ -53001,6 +53452,15 @@ button.stepped-bar__tick:focus-visible {
   color: var(--text-primary);
   font-family: var(--font-sans);
   white-space: normal;
+}
+
+/* Portalled under a card; placed from the trigger. */
+.access-picker__panel--below {
+  position: fixed;
+  z-index: 150;
+  bottom: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .access-picker__head {

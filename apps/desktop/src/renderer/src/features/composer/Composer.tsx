@@ -191,7 +191,18 @@ import {
   findPreferredReviewWorkspaceCwd,
   findPrimaryReviewWorkspaceCwd,
 } from "@pwragent/shared/review-branches";
-import { normalizeGitOriginUrl } from "@pwragent/shared/directory-navigation";
+import {
+  describeEndedPullRequestAutoFix,
+  formatThreadWorkspaceLabel,
+  getPrimaryWorkspaceRepository,
+  getThreadWorkspace,
+  hasPrimaryWorkspacePullRequest,
+  isThreadWorkspaceHandoffEligible,
+  primaryWorkspacePullRequests,
+  type ThreadWorkspace,
+  type WorkspaceHandoffAvailability,
+  type WorkspaceHandoffRequest,
+} from "./thread-workspace";
 import {
   parseCodexAsyncQuestionReply,
   summarizeCodexAsyncQuestionReply,
@@ -801,6 +812,16 @@ export type ComposerProps = {
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
+  /**
+   * Opens the handoff dialog from outside the composer: the Details tab's
+   * folder menu asks here, so both use one dialog and one set of checks.
+   */
+  workspaceHandoffRequest?: WorkspaceHandoffRequest;
+  /**
+   * Which handoffs the composer would open now, so a control outside it
+   * offers only those; undefined once the composer is gone.
+   */
+  onWorkspaceHandoffAvailabilityChange?: (availability: WorkspaceHandoffAvailability | undefined) => void;
   /** Handoff to Local that leaves the main checkout on its own branch. */
   onMoveThreadToMainCheckout?: (
     worktreePath: string,
@@ -12981,6 +13002,29 @@ function useComposerController(props: ComposerProps) {
         setFreshBranchName("");
       }
     };
+    // A request answers once, and only while the menu it came from would
+    // have offered it; a stale or refused one opens nothing.
+    const handledHandoffRequestRef = useRef(props.workspaceHandoffRequest?.id);
+    const workspaceHandoffRequest = props.workspaceHandoffRequest;
+    const handoffRequestAllowed = workspaceHandoffRequest?.direction === "to-project"
+      ? canMoveThreadProject
+      : canHandoffThreadWorkspace;
+    useEffect(() => {
+      if (!workspaceHandoffRequest
+        || handledHandoffRequestRef.current === workspaceHandoffRequest.id) return;
+      handledHandoffRequestRef.current = workspaceHandoffRequest.id;
+      if (handoffRequestAllowed) openHandoffDialog(workspaceHandoffRequest.direction);
+      // openHandoffDialog is rebuilt every render; the request id gates this.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [workspaceHandoffRequest, handoffRequestAllowed]);
+    const onWorkspaceHandoffAvailabilityChange = props.onWorkspaceHandoffAvailabilityChange;
+    useEffect(() => {
+      onWorkspaceHandoffAvailabilityChange?.({
+        project: canMoveThreadProject,
+        workspace: canHandoffThreadWorkspace,
+      });
+    }, [canHandoffThreadWorkspace, canMoveThreadProject, onWorkspaceHandoffAvailabilityChange]);
+    useEffect(() => () => onWorkspaceHandoffAvailabilityChange?.(undefined), [onWorkspaceHandoffAvailabilityChange]);
     const handoffDialogRef = useModalDialog({
       open: Boolean(handoffDialog && threadWorkspace),
       onClose: () => {
@@ -18475,35 +18519,6 @@ function formatBranchRelativeTime(
   return `${Math.round(days / 365)}y ago`;
 }
 
-function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | undefined {
-  if (!thread) {
-    return undefined;
-  }
-
-  if (thread.linkedDirectories.some((directory) => directory.kind === "worktree")) {
-    return "Worktree";
-  }
-
-  if (
-    thread.linkedDirectories.some((directory) => directory.kind === "local") ||
-    thread.projectKey
-  ) {
-    return "Local";
-  }
-
-  return undefined;
-}
-
-type ThreadWorkspace = {
-  mode: "local" | "worktree";
-  /** True only when the path is known to be a git local/worktree relationship. */
-  gitBacked: boolean;
-  /** Repository/local checkout path. In Worktree mode this is not the command CWD. */
-  repositoryPath: string;
-  /** Current workspace path for opening apps and running thread-scoped commands. */
-  sourcePath: string;
-};
-
 /**
  * Single renderer source of truth for workspace-opening commands in the
  * thread composer. VS Code, terminal, and environment Run must all use this
@@ -18520,109 +18535,6 @@ function getComposerWorkspaceOpenPath(params: {
   }
 
   return params.threadWorkspace?.sourcePath ?? params.directory?.path;
-}
-
-function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | undefined {
-  const worktreeDirectory = thread.linkedDirectories.find(
-    (directory) => directory.kind === "worktree"
-  );
-  if (worktreeDirectory) {
-    return {
-      mode: "worktree",
-      gitBacked: true,
-      repositoryPath: worktreeDirectory.path,
-      sourcePath: worktreeDirectory.worktreePath ?? worktreeDirectory.path,
-    };
-  }
-
-  const localDirectory = thread.linkedDirectories.find(
-    (directory) => directory.kind === "local"
-  );
-  if (localDirectory) {
-    return {
-      mode: "local",
-      gitBacked: true,
-      repositoryPath: localDirectory.path,
-      sourcePath: localDirectory.path,
-    };
-  }
-
-  if (thread.projectKey) {
-    return {
-      mode: "local",
-      gitBacked: false,
-      repositoryPath: thread.projectKey,
-      sourcePath: thread.projectKey,
-    };
-  }
-
-  return undefined;
-}
-
-function hasPrimaryWorkspacePullRequest(
-  thread: NavigationThreadSummary,
-): boolean {
-  return primaryWorkspacePullRequests(thread).length > 0;
-}
-
-function primaryWorkspacePullRequests(
-  thread: NavigationThreadSummary,
-): NonNullable<NavigationThreadSummary["prs"]> {
-  const primaryRepository = getPrimaryWorkspaceRepository(thread);
-  if (!primaryRepository) return [];
-  return (thread.prs ?? []).filter((pr) =>
-    normalizeGitOriginUrl(`${pr.provider}/${pr.org}/${pr.repo}`)
-      === primaryRepository,
-  );
-}
-
-/**
- * What an Auto-fix chip says when every PR on the primary workspace has
- * merged or closed: it stays on, with nothing to repair. Undefined while any
- * of them is open, or when none is attached.
- */
-function describeEndedPullRequestAutoFix(
-  thread: NavigationThreadSummary,
-): string | undefined {
-  const prs = primaryWorkspacePullRequests(thread);
-  if (prs.length === 0) return undefined;
-  let latest: { number: number; state: "merged" | "closed" } | undefined;
-  for (const pr of prs) {
-    const state = resolveLifecycleState(pr);
-    if (state !== "merged" && state !== "closed") return undefined;
-    if (!latest || pr.number > latest.number) latest = { number: pr.number, state };
-  }
-  return latest
-    ? `Auto-fix PR is on, but #${latest.number} ${latest.state}. It starts again when an open PR is linked.`
-    : undefined;
-}
-
-function getPrimaryWorkspaceRepository(
-  thread: NavigationThreadSummary,
-): string | undefined {
-  return (
-    normalizeGitOriginUrl(thread.primaryGitRepository)
-    ?? normalizeGitOriginUrl(thread.gitOriginUrl)
-  );
-}
-
-function isThreadWorkspaceHandoffEligible(params: {
-  sourceBranch?: string;
-  threadWorkspace?: ThreadWorkspace;
-}): boolean {
-  if (!params.threadWorkspace) {
-    return false;
-  }
-
-  if (!params.threadWorkspace.gitBacked) {
-    return false;
-  }
-
-  if (params.threadWorkspace.mode === "worktree") {
-    return true;
-  }
-
-  return Boolean(params.sourceBranch?.trim());
 }
 
 function buildHandoffBranchSuggestion(sourceBranch: string | undefined): string {

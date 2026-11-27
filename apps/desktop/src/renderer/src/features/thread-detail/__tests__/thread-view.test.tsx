@@ -1552,9 +1552,9 @@ describe("ThreadView", () => {
     expect(document.querySelector(".thread-header__title")).toBeNull();
     expect(document.querySelector(".thread-header__summary")).toBeNull();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
-    // Thread info stays focused on thread metadata; directories have their
-    // own Linked Projects tab.
-    fireEvent.click(screen.getByRole("tab", { name: "Thread info" }));
+    // Details opens on its Thread view: where the thread runs, its folders,
+    // and the Agent section.
+    fireEvent.click(screen.getByRole("tab", { name: /^Details/ }));
 
     expect(
       screen.getByText("The desktop client now reads the full transcript.")
@@ -1563,7 +1563,8 @@ describe("ThreadView", () => {
     expect(screen.queryByRole("link", { name: "desktop docs" })).not.toBeInTheDocument();
     expect(screen.getByText("Explored 2 files")).toBeInTheDocument();
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 3, name: "Execution context" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Execution context" })).toBeInTheDocument();
     // Backend availability + account + rate limits live under their own tab.
     expect(screen.getByRole("tab", { name: "AI provider info" })).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
@@ -1759,7 +1760,9 @@ describe("ThreadView", () => {
 
     expect(container.querySelectorAll(".transcript-message")).toHaveLength(40);
 
-    const transcriptList = screen.getByRole("list");
+    // The rail's Details rows are lists too; the transcript is the unnamed one.
+    const transcriptList = screen.getAllByRole("list")
+      .find((list) => list.classList.contains("transcript-list__items"))!;
     transcriptList.scrollTop = 120;
     await act(async () => {
       fireEvent.scroll(transcriptList);
@@ -2892,7 +2895,7 @@ describe("ThreadView", () => {
       "thread-view__launchpad-composer",
     );
     expect(screen.getByRole("tab", { name: "AI provider info" })).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Edits" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /^Details/ })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
     });
@@ -3931,7 +3934,8 @@ describe("ThreadView", () => {
     expect(threadRail.parentElement).toHaveClass("thread-view__layout");
     expect(threadRail.parentElement?.parentElement).toHaveClass("thread-view");
 
-    expect(screen.getByText("Recorded working directory is not linked to a project.")).toBeInTheDocument();
+    // Details › Folders & git says so beside the folder, without claiming it is gone.
+    expect(screen.getByText("not linked")).toBeInTheDocument();
     expect(screen.getByText("catalog-portal")).toBeInTheDocument();
 
     fireEvent.click(

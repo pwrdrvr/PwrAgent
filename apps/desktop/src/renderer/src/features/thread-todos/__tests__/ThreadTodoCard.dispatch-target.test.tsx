@@ -1,5 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { chooseSpeed, openModelSettings, speedChoices } from "../../../test/model-settings";
+import {
+  accessPanelStopValues,
+  chooseAccessPanelStop,
+  openAccessPickerFrom,
+} from "../../../test/access-picker";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, ListBackendsRequest } from "@pwragent/shared/contracts/backend";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
@@ -732,6 +737,14 @@ describe("to-do card access", () => {
   const startButton = () => screen.getByRole("button", { name: "Start thread" }) as HTMLButtonElement;
   const accessChip = () => screen.getByTestId("todo-dispatch-access");
 
+  const openAccess = () => openAccessPickerFrom(accessChip());
+  const ticks = (panel: HTMLElement) =>
+    [...panel.querySelectorAll(".stepped-bar__tick")].map((tick) => tick.textContent);
+  const chooseAccess = async (value: string) => {
+    const panel = openAccess();
+    await act(async () => { chooseAccessPanelStop(panel, value); });
+  };
+
   it("shows the inherited access and offers only the provider's available modes", async () => {
     setup({
       todo: { ...card, dispatchDefaults: { thread, threadExecutionMode: "auto" } },
@@ -739,10 +752,12 @@ describe("to-do card access", () => {
     });
     await settle();
     expect(accessChip().getAttribute("aria-label")).toBe("Access for the new thread: Auto");
-    await act(async () => { fireEvent.click(accessChip()); });
-    const menu = screen.getByRole("menu", { name: "Access for the new thread" });
-    expect(within(menu).getAllByRole("menuitemradio").map((item) => item.textContent))
-      .toEqual(["Default Access", "AutoThis thread"]);
+    expect(accessChip().getAttribute("aria-haspopup")).toBe("dialog");
+    const panel = openAccess();
+    expect(accessPanelStopValues(panel)).toEqual(["default", "auto"]);
+    expect(ticks(panel)).toEqual(["Default", "Auto"]);
+    // The raising thread's own level says so, as the menu's "This thread" did.
+    expect(panel.textContent).toContain("This thread runs at it now.");
   });
 
   it("shows the agent's own mode for a native-mode agent, and stores the operator's pick on the card", async () => {
@@ -756,11 +771,11 @@ describe("to-do card access", () => {
     expect(accessChip().getAttribute("aria-label")).toBe("Access for the new thread: Auto");
     expect(screen.getByTestId("todo-dispatch-access-note").textContent)
       .toBe("Antigravity has no Full Access, so the thread starts at Auto.");
-    await act(async () => { fireEvent.click(accessChip()); });
-    const menu = screen.getByRole("menu", { name: "Access for the new thread" });
-    expect(within(menu).getAllByRole("menuitemradio").map((item) => item.textContent))
-      .toEqual(["Default", "Accept Edits", "Auto", "Plan"]);
-    await act(async () => { fireEvent.click(within(menu).getByRole("menuitemradio", { name: /^Plan/ })); });
+    const panel = openAccess();
+    // Least freedom first, as the composer orders them: Plan reads only.
+    expect(accessPanelStopValues(panel)).toEqual(["plan", "default", "accept-edits", "auto"]);
+    expect(ticks(panel)).toEqual(["Plan", "Default", "Edits", "Auto"]);
+    await chooseAccess("plan");
     expect(api.setThreadTodoAccess).toHaveBeenCalledWith({
       id: "card", executionMode: "default", nativeAccessMode: { backend: "acp:antigravity", id: "plan" },
     });
@@ -778,11 +793,7 @@ describe("to-do card access", () => {
     expect(screen.getByTestId("todo-dispatch-access-note").textContent)
       .toBe("OpenAI cannot use the inherited access mode or Default Access. Choose one of its modes.");
     expect(startButton().disabled).toBe(true);
-    await act(async () => { fireEvent.click(accessChip()); });
-    await act(async () => {
-      fireEvent.click(within(screen.getByRole("menu", { name: "Access for the new thread" }))
-        .getByRole("menuitemradio", { name: /^Full Access/ }));
-    });
+    await chooseAccess("full-access");
     expect(api.setThreadTodoAccess).toHaveBeenCalledWith({ id: "card", executionMode: "full-access" });
   });
 
@@ -806,7 +817,9 @@ describe("to-do card access", () => {
     expect(startButton().disabled).toBe(false);
   });
 
-  it("holds Start after a pick until the card's saved version arrives", async () => {
+  it("stores a Full Access pick at once and leaves the confirmation to Start", async () => {
+    // Picking only stores the level on the card; starting the card is the
+    // escalation, and it passes the Full Access gate on the stored level.
     const todo: ThreadTodo = { ...card, dispatchDefaults: { thread, threadExecutionMode: "default" } };
     const { api, rerender, tree } = setup({
       todo, local: [{ ...claude, executionModes: modes("default", "auto", "full-access") }, codex()],
@@ -817,17 +830,17 @@ describe("to-do card access", () => {
     };
     api.setThreadTodoAccess.mockResolvedValue({ todo: saved });
     await settle();
-    await act(async () => { fireEvent.click(accessChip()); });
-    await act(async () => {
-      fireEvent.click(within(screen.getByRole("menu", { name: "Access for the new thread" }))
-        .getByRole("menuitemradio", { name: /^Full Access/ }));
-    });
+    const panel = openAccess();
+    await act(async () => { chooseAccessPanelStop(panel, "full-access"); });
+    expect(within(panel).queryByRole("button", { name: /^Allow / })).toBeNull();
     await settle();
     // The save answered, but this window still shows the Default Access card.
+    expect(accessChip().getAttribute("aria-label")).toBe("Access for the new thread: Saving…");
     expect(startButton().disabled).toBe(true);
     rerender(tree(saved));
     await settle();
     expect(startButton().disabled).toBe(false);
     expect(accessChip().getAttribute("aria-label")).toBe("Access for the new thread: Full Access");
+    expect(openAccess().textContent).toContain("Starting the thread asks you to confirm it.");
   });
 });

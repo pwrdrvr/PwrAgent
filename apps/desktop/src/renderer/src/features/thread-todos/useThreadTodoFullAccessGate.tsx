@@ -16,7 +16,7 @@ import type { ThreadTodoRunOptions } from "./thread-todos-view";
  * Access), so the card is the operator's escalation and passes the gate.
  * Sending the prompt to an existing thread applies no mode, and a card that
  * names none inherits its own thread's, which raises nothing. The operator's
- * pick from the card's Access menu is stored as the card's mode, so a pick of
+ * pick from the card's access picker is stored as the card's mode, so a pick of
  * Full Access, or of an agent's own Yolo mode, which stores Full Access as
  * its level, passes the gate here.
  */

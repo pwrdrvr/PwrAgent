@@ -1147,13 +1147,14 @@ test("directory launchpad keeps new worktree as the sticky default after startin
     const contextRail = app.window.getByRole("complementary", {
       name: "Thread context",
     });
-    await contextRail.getByRole("tab", { name: "Linked projects" }).click();
+    await contextRail.getByRole("tab", { name: /^Details/ }).click();
+    const primaryFolder = contextRail.getByRole("list", { name: "Primary folder", exact: true });
     await expect(
-      contextRail.getByLabel("Path for worktree FixtureRepo", { exact: true }),
+      primaryFolder.getByLabel("Path for FixtureRepo", { exact: true }),
     ).toBeVisible();
-    await expect(
-      contextRail.getByLabel("Path for local FixtureRepo", { exact: true }),
-    ).toHaveCount(0);
+    // The badge names the workspace mode the composer's Worktree menu showed.
+    await expect(primaryFolder.getByText("worktree", { exact: true })).toBeVisible();
+    await expect(primaryFolder.getByText("local", { exact: true })).toHaveCount(0);
 
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
