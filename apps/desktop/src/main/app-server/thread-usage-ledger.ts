@@ -509,6 +509,8 @@ export class ThreadUsageLedger {
   >();
 
   private tokenMiserStoragePreparation?: Promise<void>;
+  private tokenMiserStoragePrepared = false;
+  private tokenMiserReplayStoragePreparation?: Promise<void>;
 
   /**
    * The settlement of the last queued live gate publish. Each publish waits
@@ -2858,10 +2860,18 @@ export class ThreadUsageLedger {
     return this.tokenMiserStoragePreparation ??= store.prune({
       maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
       maxBytes: 512 * 1024 * 1024,
-    }).catch((error) => {
+    }).then(() => this.markTokenMiserStoragePrepared()).catch((error) => {
       this.tokenMiserStoragePreparation = undefined;
       throw error;
     });
+  }
+
+  private markTokenMiserStoragePrepared(): void {
+    if (this.tokenMiserStoragePrepared) return;
+    this.tokenMiserStoragePrepared = true;
+    // A previous replay restore may have read SQLite after a failed import.
+    // The next request for that thread also needs to see any imported gates.
+    this.restoredTokenMiserReplayThreads.clear();
   }
 
   async drainTokenMiserLedgerWork(): Promise<void> {
@@ -2919,24 +2929,37 @@ export class ThreadUsageLedger {
 
   restoreTokenMiserReplayForThread(threadId: string): Promise<void> {
     const store = this.host().tokenMiserStore;
-    if (!store || this.context.lifecycle.closed || this.restoredTokenMiserReplayThreads.has(threadId)) return Promise.resolve();
+    if (!store || this.context.lifecycle.closed) return Promise.resolve();
+    // Settings or another owner can complete the import. In the degraded
+    // path, check the indexed marker instead of retrying filesystem work.
+    if (!this.tokenMiserStoragePrepared && this.tokenMiserReplayStoragePreparation && store.hasCompletedLegacyImport()) {
+      this.markTokenMiserStoragePrepared();
+    }
+    if (this.restoredTokenMiserReplayThreads.has(threadId)) return Promise.resolve();
     const pending = this.tokenMiserReplayRestorations.get(threadId);
     if (pending) return pending;
-    const restore = this.restoreTokenMiserReplayPages(store, threadId).then(() => {
-      this.restoredTokenMiserReplayThreads.add(threadId);
-      this.tokenMiserLiveCompactionBoundaries.delete(threadId);
+    const restore = this.restoreTokenMiserReplayPages(store, threadId).then((complete) => {
+      if (complete) {
+        this.restoredTokenMiserReplayThreads.add(threadId);
+        if (this.tokenMiserStoragePrepared) this.tokenMiserLiveCompactionBoundaries.delete(threadId);
+      }
     }).finally(() => { this.tokenMiserReplayRestorations.delete(threadId); });
     this.tokenMiserReplayRestorations.set(threadId, restore);
     return restore;
   }
 
-  private async restoreTokenMiserReplayPages(store: TokenMiserStore, threadId: string): Promise<void> {
-    await this.prepareTokenMiserStorage();
+  private async restoreTokenMiserReplayPages(store: TokenMiserStore, threadId: string): Promise<boolean> {
+    // Live usage can continue from SQLite if legacy files cannot be imported.
+    // A stream attempts the import once. Explicit accounting reads can retry.
+    await (this.tokenMiserReplayStoragePreparation ??= this.runTokenMiserSideEffect(
+      "prepareReplayStorage", () => this.prepareTokenMiserStorage(),
+    ));
+    const preparedAtStart = this.tokenMiserStoragePrepared;
     // The request cursor belongs to this Codex session. Only the gate
     // records survive a restart.
     let persistedBoundary: Promise<number> | undefined;
     for (const page of store.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE, threadId)) {
-      if (this.context.lifecycle.closed) return;
+      if (this.context.lifecycle.closed) return false;
       const open = page.filter((entry) => entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined);
       if (open.length > 0) {
         const usage = this.context.stores.usage;
@@ -2960,6 +2983,9 @@ export class ThreadUsageLedger {
       }
       await yieldToEventLoop();
     }
+    // An import can land between pages. A later request must revisit the
+    // thread if an imported gate could have landed behind this page cursor.
+    return preparedAtStart === this.tokenMiserStoragePrepared;
   }
 
   rememberActiveTokenMiserReplayEntry(
@@ -3426,7 +3452,9 @@ export class ThreadUsageLedger {
       return;
     }
     const needsRestore = !this.restoredTokenMiserReplayThreads.has(params.threadId);
-    if (needsRestore) {
+    // Retain the observed boundary while legacy gates may still be imported.
+    // The marker write can fail even after the SQLite gates were restored.
+    if (needsRestore || !this.tokenMiserStoragePrepared) {
       const previous = this.tokenMiserLiveCompactionBoundaries.get(params.threadId) ?? -Infinity;
       this.tokenMiserLiveCompactionBoundaries.set(params.threadId, Math.max(previous, params.observedAt));
     }
@@ -3847,6 +3875,7 @@ export class ThreadUsageLedger {
     threadId: string,
     entries: readonly TokenMiserObjectMetadata[],
   ): boolean {
+    if (entries.length === 0) return false;
     const liveSubAgents = this.liveTokenMiserSubAgents.get(threadId);
     const liveUsageLines = this.liveTokenMiserUsageLines.get(threadId);
     const monitorIds = new Set(entries.map(tokenMiserMonitorId));

@@ -1,5 +1,6 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -150,6 +151,57 @@ async function checkOverlappingFlushes(retrievedCharacters: number, failFirst: b
 }
 
 describe("Token Miser persistence work budgets", () => {
+  it.each(["local", "peer"] as const)(
+    "keeps SQLite replay live through one failed legacy import and picks up a later %s import",
+    ownLedgerTest(async (importer) => {
+      const temp = createTempStateDb("pwragent-token-miser-replay-import-");
+      const db = StateDb.open(temp.dbPath);
+      try {
+        const root = path.join(temp.tempDir, "objects");
+        const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+        const tokenMiserStore = new TokenMiserStore(root, { storage });
+        const current = { ...gate(0), objectId: "00000000-0000-4000-8000-000000000001" };
+        const legacy = { ...gate(1), objectId: "00000000-0000-4000-8000-000000000002" };
+        storage.writeMetadata(current);
+        await fs.mkdir(root);
+        const file = path.join(root, `${legacy.objectId}.json`);
+        await fs.writeFile(file, "{");
+        const { ledger } = fixture(db, tokenMiserStore);
+        vi.spyOn(ledger, "emitThreadToolAccountingUpdated").mockResolvedValue();
+        const imports = vi.spyOn(tokenMiserStore, "prune");
+        const usage = (inputTokens: number) => ledger.recordTokenMiserParentModelRequest({
+          backend: "codex",
+          notification: { method: "thread/tokenUsage/updated", params: {
+            threadId: THREAD, turnId: "live", tokenUsage: { total: { inputTokens } },
+          } },
+        });
+
+        for (const input of [100, 200, 300]) await usage(input);
+        expect(imports).toHaveBeenCalledOnce();
+        expect((await tokenMiserStore.readMetadata(current.objectId))?.cachedReplayCount).toBe(1);
+
+        await fs.writeFile(file, JSON.stringify(legacy));
+        if (importer === "local") {
+          await ledger.prepareTokenMiserStorage();
+        } else {
+          const peer = StateDb.open(temp.dbPath);
+          try {
+            await new TokenMiserStore(root, { storage: new SqliteTokenMiserStorage(peer) }).prune();
+          } finally {
+            peer.close();
+          }
+        }
+        for (const input of [400, 500, 600]) await usage(input);
+        expect(imports).toHaveBeenCalledTimes(importer === "local" ? 2 : 1);
+        expect((await tokenMiserStore.readMetadata(current.objectId))?.cachedReplayCount).toBe(4);
+        expect((await tokenMiserStore.readMetadata(legacy.objectId))?.cachedReplayCount).toBe(1);
+      } finally {
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+      }
+    }),
+  );
+
   it("reuses history read statements across threads and metadata pages while still seeing peer changes", ownLedgerTest(async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-token-miser-fleet-");
@@ -349,10 +401,14 @@ describe("Token Miser persistence work budgets", () => {
       storage.writeMetadata(live);
       const { ledger, store, internals } = fixture(db, tokenMiserStore);
       const drain = vi.spyOn(ledger, "flushLiveThreadUsageLines");
+      const liveLines = new Map([[live.objectId, line(1, { sourceItemId: "system:token-miser:gate-1" })]]);
+      const iterateLiveLines = vi.spyOn(liveLines, Symbol.iterator);
+      internals.liveTokenMiserUsageLines.set(THREAD, liveLines);
       ledger.rememberPendingTokenMiserInterception(live);
 
       await ledger.repairTokenMiserHistory(THREAD);
       expect(drain).not.toHaveBeenCalled();
+      expect(iterateLiveLines).not.toHaveBeenCalled();
       expect(internals.pendingTokenMiserInterceptions.get(live.objectId)).toBe(live);
       const cards = () => store.listThreadSubAgents({ backend: "codex", threadId: THREAD });
       expect((await cards()).map((card) => card.monitorId)).toEqual(["system:token-miser:gate-0"]);

@@ -127,7 +127,7 @@ export class SqliteTokenMiserStorage<
   }
 
   hasLegacyMigration(migrationKey: string): boolean {
-    return Boolean(this.db.prepare("SELECT value FROM meta WHERE key = ?").get(migrationKey));
+    return Boolean(prepareSqliteRead(this.db, "SELECT value FROM meta WHERE key = ?").get(migrationKey));
   }
 
   importLegacyRecords({ metadata, observations, retention }: {

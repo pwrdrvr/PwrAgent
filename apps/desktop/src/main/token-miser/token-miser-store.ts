@@ -258,6 +258,7 @@ export type TokenMiserStagedObject = {
 
 export class TokenMiserStore {
   private readonly archivedThreads = new Set<string>();
+  private legacyImportKey?: string;
   private readonly outputs = new TokenMiserOutputCache();
   private readonly updateLocks = new Map<string, Promise<void>>();
   private readonly pendingRetrievalDeliveries =
@@ -1071,9 +1072,16 @@ export class TokenMiserStore {
     await this.flushThread(threadId);
   }
 
+  private get legacyMigrationKey(): string {
+    return this.legacyImportKey ??= `token_miser_files_migrated:${createHash("sha256").update(this.rootDir).digest("hex")}`;
+  }
+
+  hasCompletedLegacyImport(): boolean {
+    return this.storage.hasLegacyMigration(this.legacyMigrationKey);
+  }
+
   async prune(_params?: { maxAgeMs: number; maxBytes: number; now?: number }): Promise<void> {
-    const migrationKey = `token_miser_files_migrated:${createHash("sha256").update(this.rootDir).digest("hex")}`;
-    if (this.storage.hasLegacyMigration(migrationKey)) return;
+    if (this.hasCompletedLegacyImport()) return;
     const metadata: TokenMiserObjectMetadata[] = [];
     const observations: TokenMiserCodeModeObservation[] = [];
     const retention: Array<{ key: string; generation: string; archived: number }> = [];
@@ -1168,7 +1176,7 @@ export class TokenMiserStore {
         throw error;
       });
     }
-    this.storage.completeLegacyMigration(migrationKey);
+    this.storage.completeLegacyMigration(this.legacyMigrationKey);
   }
 
   private async readAuthorizedObject(

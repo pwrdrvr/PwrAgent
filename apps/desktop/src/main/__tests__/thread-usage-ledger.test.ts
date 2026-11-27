@@ -477,6 +477,40 @@ describe("ThreadUsageLedger", () => {
     },
   );
 
+  it("applies a live compaction to gates imported after its marker write failed", async () => {
+    const entry = gate({ objectId: "legacy-gate", threadId: "thread", createdAt: 1, replayTrackingVersion: 2 });
+    let ready = false;
+    let imported = false;
+    const restoreReplayTracking = vi.fn(async ({ stoppedAt }: { stoppedAt: number }) => [
+      { ...entry, replayTrackingStoppedAt: stoppedAt },
+    ]);
+    const tokenMiserStore = {
+      async prune() {
+        if (!ready) throw new Error("fixture malformed legacy history");
+        imported = true;
+      },
+      hasCompletedLegacyImport: () => imported,
+      *listMetadataPages() { if (imported) yield [entry]; },
+      restoreReplayTracking,
+    };
+    const { ledger, internals } = createLedger({
+      host: { tokenMiserStore: tokenMiserStore as never },
+      stores: { usage: { recordThreadCompaction: async () => { throw new Error("fixture marker write failed"); } } },
+    });
+    vi.spyOn(Date, "now").mockReturnValue(10);
+    await ledger.restoreTokenMiserReplayForThread("thread");
+    await ledger.handleThreadCompactionReplayBoundary({
+      backend: "codex",
+      notification: { method: "thread/compacted", params: { itemId: "boundary", threadId: "thread" } },
+    });
+
+    ready = true;
+    await ledger.prepareTokenMiserStorage();
+    await ledger.restoreTokenMiserReplayForThread("thread");
+    expect(restoreReplayTracking).toHaveBeenCalledWith({ objectIds: ["legacy-gate"], threadId: "thread", stoppedAt: 10 });
+    expect(internals.activeTokenMiserReplayEntries.has("thread")).toBe(false);
+  });
+
   it("repairs later history pages and publishes their usage after a page write fails", async () => {
     const entries = ["first", "second", "third"].map((threadId) =>
       gate({ objectId: threadId, threadId, createdAt: 1, replayTrackingVersion: 2 }));
