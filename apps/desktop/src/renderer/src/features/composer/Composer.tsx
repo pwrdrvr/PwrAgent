@@ -184,13 +184,12 @@ import type { ScheduledThreadAction, ScheduledThreadReviewPayload } from "@pwrag
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
 } from "@pwragent/shared/contracts/normalized-app-server";
-import { buildThreadIdentityKey, isSubthreadLaunchpadKey } from "@pwragent/shared/contracts/navigation";
+import { isSubthreadLaunchpadKey } from "@pwragent/shared/contracts/navigation";
 import {
   buildReviewBranchOptions,
   findPreferredReviewWorkspaceCwd,
   findPrimaryReviewWorkspaceCwd,
 } from "@pwragent/shared/review-branches";
-import { federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import { normalizeGitOriginUrl } from "@pwragent/shared/directory-navigation";
 import {
   parseCodexAsyncQuestionReply,
@@ -286,7 +285,6 @@ import {
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
   hashReferenceAnchorKey,
-  hashReferenceThreadIdentity,
   HASH_ANCHOR_COLD_QUERY_LENGTH,
 } from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
@@ -357,7 +355,7 @@ import {
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { EmojiAutocompleteList } from "./EmojiAutocompleteList";
 import { useComposerEmojiAutocomplete } from "./useComposerEmojiAutocomplete";
-import { resolveComposerAutocompleteProjection } from "./composer-autocomplete-projection";
+import { useComposerAutocomplete } from "./useComposerAutocomplete";
 import { SkillPickerHeader } from "./SkillPickerHeader";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
 import {
@@ -3645,8 +3643,6 @@ function useComposerController(props: ComposerProps) {
     setActiveSlashIndex,
     activeDirectoryRefIndex,
     setActiveDirectoryRefIndex,
-    activeHashReferenceIndex,
-    setActiveHashReferenceIndex,
     dismissedAutocompleteKey,
     setDismissedAutocompleteKey,
     clearThreadEnvActionStarting,
@@ -4083,7 +4079,6 @@ function useComposerController(props: ComposerProps) {
     const [activeSkillIndex, setActiveSkillIndex] = useState(0);
     const [activeSlashIndex, setActiveSlashIndex] = useState(0);
     const [activeDirectoryRefIndex, setActiveDirectoryRefIndex] = useState(0);
-    const [activeHashReferenceIndex, setActiveHashReferenceIndex] = useState(0);
     const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
 
     // A settled marker is dropped, so a later runtime change (another window
@@ -4378,8 +4373,6 @@ function useComposerController(props: ComposerProps) {
       setActiveSlashIndex,
       activeDirectoryRefIndex,
       setActiveDirectoryRefIndex,
-      activeHashReferenceIndex,
-      setActiveHashReferenceIndex,
       dismissedAutocompleteKey,
       setDismissedAutocompleteKey,
       clearThreadEnvActionStarting,
@@ -6327,44 +6320,50 @@ function useComposerController(props: ComposerProps) {
       mentionNavigation.ownerRankedDirectoryQuery,
     );
   }, [mentionNavigation.directories, mentionNavigation.instances, mentionNavigation.ownerRankedDirectoryQuery, directoryRefTrigger]);
+  const hashReferenceQuery = hashReferenceTrigger?.query;
+  const hashReferenceViewerId = readRendererFederationTarget()?.instanceId;
   const filteredHashReferenceOptions = useMemo(() => {
-    if (!hashReferenceTrigger) {
+    if (hashReferenceQuery === undefined) {
       return [];
     }
     return buildHashReferenceOptions({
       currentThread: props.thread,
-      currentThreadKey: props.thread
-        ? hashReferenceThreadIdentity(props.thread)
-        : undefined,
+      loadedThreads: props.threads,
+      viewerInstanceId: hashReferenceViewerId,
       localThreads: mentionNavigation.threads,
-      localOwnerMatched: mentionNavigation.settledQuery === hashReferenceTrigger.query.trim().toLowerCase(),
-      query: hashReferenceTrigger.query,
+      localOwnerMatched: mentionNavigation.settledQuery === hashReferenceQuery.trim().toLowerCase(),
+      query: hashReferenceQuery,
       remoteThreads: federatedHashSearchResults,
-      remoteOwnerMatched: federatedHashSearchSettledQuery === hashReferenceTrigger.query.trim(),
+      remoteOwnerMatched: federatedHashSearchSettledQuery === hashReferenceQuery.trim(),
     });
   }, [
     federatedHashSearchResults,
     federatedHashSearchSettledQuery,
-    hashReferenceTrigger,
+    hashReferenceQuery,
+    hashReferenceViewerId,
     props.thread,
+    props.threads,
     mentionNavigation.threads,
     mentionNavigation.settledQuery,
   ]);
-  const hashReferenceCount = filteredHashReferenceOptions.length;
   const {
     activeAutocompleteIndex,
     activeAutocompleteOptionId,
+    activeHashReferenceIndex,
     autocompleteKey,
     autocompleteKind,
     autocompleteLength,
     autocompleteListboxId,
+    clearHashReferenceSelection,
+    hashReferenceOptionKeys,
     hasAutocompleteOptions,
-  } = resolveComposerAutocompleteProjection({
+    selectHashReferenceOption,
+  } = useComposerAutocomplete({
     activeDirectoryRefIndex,
     activeEmojiIndex: emojiAutocomplete.activeIndex,
-    activeHashReferenceIndex,
     activeSkillIndex,
     activeSlashIndex,
+    composerScopeKey,
     directoryRefCount: filteredDirectoryRefs.length,
     directoryRefListboxId,
     directoryRefTrigger,
@@ -6374,8 +6373,8 @@ function useComposerController(props: ComposerProps) {
     emojiTrigger: emojiAutocomplete.trigger,
     federatedHashSearchLoading,
     filteredSkillCount: filteredSkills.length,
-    hashReferenceCount,
     hashReferenceListboxId,
+    hashReferenceOptions: filteredHashReferenceOptions,
     hashReferenceTrigger,
     hasEnsureSkillsLoaded: Boolean(props.onEnsureSkillsLoaded),
     matchingSkillCount: matchingSkills.length,
@@ -7084,10 +7083,6 @@ function useComposerController(props: ComposerProps) {
   useEffect(() => {
     setActiveDirectoryRefIndex(0);
   }, [directoryRefTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
-
-  useEffect(() => {
-    setActiveHashReferenceIndex(0);
-  }, [hashReferenceTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
 
   // Retire a `#` that has run long with nothing to show. Matching is
   // monotonic (see HASH_ANCHOR_COLD_QUERY_LENGTH), so an empty result set
@@ -10917,7 +10912,7 @@ function useComposerController(props: ComposerProps) {
     createToken: (index: number) => ComposerSkillToken,
   ): void => {
     inputRef.current?.replaceReference("#", [createToken(0)]);
-    setActiveHashReferenceIndex(0);
+    clearHashReferenceSelection();
   };
 
   const applyEmojiShortcode = (emoji: string): void => {
@@ -13226,12 +13221,12 @@ function useComposerController(props: ComposerProps) {
       setActiveSkillIndex(0);
       setActiveSlashIndex(0);
       setActiveDirectoryRefIndex(0);
-      setActiveHashReferenceIndex(0);
+      clearHashReferenceSelection();
       emojiAutocomplete.setActiveIndex(0);
       if (restoreFocus) {
         requestAnimationFrame(() => inputRef.current?.focus());
       }
-    }, [autocompleteKey, emojiAutocomplete.setActiveIndex]);
+    }, [autocompleteKey, clearHashReferenceSelection, emojiAutocomplete.setActiveIndex]);
 
     const handleAutocompleteKeyDown = (
       event: ReactKeyboardEvent<HTMLElement>,
@@ -13268,7 +13263,7 @@ function useComposerController(props: ComposerProps) {
         } else if (autocompleteKind === "emoji") {
           emojiAutocomplete.setActiveIndex(updater);
         } else if (autocompleteKind === "hash-references") {
-          setActiveHashReferenceIndex(updater);
+          selectHashReferenceOption(updater(activeHashReferenceIndex));
         } else {
           setActiveSlashIndex(updater);
         }
@@ -15437,6 +15432,7 @@ function useComposerController(props: ComposerProps) {
           style={{ maxHeight: autocompleteLayout.maxHeight }}
         >
           {filteredHashReferenceOptions.map((option, index) => {
+            const key = hashReferenceOptionKeys[index];
             const showRemoteDivider =
               option.remote
               && !filteredHashReferenceOptions[index - 1]?.remote;
@@ -15448,9 +15444,6 @@ function useComposerController(props: ComposerProps) {
                 thread,
                 hashReferenceTrigger?.query ?? "",
               );
-              const key = thread.federation
-                ? federatedThreadIdentityKey(thread.federation.ref)
-                : buildThreadIdentityKey(thread.source, thread.id);
               return (
                 <Fragment key={key}>
                   {showRemoteDivider ? (
@@ -15490,7 +15483,7 @@ function useComposerController(props: ComposerProps) {
                       );
                     }}
                     onFocus={() => {
-                      setActiveHashReferenceIndex(index);
+                      selectHashReferenceOption(index);
                     }}
                     onKeyDown={handleAutocompleteKeyDown}
                   >
@@ -15530,7 +15523,7 @@ function useComposerController(props: ComposerProps) {
 
             const pullRequest = option.pullRequest;
             return (
-              <Fragment key={pullRequest.url}>
+              <Fragment key={key}>
                 {showRemoteDivider ? (
                   <div
                     aria-hidden="true"
@@ -15563,7 +15556,7 @@ function useComposerController(props: ComposerProps) {
                     );
                   }}
                   onFocus={() => {
-                    setActiveHashReferenceIndex(index);
+                    selectHashReferenceOption(index);
                   }}
                   onKeyDown={handleAutocompleteKeyDown}
                 >
