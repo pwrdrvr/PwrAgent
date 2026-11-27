@@ -544,7 +544,7 @@ export const MAX_SPEND_ALERT_THRESHOLD_USD = 10_000;
 export const DESKTOP_SPEND_ALERT_POLICY_DEFAULT: DesktopSpendAlertPolicy = {
   activeTurnSpendEnabled: false,
   activeTurnSpendThresholdUsd: 5,
-  threadSpendEnabled: true,
+  threadSpendEnabled: false,
   threadSpendThresholdUsd: 25,
 };
 

@@ -7836,6 +7836,9 @@ class DesktopAppServerService {
   }
 
   async listPendingThreadSpendAlerts(request: ListPendingThreadSpendAlertsRequest): Promise<ListPendingThreadSpendAlertsResponse> {
+    if (!getDesktopSettingsService().resolveSpendAlertPolicy().threadSpendEnabled) {
+      return { alerts: [], hasMore: false };
+    }
     return this.getOverlayStore().listPendingThreadSpendAlerts(request);
   }
 

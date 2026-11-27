@@ -104,7 +104,7 @@ describe("desktop settings contracts", () => {
         spendAlerts: {
           activeTurnSpendEnabled: { value: false, source: "default" },
           activeTurnSpendThresholdUsd: { value: 5, source: "default" },
-          threadSpendEnabled: { value: true, source: "default" },
+          threadSpendEnabled: { value: false, source: "default" },
           threadSpendThresholdUsd: { value: 25, source: "default" },
         },
         appearance: {
