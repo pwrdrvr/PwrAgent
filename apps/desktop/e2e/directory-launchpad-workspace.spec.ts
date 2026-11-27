@@ -1188,7 +1188,7 @@ test("local-to-worktree handoff records PwrAgent workspace state without rewriti
 
   try {
     await app.window
-      .getByRole("button", { name: "Local handoff thread" })
+      .getByRole("button", { name: "Local handoff thread", exact: true })
       .click();
 
     const workspaceMode = app.window.getByLabel(/^Workspace mode(?::|$)/);

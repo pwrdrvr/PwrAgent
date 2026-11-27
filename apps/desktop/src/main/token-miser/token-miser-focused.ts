@@ -67,7 +67,7 @@ export class TokenMiserFocusedSummaries {
         if (!sources) throw new Error("Selected source expired or unavailable.");
         sourceBytes += sources.reduce((sum, source) => sum + utf8ByteLength(source.text), 0);
         if (sourceBytes > 60_000) throw new Error("Selected source exceeds the 60000-byte batch limit; narrow the selections.");
-        selected.push({ segmentId: randomUUID(), segment, question: request.question, sources });
+        selected.push({ segmentId: this.options.store.issueOutputHandle(), segment, question: request.question, sources });
       }
       const prompt = JSON.stringify({ requests: selected.map((entry) => ({ id: entry.segmentId, question: entry.question, sources: entry.sources })) });
       if (utf8ByteLength(prompt) > 78_000) throw new Error("Focused prompt exceeds the 78000-byte limit; narrow the selections.");
@@ -95,7 +95,7 @@ export class TokenMiserFocusedSummaries {
         if (!answer || answer.id !== entry.segmentId || typeof answer.summary !== "string"
           || !answer.summary.trim() || utf8ByteLength(answer.summary) > 1000) throw new Error("Invalid focused summary response.");
         if (!await this.materialize(entry.segment, threadId, turnId)) throw new Error("Selected source expired or unavailable.");
-        if (!this.references.put(entry.segmentId, JSON.stringify(entry.segment))) throw new Error("Segment reference capacity exceeded.");
+        if (!this.references.put(randomUUID(), JSON.stringify(entry.segment), "temporary", undefined, entry.segmentId)) throw new Error("Segment reference capacity exceeded.");
         results.push({ segmentId: entry.segmentId, summary: answer.summary,
           spanCount: entry.segment.spans.length,
           sources: [...new Map(entry.segment.spans.map((span) => [JSON.stringify([span.objectId, span.memberId]),
@@ -111,7 +111,7 @@ export class TokenMiserFocusedSummaries {
   async read(segmentId: string, threadId: string, turnId?: string, cursor = { spanIndex: 0, offset: 0 }) {
     if (!cursor || typeof cursor !== "object" || !Number.isSafeInteger(cursor.spanIndex) || cursor.spanIndex < 0
       || !Number.isSafeInteger(cursor.offset) || cursor.offset < 0) return undefined;
-    const raw = this.references.get(segmentId);
+    const raw = this.references.get(this.references.resolveId(segmentId));
     if (!raw) return undefined;
     const segment = JSON.parse(raw) as Segment;
     const all = await this.materialize(segment, threadId, turnId);

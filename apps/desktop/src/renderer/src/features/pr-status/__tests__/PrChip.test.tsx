@@ -47,6 +47,17 @@ function renderChip(pr: PrSummary, opts: { withStatusPills?: boolean } = {}) {
 }
 
 describe("PrChip", () => {
+  it("splits a repo-prefixed label so the prefix can ellipsize and the number cannot", () => {
+    const pr = basePr({ org: "example-organization-name", repo: "example-repository-with-a-very-long-name", number: 123456 });
+    const { container } = render(<PrChip pr={pr} showRepoPrefix onOpen={vi.fn()} />);
+    const label = container.querySelector(".pr-chip__label")!;
+    expect(label.textContent).toBe("example-organization-name/example-repository-with-a-very-long-name#123456");
+    expect(label.querySelector(".pr-chip__repo")?.textContent)
+      .toBe("example-organization-name/example-repository-with-a-very-long-name");
+    cleanup();
+    expect(renderChip(basePr()).querySelector(".pr-chip__repo")).toBeNull();
+  });
+
   it("is a non-draggable atomic control", () => {
     const chip = renderChip(basePr());
     expect(chip).toHaveAttribute("draggable", "false");

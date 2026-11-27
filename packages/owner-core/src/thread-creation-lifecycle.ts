@@ -194,8 +194,10 @@ export class ThreadCreationLifecycle {
     if (options.worktree) await attempt("worktree", () => host.recordWorktreeOwner?.(created));
     attemptSync("invalidate", () => host.invalidate?.(created));
     if (backend === "claude" || backend === "codex") await attempt("execution", () => host.persistExecutionMode?.(created));
+    if (options.tokenMiserOverride !== undefined && (backend === "codex" || backend === "claude" || backend === "acp:antigravity")) {
+      await attempt("token-miser", () => host.persistTokenMiser?.(created));
+    }
     if (backend === "codex") {
-      if (options.tokenMiserOverride !== undefined) await attempt("token-miser", () => host.persistTokenMiser?.(created));
       if (options.pdfCatalog) await attempt("pdf-catalog", () => host.persistPdfCatalog?.(created));
       await attempt("git", () => host.persistGitBranch?.(created));
     }

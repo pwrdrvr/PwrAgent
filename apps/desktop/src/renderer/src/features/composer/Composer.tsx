@@ -679,6 +679,7 @@ export type ComposerProps = {
   /** Settings -> General -> Reviews: whether a new review panel opens with Auto-fix on. */
   reviewAutoFixDefault?: boolean;
   /** Token Miser experiment availability gate. */
+  tokenMiserCaptureEnabled?: boolean;
   tokenMiserEnabled?: boolean;
   /** Inherited Token Miser state when a thread has no explicit override. */
   tokenMiserDefaultEnabled?: boolean;
@@ -12151,9 +12152,11 @@ function useComposerController(props: ComposerProps) {
   function useComposerPresentation() {
     // Remote controls use the owner's feature gate/default, never the viewer's.
     // Older owners omit this metadata, so the override control stays hidden.
+    const miserBackend = props.launchpad?.backend ?? props.thread?.source;
     const tokenMiserEnabled = filesystemFederationTarget?.scope === "remote"
       ? backend?.tokenMiser?.enabled
-      : props.tokenMiserEnabled;
+      : (miserBackend === "codex" && props.tokenMiserEnabled)
+        || (props.tokenMiserCaptureEnabled && ["codex", "claude", "acp:antigravity"].includes(miserBackend ?? ""));
     const tokenMiserDefaultEnabled = filesystemFederationTarget?.scope === "remote"
       ? backend?.tokenMiser?.defaultEnabled
       : props.tokenMiserDefaultEnabled;
@@ -16450,9 +16453,8 @@ function useComposerController(props: ComposerProps) {
                 }
               : {})}
             {...(tokenMiserEnabled === true
-              && ((props.launchpad?.backend === "codex" && props.onUpdateLaunchpad)
-                || (props.thread?.source === "codex"
-                  && props.desktopApi?.setThreadTokenMiser))
+              && ((props.launchpad && props.onUpdateLaunchpad)
+                || (props.thread && props.desktopApi?.setThreadTokenMiser))
               ? {
                   tokenMiser: props.launchpad?.tokenMiserEnabled
                     ?? props.thread?.tokenMiserEnabled

@@ -152,6 +152,10 @@ it("budgets one atomic metadata command and zero writes for unchanged facts and 
       }
     });
     expectSqliteWriteBudget({ scenario: "owner-thread-metadata-unchanged", note: "100 unchanged metadata commands and reads make no commits.", writes: unchanged.writes });
+    const captureOverride = await measureSqliteWrites(async () => {
+      await (fixture.registry as SqliteOverlayStore).setThreadTokenMiser({ backend: "acp:antigravity", threadId: "new-launchpad-thread", enabled: true });
+    });
+    expectSqliteWriteBudget({ scenario: "token-miser-launchpad-override", note: "Persist an explicit capture override on a new thread.", writes: captureOverride.writes });
   } finally {
     fixture.close();
     if (previous === undefined) delete process.env[SQLITE_WRITE_METRICS_ENV];

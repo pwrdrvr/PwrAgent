@@ -85,6 +85,7 @@ export function resolveAgentToolCatalogs(params: {
   forgeToolPolicy?: ForgeAgentToolPolicy;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
   tokenMiserStore?: TokenMiserStore;
+  boundedCommandCapture?: import("../token-miser/bounded-command").BoundedCommandCapture;
   tokenMiserFocused?: TokenMiserFocusedSummaries;
   starMapHandler?: PwrAgentStarMapHandler;
   threadTodoHandler?: PwrAgentThreadTodoHandler;
@@ -154,7 +155,7 @@ export function resolveAgentToolCatalogs(params: {
   ]);
   const mcpConnectionDynamicTools = mcpConnectionRouter.buildDynamicToolSpecs();
   const tokenMiserRouter = new AgentToolRouter(
-    buildTokenMiserToolDefinitions(params.tokenMiserStore, params.tokenMiserFocused),
+    buildTokenMiserToolDefinitions(params.tokenMiserStore, params.tokenMiserFocused, params.boundedCommandCapture),
   );
   const tokenMiserDynamicTools = tokenMiserRouter.buildDynamicToolSpecs();
   const starMapRouter = buildPwrAgentStarMapToolRouter(params.starMapHandler);
@@ -364,9 +365,9 @@ export function resolveAgentToolCatalogs(params: {
       summary: {
         id: "token_miser",
         namespace: PWRAGENT_TOOL_NAMESPACE,
-        enabled: Boolean(params.tokenMiserStore),
+        enabled: Boolean(tokenMiserDynamicTools.length),
         toolCount: countDynamicTools(tokenMiserDynamicTools),
-        ...(!params.tokenMiserStore
+        ...(!tokenMiserDynamicTools.length
           ? { unavailableReason: "Token Miser is disabled." }
           : {}),
         fingerprint: buildCatalogFingerprint({

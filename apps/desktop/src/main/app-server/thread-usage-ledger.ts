@@ -2896,8 +2896,9 @@ export class ThreadUsageLedger {
     this.scheduleStreamedToolInvocationFlush();
   }
 
-  async recordTokenMiserFocusedInference(
+  async recordTokenMiserHelperInference(
     params: Parameters<NonNullable<TokenMiserServiceOptions["onFocusedInference"]>>[0],
+    boundedCaptureBackend?: AppServerBackendKind,
   ): Promise<void> {
     const { threadId, turnId, inferenceId, usage: result } = params;
     if (result.status !== "ok" || !result.tokenUsage) return;
@@ -2908,17 +2909,17 @@ export class ThreadUsageLedger {
     });
     if (!usage) return;
     const line = buildTaskMonitorUsageLine({
-      backend: "codex", parentThreadId: threadId,
+      backend: boundedCaptureBackend ?? "codex", parentThreadId: threadId,
       accountKey: result.accountKey,
-      monitorId: `system:token-miser-focused:${inferenceId}`,
-      monitorThreadId: result.helperThreadId ?? `token-miser-focused:${inferenceId}`,
+      monitorId: `system:token-miser-${boundedCaptureBackend ? "capture" : "focused"}:${inferenceId}`,
+      monitorThreadId: result.helperThreadId ?? `token-miser-${boundedCaptureBackend ? "capture" : "focused"}:${inferenceId}`,
       monitorTurnId: result.helperTurnId ?? turnId,
       model: result.model, reasoningEffort: result.reasoningEffort,
       serviceTier: result.serviceTier, source: "monitor", usage,
     });
     logUnpricedThreadUsageLine(line);
     await this.context.stores.usage.upsertThreadUsageLine!({ line });
-    await this.emitThreadPricingUpdated({ backend: "codex", threadId });
+    await this.emitThreadPricingUpdated({ backend: boundedCaptureBackend ?? "codex", threadId });
   }
 
   /** Explicit readers can join or start the import even with Token Miser off. */

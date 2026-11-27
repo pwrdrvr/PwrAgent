@@ -418,6 +418,24 @@ start attempts. A separate ACP client oracle checks that the readiness
 signal resolves only after both native commands finish. The monitor then
 reevaluates the latest fill once.
 
+### Antigravity sub-agent steps
+
+The November 26, 2026 capture of Antigravity 1.5.18 (`agy acp --process-per-session`,
+`--allow-tools`, a disposable directory) asked the parent to start one worker
+with `invoke_subagent`. The launch `tool_call` and its `completed` update
+named no child conversation: no `rawOutput`, no content. The worker's own tool
+calls then arrived on the parent session as `tool_call` updates whose
+`toolCallId` is `<child conversation id>:<call id>`, titled with the command
+(`ls -la`, `pwd`) and `kind: "execute"`. The parent turn ended `end_turn` while
+the worker was still working.
+
+PwrAgent's sub-agent activity line ties a child conversation to its launch
+only while exactly one running launch is untied, since nothing on the wire
+links them; with several untied launches it shows no line. Grok's
+`subagent_progress` carries only counts (`tool_call_count`, `tokens_used`,
+`duration_ms`), so Grok workers have no activity line. Raw capture (ignored):
+`apps/desktop/.local/protocol-captures/antigravity-subagent-activity/capture.json`.
+
 ## Capturing Codex Account Protocol
 
 `scripts/capture-codex-usage-protocol.ts` records a complete Codex App Server
@@ -468,3 +486,20 @@ Codex lists until the reported fork publishes `landed`. The raw fork capture is
 `apps/desktop/.local/protocol-captures/thread-start-order/wire-fork.jsonl`.
 Frames 10–15 show the first fork request, response, notification, and the
 list request and response that contains its new ID.
+
+### Codex native worker steps
+
+The November 26, 2026 capture of Codex CLI 0.169.0 started a non-ephemeral
+thread (an ephemeral parent cannot spawn: the worker's start fails with "no
+rollout found") and asked it to spawn one worker. The parent reported the
+spawn as a `subAgentActivity` item. Codex then delivered the worker's own
+`turn/started`, `item/started`, `item/completed`, `thread/tokenUsage/updated`
+and `turn/completed` on the same connection under the worker's thread id.
+A worker `commandExecution` wraps the command in the shell
+(`/bin/zsh -lc 'ls -la'`); its `commandActions` carry the command the worker
+wrote and classify it (`listFiles`, `read` with the file `name`, `unknown`).
+The worker went `idle` with its `turn/completed`.
+
+PwrAgent's sub-agent activity line uses the worker's latest started step and
+clears it when the worker's turn ends or it goes idle. Raw capture (ignored):
+`apps/desktop/.local/protocol-captures/codex-subagent-activity/frames.jsonl`.

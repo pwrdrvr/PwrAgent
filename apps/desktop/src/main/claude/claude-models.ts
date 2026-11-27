@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { query, McpServerStatus, ModelInfo, Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { query, McpServerStatus, ModelInfo, Options, Query, SDKUserMessage, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
+import type { ClaudeSkillEvidence } from "./claude-skills";
 import { loadClaudeAgentSdk } from "./claude-sdk";
 import type { BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { getMainLogger } from "../log";
@@ -52,6 +53,33 @@ export async function discoverClaudeModels(params: {
 }
 
 /**
+ * A folder's slash commands and Claude's skill listing, read through one
+ * session that receives no prompt. The listing names each skill's file, which
+ * is how the commands that are skills are told apart.
+ */
+export async function readClaudeCatalog(params: {
+  executable: string;
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+  query?: typeof query;
+}): Promise<{ commands: SlashCommand[]; skills: ClaudeSkillEvidence[] }> {
+  return await readClaudeMetadata({
+    ...params,
+    // Without the Skill tool, Claude's context listing names no skills.
+    tools: ["Skill"],
+    read: async (session) => {
+      const [commands, context] = await Promise.all([
+        session.supportedCommands(),
+        // Summary detail answers locally, without token-count requests.
+        session.getContextUsage({ detail: "summary" }).catch(() => undefined),
+      ]);
+      return { commands, skills: context?.skills?.skillFrontmatter ?? [] };
+    },
+    timeoutMessage: "Claude command discovery timed out.",
+  });
+}
+
+/**
  * The MCP servers Claude Code loads from its own settings, `.mcp.json` and
  * plugins for a folder, read through a session that receives no prompt.
  * Servers still connecting are polled until they settle or the wait ends.
@@ -93,6 +121,8 @@ export async function readClaudeMetadata<T>(params: {
   settingSources?: Options["settingSources"];
   /** Connect the MCP servers Claude Code's own config names. */
   loadMcpServers?: boolean;
+  /** Tools to load; none by default. The session gets no prompt, so none runs. */
+  tools?: string[];
   query?: typeof query;
   read: (session: Query) => Promise<T>;
   timeoutMessage: string;
@@ -139,7 +169,7 @@ export async function readClaudeMetadata<T>(params: {
         persistSession: false,
         // Metadata reads need no tools, and MCP connections only when the
         // read is about them.
-        tools: [],
+        tools: params.tools ?? [],
         ...(params.loadMcpServers ? {} : { strictMcpConfig: true, mcpServers: {} }),
       },
     });

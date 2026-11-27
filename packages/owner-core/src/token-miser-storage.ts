@@ -21,6 +21,8 @@ export interface TokenMiserStorage<
   Metadata extends TokenMiserObjectRecord,
   Observation extends TokenMiserObservationRecord,
 > {
+  /** Reserve consecutive profile-wide numbers. Unused numbers are never recycled. */
+  reserveOutputHandles(count: number): number;
   readMetadata(objectId: string, threadId?: string): Metadata | undefined;
   listMetadata(threadId?: string): Metadata[];
   /** Keyset page over the stored (threadId, createdAt, objectId) keys. */

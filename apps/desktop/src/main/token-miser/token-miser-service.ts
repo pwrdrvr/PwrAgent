@@ -755,15 +755,17 @@ export class TokenMiserService {
       .map((member) => `Tool result ${member.toolCallId} (${member.toolName}):\n${member.output}`)
       .join("\n\n");
     const separator = preservedOutput ? "\n\n" : "";
-    const groupMembers: TokenMiserGroupMemberSummary[] = summarizedMembers.map((member) => ({
+    const groupHandle = this.options.store.issueOutputHandle();
+    const groupMembers = summarizedMembers.map((member) => ({
       objectId: randomUUID(),
+      handle: this.options.store.issueOutputHandle(),
       toolCallId: member.toolCallId,
       toolName: member.toolName,
       summary: parsed.members.get(member.toolCallId) ?? "Completed tool result.",
     }));
     const summarizedReplacement = buildCappedGroupReplacement({
-      groupId: payload.cell_id,
-      groupMembers,
+      groupId: groupHandle,
+      groupMembers: groupMembers.map((member) => ({ ...member, objectId: member.handle })),
       maxBytes:
         payload.max_output_tokens * TOKEN_MISER_ESTIMATED_BYTES_PER_TOKEN
         - payload.model_visible_overhead_characters
@@ -780,6 +782,7 @@ export class TokenMiserService {
       groupId: payload.cell_id,
       members: summarizedMembers.map((member, index) => ({
         objectId: groupMembers[index]!.objectId,
+        handle: groupMembers[index]!.handle,
         toolCallId: member.toolCallId,
         toolName: member.toolName,
         output: member.output,
@@ -792,6 +795,7 @@ export class TokenMiserService {
       return undefined;
     }
     const staged = await this.options.store.stage({
+      handle: groupHandle,
       threadId: payload.thread_id,
       turnId: payload.turn_id,
       toolUseId: payload.call_id,
@@ -982,11 +986,11 @@ export class TokenMiserService {
       return { disposition: "passed_through" };
     }
 
-    const objectId = randomUUID();
+    const handle = this.options.store.issueOutputHandle();
     const replacement = buildCappedReplacement({
       maxBytes:
         params.maxReplacementBytes ?? TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
-      objectId,
+      objectId: handle,
       summary: decision.summary,
     });
     if (!replacement) {
@@ -999,7 +1003,7 @@ export class TokenMiserService {
       return undefined;
     }
     const staged = await this.options.store.stage({
-      objectId,
+      handle,
       threadId: params.threadId,
       turnId: params.turnId,
       toolUseId: params.toolUseId,

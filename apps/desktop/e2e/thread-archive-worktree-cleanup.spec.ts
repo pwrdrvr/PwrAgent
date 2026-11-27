@@ -185,7 +185,7 @@ test("archiving a replay-backed thread removes its real Git worktree", async () 
     // The row proves the active listing reached the renderer, so every read
     // after the archive sees the thread only in the archived listing.
     await expect(
-      app.window.getByRole("button", { name: /Archive worktree cleanup/i }),
+      app.window.getByRole("button", { name: "Archive worktree cleanup", exact: true }),
     ).toBeVisible();
     // The archive response owns the Git cleanup. A first Windows Job-wrapper
     // launch can still be compiling after the UI optimistically hides the row.
@@ -244,8 +244,11 @@ test("Claude archive removes its snapshotted worktree and restores its branch an
       }));
     },
   });
+  const threadRow = app.window
+    .getByRole("complementary", { name: "Threads", exact: true })
+    .getByRole("button", { name: "Claude archive retention", exact: true });
   try {
-    await expect(app.window.getByRole("button", { name: /Claude archive retention/i })).toBeVisible();
+    await expect(threadRow).toBeVisible();
     const response = await app.window.evaluate(async (id) => {
       const api = (window as Window & { pwragent?: DesktopApi }).pwragent;
       if (!api?.archiveThread) throw new Error("Desktop archive bridge is unavailable.");
@@ -261,7 +264,7 @@ test("Claude archive removes its snapshotted worktree and restores its branch an
       if (!api?.restoreThread) throw new Error("Desktop restore bridge is unavailable.");
       await api.restoreThread({ backend: "claude", threadId: id });
     }, threadId);
-    await expect(app.window.getByRole("button", { name: /Claude archive retention/i })).toBeVisible();
+    await expect(threadRow).toBeVisible();
     expect(await pathExists(fixture.worktreePath)).toBe(true);
     expect(git(fixture.worktreePath, ["branch", "--show-current"])).toBe("feat/archive-cleanup");
     expect(await readFile(path.join(fixture.worktreePath, "README.md"), "utf8")).toBe("Saved Claude edits\n");

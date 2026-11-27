@@ -121,6 +121,12 @@ describe("package manager release inputs", () => {
     expect(() => renderPackages(release, {})).toThrow(/checksums/);
   });
 
+  it("includes exactly one privacy policy URL in the WinGet default locale", () => {
+    const files = renderPackages(release, hashes);
+    const locale = files[`${WINGET_PATH}/${version}/PwrDrvr.PwrAgent.locale.en-US.yaml`];
+    expect(locale.match(/^PrivacyUrl:.*$/gm)).toEqual(["PrivacyUrl: https://pwragent.ai/#privacy"]);
+  });
+
   it("reports authoritative versions and pending links, and propagates API failures", () => {
     const api = (endpoint) => {
       if (/^repos\/[^/]+\/[^/?]+$/.test(endpoint)) return { full_name: endpoint.slice(6), private: false, default_branch: "main" };

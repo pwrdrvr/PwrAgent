@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -227,7 +227,15 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
   );
   const notesPath = path.join(fileRoot, "star-map-notes.txt");
   await writeFile(notesPath, "renderer preload attachment evidence\n", "utf8");
-  const app = await launchElectronApp({ fixturePath });
+  const worktreePath = path.join(fileRoot, "worktree");
+  await mkdir(worktreePath);
+  const localFixturePath = path.join(fileRoot, "attachments.fixture.json");
+  const replay = (await readFile(fixturePath, "utf8")).replace(
+    JSON.stringify("/repo/PwrAgent/.worktrees/feature-star-map-audit"),
+    JSON.stringify(worktreePath),
+  );
+  await writeFile(localFixturePath, replay, "utf8");
+  const app = await launchElectronApp({ fixturePath: localFixturePath });
   // Hoisted so the `finally` can stop it on the failing path too. Left
   // running, its 250ms backstop and its subtree observer keep sampling
   // through teardown — while the report they produced is being read.

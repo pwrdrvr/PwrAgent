@@ -272,6 +272,7 @@ Installers:
 Publisher: PwrDrvr LLC
 PublisherUrl: https://pwrdrvr.com/
 PublisherSupportUrl: https://github.com/${SOURCE_REPO}/issues
+PrivacyUrl: https://pwragent.ai/#privacy
 PackageName: PwrAgent
 PackageUrl: https://pwragent.ai/
 License: MIT

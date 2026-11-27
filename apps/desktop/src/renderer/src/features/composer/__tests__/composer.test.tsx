@@ -2347,19 +2347,19 @@ describe("Composer", () => {
       .not.toBeInTheDocument();
   });
 
-  it("shows Token Miser available but off when the inherited default is off", () => {
+  it.each(["codex", "claude", "acp:antigravity"] as const)("offers capture-only opt-in on %s when the inherited default is off", (source) => {
     render(
       <Composer
         desktopApi={{ setThreadTokenMiser: vi.fn() }}
         disabled={false}
         skills={[]}
-        tokenMiserEnabled
+        tokenMiserCaptureEnabled
         tokenMiserDefaultEnabled={false}
         thread={{
           id: "thread-1",
           title: "Existing Codex thread",
           titleSource: "explicit",
-          source: "codex",
+          source,
           linkedDirectories: [],
           inbox: { inInbox: false },
         }}

@@ -97,7 +97,7 @@ test("keystroke after clicking the transcript draws no outline, Tab draws the ri
     // The title is click-through since the transcript-gaps pass (pointer
     // events fall to the open-thread overlay button), so target the
     // button by its accessible name.
-    await window.getByRole("button", { name: "Focus ring thread" }).click();
+    await window.getByRole("button", { name: "Focus ring thread", exact: true }).click();
     const body = window.getByText("Transcript body for the focus ring check.");
     await expect(body).toBeVisible();
 
