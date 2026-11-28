@@ -7,6 +7,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import type { Duplex } from "node:stream";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type {
   CallToolRequest,
@@ -19,7 +20,7 @@ import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized
 import { getMainLogger } from "../log.js";
 import { lazyModule } from "../lazy-module.js";
 import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStdio, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
-import { CodexAgentToolIpc, type CodexAgentToolStdioConfig, type OwnedCodexProcess } from "./codex-agent-tool-ipc.js";
+import { CodexAgentToolIpc, type CodexAgentToolStdioConfig, type CodexIpcConnection, type CodexIpcListener, type OwnedCodexProcess } from "./codex-agent-tool-ipc.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
 import {
@@ -196,6 +197,7 @@ export type AgentToolMcpAuthorization = {
 export type AgentToolMcpServerOptions = {
   verifyCodexThreadId?: boolean;
   codexRelayExecutable?: () => string;
+  createCodexIpcListener?: (onConnection: CodexIpcConnection) => CodexIpcListener;
   resolveCatalogs: (
     context: AgentToolMcpClientContext,
   ) => AgentToolMcpCatalog[] | Promise<AgentToolMcpCatalog[]>;
@@ -237,13 +239,13 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private port?: number;
   private startPromise?: Promise<void>;
   private closed = false;
-  private readonly codexIpc: CodexAgentToolIpc;
+  private readonly codexIpc: CodexIpcListener;
 
   constructor(private readonly options: AgentToolMcpServerOptions) {
-    this.codexIpc = new CodexAgentToolIpc(
-      (socket, token, isAuthorized) => this.openCodexSession(socket, token, isAuthorized),
-      options.codexRelayExecutable,
-    );
+    const onConnection: CodexIpcConnection = (stream, token, isAuthorized) =>
+      this.openCodexSession(stream, token, isAuthorized);
+    this.codexIpc = options.createCodexIpcListener?.(onConnection)
+      ?? new CodexAgentToolIpc(onConnection, options.codexRelayExecutable);
   }
 
   async registerClient(
@@ -296,7 +298,9 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     context: AgentToolMcpClientContext,
     owned: OwnedCodexProcess,
   ): Promise<OwnedAgentToolMcpRegistration | undefined> {
-    if (this.closed || process.platform !== "darwin" || context.backend === "codex") return undefined;
+    if (this.closed || process.platform !== "darwin" || context.backend === "codex" || !this.codexIpc.bindRuntime) {
+      return undefined;
+    }
     const token = randomBytes(32).toString("base64url");
     const threadId = context.threadId?.trim() || undefined;
     this.contextsByToken.set(token, { ...context, threadId });
@@ -730,7 +734,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     return mcpServer;
   }
 
-  private async openCodexSession(socket: Socket, token: string, isAuthorized: () => boolean): Promise<void> {
+  private async openCodexSession(socket: Duplex, token: string, isAuthorized: () => boolean): Promise<void> {
     const context = this.contextsByToken.get(token);
     if (!context || !this.codexStdioTokens.has(token) || !isAuthorized()) {
       socket.destroy();
@@ -741,7 +745,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const disconnected = new AbortController();
     const responses = new Map<RequestId, ReturnType<typeof createResponseFlush>>();
     const inFlight = new Set<RequestId>();
+    const initializeDeadline = setTimeout(() => socket.destroy(), 10_000);
+    initializeDeadline.unref();
     socket.once("close", () => {
+      clearTimeout(initializeDeadline);
       disconnected.abort();
       for (const flush of responses.values()) flush.finish(new Error("Codex MCP connection closed."));
       responses.clear();
@@ -764,7 +771,6 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       socket.destroy();
       return;
     }
-    socket.setTimeout(10_000, () => socket.destroy());
     transport.onerror = () => socket.destroy();
     transport.onclose = () => socket.destroy();
     let initializeId: RequestId | undefined;
@@ -801,7 +807,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           initializeId = message.id;
         } else if (initializeAnswered && types.isInitializedNotification(message)) {
           initialized = true;
-          socket.setTimeout(0);
+          clearTimeout(initializeDeadline);
         }
         else return void socket.destroy();
       }

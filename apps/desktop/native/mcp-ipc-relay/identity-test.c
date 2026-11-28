@@ -1,6 +1,7 @@
 /* Native-only tests: compiled separately; never packaged or called by the app. */
 #ifdef _WIN32
 #define wmain relay_wmain
+#define PWRAGENT_TEST_WINDOWS_CODEX
 #else
 #define main relay_main
 #endif
@@ -24,6 +25,8 @@ static int marker_after_open_test(marker_char *root, marker_char *prefix, marker
 #include <sddl.h>
 #include <accctrl.h>
 int wmain(int argc, wchar_t **argv) {
+  if (argc >= 2 && (!wcscmp(argv[1], L"--codex-windows-supervisor") || !wcscmp(argv[1], L"--codex-stdio")))
+    return relay_wmain(argc, argv);
   if (argc == 5 && !wcscmp(argv[1], L"--marker-after-open")) return marker_after_open_test(argv[2], argv[3], argv[4]);
   if (argc == 4 && !wcscmp(argv[1], L"secure-fixture")) {
     /* Node/libuv uses the token's default owner, which can be the shared

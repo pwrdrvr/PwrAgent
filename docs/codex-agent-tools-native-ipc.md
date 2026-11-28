@@ -40,7 +40,7 @@ and Dynamic Tools paths. A requested native configuration requires the relay.
   selected by ACP capability. Managed reviews keep their own HTTP registration.
   Linux and Windows Claude/ACP combinations use these existing paths.
 
-## Admission and lifetime
+## Unix admission and lifetime
 
 1. The owner lazily creates a socket in a new mode-0700 directory under
    the system's short `/tmp` path and sets the socket to mode 0600. The
@@ -97,10 +97,90 @@ from the relay would lose that proof.
 | --- | --- | --- |
 | macOS | `getpeereid` verifies the connected UID. `LOCAL_PEERTOKEN` supplies the connector's PID and audit PID version. The process probe checks that version and follows exact process and parent unique IDs, then rereads the chain. [XNU process info ABI](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info_private.h) | The prototype uses a libproc flavor outside the public SDK header. If it is unavailable or returns a different record size, admission fails closed. Minimum supported macOS and signed builds need separate verification before graduating the experiment. |
 | Linux | `SO_PEERCRED` provides UID and PID. `SO_PEERPIDFD` gives a handle to the connected process, which must still be live after the `/proc` ancestry walk. Process start times accompany PIDs. The walk rechecks links and rejects parents started after their children. [Linux socket implementation](https://github.com/torvalds/linux/blob/master/net/core/sock.c), [procfs documentation](https://docs.kernel.org/filesystems/proc.html) | Requires Linux 6.5 or a kernel with the socket option backported and a readable local procfs view. Older kernels and restricted or split PID namespaces have no PID-only fallback. Linux start times have clock-tick granularity. |
-| Windows | The relay can connect to a verified named pipe. An owner listener could obtain the actual client PID with `GetNamedPipeClientProcessId`, then hold a process handle and verify the SID and creation time. A Toolhelp parent chain is insufficient for strict proof because a caller with `PROCESS_CREATE_PROCESS` can select its reported parent. [Connected client PID](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid), [Windows process creation attributes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute) | Owner-side admission is disabled. A candidate design is an owner-created job containing the launcher from creation and a connected-process membership check, verified against job inheritance, permissions, and sandbox wrappers. A supported Windows owner needs both the private listener and this proof. |
+| Windows | The relay can connect to a verified named pipe. An owner listener could obtain the actual client PID with `GetNamedPipeClientProcessId`, then hold a process handle and verify the SID and creation time. A Toolhelp parent chain is insufficient for strict proof because a caller with `PROCESS_CREATE_PROCESS` can select its reported parent. [Connected client PID](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid), [Windows process creation attributes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute) | Owner-side admission is disabled. The non-shipping prototype below uses a protected listener and debugger creation events. Product admission stays disabled. |
 
 A thread that requests the experiment requires successful relay launch and
 admission. An unsupported runtime, unavailable helper, or failed ancestry
 probe produces a startup error. Threads created with the setting off use
 Dynamic Tools. A thread created with the experiment retains that choice
 when it resumes or forks.
+
+## Windows admission prototype
+
+The non-shipping Windows test helper launches one selected runtime under
+`DEBUG_PROCESS`. Its protected listener admits at most one MCP byte stream
+for that runtime. The test owner uses the production MCP protocol factory,
+registration grant, thread check, and active-turn check. The installed relay
+and the ordinary Windows owner do not select the prototype.
+
+### Why this prototype uses creation events
+
+`IsProcessInJob` can show that a process belongs to a particular owner-created
+job. Windows can inherit the job object from a caller-selected parent when
+the caller holds `PROCESS_CREATE_PROCESS` on that parent. An unnamed job
+and protected job handle address direct assignment and discovery. A protected
+root process DACL still leaves every accessible job member as a potential
+parent, so membership alone does not prove who created the relay. Job
+membership remains useful for process lifecycle management. Windows documents
+that the *debug port* comes from the actual creating process, even with an
+explicit parent choice. A driver could inspect both fields in a creation
+callback, but an installed driver would introduce a separate trust and
+deployment requirement. [Process creation attributes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute),
+[debugger inheritance](https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags),
+[kernel creation notification](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_ps_create_notify_info).
+
+1. The supervisor creates a private pipe with an explicit owner SID, a
+   protected user-only DACL, first-instance protection, and remote-client
+   rejection. The relay checks the connected pipe's owner and process SID
+   and requires the supervisor PID supplied by the test owner. This also
+   rejects a different same-SID pipe server before sending the grant.
+2. The selected runtime inherits only its three ordinary stdio handles.
+   The supervisor records duplicated process handles from its own kernel
+   creation events. An event ID or a Toolhelp parent field cannot enroll a
+   process. The supervisor continues each event on its debugger thread.
+3. The listener obtains the PID from the connected pipe. It holds a process
+   handle, checks the account SID and liveness, and compares the kernel
+   process object to a recorded descendant with `CompareObjectHandles`.
+   The root itself cannot claim to be a relay.
+4. To account for a stale numeric PID attached to a still-open connection,
+   the listener duplicates a fresh unnamed event into the matched process
+   only. The peer must signal that event before it can send the MCP
+   preamble. The listener then rechecks the connected PID and pinned
+   process object. The remote handle has only event-modification access
+   and is non-inheritable. Connecting before a runtime is observed, an
+   inaccessible process, a missing event, or client exit fails admission.
+   [Connected PID](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid),
+   [object identity comparison](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-compareobjecthandles),
+   [handle duplication](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-duplicatehandle).
+5. The owner receives the bytes through inherited control descriptors after
+   proof. It still verifies the registered grant and uses the production
+   catalog and call authorization. The native process never dispatches
+   tools. Overlapped connection, read, and write operations cancel on
+   teardown. Cancellation of inherited synchronous I/O releases both
+   directions. The supervisor owns debugger-exit cleanup for the runtime.
+
+Access to a tracked process with `PROCESS_DUP_HANDLE`, code injection, or
+equivalent control can defeat the process boundary. Same-SID access to the
+pipe or `PROCESS_CREATE_PROCESS` alone does not give that control over the
+challenge. Missing access to query the real peer or duplicate the one
+challenge handle closes the connection. Brokers, run-as identities,
+sandbox jobs, and alternate debuggers can change the actual creator or
+prevent debug event inheritance. Windows admission therefore remains
+disabled in the product. A deployment decision needs evidence about
+debugger effects, ordinary launch and crash behavior, wrappers, and
+sandbox modes in addition to native admission tests.
+
+### Verification
+
+Run `node apps/desktop/scripts/run-windows-codex-mcp-prototype.mjs <codex.exe>`
+on a native Windows machine with the repository's Node.js and MSVC
+toolchain. The script builds only the native test executable. The fixture
+tests production-off behavior, an occupied endpoint, an outside process
+with the correct grant, an admitted descendant, idle and wrong-thread rejection,
+and endpoint cleanup. With a native Codex executable supplied it also
+checks that a disposable App Server launches the relay, reports the tool
+server ready, and receives the owner's idle-call refusal. The app-server
+inventory RPC attempted its own handshake after the thread reported ready.
+That handshake could not open a second stream on the prototype's one-stream
+listener. The prototype does not support the full inventory inspector. The path-filtered Windows workflow downloads the pinned
+Codex 0.169.0 release and runs both scenarios without using an account.

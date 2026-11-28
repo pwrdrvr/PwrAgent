@@ -165,7 +165,11 @@ it("covers every configured production entry, inline worker, and audio worklet",
   ].sort());
   // A newly introduced bundler must enter this inventory rather than escaping it.
   const otherBuilders = walkFiles(desktop).filter((file) => /(?:from\s*["']esbuild["']|import\(["']esbuild["']\))/.test(fs.readFileSync(file, "utf8")));
-  expect(otherBuilders).toEqual([path.join(desktop, "scripts/build-headless.mjs")]);
+  expect(otherBuilders.sort()).toEqual([
+    path.join(desktop, "scripts/build-headless.mjs"),
+    // This entry only builds the disposable Windows admission oracle.
+    path.join(desktop, "scripts/run-windows-codex-mcp-prototype.mjs"),
+  ]);
   console.info("production-entry-oracle inventory", JSON.stringify({ wallMs: performance.now() - started }));
 });
 

@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdtemp, realpath, rmdir } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { join } from "node:path";
+import type { Duplex } from "node:stream";
 import { promisify } from "node:util";
 import { nativeStdioRelayPath } from "../native-relay-path";
 
@@ -21,6 +22,10 @@ export type CodexAgentToolStdioConfig = {
   args: [string, string];
   env: Record<string, string>;
 };
+export type CodexIpcConnection = (stream: Duplex, token: string, isAuthorized: () => boolean) => Promise<void>;
+export type CodexIpcListener = Pick<CodexAgentToolIpc, "configuration" | "revoke" | "close">
+  & Partial<Pick<CodexAgentToolIpc, "bindRuntime">>;
+
 export type OwnedCodexProcess = { child: ChildProcess; isCurrent: () => boolean };
 type RegisteredRuntime = { process: OwnedCodexProcess; identity: string; sockets: Set<Socket> };
 type Registration = { runtime?: RegisteredRuntime; binding?: { child: ChildProcess } };
@@ -61,7 +66,7 @@ export class CodexAgentToolIpc {
   private closed = false;
 
   constructor(
-    private readonly onConnection: (socket: Socket, token: string, isAuthorized: () => boolean) => Promise<void>,
+    private readonly onConnection: CodexIpcConnection,
     private readonly executable: () => string = nativeStdioRelayPath,
   ) {}
 
@@ -192,7 +197,7 @@ export class CodexAgentToolIpc {
   }
 }
 
-function readRegistrationPreface(socket: Socket): Promise<string | undefined> {
+export function readRegistrationPreface(socket: Duplex): Promise<string | undefined> {
   return new Promise((resolve) => {
     const finish = (token?: string) => {
       clearTimeout(timeout);
