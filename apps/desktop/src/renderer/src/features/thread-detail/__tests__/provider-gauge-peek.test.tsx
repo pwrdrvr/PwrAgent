@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ReadUsageActivityResponse } from "@pwragent/shared/contracts/usage-activity";
+import { describeRateLimitRow } from "../../../lib/backend-status-format";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { ThreadContextPanel } from "../ThreadContextPanel";
@@ -68,7 +69,7 @@ function mockLayout(): void {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     if (this.classList.contains("context-rail")) return new DOMRect(1152, 0, 48, 800);
     if (this.classList.contains("provider-peek")) {
-      const paceLines = this.querySelectorAll(".backend-status-list__pace").length;
+      const paceLines = this.querySelectorAll(".provider-peek__pace").length;
       return new DOMRect(852, 500, 290, 260 + paceLines * PACE_LINE_HEIGHT);
     }
     if (this.classList.contains("tooltip-hover-bridge")) return new DOMRect(1142, 500, 10, 260);
@@ -175,7 +176,7 @@ describe("AI provider gauge peek", () => {
       expect(windows(shown)).toEqual(["Weekly", "5h"]);
       const rows = shown.querySelectorAll(".provider-peek__scope .provider-peek__limit");
       expect(rows).toHaveLength(2);
-      expect(rows[1]).toHaveTextContent("85% used");
+      expect(rows[1]).toHaveTextContent("85%");
 
       // The peek unmounts on the way out; the latch is not its state.
       move(gauge(), document.body);
@@ -187,7 +188,7 @@ describe("AI provider gauge peek", () => {
       view.rerender(panel([openAi(70)]));
       shown = await openPeek();
       expect(windows(shown)).toEqual(["Weekly", "5h"]);
-      expect(shown).toHaveTextContent("70% used");
+      expect(shown).toHaveTextContent("70%");
     });
 
     it("wears the warning tone once the window has run out", async () => {
@@ -231,6 +232,52 @@ describe("AI provider gauge peek", () => {
     });
   });
 
+  // The balance a turn spends once a window runs out, shown as the panel shows it.
+  describe("a provider's credit balance", () => {
+    const credits = { name: "Credits", limitId: "credits", windowKey: "credits" as const, hasCredits: true, remaining: 29_093 };
+    const panel = (backends: BackendSummary[]) => (
+      <ThreadContextPanel
+        activeTab="info"
+        backends={backends}
+        pinned={false}
+        thread={thread}
+        onActiveTabChange={vi.fn()}
+      />
+    );
+    const windows = (shown: HTMLElement) =>
+      [...shown.querySelectorAll(".provider-peek__window")].map((node) => node.textContent);
+
+    it("shows beside an exhausted Weekly window", async () => {
+      mockLayout();
+      render(panel([backend("codex", "OpenAI", [
+        { name: "Weekly limit", usedPercent: 100, windowMinutes: 10_080 },
+        credits,
+      ])]));
+      const shown = await openPeek();
+      expect(windows(shown)).toEqual(["Credits", "Weekly"]);
+      const rows = shown.querySelectorAll(".provider-peek__limit");
+      expect(rows[0]).toHaveTextContent("29,093");
+      expect(rows[1]).toHaveTextContent("100%");
+    });
+
+    it("stands in for limits when it is all the provider reports", async () => {
+      mockLayout();
+      render(panel([backend("codex", "OpenAI", [credits])]));
+      const shown = await openPeek();
+      expect(windows(shown)).toEqual(["Credits"]);
+      expect(shown).not.toHaveTextContent("No limits reported");
+    });
+
+    it("stays out when the provider has no credits", async () => {
+      mockLayout();
+      render(panel([backend("codex", "OpenAI", [
+        { name: "Weekly limit", usedPercent: 40, windowMinutes: 10_080 },
+        { ...credits, hasCredits: false, remaining: 0 },
+      ])]));
+      expect(windows(await openPeek())).toEqual(["Weekly"]);
+    });
+  });
+
   // A Codex business account's Individual limit has no window, so it is no
   // allowance's row; the peek used to lead with it as the fullest limit.
   describe("a provider's Individual cap", () => {
@@ -270,7 +317,7 @@ describe("AI provider gauge peek", () => {
       const rows = providers[0]!.querySelectorAll(".provider-peek__limit");
       expect(rows[0]).toHaveTextContent("98 of 100 used");
       expect(rows[0]).not.toHaveClass("is-warning");
-      expect(rows[1]).toHaveTextContent("20% used");
+      expect(rows[1]).toHaveTextContent("20%");
     });
 
     it("shows at 80%, holds between the bounds, and hides below 60%", async () => {
@@ -327,11 +374,9 @@ describe("AI provider gauge peek", () => {
       .toEqual(["Claude", "Antigravity"]);
     expect(read(providers[0]!)).toEqual({ scopes: [], windows: ["Weekly"] });
     expect(read(providers[1]!)).toEqual({ scopes: ["Claude/GPT", "Gemini"], windows: ["Weekly", "Weekly"] });
-    expect(providers[1]).toHaveTextContent("36% used");
-    expect(providers[1]).toHaveTextContent("30% used");
-    // The panel's own label ("Weekly Gemini limit") is hidden by the peek's
-    // stylesheet, which jsdom does not load; the visible text is the rest.
-    for (const label of shown.querySelectorAll(".provider-peek__stat dt")) label.remove();
+    expect(providers[1]).toHaveTextContent("36%");
+    expect(providers[1]).toHaveTextContent("30%");
+    // The window column replaces the panel's label ("Weekly Gemini limit").
     expect(shown).not.toHaveTextContent(/limit/i);
     expect(shown).not.toHaveTextContent("5h");
     // Every row shares the one window column, so every bar starts at one edge.
@@ -439,7 +484,7 @@ describe("AI provider gauge peek", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(readUsageActivity).toHaveBeenCalledTimes(1);
-    expect(shown.querySelector(".backend-status-list__pace")).toBeNull();
+    expect(shown.querySelector(".provider-peek__pace")).toBeNull();
     await act(async () => {
       answer({
         rows: [],
@@ -456,9 +501,53 @@ describe("AI provider gauge peek", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     const placed = peek()!;
-    expect(placed.querySelector(".backend-status-list__pace")).not.toBeNull();
+    expect(placed.querySelector(".provider-peek__pace")).not.toBeNull();
     const bottom = Number.parseFloat(placed.style.top) + placed.getBoundingClientRect().height;
     expect(bottom).toBeLessThanOrEqual(window.innerHeight);
+  });
+
+  // The browser wraps the peek's narrow lines, and jsdom lays nothing out, so
+  // this holds the markup to the rule the wrapping follows: the percent sits
+  // beside the bar, the reset has its own line, and every time and duration
+  // sits whole in one unbreakable phrase ("Sun 9:08 PM" never loses its "PM").
+  it("keeps each time and duration in one unbreakable phrase", async () => {
+    const now = Date.UTC(2026, 10, 24, 21);
+    vi.setSystemTime(now);
+    const weekly = { name: "Weekly limit", windowKey: "secondary" as const, windowMinutes: 10_080, resetAt: now + 82 * 3_600_000 };
+    const readUsageActivity = vi.fn(async () => ({
+      rows: [],
+      readAt: now,
+      rateLimits: [],
+      truncated: false,
+      limitObservation: { observedAt: now, accountKey: "phrases", planType: "pro", limits: [{ ...weekly, usedPercent: 53 }] },
+    }) as unknown as ReadUsageActivityResponse);
+    mockLayout();
+    render(
+      <ThreadContextPanel
+        activeTab="info"
+        backends={[backend("codex", "OpenAI", [{ ...weekly, usedPercent: 53 }])]}
+        desktopApi={{ readUsageActivity } as unknown as ComponentProps<typeof ThreadContextPanel>["desktopApi"]}
+        pinned={false}
+        thread={thread}
+        onActiveTabChange={vi.fn()}
+      />,
+    );
+    await openPeek();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const row = peek()!.querySelector(".provider-peek__limit")!;
+    expect(row.querySelector(".provider-peek__percent")).toHaveTextContent(/^53%$/);
+    const reset = row.querySelector(".provider-peek__detail .provider-peek__phrase");
+    // The whole reset, in the runner's own locale, in one phrase.
+    expect(reset?.textContent).toBe(describeRateLimitRow({ ...weekly, usedPercent: 53 }, now).reset);
+    const pace = row.querySelector(".provider-peek__pace")!;
+    const phrases = [...pace.querySelectorAll(".provider-peek__phrase")].map((node) => node.textContent!);
+    // Everything after the rate is phrases; a line can break only between them.
+    expect(phrases.join(" ")).toBe(pace.textContent!.replace(/^\S+\s+/, ""));
+    for (let index = 1; index < phrases.length; index++) {
+      expect(phrases[index]!.split(" ")[0]).not.toMatch(/^(AM|PM|h|m|days?)$/);
+    }
   });
 
   // Found by the scaling audit: reading the pace only while the peek was up
