@@ -55,7 +55,7 @@ describe("Codex launch recovery notice", () => {
     render(<NoticeHarness discovery={broken} onOpenCodexSettings={onOpenCodexSettings} />);
 
     expect(screen.getByRole("status")).toHaveTextContent("Codex installation failed to start");
-    expect(screen.getByRole("status")).toHaveTextContent("Refresh Codex");
+    expect(screen.getByRole("status")).toHaveTextContent("Check again under Setup");
     expect(screen.getByRole("definition")).toHaveTextContent(command);
     const guide = screen.getByRole("link", { name: "Codex CLI installation guide" });
     expect(guide).toHaveAttribute("href", CODEX_CLI_INSTALL_URL);

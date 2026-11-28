@@ -19,6 +19,8 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";
 import { describeGitCommandState } from "./CommandToolsSettings";
 import { claudeProviderStatus } from "./claude-provider-status";
+import { acpSetupStatus, codexSetupStatus } from "./harness-setup-status";
+import { useManagedRuntimeProgress } from "./ManagedRuntimeProgress";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { GuidedSetupDialog } from "./guided-setup/GuidedSetupDialog";
@@ -541,6 +543,8 @@ export function SettingsScreen(props: {
     [],
   );
   const desktopApi = props.desktopApi;
+  // Reads main's cached download state; starts nothing.
+  const managedCodexProgress = useManagedRuntimeProgress(desktopApi, "codex");
   const enabledForges = FORGE_KINDS.filter((kind) =>
     snapshot?.applications[FORGE_PRODUCTS[kind].cli]?.enabled.value === true,
   ).join(",");
@@ -604,9 +608,13 @@ export function SettingsScreen(props: {
       ];
     }
     if (target === "models") {
-      const codexConfigured = Boolean(
-        snapshot?.models.codex.discovery.selectedCommand,
-      );
+      const codex = snapshot
+        ? codexSetupStatus({
+            codex: snapshot.models.codex,
+            backend: props.cachedBackends?.find((backend) => backend.kind === "codex"),
+            managedProgress: managedCodexProgress,
+          })
+        : undefined;
       const claude = claudeProviderStatus(
         props.cachedBackends?.find((backend) => backend.kind === "claude")?.claude,
       );
@@ -630,7 +638,8 @@ export function SettingsScreen(props: {
           label: "Codex",
           sub: "codex",
           group: harnesses,
-          dot: snapshot ? (codexConfigured ? "ok" : "off") : undefined,
+          dot: codex?.dot,
+          ...(codex?.navChip ? { chip: codex.navChip } : {}),
         },
         {
           key: "claude",
@@ -642,13 +651,14 @@ export function SettingsScreen(props: {
         },
         ...displayOrderedAcpEntries(acpCatalog.entries).map((entry) => {
           const enabled = acpAgentEnabledInSnapshot(snapshot, entry.registryId);
+          const status = acpSetupStatus(entry, { enabled });
           return {
             key: entry.registryId,
             label: entry.name,
             sub: entry.registryId,
             group: harnesses,
-            dot: (enabled && entry.installed ? "ok" : "off") as "ok" | "off",
-            ...(enabled ? {} : { chip: "off" }),
+            dot: status.dot,
+            ...(status.navChip ? { chip: status.navChip } : {}),
           };
         }),
         ...services,

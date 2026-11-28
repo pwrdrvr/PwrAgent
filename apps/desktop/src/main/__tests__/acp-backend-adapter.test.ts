@@ -510,7 +510,7 @@ describe("describeInstalledAcpBackend", () => {
           expect(settings.unavailableReason).toBe(summary.unavailableReason);
           if (deprecated) {
             expect(settings.lastDiscoveryError).toContain("Antigravity");
-            expect(settings.lastDiscoveryError).toContain("Re-probe");
+            expect(settings.lastDiscoveryError).toContain("Check again in Setup");
           } else {
             expect(settings.lastDiscoveryError).toBe(lastDiscoveryError);
           }

@@ -7,9 +7,12 @@ import type { DesktopApi } from "../../../lib/desktop-api";
  */
 export type RowLoginState =
   | { kind: "idle" }
+  /** A status check found no sign-in, and none was started from here. */
+  | { kind: "signed-out"; detail?: string }
   | { kind: "starting" }
   | { kind: "waiting"; url?: string; detail?: string }
-  | { kind: "checking"; url?: string }
+  /** `signIn`: the check is about a sign-in started from this row. */
+  | { kind: "checking"; url?: string; signIn?: boolean }
   | { kind: "ok"; email?: string; planType?: string }
   | { kind: "error"; detail: string; url?: string };
 
@@ -43,6 +46,7 @@ export function ProfileRowLoginControls(props: {
     if (props.state.kind === "starting") return "Starting…";
     if (props.state.kind === "waiting") return "Re-open browser";
     if (props.state.kind === "error") return "Try again";
+    if (props.state.kind === "signed-out") return "Log in";
     if (props.state.kind === "checking") return "Checking…";
     return "Log in";
   })();
@@ -69,6 +73,7 @@ export function ProfileRowLoginControls(props: {
         </button>
       ) : null}
       {props.state.kind === "waiting"
+      || props.state.kind === "signed-out"
       || (props.state.kind === "idle" && props.checkWhenIdle) ? (
         <button
           type="button"
@@ -108,6 +113,13 @@ export function ProfileRowLoginStatus(props: { state: RowLoginState }) {
       </div>
     );
   }
+  if (props.state.kind === "signed-out") {
+    return (
+      <div className="guided-setup__profile-row-detail">
+        Not signed in. Log in opens the Codex sign-in in your browser.
+      </div>
+    );
+  }
   return null;
 }
 
@@ -124,17 +136,41 @@ export function useCodexProfileLogin(
   initial: RowLoginState = { kind: "idle" },
 ) {
   const [state, setState] = useState<RowLoginState>(initial);
+  // The state belongs to one profile. When the row starts describing another
+  // (the operator picked a different auth profile), the old profile's
+  // "Logged in" or open browser link must not carry over to it.
+  // Each start or check takes the next number, and only the newest one may
+  // write its answer. A check that was already running when the operator
+  // pressed Log in again, or that belongs to a profile since replaced, is
+  // older news than what the row now shows.
+  const requestRef = useRef(0);
+  const [stateProfile, setStateProfile] = useState(profile);
+  if (stateProfile !== profile) {
+    setStateProfile(profile);
+    setState(initial);
+    requestRef.current += 1;
+  }
   const apiRef = useRef(desktopApi);
   apiRef.current = desktopApi;
 
   const check = useCallback(async (): Promise<void> => {
     const api = apiRef.current;
     if (!api?.checkCodexAuthProfileStatus) return;
+    const request = ++requestRef.current;
+    const current = () => request === requestRef.current;
     setState((prev) =>
-      prev.kind === "ok" ? prev : { kind: "checking", url: rowLoginUrl(prev) },
+      prev.kind === "ok"
+        ? prev
+        : {
+            kind: "checking",
+            url: rowLoginUrl(prev),
+            signIn: prev.kind === "waiting"
+              || (prev.kind === "checking" && prev.signIn === true),
+          },
     );
     try {
       const result = await api.checkCodexAuthProfileStatus({ profile });
+      if (!current()) return;
       if (result.authenticated) {
         setState({
           kind: "ok",
@@ -142,13 +178,20 @@ export function useCodexProfileLogin(
           planType: result.planType,
         });
       } else {
-        setState((prev) => ({
-          kind: "waiting",
-          url: rowLoginUrl(prev),
-          detail: result.detail,
-        }));
+        // Only a sign-in started from this row is something to wait for. A
+        // check with none running found a signed-out profile; saying a
+        // browser opened would describe something that never happened.
+        setState((prev) => {
+          const url = rowLoginUrl(prev);
+          const signingIn = prev.kind === "waiting"
+            || (prev.kind === "checking" && prev.signIn === true);
+          return url !== undefined || signingIn
+            ? { kind: "waiting", url, detail: result.detail }
+            : { kind: "signed-out", detail: result.detail };
+        });
       }
     } catch (caught) {
+      if (!current()) return;
       setState({
         kind: "error",
         detail: caught instanceof Error ? caught.message : String(caught),
@@ -160,6 +203,8 @@ export function useCodexProfileLogin(
     async (options?: { createProfile?: boolean }): Promise<void> => {
       const api = apiRef.current;
       if (!api?.startCodexAuthProfileLogin) return;
+      const request = ++requestRef.current;
+      const current = () => request === requestRef.current;
       setState({ kind: "starting" });
       try {
         if (options?.createProfile) {
@@ -168,6 +213,7 @@ export function useCodexProfileLogin(
           await api.createCodexAuthProfile({ profile });
         }
         const result = await api.startCodexAuthProfileLogin({ profile });
+        if (!current()) return;
         if (result.authenticated) {
           await check();
           return;
@@ -178,6 +224,7 @@ export function useCodexProfileLogin(
           detail: result.detail,
         });
       } catch (caught) {
+        if (!current()) return;
         setState({
           kind: "error",
           detail: caught instanceof Error ? caught.message : String(caught),

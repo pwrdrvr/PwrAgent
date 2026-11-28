@@ -635,6 +635,9 @@ export function SettingsField(props: {
    *  render a malformed label. */
   label: string;
   labelId?: string;
+  /** Element id for the field, so another control can bring it into view
+   *  (a Setup step's Change). */
+  fieldId?: string;
   /** 12-px description below the label. Single sentence framing. */
   sub?: ReactNode;
   /** 11.5-px hint below the control. */
@@ -675,7 +678,7 @@ export function SettingsField(props: {
   );
 
   return (
-    <div className="settings-field">
+    <div className="settings-field" id={props.fieldId}>
       <div className="settings-field__label">
         <span id={props.labelId}>{props.label}</span>
         {props.sub ? (

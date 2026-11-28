@@ -2200,7 +2200,7 @@ describe("DesktopSettingsService", () => {
       },
     });
     await expect(service.resolveCodexCommand()).rejects.toThrow(
-      "Refresh Codex in Settings",
+      "Check again under Setup in Settings → Codex",
     );
     expect(resolve).not.toHaveBeenCalled();
   });
@@ -2651,7 +2651,7 @@ describe("DesktopSettingsService", () => {
     // still pending would leave a startup surface waiting forever for one.
     expect(service.isCodexDiscoveryPending()).toBe(false);
     await expect(service.resolveCodexCommand()).rejects.toThrow(
-      "Refresh Codex in Settings",
+      "Check again under Setup in Settings → Codex",
     );
   });
 

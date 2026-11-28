@@ -612,7 +612,7 @@ function rejectedAcpCandidateMessage(
   const command = rejected?.command ?? "The detected executable";
   switch (rejected?.reason) {
     case "probe-timed-out":
-      return `${command} was found, but its ACP verification timed out. Refresh to try again.`;
+      return `${command} was found, but its ACP verification timed out. Select Check again in Setup to try again.`;
     case "version-probe-failed":
       return `${command} was found, but its version check failed.`;
     case "acp-help-mismatch":

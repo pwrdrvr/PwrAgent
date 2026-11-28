@@ -12,6 +12,9 @@ import { antigravityRuntimeView, type AntigravityRuntimeView } from "./antigravi
 import { ManagedRuntimeProgressStrip, useManagedRuntimeProgress } from "./ManagedRuntimeProgress";
 import { SettingsField } from "./SettingsLayout";
 
+export const ANTIGRAVITY_RUNTIME_FIELD_ID = "settings-antigravity-runtime";
+export const ANTIGRAVITY_ACCOUNT_FIELD_ID = "settings-antigravity-account";
+
 type SignInStep = "opening" | "code" | "verifying";
 
 export function AntigravitySetup(props: {
@@ -189,6 +192,7 @@ export function AntigravitySetup(props: {
     <>
       <SettingsField
         label="Runtime"
+        fieldId={ANTIGRAVITY_RUNTIME_FIELD_ID}
         sub="PwrAgent downloads Antigravity from Google, verifies its checksum and ACP startup, and checks for a newer release when you open this page."
         error={progress?.phase === "failed" ? undefined : runtimeError ?? checkError}
         control={
@@ -214,6 +218,7 @@ export function AntigravitySetup(props: {
       {props.children}
       <SettingsField
         label="Google account"
+        fieldId={ANTIGRAVITY_ACCOUNT_FIELD_ID}
         sub="Sign in with Google to use Antigravity and discover the models available to your account."
         error={accountError}
         control={
@@ -251,7 +256,7 @@ export function AntigravitySetup(props: {
             {entry.installed && !step ? (
               <details>
                 <summary>Manage your account in Terminal</summary>
-                <p>Use <code>agy acp --login</code> to sign in or switch accounts. To sign out, open <code>agy</code> and run <code>/logout</code>. Select Refresh below after changing an account.</p>
+                <p>Use <code>agy acp --login</code> to sign in or switch accounts. To sign out, open <code>agy</code> and run <code>/logout</code>. Select Check again in Setup after changing an account.</p>
               </details>
             ) : null}
           </div>
