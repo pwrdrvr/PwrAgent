@@ -19,7 +19,7 @@ import { getDesktopNavigationQueryPool } from "../../app-server/navigation-query
 import { stageQueuedFileInputs } from "../../app-server/turn-input-attachment-files";
 import { rewriteFederatedTranscriptImageUrlForRenderer } from "../transcript-image-protocol";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
-import { ipcMain, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import { issueProviderDiscoveryPermit } from "../../settings/provider-discovery-permit";
 import {
   federationTargetForChannelSubscriber,
@@ -489,9 +489,15 @@ export function registerAgentIpcHandlers(): void {
   ipcMain.handle(
     BACKEND_LIST_CHANNEL,
     async (
-      _event,
+      event,
       request?: ListBackendsRequest
     ): Promise<ListBackendsResponse> => {
+      if (request?.refreshAntigravityQuota === true) {
+        const window = BrowserWindow.fromWebContents(event.sender);
+        if (!window?.isFocused() || !window.isVisible()) {
+          request = { ...request, refreshAntigravityQuota: undefined };
+        }
+      }
       return await timeStartupProfileOperation({
         type: "ipc-main:listBackends",
         detail: {

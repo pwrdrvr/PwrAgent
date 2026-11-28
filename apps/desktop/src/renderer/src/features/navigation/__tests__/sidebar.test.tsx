@@ -3590,6 +3590,7 @@ describe("Sidebar", () => {
 
   it("refreshes profile quotas on hover and focus and updates the open tooltip", async () => {
     const onRefreshRateLimits = vi.fn();
+    const onRequestAntigravityQuota = vi.fn();
     const props = {
       activeProfile: "work",
       backends,
@@ -3603,12 +3604,15 @@ describe("Sidebar", () => {
       onOpenLaunchpad: async () => undefined,
       onSelectThread: () => undefined,
       onRefreshRateLimits,
+      onRequestAntigravityQuota,
     };
     const { rerender } = render(<Sidebar {...props} />);
     const button = screen.getByRole("button", { name: /^Open PwrAgent profile menu: / });
     expect(button).toHaveAccessibleName(`Open PwrAgent profile menu: ${button.textContent}`);
+    expect(onRequestAntigravityQuota).not.toHaveBeenCalled();
     fireEvent.mouseEnter(button);
     expect(onRefreshRateLimits).toHaveBeenCalledTimes(1);
+    expect(onRequestAntigravityQuota).toHaveBeenCalledOnce();
     await screen.findByRole("tooltip");
     rerender(<Sidebar {...props} backends={[{
       ...backends[0]!,
@@ -3619,6 +3623,7 @@ describe("Sidebar", () => {
     fireEvent.mouseLeave(button);
     fireEvent.focus(button);
     expect(onRefreshRateLimits).toHaveBeenCalledTimes(2);
+    expect(onRequestAntigravityQuota).toHaveBeenCalledOnce();
   });
 
   it("shows the active PwrAgent and Codex profiles with account tooltip details", async () => {

@@ -12,8 +12,11 @@ type BackendSummaryData = {
 
 type BackendSummaryState = BackendSummaryData & {
   refreshRateLimits: () => Promise<BackendSummary[]>;
+  requestAntigravityQuota: () => void;
   refreshAcpAgents: () => Promise<BackendSummary[]>;
 };
+
+const PENDING_SUMMARIES: BackendSummaryData = { backends: [], loaded: false };
 
 export const BACKEND_SUMMARIES_REFRESH_EVENT =
   "pwragent:backend-summaries-refresh";
@@ -30,14 +33,12 @@ export function useBackendSummaries(
   const enabled = options.enabled ?? true;
   const federationTarget = options.federationTarget;
   const suspended = options.suspended ?? false;
-  const [state, setState] = useState<BackendSummaryData>({
-    backends: [],
-    loaded: false,
-  });
+  const [state, setState] = useState<BackendSummaryData & { source?: FederationTarget }>(PENDING_SUMMARIES);
   const stateRef = useRef(state);
   stateRef.current = state;
-  const suspendedRef = useRef(suspended);
-  suspendedRef.current = suspended;
+  const requestContext = useRef({ enabled, suspended, federationTarget });
+  requestContext.current = { enabled, suspended, federationTarget };
+  const quotaRequests = useRef(new Set<string | undefined>());
   const acpRefreshPromiseRef =
     useRef<Promise<BackendSummary[]> | undefined>(undefined);
   // Reads overlap: an event refresh and a slower rate-limit refresh can
@@ -47,18 +48,19 @@ export function useBackendSummaries(
   // The shown list as JSON, kept so each response is serialized only once.
   const shownJsonRef = useRef<string | undefined>(undefined);
 
-  const readSummaries = useCallback(async (refreshRateLimits = false): Promise<BackendSummary[]> => {
+  const readSummaries = useCallback(async (
+    refreshRateLimits = false,
+    refreshAntigravityQuota = false,
+  ): Promise<BackendSummary[]> => {
     if (!enabled) {
-      setState({
-        backends: [],
-        error: undefined,
-        loaded: false,
-      });
+      setState({ ...PENDING_SUMMARIES, source: federationTarget });
       return [];
     }
 
+    const cachedBackends = () => federationTargetsEqual(stateRef.current.source, federationTarget)
+      ? stateRef.current.backends : PENDING_SUMMARIES.backends;
     if (suspended) {
-      return stateRef.current.backends;
+      return cachedBackends();
     }
 
     if (!desktopApi?.listBackends) {
@@ -66,16 +68,25 @@ export function useBackendSummaries(
         backends: [],
         error: undefined,
         loaded: true,
+        source: federationTarget,
       });
       return [];
     }
 
+    const requestIsCurrent = () => {
+      const current = requestContext.current;
+      return current.enabled && !current.suspended
+        && federationTargetsEqual(current.federationTarget, federationTarget);
+    };
+    const appliedAtStart = appliedRef.current;
     try {
       const response = await desktopApi.listBackends({
         includeUnavailable: true,
         ...(refreshRateLimits ? { refreshRateLimits: true } : {}),
+        ...(refreshAntigravityQuota ? { refreshAntigravityQuota: true } : {}),
         ...(federationTarget ? { federationTarget } : {}),
       });
+      if (!requestIsCurrent()) return cachedBackends();
       const applied = appliedRef.current;
       const sameSource = applied !== undefined
         && federationTargetsEqual(applied.source, federationTarget);
@@ -84,7 +95,7 @@ export function useBackendSummaries(
         && typeof response.fetchedAt === "number"
         && response.fetchedAt < applied.fetchedAt
       ) {
-        return stateRef.current.backends;
+        return cachedBackends();
       }
       if (typeof response.fetchedAt === "number") {
         appliedRef.current = { source: federationTarget, fetchedAt: response.fetchedAt };
@@ -106,19 +117,22 @@ export function useBackendSummaries(
         backends: response.backends,
         error: undefined,
         loaded: true,
+        source: federationTarget,
       });
       return response.backends;
     } catch (error) {
-      // A peer-status event can suspend this hook while an earlier remote
-      // read is still in flight. Keep the last usable summaries in that race;
-      // reconnecting changes `suspended` and immediately refreshes them.
-      if (suspendedRef.current) {
-        return stateRef.current.backends;
+      // Failures have no assembly timestamp. Keep a snapshot from this owner
+      // if it was accepted while this read was pending.
+      const applied = appliedRef.current;
+      if (!requestIsCurrent() || (applied && applied !== appliedAtStart
+        && federationTargetsEqual(applied.source, federationTarget))) {
+        return cachedBackends();
       }
       setState({
-        backends: refreshRateLimits ? stateRef.current.backends : [],
+        backends: refreshRateLimits || refreshAntigravityQuota ? cachedBackends() : [],
         error: error instanceof Error ? error.message : String(error),
         loaded: true,
+        source: federationTarget,
       });
       return [];
     }
@@ -129,6 +143,16 @@ export function useBackendSummaries(
     () => readSummaries(true),
     [readSummaries],
   );
+  const requestAntigravityQuota = useCallback((): void => {
+    if (!enabled || suspended || document.visibilityState !== "visible" || !document.hasFocus()) return;
+    const owner = federationTarget?.scope === "remote" ? federationTarget.instanceId : undefined;
+    const pending = quotaRequests.current;
+    if (pending.has(owner)) return;
+    pending.add(owner);
+    void readSummaries(false, true).finally(() => {
+      pending.delete(owner);
+    });
+  }, [enabled, federationTarget, readSummaries, suspended]);
 
   useEffect(() => {
     if (!enabled || suspended || !options.pollRateLimits) return;
@@ -228,9 +252,13 @@ export function useBackendSummaries(
     });
   }, [desktopApi, enabled, federationTarget, refresh]);
 
+  const shown = federationTargetsEqual(state.source, federationTarget) ? state : PENDING_SUMMARIES;
   return {
-    ...state,
+    backends: shown.backends,
+    error: shown.error,
+    loaded: shown.loaded,
     refreshRateLimits,
+    requestAntigravityQuota,
     refreshAcpAgents,
   };
 }

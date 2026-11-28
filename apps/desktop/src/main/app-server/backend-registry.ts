@@ -4183,7 +4183,7 @@ export class DesktopBackendRegistry {
     if ((!policy || policy.enabledBackends.includes("claude")) && (request.refreshModels === true || request.refreshModels === "claude")) {
       await this.claudeBackend.discover();
     }
-    const refreshAntigravityQuota = request.refreshRateLimits === true
+    const refreshAntigravityQuota = request.refreshAntigravityQuota === true
       && (!policy || policy.enabledBackends.includes("acp:antigravity"));
     const acpSummaries = !policy || policy.enabledBackends.some(isAcpBackendId)
       ? await this.acpBackend.describeInstalledBackends(refreshAntigravityQuota)

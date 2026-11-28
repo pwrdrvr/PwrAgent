@@ -751,6 +751,7 @@ export type ThreadViewProps = {
   bindOptimisticUserMessageToTurn?: (id: string, turnId: string) => void;
   backendError?: string;
   backends: BackendSummary[];
+  onRequestAntigravityQuota?: () => void;
   applications?: DesktopApplicationsSnapshot;
   codexFastAllowed?: boolean;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
@@ -928,6 +929,7 @@ export type ThreadViewProps = {
    * window chrome; App always supplies them.
    */
   contextRailPinned?: boolean;
+  onToggleContextRail?: () => void;
   onContextRailPinnedChange?: (pinned: boolean) => void;
   activeContextTab?: ContextTabId;
   onActiveContextTabChange?: (tab: ContextTabId) => void;
@@ -3890,6 +3892,7 @@ export function ThreadView(props: ThreadViewProps) {
               activeTab={activeContextTab}
               backendError={props.backendError}
               backends={props.backends}
+              onRequestAntigravityQuota={props.onRequestAntigravityQuota}
               ownerBackends={peerOwnerTarget ? peerOwnerSummaries.backends : undefined}
               desktopApi={props.desktopApi}
               onOpenAutomations={props.onOpenAutomations}
@@ -4263,7 +4266,7 @@ function renderThreadViewHeader({
       sidebarOpen: !sidebarHidden,
       railOpen: contextRailPinned,
       onToggleSidebar,
-      onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+      onToggleRail: props.onToggleContextRail ?? (() => onContextRailPinnedChange(!contextRailPinned)),
     },
     masthead: props.mastheadActions,
     history: props.historyNav,

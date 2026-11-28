@@ -12,6 +12,7 @@ import {
   discoverCodexBackendForTest,
 } from "./helpers/backend-registry-fixture";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
 import fc from "fast-check";
 import {
   mkdir,
@@ -57,6 +58,22 @@ import type { AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
 import { AcpSessionStore } from "../storage/acp-session-store";
 
 describe("DesktopBackendRegistry", () => {
+  it("requires explicit Antigravity usage intent independently of background or generic quota refresh", async () => {
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const describeAcp = vi.spyOn(AcpBackendAdapter.prototype, "describeInstalledBackends").mockResolvedValue([]);
+    onTestFinished(async () => {
+      describeAcp.mockRestore();
+      await registry.close();
+    });
+    await registry.listBackends();
+    await registry.listBackends({ refreshRateLimits: true });
+    await registry.listBackends({ refreshAntigravityQuota: true });
+    expect(describeAcp.mock.calls).toEqual([[false], [false], [true]]);
+  });
+
   it("serves cached ACP provider commands to a launchpad draft with no thread", async () => {
     const repositoryPath = toTestRepositoryPath("/repo");
     const commands: AppServerAvailableCommandSummary[] = [

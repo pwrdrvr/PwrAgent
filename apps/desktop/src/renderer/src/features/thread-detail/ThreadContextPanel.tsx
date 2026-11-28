@@ -168,6 +168,7 @@ type ThreadContextPanelProps = {
   activeTurnId?: string;
   backendError?: string;
   backends: BackendSummary[];
+  onRequestAntigravityQuota?: () => void;
   /** The owning peer's providers, for a thread that runs on another instance. */
   ownerBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
@@ -708,6 +709,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     }
   };
   const selectTab = (tab: ContextRailTabId): void => {
+    if (tab === "providers") props.onRequestAntigravityQuota?.();
     const id = tab === "details" ? contextTabIdForDetailsSegment(detailsSegment) : tab;
     setPickedTab(id);
     showContextTab(id);
@@ -732,6 +734,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       return;
     }
     clearRevealTimer();
+    props.onRequestAntigravityQuota?.();
     providerPeek.enter(event.currentTarget);
   };
   const leaveGauge = (event: MouseEvent<HTMLElement>): void => {
