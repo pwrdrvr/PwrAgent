@@ -2058,7 +2058,9 @@ export type ThreadTokenMiserSavings = {
 
 export type ThreadTokenMiserAccounting = {
   savings?: ThreadTokenMiserSavings;
+  suppressSavings?: true;
   interceptionCount: number;
+  boundedCaptureCount?: number;
   passThroughCount?: number;
   policyPassThroughCount?: number;
   helperPassThroughCount?: number;

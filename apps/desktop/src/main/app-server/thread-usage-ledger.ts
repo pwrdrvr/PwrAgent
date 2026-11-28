@@ -1254,7 +1254,8 @@ export class ThreadUsageLedger {
       });
       return {
         ...params.accounting,
-        tokenMiser: savings ? { ...withReplays, savings } : withReplays,
+        tokenMiser: savings === null ? { ...withReplays, suppressSavings: true }
+          : savings ? { ...withReplays, savings } : withReplays,
       };
     } catch (error) {
       backendRegistryLog.warn("failed to read Token Miser thread accounting", {
@@ -3711,7 +3712,7 @@ export class ThreadUsageLedger {
     entries: readonly TokenMiserObjectMetadata[];
     replays: TokenMiserCachedReplayIndex;
     threadId: string;
-  }): Promise<ThreadTokenMiserSavings | undefined> {
+  }): Promise<ThreadTokenMiserSavings | null | undefined> {
     if (!this.host().tokenMiserStore) {
       return undefined;
     }
@@ -3810,7 +3811,7 @@ export class ThreadUsageLedger {
     // parent never reads its answer.
     for (const line of pricing.lines) {
       if (isTokenMiserAuxiliaryHelper(line.sourceItemId)) {
-        if (line.priceStatus !== "priced") return undefined;
+        if (line.priceStatus !== "priced") return null;
         const cost = line.totalCostMicros;
         gateCostMicros += cost;
         savingsMicros -= cost;

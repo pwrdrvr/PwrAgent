@@ -43,6 +43,7 @@ export class TokenMiserPricingPage {
   private passed = 0;
   private avoided = 0;
   private legacyCount = 0;
+  private captureCount = 0;
   private legacyTurns = new Map<string, string>();
 
   static open(store: TokenMiserStore, threadId: string, backend: AppServerBackendKind) {
@@ -95,6 +96,7 @@ export class TokenMiserPricingPage {
     }
     if (group.gates.size || group.captureIds?.size) this.turns.set(entry.turnId, group);
     else this.turns.delete(entry.turnId);
+    if (entry.captureBackend) this.captureCount += sign;
     if (decision?.decisionSource === "policy") group.counts.policyDecisionCount += sign;
     else if (decision) group.counts.helperDecisionCount += sign;
     if (decision?.disposition === "passed_through") {
@@ -175,7 +177,8 @@ export class TokenMiserPricingPage {
     const callCount = this.backend === "codex" ? this.metadata.observationCount() : 0;
     const count = this.rows.size;
     const accounting = {
-      interceptionCount: count, helperDecisionCount: this.helpers, passThroughCount: this.passed, estimatedParentTokensSaved: this.avoided,
+      interceptionCount: count, boundedCaptureCount: this.captureCount,
+      helperDecisionCount: this.helpers, passThroughCount: this.passed, estimatedParentTokensSaved: this.avoided,
       codeMode: { callCount },
     };
     const helperCost = reader.auxiliaryHelperCost();
@@ -185,8 +188,8 @@ export class TokenMiserPricingPage {
       pricedGateCount: this.totals.pricedCount,
     } : undefined;
     page.savings = { summary: buildTokenMiserSavingsSummary({
-      accounting: { ...accounting, savings },
-      gateTotals: savings ? gateTotals : { ...gateTotals, pricedCount: 0 },
+      accounting: { ...accounting, savings, suppressSavings: savings ? undefined : true },
+      gateTotals,
     }) };
     for (const group of page.groups?.values() ?? []) {
       const turn = group.parentTurnId && this.turns.get(group.parentTurnId);

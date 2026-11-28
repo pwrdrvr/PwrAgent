@@ -5,7 +5,7 @@ import type {
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { BoundedCommandDelivery } from "./bounded-command";
+import type { BoundedCommandCaller, BoundedCommandDelivery, BoundedCommandReceipt } from "./bounded-command";
 import { mapTokenMiserFiles, withTokenMiserFileOperation } from "./token-miser-file-io";
 import { TokenMiserOutputCache } from "./token-miser-output-cache";
 import type { OrderedTokenMiserMetadata, TokenMiserObjectRecord, TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
@@ -135,7 +135,10 @@ type PendingRetrievalDelivery = {
   kind?: "summary" | "source";
   wrappedText: string;
   allowJsonString?: boolean;
+  capture?: BoundedCommandReceipt;
 };
+
+type PendingCaptureReads = { caller: BoundedCommandCaller; hasDigest: boolean; bytes: number };
 
 function deliveryTextForms(pending: PendingRetrievalDelivery): string[] {
   // text({ objectId, summary }) encodes the entire summary as a JSON string.
@@ -147,6 +150,7 @@ function deliveryTextForms(pending: PendingRetrievalDelivery): string[] {
 
 export type TokenMiserUsageSummary = {
   interceptionCount: number;
+  boundedCaptureCount?: number;
   passThroughCount: number;
   policyPassThroughCount: number;
   helperPassThroughCount: number;
@@ -233,6 +237,7 @@ export type TokenMiserStoreOptions = {
   onCodeModeObservationUpdated?: (
     observation: TokenMiserCodeModeObservation,
   ) => void | Promise<void>;
+  onBoundedCommandAccountingUpdated?: (caller: BoundedCommandCaller) => void;
 };
 
 export type TokenMiserStoreParams = {
@@ -286,6 +291,7 @@ export class TokenMiserStore {
   private readonly pendingRetrievalDeliveries =
     new Map<string, { createdAt: number; threadId: string; turnId: string }>();
   private readonly replayUpdates = new Map<string, PendingReplayUpdate>();
+  private readonly captureReads = new Map<string, Map<string, PendingCaptureReads>>();
   private readonly parentRequestUsage = new Map<string, {
     requestEpoch: string;
     cumulativeInputTokens: number;
@@ -493,7 +499,7 @@ export class TokenMiserStore {
 
   async readMetadata(objectId: string, threadId?: string): Promise<TokenMiserObjectMetadata | undefined> {
     const metadata = this.readPersistedMetadata(objectId, threadId);
-    return metadata ? mergeReplayUpdate(metadata, this.replayUpdates.get(objectId)) : undefined;
+    return metadata ? this.withPendingAccounting(metadata) : undefined;
   }
 
   readPersistedMetadata(objectId: string, threadId?: string): TokenMiserObjectMetadata | undefined {
@@ -712,6 +718,7 @@ export class TokenMiserStore {
     turnId: string;
     visibleText: string;
     allowJsonString?: boolean;
+    capture?: BoundedCommandReceipt;
   }): Promise<TokenMiserRetrievalDelivery | undefined> {
     if (!this.isCurrentTurn(params.threadId, params.turnId) || await this.isArchived(params.threadId)) return undefined;
     const generation = await this.readRetentionGeneration(params.threadId);
@@ -727,6 +734,7 @@ export class TokenMiserStore {
     allowJsonString?: boolean;
     kind?: "summary" | "source";
     generation: string;
+    capture?: BoundedCommandReceipt;
   }): TokenMiserRetrievalDelivery | undefined {
     const now = Date.now();
     for (const [deliveryId, pending] of this.pendingRetrievalDeliveries) {
@@ -747,6 +755,7 @@ export class TokenMiserStore {
       kind: params.kind,
       wrappedText,
       allowJsonString: params.allowJsonString,
+      capture: params.capture,
     }))) return undefined;
     this.pendingRetrievalDeliveries.set(deliveryId, { createdAt: now, threadId: params.threadId, turnId: params.turnId });
     return { deliveryId, text: wrappedText };
@@ -829,15 +838,21 @@ export class TokenMiserStore {
       normalizePositiveInteger(params.maxVisibleBytes, Number.MAX_SAFE_INTEGER),
     );
     const charges = new Map<string, { pending: PendingRetrievalDelivery; bytes: number }>();
-    for (const { deliveryId, start, pending } of matches) {
+    for (const { deliveryId, start, end, pending } of matches) {
       const charge = charges.get(deliveryId) ?? { pending, bytes: 0 };
       charges.set(deliveryId, charge);
-      // Host-issued text has no managed-output ledger charge.
-      if (!pending.objectId) continue;
-      const visibleStart = start + pending.visibleTextOffset;
+      // Unattributed host text proves provenance without charging a delivery.
+      if (!pending.objectId && !pending.capture) continue;
+      const quoted = params.output[start] === '"';
+      const visibleStart = start + (quoted
+        ? JSON.stringify(pending.wrappedText.slice(0, pending.visibleTextOffset)).length - 1
+        : pending.visibleTextOffset);
+      const visibleEnd = quoted
+        ? end - JSON.stringify(pending.wrappedText.slice(pending.visibleTextOffset + pending.visibleText.length)).length + 1
+        : visibleStart + pending.visibleText.length;
       for (const range of visibleRanges) {
         const from = Math.max(visibleStart, range.start);
-        const to = Math.min(visibleStart + pending.visibleText.length, range.end);
+        const to = Math.min(visibleEnd, range.end);
         if (to > from) charge.bytes += utf8ByteLength(params.output.slice(from, to));
       }
     }
@@ -845,6 +860,11 @@ export class TokenMiserStore {
     for (const [deliveryId, { pending, bytes }] of charges) {
       if (!this.pendingRetrievalDeliveries.has(deliveryId)) continue;
       this.abandonRetrievalDelivery(deliveryId);
+      if (pending.capture) {
+        this.recordBoundedCommandDelivery({ ...pending.capture, deliveredBytes: bytes, maxVisibleBytes: params.maxVisibleBytes });
+        confirmedCharacters += bytes;
+        continue;
+      }
       if (!pending.objectId) continue;
       await this.recordRetrieval(pending.objectId, bytes, pending.kind);
       confirmedCharacters += bytes;
@@ -866,7 +886,7 @@ export class TokenMiserStore {
     this.pricingListeners.set(threadId, listeners);
     listeners.add(changed);
     const current = (row: OrderedTokenMiserMetadata<TokenMiserObjectMetadata>) => ({
-      ...row, entry: mergeReplayUpdate(row.entry, this.replayUpdates.get(row.entry.objectId)),
+      ...row, entry: this.withPendingAccounting(row.entry),
     });
     return {
       dataVersion: () => watcher.dataVersion(),
@@ -885,20 +905,70 @@ export class TokenMiserStore {
   }
 
   async listMetadata(threadId?: string): Promise<TokenMiserObjectMetadata[]> {
-    return this.storage.listMetadata(threadId).map((entry) =>
-      mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
+    return this.storage.listMetadata(threadId).map((entry) => this.withPendingAccounting(entry));
   }
 
-  recordBoundedCommandDelivery({ caller, objectId, itemId, originalBytes, deliveredBytes }: BoundedCommandDelivery): void {
-    if (!caller.turnId) return;
+  private withPendingAccounting(entry: TokenMiserObjectMetadata): TokenMiserObjectMetadata {
+    if (!entry.captureBackend) return mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId));
+    const pending = this.captureReads.get(entry.threadId)?.get(entry.objectId);
+    const baselineParentTokens = entry.captureBackend === "codex"
+      ? Math.min(entry.baselineParentTokens, estimateTokenCount(TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES))
+      : entry.baselineParentTokens;
+    if (!pending?.bytes && baselineParentTokens === entry.baselineParentTokens) return entry;
+    return { ...entry, baselineParentTokens, retrievedCharacters: entry.retrievedCharacters + (pending?.bytes ?? 0) };
+  }
+
+  recordBoundedCommandDelivery({ caller, objectId, itemId, originalBytes, deliveredBytes, kind, maxVisibleBytes }: BoundedCommandDelivery): void {
+    if (!caller.turnId || deliveredBytes <= 0) return;
+    const reads = this.captureReads.get(caller.threadId) ?? new Map<string, PendingCaptureReads>();
+    const pending = reads.get(objectId) ?? {
+      caller, hasDigest: this.storage.readMetadata(objectId, caller.threadId)?.captureBackend === caller.backend, bytes: 0,
+    };
+    if (kind === "excerpt" || pending.hasDigest) {
+      pending.bytes += deliveredBytes;
+      reads.set(objectId, pending);
+      this.captureReads.set(caller.threadId, reads);
+      if (pending.hasDigest) {
+        for (const notify of this.pricingListeners.get(caller.threadId) ?? []) notify(objectId);
+      }
+      return;
+    }
+    const baselineBytes = caller.backend === "codex"
+      ? Math.min(originalBytes, TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES, maxVisibleBytes ?? Infinity)
+      : originalBytes;
     // The file and the summary stay with the live capture. Only byte counts persist.
     this.storage.writeMetadata({
       version: 1, objectId, threadId: caller.threadId, turnId: caller.turnId, toolUseId: itemId,
       toolName: "capture_token_miser_command", captureBackend: caller.backend, createdAt: Date.now(),
-      originalCharacters: originalBytes, baselineParentTokens: estimateTokenCount(originalBytes),
-      replacementCharacters: deliveredBytes, retrievedCharacters: 0,
+      originalCharacters: originalBytes, baselineParentTokens: estimateTokenCount(baselineBytes),
+      replacementCharacters: deliveredBytes, retrievedCharacters: pending.bytes,
       summary: { summary: "Bounded command output delivered.", usefulDetails: [] },
     });
+    reads.set(objectId, { ...pending, hasDigest: true, bytes: 0 });
+    this.captureReads.set(caller.threadId, reads);
+    this.options.onBoundedCommandAccountingUpdated?.(caller);
+  }
+
+  flushBoundedCommandReads(threadId: string, ended?: BoundedCommandCaller): void {
+    const reads = this.captureReads.get(threadId);
+    if (!reads) return;
+    const matching = [...reads].filter(([, { caller }]) => !ended
+      || (caller.backend === ended.backend && caller.turnId === ended.turnId));
+    const dirty = matching.filter(([, entry]) => entry.hasDigest && entry.bytes > 0);
+    if (dirty.length) {
+      this.storage.runExclusive(() => {
+        for (const [id, pending] of dirty) {
+          const entry = this.storage.readMetadata(id, threadId);
+          if (entry?.captureBackend) {
+            this.storage.writeMetadata({ ...entry, retrievedCharacters: entry.retrievedCharacters + pending.bytes });
+          }
+        }
+      });
+    }
+    for (const [id] of matching) reads.delete(id);
+    if (!reads.size) this.captureReads.delete(threadId);
+    const callers = new Map(dirty.map(([, pending]) => [pending.caller.backend, pending.caller]));
+    for (const caller of callers.values()) this.options.onBoundedCommandAccountingUpdated?.(caller);
   }
 
   *listOpenReplayPages(limit: number, threadId: string): Iterable<TokenMiserObjectRecord[]> {
@@ -917,7 +987,7 @@ export class TokenMiserStore {
     for (;;) {
       const { entries, next } = this.storage.readMetadataPage(after, limit, threadId);
       if (entries.length === 0) return;
-      yield persistedOnly ? entries : entries.map((entry) => mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
+      yield persistedOnly ? entries : entries.map((entry) => this.withPendingAccounting(entry));
       if (!next) return;
       after = next;
     }
@@ -1117,6 +1187,7 @@ export class TokenMiserStore {
   async flushAll(): Promise<void> {
     await Promise.allSettled([...this.updateLocks.values()]);
     await this.flushEntries([...this.replayUpdates.keys()]);
+    for (const threadId of this.captureReads.keys()) this.flushBoundedCommandReads(threadId);
   }
 
   private async flushEntries(ids: string[]): Promise<void> {
@@ -1174,6 +1245,7 @@ export class TokenMiserStore {
     }
     this.storage.archiveThread(key, randomUUID());
     this.archivedThreads.delete(threadId);
+    this.flushBoundedCommandReads(threadId);
     await this.flushThread(threadId);
   }
 
@@ -1605,6 +1677,7 @@ function safeMetadata(value: TokenMiserObjectMetadata): TokenMiserObjectMetadata
 function summarizeMetadata(
   metadata: TokenMiserObjectMetadata[],
 ): TokenMiserUsageSummary {
+  const boundedCaptureCount = metadata.filter((entry) => entry.captureBackend).length;
   const baselineParentTokens = metadata.reduce(
     (total, entry) => total + entry.baselineParentTokens,
     0,
@@ -1627,6 +1700,7 @@ function summarizeMetadata(
   );
   return {
     interceptionCount: metadata.length,
+    ...(boundedCaptureCount ? { boundedCaptureCount } : {}),
     passThroughCount: metadata.filter(
       (entry) => entry.disposition === "passed_through",
     ).length,

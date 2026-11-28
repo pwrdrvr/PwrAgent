@@ -150,6 +150,15 @@ describe("TokenMiserSummaryCard", () => {
     expect(card()).toHaveAttribute("data-savings-tier", "over");
   });
 
+  it("shows token savings for a capture-only thread", () => {
+    render(<TokenMiserSummaryCard summary={{
+      decisionCount: 0, boundedCaptureCount: 1, pricedDecisionCount: 0, avoidedParentTokens: 2_000,
+    }} />);
+    expect(screen.getByText("1 capture")).toBeInTheDocument();
+    expect(screen.getByText("2k kept out")).toBeInTheDocument();
+    expect(screen.queryByText("Savings terms")).not.toBeInTheDocument();
+  });
+
   it("drops the unfiltered comparison when the overhead swallows the bill", () => {
     /* An overhead larger than the thread's own bill leaves nothing to compare
        against; "$0.00 unfiltered" would read as a measurement. */

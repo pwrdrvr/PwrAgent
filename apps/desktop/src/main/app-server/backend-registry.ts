@@ -1996,17 +1996,10 @@ export class DesktopBackendRegistry {
     return readRecord(response)?.action === "accept";
   }, (caller) => this.resolveBoundedCommandHelper(caller), (delivery) => {
     try {
-      if (!this.tokenMiserStore) return false;
-      this.tokenMiserStore.recordBoundedCommandDelivery(delivery);
+      this.tokenMiserStore?.recordBoundedCommandDelivery(delivery);
     } catch (error) {
       backendRegistryLog.warn("Could not record bounded command delivery", { error: String(error) });
-      return false;
     }
-    const { backend, threadId } = delivery.caller;
-    void this.emit({ backend, notification: {
-      method: "thread/pricing/updated", params: { threadId, displayInvalidated: true, pricing: { lines: [], summaries: [] } },
-    } }).catch((error) => backendRegistryLog.warn("Could not publish bounded command accounting", { error: String(error) }));
-    return true;
   });
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserDiagnostics?: TokenMiserDiagnostics;
@@ -8449,7 +8442,17 @@ export class DesktopBackendRegistry {
         { backend, threadId: request.threadId }, withOrigins, undefined, [], request,
       );
       const pendingRequest = this.getPendingRequestForThread({ backend, threadId: request.threadId });
-      return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus };
+      const target = { backend, threadId: request.threadId };
+      const [pricing, toolAccounting] = request.includeAccounting !== false
+        && (request.includeAllToolInvocations || request.includeAccounting === true)
+        ? await Promise.all([
+          this.threadUsageLedger.readThreadPricingWithLiveTokenMiser(target),
+          this.overlayStore.readThreadToolAccounting({ ...target, includeAllInvocations: request.includeAllToolInvocations })
+            .then((accounting) => this.threadUsageLedger.withTokenMiserAccounting({ ...target, accounting })),
+        ])
+        : [];
+      return { ...target, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus,
+        ...(pricing ? { pricing } : {}), ...(toolAccounting ? { toolAccounting } : {}) };
     }
     if (isAcpBackendId(backend)) {
       const response = await this.readAcpThread(request, backend);
@@ -23719,6 +23722,13 @@ export class DesktopBackendRegistry {
     if (isTerminal && !event.federationTarget) {
       const turnId = turnIdFromTerminalNotification(notification);
       if (turnId) {
+        try {
+          this.tokenMiserStore?.flushBoundedCommandReads(notification.params.threadId, {
+            backend: event.backend, threadId: notification.params.threadId, turnId,
+          });
+        } catch (error) {
+          backendRegistryLog.warn("Could not persist bounded command reads", { error: String(error) });
+        }
         this.boundedCommandCapture.forgetIntent({ backend: event.backend, threadId: notification.params.threadId, turnId });
         if (this.boundedCommandCapture.pending) {
           const threadId = notification.params.threadId;

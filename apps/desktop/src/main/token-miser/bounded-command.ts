@@ -18,7 +18,10 @@ export type BoundedCommandDelivery = {
   itemId: string;
   originalBytes: number;
   deliveredBytes: number;
+  kind?: "excerpt";
+  maxVisibleBytes?: number;
 };
+export type BoundedCommandReceipt = Omit<BoundedCommandDelivery, "deliveredBytes" | "maxVisibleBytes">;
 type Ticket = {
   handle: string;
   receipt: string;
@@ -33,7 +36,6 @@ type Ticket = {
   processId?: string;
   status?: number;
   summary?: Promise<{ text: string; bytes: number }>;
-  recorded?: boolean;
   helperIdentity?: string;
   intent?: string;
   lifetime: AbortController;
@@ -153,10 +155,14 @@ export class BoundedCommandCapture {
     private readonly eligible: (caller: BoundedCommandCaller) => Promise<boolean>,
     private readonly approve: (caller: BoundedCommandCaller, command: string, helper: string | undefined, signal: AbortSignal) => Promise<boolean>,
     private readonly resolveHelper: (caller: BoundedCommandCaller) => BoundedCommandHelper | undefined = () => undefined,
-    private readonly recordDelivery?: (delivery: BoundedCommandDelivery) => boolean,
+    private readonly recordDelivery?: (delivery: BoundedCommandDelivery) => void,
   ) {}
 
   get pending() { return this.tickets.size > 0 || this.preparations.size > 0; }
+
+  confirmDelivery(delivery: BoundedCommandDelivery): void {
+    this.recordDelivery?.(delivery);
+  }
 
   observeIntent({ backend, federationTarget, notification }: AgentEvent, captureEnabled: () => boolean) {
     if (federationTarget || (backend !== "codex" && backend !== "claude" && backend !== "acp:antigravity")) return;
@@ -334,25 +340,24 @@ export class BoundedCommandCapture {
     return ticket;
   }
 
-  async readBytes(caller: BoundedCommandCaller, id: string, offset: number) {
+  async readBytes(caller: BoundedCommandCaller, id: string, offset: number, receipt?: (value: BoundedCommandReceipt) => void) {
     const ticket = await this.retained(caller, id);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid byte offset.");
     const totalBytes = (await ticket.file.stat()).size;
     const { buffer, bytesRead } = await ticket.file.read(Buffer.alloc(1024), 0, 1024, offset);
     assertRetained(ticket);
+    receipt?.({ caller: ticket.caller, objectId: ticket.handle, itemId: ticket.itemId!, originalBytes: totalBytes, kind: "excerpt" });
     return { totalBytes, offset, base64: buffer.subarray(0, bytesRead).toString("base64") };
   }
 
-  async inspect(caller: BoundedCommandCaller, id: string, range?: { start: number; end?: number; query?: string }) {
+  async inspect(caller: BoundedCommandCaller, id: string, range?: { start: number; end?: number; query?: string },
+    receipt?: (value: BoundedCommandReceipt) => void) {
     const ticket = await this.retained(caller, id);
     if (!range) {
       const { text, bytes } = await ticket.summary!;
       if (ticket.lifetime.signal.aborted || !await this.eligible(caller)) throw new Error("Output expired or unavailable for this turn.");
       assertRetained(ticket);
-      if (!ticket.recorded && this.recordDelivery) {
-        ticket.recorded = this.recordDelivery({ caller: ticket.caller, objectId: ticket.handle, itemId: ticket.itemId!,
-          originalBytes: bytes, deliveredBytes: Buffer.byteLength(text) });
-      }
+      receipt?.({ caller: ticket.caller, objectId: ticket.handle, itemId: ticket.itemId!, originalBytes: bytes });
       return text;
     }
     const { start, end, query } = range;
@@ -368,6 +373,7 @@ export class BoundedCommandCapture {
       if (number === end || (end === undefined && selected.length >= 20)) break;
     }
     assertRetained(ticket);
+    receipt?.({ caller: ticket.caller, objectId: ticket.handle, itemId: ticket.itemId!, originalBytes: 0, kind: "excerpt" });
     return takeUtf8Prefix(selected.join("\n"), 1450);
   }
 

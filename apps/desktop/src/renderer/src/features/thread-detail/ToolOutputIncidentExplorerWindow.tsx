@@ -733,7 +733,7 @@ export function ToolOutputIncidentExplorerWindow() {
           <span>
             {activeTokenMiser
               ? describeTokenMiserReach({
-                  gatedCount: activeTokenMiser.interceptionCount,
+                  gatedCount: activeTokenMiser.interceptionCount - (activeTokenMiser.boundedCaptureCount ?? 0),
                   passThroughCount: activeTokenMiser.passThroughCount ?? 0,
                   ...(activeTokenMiser.codeMode
                     ? {
@@ -1576,8 +1576,9 @@ function TokenMiserSavingsLens(props: {
       })
     : undefined;
   const split = savings ? buildTokenMiserSavingsSplit(savings) : undefined;
-  const summarizedCount = tokenMiser.interceptionCount
-    - (tokenMiser.passThroughCount ?? 0);
+  const captureCount = tokenMiser.boundedCaptureCount ?? 0;
+  const decisionCount = tokenMiser.interceptionCount - captureCount;
+  const summarizedCount = decisionCount - (tokenMiser.passThroughCount ?? 0);
   return (
     <div className="incident-explorer__savings">
       <div className="incident-explorer__savings-hero">
@@ -1773,7 +1774,8 @@ function TokenMiserSavingsLens(props: {
       <SavingsDetailStack height={layout.detailsHeight} onMeasure={measure}>
         <SavingsDetailSection
           facts={[
-            { label: "decisions", value: tokenMiser.interceptionCount.toLocaleString() },
+            { label: "decisions", value: decisionCount.toLocaleString() },
+            ...(captureCount ? [{ label: "captures", value: captureCount.toLocaleString() }] : []),
             { label: "summarized", value: summarizedCount.toLocaleString() },
             ...(tokenMiser.passThroughCount
               ? [{

@@ -1,10 +1,30 @@
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
-import type { BoundedCommandCapture } from "../token-miser/bounded-command";
+import type { BoundedCommandCapture, BoundedCommandReceipt } from "../token-miser/bounded-command";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
-import { agentToolFailure, agentToolSuccess, type AgentToolDefinition } from "./agent-tool-definition";
+import { serializeToolResponse } from "../token-miser/token-miser-types";
+import { agentToolFailure, agentToolSuccess, type AgentToolCallContext, type AgentToolDefinition } from "./agent-tool-definition";
 
 export function boundedCommandTools(capture?: BoundedCommandCapture, store?: TokenMiserStore): AgentToolDefinition[] {
   if (!capture || process.platform === "win32") return [];
+  const delivered = async (context: AgentToolCallContext, result: unknown, receipt?: BoundedCommandReceipt) => {
+    const text = serializeToolResponse(result);
+    const codex = context.backend === "codex";
+    const delivery = store && codex && context.turnId
+      ? await store.prepareOwnerTextDelivery({
+        threadId: context.threadId, turnId: context.turnId, visibleText: text, allowJsonString: true, capture: receipt,
+      })
+      : undefined;
+    if (!codex && receipt && !context.signal?.aborted) {
+      const confirm = () => capture.confirmDelivery({ ...receipt, deliveredBytes: Buffer.byteLength(text) });
+      if (context.responseFlushed) void context.responseFlushed.then(confirm).catch(() => {});
+      else confirm();
+    }
+    // Stock Codex has no outer-result receipt. Leave its response shape intact.
+    if (!delivery && typeof result !== "string") return agentToolSuccess(result);
+    const visibleText = delivery?.text ?? text;
+    return agentToolSuccess(result, { contentItems: [{ type: "inputText", text: visibleText }],
+      mcpContentItems: [{ type: "text", text: visibleText }] });
+  };
   return [{
     namespace: PWRAGENT_TOOL_NAMESPACE,
     name: "capture_token_miser_command",
@@ -24,8 +44,11 @@ export function boundedCommandTools(capture?: BoundedCommandCapture, store?: Tok
         }
         if (typeof args.objectId === "string") {
           const keys = Object.keys(args);
+          let receipt: BoundedCommandReceipt | undefined;
+          const receive = (value: BoundedCommandReceipt) => { receipt = value; };
           if (keys.length === 2 && typeof args.byteOffset === "number") {
-            return agentToolSuccess(await capture.readBytes(context, args.objectId, args.byteOffset));
+            const page = await capture.readBytes(context, args.objectId, args.byteOffset, receive);
+            return await delivered(context, page, receipt);
           }
           if (keys.every((key) => ["objectId", "query", "startLine", "endLine"].includes(key))
             && (args.query === undefined || typeof args.query === "string")
@@ -34,11 +57,8 @@ export function boundedCommandTools(capture?: BoundedCommandCapture, store?: Tok
             const start = args.startLine ?? 1;
             const text = await capture.inspect(context, args.objectId, keys.length === 1 ? undefined : {
               start, end: args.endLine ?? (args.query === undefined ? start + 19 : undefined), query: args.query,
-            });
-            const delivery = store && context.backend === "codex" && context.transport === "codex_dynamic_tool" && context.turnId
-              ? await store.prepareOwnerTextDelivery({ threadId: context.threadId, turnId: context.turnId, visibleText: text, allowJsonString: true })
-              : undefined;
-            return agentToolSuccess(text, { contentItems: [{ type: "inputText", text: delivery?.text ?? text }], mcpContentItems: [{ type: "text", text }] });
+            }, receive);
+            return await delivered(context, text, receipt);
           }
         }
         return agentToolFailure({ code: "invalid_arguments", message: "Supply a command or an output reference." });

@@ -347,7 +347,7 @@ describe("Token Miser savings scaling", () => {
     const before = await read();
     metadataReads.reset();
     tokenMiserStore.recordBoundedCommandDelivery({
-      caller: turn, objectId: "capture", itemId: "native-capture", originalBytes: 400, deliveredBytes: 40,
+      caller: turn, objectId: "o1", itemId: "native-capture", originalBytes: 400, deliveredBytes: 40,
     });
     const after = await read();
     expect(metadataReads.count()).toBe(1);

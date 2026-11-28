@@ -1019,6 +1019,7 @@ export type ThreadReadEvaluationTokenMiserCodeMode = {
 };
 
 export type ThreadReadEvaluationTokenMiser = {
+  boundedCaptureCount?: number;
   savings?: ThreadTokenMiserSavings;
   interceptionCount: number;
   passThroughCount?: number;

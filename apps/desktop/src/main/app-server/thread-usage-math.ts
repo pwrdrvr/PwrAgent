@@ -1236,7 +1236,7 @@ export function priceBoundedCommandDelivery(entry: TokenMiserObjectMetadata, par
     uncachedInputTokens, cachedInputTokens: 0, outputTokens: 0,
   })?.uncachedInputCostMicros;
   const baseline = cost(entry.baselineParentTokens);
-  const delivered = cost(estimateTokenCount(entry.replacementCharacters));
+  const delivered = cost(estimateTokenCount(entry.replacementCharacters) + estimateTokenCount(entry.retrievedCharacters));
   return baseline === undefined || delivered === undefined ? undefined : { baseline, delivered };
 }
 
@@ -1422,6 +1422,7 @@ export function toThreadReadEvaluationTokenMiser(
         }
       : {}),
     interceptionCount: accounting.interceptionCount,
+    ...(accounting.boundedCaptureCount ? { boundedCaptureCount: accounting.boundedCaptureCount } : {}),
     ...(accounting.passThroughCount !== undefined
       ? { passThroughCount: accounting.passThroughCount }
       : {}),
