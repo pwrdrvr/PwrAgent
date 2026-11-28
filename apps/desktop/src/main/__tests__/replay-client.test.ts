@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { describe, expect, it, vi } from "vitest";
 import { ReplayClient } from "../shell/testing/replay-client";
 
 function buildFixture() {
@@ -171,6 +172,30 @@ function buildConcurrentResponseFixture() {
 }
 
 describe("ReplayClient", () => {
+  it("logs a rejected request listener with the request ID and stack", async () => {
+    const client = ReplayClient.fromFixture(buildFixture());
+    const failure = new Error("request listener failed");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      client.onRequest(async () => {
+        throw failure;
+      });
+      await client.getInitializeResult();
+      await client.listThreads();
+      await client.advance({ stepId: "notif-1" });
+      await client.advance({ stepId: "req-1" });
+      await setImmediate();
+
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        "Replay request approval-1 (turn/requestApproval) failed",
+        failure.stack,
+      );
+      expect(client.getPendingRequest()?.params.requestId).toBe("approval-1");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("consumes response steps and advances live replay deterministically", async () => {
     const client = ReplayClient.fromFixture(buildFixture());
     const notifications: string[] = [];

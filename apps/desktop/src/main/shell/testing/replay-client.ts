@@ -308,11 +308,20 @@ export class ReplayClient {
       return;
     }
 
+    // Interactive listeners can wait for an operator response after advance returns.
+    const { method, params: { requestId } } = step.request;
     const pendingListeners = [...this.requestListeners];
     for (const listener of pendingListeners) {
-      void Promise.resolve(listener(step.request)).then(async () => {
-        this.controller.resolvePendingRequest(step.request.params.requestId);
-      });
+      void Promise.resolve(listener(step.request))
+        .then(() => {
+          this.controller.resolvePendingRequest(requestId);
+        })
+        .catch((error: unknown) => {
+          console.error(
+            `Replay request ${requestId} (${method}) failed`,
+            error instanceof Error ? error.stack ?? error.message : error,
+          );
+        });
     }
   }
 

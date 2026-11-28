@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { createReplayClientsFromEnv } from "../shell/testing/replay-runtime";
@@ -27,6 +28,57 @@ afterEach(() => {
 });
 
 describe("replay-runtime", () => {
+  it("handles consecutive tool calls outside the active SQLite step", async () => {
+    const requestIds = ["notify-1", "notify-2"];
+    vi.stubEnv(REPLAY_FIXTURE_PATH_ENV, writeFixture({
+      metadata: { backend: "codex", scenario: "consecutive-tool-calls" },
+      steps: requestIds.map((requestId) => ({
+        id: requestId,
+        kind: "request",
+        request: {
+          method: "item/tool/call",
+          params: {
+            requestId,
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: requestId,
+            tool: "notify_operator",
+            arguments: { message: requestId },
+          },
+        },
+      })),
+    }));
+    const { codexClient } = createReplayClientsFromEnv()!;
+    const driver = globalThis.__PWRAGENT_REPLAY_DRIVER__!;
+    const db = new Database(":memory:");
+    const handled: string[] = [];
+    try {
+      codexClient.onRequest(({ params }) => {
+        db.prepare("SELECT 1").get();
+        handled.push(params.requestId);
+      });
+      await driver.advance({ stepId: "notify-1" });
+
+      // Model an inspector interrupt by entering the same driver while SQLite
+      // has control of the connection and is calling back into JavaScript.
+      let secondAdvance: Promise<void> | undefined;
+      db.function("advance_replay", () => {
+        secondAdvance = driver.advance({ stepId: "notify-2" });
+        return 1;
+      });
+      db.prepare("SELECT advance_replay()").get();
+
+      await Promise.resolve();
+      const handledBeforeNextTask = [...handled];
+      await expect(secondAdvance).resolves.toBeUndefined();
+      expect(handledBeforeNextTask).toEqual(["notify-1"]);
+      expect(handled).toEqual(requestIds);
+      expect(driver.getPendingRequest()).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
   it.each([
     { replay: true, e2e: true, packaged: false, armed: true },
     { replay: false, e2e: true, packaged: false, armed: false },
@@ -150,10 +202,14 @@ describe("replay-runtime", () => {
       }
     });
 
-    await globalThis.__PWRAGENT_REPLAY_DRIVER__?.respondToPendingRequest({
+    const response = globalThis.__PWRAGENT_REPLAY_DRIVER__?.respondToPendingRequest({
       executionMode: "full-access",
       requestId: "approval-1"
     });
+    await Promise.resolve();
+    const pendingBeforeNextTask = globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest();
+    await response;
+    expect(pendingBeforeNextTask?.params.requestId).toBe("approval-1");
 
     expect(
       globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest({
