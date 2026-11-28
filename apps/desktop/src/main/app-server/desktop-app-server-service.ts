@@ -40,6 +40,7 @@ import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
+import { collectFactoryProject } from "../factory/factory-evidence-collector";
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 import { getDesktopStackReader, StackReadObservation, stackMemberships, type StackReader, type StackThreadActivity } from "../stacks/stack-reader";
@@ -431,7 +432,7 @@ import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-env
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { setLocalDirectoryPin, reorderLocalDirectoryPins, rejectNonUserDirectoryKey } from "./local-directory-pins";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
-import { getAppScheduledThreadActionStore, getAppStateMode } from "../storage/desktop-runtime-storage";
+import { createThreadReviewStorage, getAppScheduledThreadActionStore, getAppStateMode } from "../storage/desktop-runtime-storage";
 import {
   SandboxerPrCleanupService,
   formatSandboxCleanupLines,
@@ -3856,6 +3857,24 @@ class DesktopAppServerService {
   private forgeCiClient?: ForgeCiClient;
   private githubPrToolClient?: GithubPrToolClient;
   private gitlabPrToolClient?: GitlabPrToolClient;
+
+  getCachedPrStatus(prKey: string): Readonly<Pick<PrStatusRegistryEntry, "pr" | "fetchedAt">> | undefined {
+    return this.prStatusRegistry.get(this.prRepositoryAliases.canonicalizeKey(prKey));
+  }
+
+  readFactoryProject(request: unknown) {
+    let reviews: ReturnType<typeof createThreadReviewStorage> | undefined;
+    return collectFactoryProject(request, {
+      resolveProject: async (directoryKey) => {
+        const project = await this.getOverlayStore().getDirectoryLaunchpad({ directoryKey });
+        if (!project?.registeredAt || !project.directoryPath || project.federationTarget?.scope === "remote") return undefined;
+        return { path: project.directoryPath, remotes: await readForgeRepositoryRemotes(project.directoryPath) };
+      },
+      cachedStatus: (key) => this.getCachedPrStatus(key),
+      readReview: (id) => (reviews ??= createThreadReviewStorage()).get(id),
+      github: (...args) => this.getForgeCiClient().requestGithub(...args),
+    });
+  }
 
   getForgeCiClient(): ForgeCiClient {
     this.forgeCiClient ??= new ForgeCiClient({

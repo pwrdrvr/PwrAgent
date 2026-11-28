@@ -119,7 +119,8 @@ import {
   type OpenVoiceManagerResponse,
 } from "../shared/native-voice";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
-import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
+import { FACTORY_PROJECT_READ_CHANNEL, USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
+import type { FactoryProjectProjection, FactoryProjectReadRequest } from "@pwragent/shared/factory-projection";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import {
   USAGE_ACTIVITY_OPEN_THREAD_CHANNEL,
@@ -2792,6 +2793,8 @@ const desktopApi = Object.freeze({
     ),
   readUsageActivity: async (request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_READ_CHANNEL, request),
+  readFactoryProject: async (request: FactoryProjectReadRequest): Promise<FactoryProjectProjection> =>
+    await ipcRenderer.invoke(FACTORY_PROJECT_READ_CHANNEL, request),
   readThreadFamilyPricing: async (request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> =>
     await ipcRenderer.invoke(THREAD_FAMILY_PRICING_READ_CHANNEL, request),
   analyzeUsageActivity: async (request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>

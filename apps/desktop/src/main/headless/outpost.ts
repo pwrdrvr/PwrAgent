@@ -25,6 +25,7 @@ export async function handleOutpostCommand(services: Services, method: string, p
     case "status": return { codex: await settings.resolveCodexCommand(), backends: await registry.listBackends(), federation: await federation.health() };
     case "list": return registry.listThreads({ backend: "codex", callerReason: "outpost-cli", enrichDirectories: false, ...params });
     case "show": return registry.readThread(params as Parameters<typeof registry.readThread>[0]);
+    case "factory-board": return services.service.readFactoryProject(params);
     case "start-thread": return registry.startThread(params as Parameters<typeof registry.startThread>[0]);
     case "register-directory": {
       // The same registration the desktop's Add Project Directory performs; the project then lists for viewers.

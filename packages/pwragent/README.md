@@ -58,6 +58,7 @@ same parameter object as the desktop owner contracts:
 | --- | --- |
 | `start-thread` | `backend`, `cwd`, optional `executionMode` and model settings |
 | `register-directory` | `path`: adds an existing folder as a project, as the desktop's Add Project Directory does |
+| `factory-board` | `projectKey` from `register-directory`, `repository` under `pwrdrvr`, optional `limit`, `candidate` and `selection` |
 | `show` | `backend`, `threadId` |
 | `submit` | `SubmitDurableTurnRequest`: immutable client request ID, creation time, payload hash and request |
 | `receipt` | Durable client request `id`, `backend`, `threadId` |
@@ -80,6 +81,39 @@ and deduplication. No second job store or queue exists.
 The desktop viewer provides the remaining owner operations. Legacy Outpost job
 files, output formats and its command surface are retired. This host opens the
 standard profile SQLite database directly.
+
+### Factory evidence
+
+Run `pwragent factory-board --params-file /request.json` with the registered
+`projectKey` and the GitHub repository name, for example `PwrAgent`. The owner
+verifies the repository against the registered project's Git remotes. It
+returns up to 25 recent open PRs, including PRs that no local thread has
+attached. `truncated` indicates more open PRs exist.
+
+Before publishing a PR, pass `candidate` with the immutable Linear `issueId`
+from the operator's selected `pwrdrvr` issue, the local `branch` and a full
+`baseRef` such as `refs/remotes/origin/main`. Optionally supply the linked
+`worktree`, up to eight existing local `reviewIds`, and `assessment` with
+`outcome` and `change`. The owner verifies the Git checkout and reports its
+local refs, matching review observations and runtime identity. A ref-only
+candidate remains readable as `parked`. A candidate-only read sets `inventory`
+to `unobserved` and makes zero forge requests. The issue ID comes from the local
+operator's selection.
+
+To inspect a PR, add `selection` with its `number` and the `repositoryId` from
+the inventory response (`repository.id`). Pass `expected: { headOid, baseOid }`
+to compare with a previously observed revision. Pass `requiredChecks` with
+the CI context names to evaluate; absent, skipped and incomplete contexts
+never establish a pass. For an advisory assessment, pass
+`assessment: { outcome, change }` in the selection. The response supplies an
+input packet for a separate `decisions_invoke` using `factory_pr_review_v1`.
+This read does not invoke a model. The local desktop window uses the same
+owner read through `readFactoryProject`.
+
+Pass the original `candidate` alongside `selection` after publishing. The
+projection keeps the issue-derived `candidate.outcomeId` and confirms the PR
+when repository, branch, target ref and head agree. A later head change is
+shown separately from the local candidate revision.
 
 ## Unattended execution
 
