@@ -35,10 +35,13 @@ function makeReview(id: string, open = true): ThreadReview {
   };
 }
 
-type StackStep = "ci-settled" | "operation-ended" | "unrelated-pr" | "unrelated-operation";
+type StackStep = "ci-settled" | "operation-ended" | "unrelated-pr" | "unrelated-operation" | "unrelated-turn";
 type StackRelease = Extract<StackStep, "ci-settled" | "operation-ended">;
+type StackBlocker = "operation" | "journal" | "repair";
 
-async function replayStackWake(steps: readonly StackStep[], earlyRelease?: StackRelease) {
+async function replayStackWake(
+  steps: readonly StackStep[], earlyRelease?: StackRelease, blocker: StackBlocker = "operation",
+) {
   const review = makeReview("upper-review");
   const lowerThreadKey = buildThreadIdentityKey("claude", "lower-owner");
   const upper: PrSummary = {
@@ -65,10 +68,14 @@ async function replayStackWake(steps: readonly StackStep[], earlyRelease?: Stack
       if (reads === 1 && firstRead) await firstRead.promise;
       scope.observe(upper, [{
         key: "stack", name: "lower", repository: "github.com:example/stack", trunk: "main", inferred: false,
+        ...(blocker === "journal" && { githubStack: 42, ...(operationHeld && { journalHeld: true as const }) }),
         layers: [
-          { branch: "lower", parent: "main", pullRequest: lower, health: operationHeld ? "held" : "in_sync",
+          { branch: "lower", parent: "main", pullRequest: lower,
+            health: operationHeld && blocker !== "repair" ? "held" : "in_sync",
+            ...(operationHeld && blocker === "repair" && { unsettled: "repair in progress" as const }),
             role: "layer", thread: { key: lowerThreadKey, title: "Lower owner" } },
-          { branch: "upper", parent: "lower", pullRequest: upper, health: "in_sync", role: "holder" },
+          { branch: "upper", parent: "lower", pullRequest: upper,
+            health: operationHeld && blocker === "journal" ? "held" : "in_sync", role: "holder" },
         ],
       }]);
       scope.finish();
@@ -88,7 +95,9 @@ async function replayStackWake(steps: readonly StackStep[], earlyRelease?: Stack
   for (const step of earlyRelease ? [earlyRelease, ...steps] : steps) {
     const before = reads;
     const alreadyStarted = !ciPending && !operationRunning;
-    const affectsStack = step === "ci-settled" || step === "operation-ended";
+    const affectsStack = step === "ci-settled"
+      || (step === "operation-ended" && (operationRunning || blocker === "operation"))
+      || (blocker === "journal" && operationRunning && step === "unrelated-operation");
     let update: ReviewAutoFixStackUpdate;
     if (step === "ci-settled" || step === "unrelated-pr") {
       if (step === "ci-settled") ciPending = false;
@@ -98,7 +107,15 @@ async function replayStackWake(steps: readonly StackStep[], earlyRelease?: Stack
       if (step === "operation-ended") operationRunning = false;
       update = { threadKey: step === "operation-ended" ? lowerThreadKey : buildThreadIdentityKey("codex", "lower-owner") };
     }
-    dispatcher.wakeForStackUpdate(update);
+    if (step === "unrelated-turn") {
+      dispatcher.onTurnEnded({ backend: "codex", threadId: "lower-owner" }, new Set(["unrelated-turn"]));
+    } else if (step === "operation-ended" && blocker === "repair") {
+      dispatcher.onTurnEnded({ backend: "claude", threadId: "lower-owner" }, new Set(["repair-turn"]));
+    } else if (step === "operation-ended" && blocker === "journal") {
+      dispatcher.wakeForStackUpdate({ threadKey: buildThreadIdentityKey("claude", "other-stack-owner") });
+    } else {
+      dispatcher.wakeForStackUpdate(update);
+    }
     firstRead?.resolve();
     // Drain the dispatcher and its final admission check before the next observation.
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -122,13 +139,72 @@ describe("review auto-fix dispatcher", () => {
     ["stack hold", ["ci-settled", "unrelated-operation", "operation-ended"]],
   ] as const)("resumes after the lower layer's %s update", (_signal, steps) => replayStackWake(steps));
 
+  it("resumes a numbered local stack when another stack's operation releases the shared journal", () =>
+    replayStackWake(["ci-settled", "operation-ended"], undefined, "journal"));
+
+  it("resumes when the lower layer's repair turn ends without a PR change", () =>
+    replayStackWake(["ci-settled", "unrelated-turn", "operation-ended"], undefined, "repair"));
+
+  it("ignores a duplicate lower repair terminal after an in-flight check records its release", () =>
+    replayStackWake(["operation-ended", "ci-settled"], "operation-ended", "repair"));
+
+  it("retries only the review with unavailable evidence without a PR update", async () => {
+    const unavailable = makeReview("unavailable");
+    const held = { ...makeReview("held"), threadId: "other-owner" };
+    const reviews = new Map([[unavailable.id, unavailable], [held.id, held]]);
+    const scheduled = new Set<() => void>();
+    const reads: string[] = [];
+    const starts: string[] = [];
+    let checkoutAvailable = false;
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: (id) => reviews.get(id),
+      isThreadArchived: () => false,
+      readStackHold: async (review, setWakeFilter) => {
+        reads.push(review.id);
+        const needsRetry = review.id === unavailable.id && !checkoutAvailable;
+        setWakeFilter(() => false, () => needsRetry);
+        return needsRetry ? "Held while stack settlement is unavailable"
+          : review.id === held.id ? "Held by #1" : undefined;
+      },
+      scheduleStackRetry: (retry) => {
+        scheduled.add(retry);
+        return () => { scheduled.delete(retry); };
+      },
+      submitTurn: async () => { throw new Error("Expected fresh admission"); },
+      submitTurnIfIdle: async ({ canAdmit, threadId }) => {
+        if (!await canAdmit()) return { status: "busy" };
+        starts.push(threadId);
+        return { status: "started" };
+      },
+      recordRun: () => {},
+    });
+    try {
+      await dispatcher.dispatch(unavailable.id);
+      await dispatcher.dispatch(held.id);
+      expect(scheduled.size).toBe(1);
+      scheduled.values().next().value?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts).toEqual([]);
+      expect(scheduled.size).toBe(1);
+      checkoutAvailable = true;
+      scheduled.values().next().value?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts).toEqual([unavailable.threadId]);
+      expect(reads).toEqual([unavailable.id, held.id, unavailable.id, unavailable.id, unavailable.id]);
+      expect(scheduled.size).toBe(0);
+    } finally {
+      dispatcher.dispose();
+    }
+  });
+
   it("agrees with the lower-layer hold model across update ordering and redelivery", async () => {
-    const step = fc.constantFrom<StackStep>("ci-settled", "operation-ended", "unrelated-pr", "unrelated-operation");
+    const step = fc.constantFrom<StackStep>("ci-settled", "operation-ended", "unrelated-pr", "unrelated-operation", "unrelated-turn");
     const earlyRelease = fc.option(fc.constantFrom<StackRelease>("ci-settled", "operation-ended"), { nil: undefined });
-    await fc.assert(fc.asyncProperty(fc.array(step, { maxLength: 12 }), fc.boolean(), earlyRelease,
-      async (steps, ciFirst, early) => {
+    const blocker = fc.constantFrom<StackBlocker>("operation", "journal", "repair");
+    await fc.assert(fc.asyncProperty(fc.array(step, { maxLength: 12 }), fc.boolean(), earlyRelease, blocker,
+      async (steps, ciFirst, early, kind) => {
         const releaseOrder: StackStep[] = ciFirst ? ["ci-settled", "operation-ended"] : ["operation-ended", "ci-settled"];
-        await replayStackWake([...steps, ...releaseOrder], early);
+        await replayStackWake([...steps, ...releaseOrder], early, kind);
       }), { numRuns: 8 });
   });
 

@@ -12,11 +12,14 @@ export function createReviewStackWakeScope(threadKey: string, candidates: readon
   const repositories = new Set([...prKeys].map(repositoryKey));
   const uncertainRepositories = new Set<string>();
   const threadKeys = new Set([threadKey]);
+  const repairThreadKeys = new Set<string>();
   const inferredRefs = new Map<string, { heads: Set<string>; bases: Set<string> }>();
   let reading = candidates.length > 0;
   let operationScopeUnknown = false;
+  let unavailable = false;
 
   const matches: ReviewAutoFixStackWakeFilter = (update) => {
+    if ("repairThreadKey" in update) return reading || repairThreadKeys.has(update.repairThreadKey);
     if ("threadKey" in update) return reading || operationScopeUnknown || threadKeys.has(update.threadKey);
     return update.prKeys.some((key) => {
       if (prKeys.has(key)) return true;
@@ -31,24 +34,25 @@ export function createReviewStackWakeScope(threadKey: string, candidates: readon
 
   return {
     matches,
+    needsRetry: () => unavailable,
     observe(pr: PrSummary, stacks: readonly StackSummary[] | undefined): void {
       const repository = repositoryKey(buildPullRequestStatusKey(pr));
       if (!stacks) {
         uncertainRepositories.add(repository);
         operationScopeUnknown = true;
+        unavailable = true;
         return;
       }
       for (const stack of stacks) {
         // A local journal can mark the entire clone held. The notification
         // identifies a participant, which may be in a different stack.
-        if (!stack.inferred && stack.githubStack === undefined && stack.layers.every(({ health }) => health === "held")) {
-          operationScopeUnknown = true;
-        }
+        operationScopeUnknown ||= stack.journalHeld === true;
         const refs = stack.inferred
           ? inferredRefs.get(repository) ?? { heads: new Set<string>(), bases: new Set<string>() }
           : undefined;
         if (refs) inferredRefs.set(repository, refs);
-        for (const layer of stack.layers) {
+        const reviewedPosition = stack.layers.findIndex((layer) => layer.pullRequest?.number === pr.number);
+        for (const [position, layer] of stack.layers.entries()) {
           if (layer.pullRequest) {
             prKeys.add(`${repository}#${layer.pullRequest.number}`);
           } else {
@@ -56,7 +60,10 @@ export function createReviewStackWakeScope(threadKey: string, candidates: readon
             // ambiguous layer without naming the branch in its new status.
             uncertainRepositories.add(repository);
           }
-          if (layer.thread) threadKeys.add(layer.thread.key);
+          if (layer.thread) {
+            threadKeys.add(layer.thread.key);
+            if (position < reviewedPosition && layer.unsettled === "repair in progress") repairThreadKeys.add(layer.thread.key);
+          }
           // A new head/base relationship can reshape an inferred chain.
           refs?.heads.add(layer.branch);
           refs?.bases.add(layer.parent);

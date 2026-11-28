@@ -216,11 +216,14 @@ describe("review tracking runtime eligibility", () => {
     it("rechecks only affected reviews when a lower layer reports PR status or a stack hold", async () => {
       const lowerKey = buildPullRequestStatusKey(PR);
       const lowerOwner = { backend: "claude" as const, threadId: "lower-owner" };
+      const lowerOwnerKey = buildThreadIdentityKey(lowerOwner.backend, lowerOwner.threadId);
       const unrelatedKey = buildPullRequestStatusKey({ ...PR, repo: "other", number: 1, url: undefined });
       const readHold = vi.fn(async (review: ThreadReview, setWakeFilter?: (filter: ReviewAutoFixStackWakeFilter) => void) => {
         const affected = review.threadId === THREAD.threadId;
-        setWakeFilter?.((update) => "prKeys" in update ? update.prKeys.includes(affected ? lowerKey : unrelatedKey)
-          : affected && update.threadKey === buildThreadIdentityKey(lowerOwner.backend, lowerOwner.threadId));
+        setWakeFilter?.((update) => {
+          if ("prKeys" in update) return update.prKeys.includes(affected ? lowerKey : unrelatedKey);
+          return affected && ("threadKey" in update ? update.threadKey : update.repairThreadKey) === lowerOwnerKey;
+        });
         return "Held by a lower layer";
       });
       install(readHold);
@@ -237,6 +240,16 @@ describe("review tracking runtime eligibility", () => {
         } },
         { backend: lowerOwner.backend, notification: {
           method: "thread/stackHold/updated", params: { threadId: lowerOwner.threadId, opId: "operation", held: false },
+        } },
+        { backend: lowerOwner.backend, notification: {
+          method: "turn/completed", params: {
+            threadId: lowerOwner.threadId, turnId: "repair-turn", turn: { id: "repair-turn", status: "completed", output: [] },
+          },
+        } },
+        { backend: lowerOwner.backend, notification: {
+          method: "thread/turnQueue/updated", params: {
+            threadId: lowerOwner.threadId, queueEntryId: "repair-entry", origin: "automation", status: "terminal",
+          },
         } },
       ];
       for (const event of events) {

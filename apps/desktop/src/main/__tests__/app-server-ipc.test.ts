@@ -12567,6 +12567,13 @@ describe("app server ipc", () => {
     expect(listing).toHaveBeenCalledTimes(1);
     expect(readNavigationPullRequests).toHaveBeenCalledTimes(1);
     expect(project.mock.calls.map(([, , directories]) => directories)).toEqual([[cwd], [linked]]);
+
+    const preflight = vi.spyOn(getDesktopStackReader(), "preflightCatalogs").mockResolvedValueOnce([{ status: "unavailable" }]);
+    onTestFinished(() => preflight.mockRestore());
+    setWakeFilter.mockClear();
+    await expect(appServerService.automationStackHold(upperReview, setWakeFilter))
+      .resolves.toBe("Held while stack settlement is unavailable");
+    expect(setWakeFilter.mock.calls[0]?.[1]?.()).toBe(true);
   });
 
   it("rechecks late PR attachments for the workspace and branch captured by the review", async () => {

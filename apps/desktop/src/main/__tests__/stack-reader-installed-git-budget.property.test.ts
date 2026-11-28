@@ -182,6 +182,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const rows = [lowerRow, upperRow];
     await writeFile(catalog, JSON.stringify({
       schemaVersion: 1, repository, stacks: [{
+        number: 42,
         trunk: { branch: "main", head },
         branches: [{ branch: "lower", head, base: head }, { branch: "upper", head, base: head }],
       }],
@@ -201,6 +202,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
 
     await writeFile(path.join(repo, ".git", "pwragent-stack-op.json"), "{}");
     const busy = await readForPublication(reader, rows);
+    expect(busy.stacks[0]).toMatchObject({ githubStack: 42, journalHeld: true });
     expect(busy.stacks[0]?.layers.map((entry) => entry.health)).toEqual(["held", "held"]);
 
     await rm(catalog);
@@ -224,6 +226,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     expect(checkoutStarts()).toEqual([upper]);
     const forge = await advertisedReader.read(advertisedRows, [], [upper]);
     expect(forge.stacks.map((stack) => stack.githubStack)).toEqual([3]);
+    expect(forge.stacks[0]?.journalHeld).toBeUndefined();
 
     // A separate local publishing target must not admit the forge-only stack.
     await writeFile(catalog, JSON.stringify({

@@ -55,6 +55,8 @@ export type StackSummary = {
    * every open layer below.
    */
   githubStack?: number;
+  /** A local operation journal holds this stack's clone. */
+  journalHeld?: true;
   layers: StackLayer[];
 };
 

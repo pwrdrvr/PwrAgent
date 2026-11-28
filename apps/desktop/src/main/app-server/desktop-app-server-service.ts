@@ -61,7 +61,7 @@ import {
 } from "../pr-status/pr-review-offer-owner";
 import { describePrReviewReadiness } from "../pr-status/pr-review-readiness";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
-import type { ReviewAutoFixStackWakeFilter } from "../thread-reviews/review-auto-fix";
+import type { ReviewAutoFixStackObserver } from "../thread-reviews/review-auto-fix";
 import { reviewContextPullRequests, type ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
@@ -3998,7 +3998,7 @@ class DesktopAppServerService {
 
   async automationStackHold(
     review: Pick<ThreadReview, "backend" | "threadId" | "context">,
-    setWakeFilter?: (filter: ReviewAutoFixStackWakeFilter) => void,
+    setWakeFilter?: ReviewAutoFixStackObserver,
   ): Promise<string | undefined> {
     const reviewed = reviewContextPullRequests(review.context);
     const reviewedKeys = new Set(reviewed.map((pr) => this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(pr))));
@@ -4023,7 +4023,7 @@ class DesktopAppServerService {
       return paths.some((value) => workspacePaths.has(pathKey(value)));
     }) : [];
     const wakeScope = setWakeFilter && createReviewStackWakeScope(threadKey, candidates);
-    if (wakeScope) setWakeFilter?.(wakeScope.matches);
+    if (wakeScope) setWakeFilter?.(wakeScope.matches, wakeScope.needsRetry);
     // Share one observation per checkout scope within this admission. The
     // final admission guard creates a fresh reader and rechecks live state.
     const readScope = this.createPrStackScopeReader();

@@ -456,6 +456,7 @@ export function installThreadTodoRuntime(params: {
     }
     const status = event.notification.method === "thread/status/changed" ? event.notification.params.status : undefined;
     const queueStatus = event.notification.method === "thread/turnQueue/updated" ? event.notification.params.status : undefined;
+    const queueEnded = queueStatus === "terminal" || queueStatus === "cancelled" || queueStatus === "failed";
     if (event.notification.method === "pullRequest/status/updated") {
       const { prKey, pr } = event.notification.params as { prKey?: string; pr?: PrSummary };
       if (prKey) reviewAutoFixDispatcher.wakeForStackUpdate({
@@ -471,10 +472,12 @@ export function installThreadTodoRuntime(params: {
       reviewAutoFixDispatcher.wake({ backend: event.backend, threadId: event.notification.params.threadId });
     } else if (!handledTerminalTurn && (event.notification.method === "thread/lock/updated"
       || (status && typeof status === "object" && "type" in status && status.type === "idle")
-      || queueStatus === "terminal" || queueStatus === "cancelled" || queueStatus === "failed")) {
+      || queueEnded)) {
       const threadId = "threadId" in event.notification.params && typeof event.notification.params.threadId === "string"
         ? event.notification.params.threadId : undefined;
-      reviewAutoFixDispatcher.wake(threadId ? { backend: event.backend, threadId } : undefined);
+      const thread = threadId ? { backend: event.backend, threadId } : undefined;
+      if (queueEnded && thread) reviewAutoFixDispatcher.wakeAfterRepairProgress(thread);
+      else reviewAutoFixDispatcher.wake(thread);
     }
     const completed = completedThreadReview(event);
     if (completed) {

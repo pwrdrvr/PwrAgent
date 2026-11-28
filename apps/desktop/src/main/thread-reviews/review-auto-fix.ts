@@ -3,7 +3,7 @@ import type {
   AppServerThreadMessageOrigin,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ReviewAfterAction } from "@pwragent/shared/contracts/agent";
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import type {
   ReviewAutoFixRun,
   ReviewAutoFixStatus,
@@ -324,16 +324,27 @@ export type ReviewAutoFixTurnRequest = {
 
 export type ReviewAutoFixStackUpdate =
   | { prKeys: readonly string[]; pr?: Pick<PrSummary, "headRefName" | "baseRefName"> }
-  | { threadKey: string };
+  | { threadKey: string }
+  | { repairThreadKey: string };
 
 export type ReviewAutoFixStackWakeFilter = (update: ReviewAutoFixStackUpdate) => boolean;
+export type ReviewAutoFixStackObserver = (filter: ReviewAutoFixStackWakeFilter, needsRetry?: () => boolean) => void;
+
+const STACK_RETRY_DELAY_MS = 30_000;
+
+function scheduleStackRetry(retry: () => void): () => void {
+  const timer = setTimeout(retry, STACK_RETRY_DELAY_MS);
+  timer.unref();
+  return () => clearTimeout(timer);
+}
 
 export type ReviewAutoFixDispatcherDeps = {
   getReview: (id: string) => ThreadReview | undefined;
   isThreadArchived: (thread: ReviewAutoFixThread) => boolean;
   readStackHold?: (
-    review: ThreadReview, setWakeFilter: (filter: ReviewAutoFixStackWakeFilter) => void,
+    review: ThreadReview, setWakeFilter: ReviewAutoFixStackObserver,
   ) => Promise<string | undefined>;
+  scheduleStackRetry?: (retry: () => void) => () => void;
   threadHasActiveTurn?: (thread: ReviewAutoFixThread) => boolean;
   suspendDispatch?: (thread: ReviewAutoFixThread) => () => void;
   submitTurn: (request: ReviewAutoFixTurnRequest) => Promise<unknown>;
@@ -365,7 +376,12 @@ export class ReviewAutoFixDispatcher {
   private readonly heldReviews = new Map<string, string>();
   private readonly checkingReviews = new Set<string>();
   private readonly recheckReviews = new Set<string>();
-  private readonly stackWakeFilters = new Map<string, ReviewAutoFixStackWakeFilter>();
+  private readonly stackWakeFilters = new Map<string, {
+    matches: ReviewAutoFixStackWakeFilter;
+    needsRetry?: () => boolean;
+  }>();
+  private readonly stackRetries = new Map<string, () => void>();
+  private disposed = false;
   private readonly handoffSuspensions = new Map<string, HandoffSuspension>();
   private readonly now: () => number;
 
@@ -388,12 +404,17 @@ export class ReviewAutoFixDispatcher {
         handoff.reviewTurnEnded = true;
       }
     }
-    this.wake(thread);
+    this.wakeAfterRepairProgress(thread);
   }
 
-  wake(thread?: ReviewAutoFixThread): void {
+  wakeAfterRepairProgress(thread: ReviewAutoFixThread): void {
+    this.wake(thread, { repairThreadKey: buildThreadIdentityKey(thread.backend, thread.threadId) });
+  }
+
+  wake(thread?: ReviewAutoFixThread, repairUpdate?: { repairThreadKey: string }): void {
     this.wakeMatching((id) => {
       if (!thread) return true;
+      if (repairUpdate && this.stackWakeFilters.get(id)?.matches(repairUpdate)) return true;
       const review = this.deps.getReview(id);
       return !review || (review.backend === thread.backend && review.threadId === thread.threadId);
     });
@@ -401,7 +422,7 @@ export class ReviewAutoFixDispatcher {
 
   wakeForStackUpdate(update: ReviewAutoFixStackUpdate): void {
     // Readers without scoped evidence still need every possible wakeup.
-    this.wakeMatching((id) => this.stackWakeFilters.get(id)?.(update) ?? true);
+    this.wakeMatching((id) => this.stackWakeFilters.get(id)?.matches(update) ?? true);
   }
 
   private wakeMatching(matches: (id: string) => boolean): void {
@@ -443,18 +464,26 @@ export class ReviewAutoFixDispatcher {
       }
     }
     for (const id of cancelled) {
+      this.cancelStackRetry(id);
       this.stackWakeFilters.delete(id);
       this.deps.recordRun(thread, id, { kind: "queue", status: "cancelled", at: this.now() });
     }
   }
 
   dispose(): void {
+    this.disposed = true;
+    for (const id of this.stackRetries.keys()) this.cancelStackRetry(id);
     for (const id of [...this.handoffSuspensions.keys()]) {
       this.releaseHandoffSuspension(id);
     }
     this.heldReviews.clear();
     this.recheckReviews.clear();
     this.stackWakeFilters.clear();
+  }
+
+  private cancelStackRetry(id: string): void {
+    this.stackRetries.get(id)?.();
+    this.stackRetries.delete(id);
   }
 
   private cancelReview(id: string, thread: ReviewAutoFixThread): void {
@@ -492,14 +521,18 @@ export class ReviewAutoFixDispatcher {
 
   private readStackHold(review: ThreadReview): Promise<string | undefined> | undefined {
     this.stackWakeFilters.delete(review.id);
-    return this.deps.readStackHold?.(review, (filter) => this.stackWakeFilters.set(review.id, filter));
+    return this.deps.readStackHold?.(review, (matches, needsRetry) => {
+      if (!this.disposed) this.stackWakeFilters.set(review.id, { matches, needsRetry });
+    });
   }
 
   async dispatch(id: string): Promise<void> {
+    if (this.disposed) return;
     if (this.checkingReviews.has(id)) {
       this.recheckReviews.add(id);
       return;
     }
+    this.cancelStackRetry(id);
     this.checkingReviews.add(id);
     try {
       do {
@@ -598,7 +631,12 @@ export class ReviewAutoFixDispatcher {
     } finally {
       this.checkingReviews.delete(id);
       this.recheckReviews.delete(id);
-      if (!this.heldReviews.has(id)) this.stackWakeFilters.delete(id);
+      if (!this.heldReviews.has(id)) {
+        this.stackWakeFilters.delete(id);
+      } else if (!this.disposed && this.stackWakeFilters.get(id)?.needsRetry?.()) {
+        const cancel = (this.deps.scheduleStackRetry ?? scheduleStackRetry)(() => void this.dispatch(id));
+        this.stackRetries.set(id, cancel);
+      }
     }
   }
 }
