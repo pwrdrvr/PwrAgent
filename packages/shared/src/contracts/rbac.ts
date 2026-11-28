@@ -779,6 +779,9 @@ export type MessagingDynamicToolCategory =
  *       · `mark_project_read` changes seen state → `thread.control.organize`.
  *       · `schedule_follow_up` queues a later turn on the calling thread →
  *         `thread.control.schedule`, as `/schedule` and `/scheduled` do.
+ *       · `notify_operator` raises a notice for the operator now or later,
+ *         stored as a scheduled action on the calling thread →
+ *         `thread.control.schedule`.
  *       · `apply_thread_maintenance` archives threads and removes checkouts →
  *         `thread.control.archive`. `scan_thread_maintenance` reads only, and
  *         `open_thread_maintenance` only shows a dialog on this machine, so
@@ -816,6 +819,11 @@ export function permissionForDynamicTool(
       }
       if (tool === "schedule_follow_up") {
         // The agent's own `/schedule`: the same permission as the command.
+        return "thread.control.schedule";
+      }
+      if (tool === "notify_operator") {
+        // A notice the operator gets now or later, as a scheduled action on
+        // the calling thread: the follow-up's permission.
         return "thread.control.schedule";
       }
       if (tool === "attach_thread_pull_request") {

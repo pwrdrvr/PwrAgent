@@ -272,6 +272,7 @@ import {
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import { useJobMonitorWakeNotices } from "./features/notifications/useJobMonitorWakeNotices";
+import { useAgentNotificationsSurface } from "./features/agent-notifications/useAgentNotificationsSurface";
 import { useClaudeSignIn } from "./features/notifications/useClaudeSignIn";
 import { buildModelVerificationNotice } from "./features/notifications/model-verification-notice";
 import {
@@ -2577,9 +2578,10 @@ function DesktopAppShell(props: {
     ...(submitServerRequest ? { respond: respondToOperatorWait } : {}),
   });
   const monitorWakeNotices = useJobMonitorWakeNotices(desktopApi, showAppNotice);
-  const durableNotices = useMemo(
-    () => [...approvalNotices, ...monitorWakeNotices, ...appNotices.durable],
-    [appNotices.durable, approvalNotices, monitorWakeNotices],
+  // The durable notice stack: approvals, agent notices, then the rest.
+  const agentNotices = useAgentNotificationsSurface(
+    desktopApi, localThreadTitles, showThreadFromLink, showAppNotice,
+    approvalNotices, monitorWakeNotices, appNotices.durable,
   );
   const listThreadTodos = desktopApi?.listThreadTodos;
   const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
@@ -3920,6 +3922,7 @@ function DesktopAppShell(props: {
   })();
   const mastheadActions = {
     voiceControl: directorVoiceControl,
+    notificationsControl: agentNotices.control,
     addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
     automationsSchedulingStatus,
@@ -4659,6 +4662,7 @@ function DesktopAppShell(props: {
         >
           <Sidebar
             mastheadVoiceControl={directorVoiceControl}
+            mastheadNotificationsControl={agentNotices.control}
             inert={layerView !== undefined}
             directoryDisclosure={navigation.directoryDisclosure}
             pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
@@ -5253,7 +5257,7 @@ function DesktopAppShell(props: {
           <ArchiveGroupConfirmation controller={archiveGroupConfirmation} />
           <AppNoticeStack
             desktopApi={desktopApi}
-            durableNotices={durableNotices}
+            durableNotices={agentNotices.durable}
             onDismissDurable={(id) => {
               const acknowledge = monitorWakeNotices.find((notice) => notice.id === id)?.onDismiss;
               if (acknowledge) acknowledge();

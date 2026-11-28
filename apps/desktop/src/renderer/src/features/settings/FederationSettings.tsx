@@ -2112,6 +2112,9 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   project_forge_automation: "pause project forge activity",
   thread_pull_request_auto_fix_v1: "switch Auto-fix for one pull request",
   thread_research: "view and control Research runs",
+  // Reading and dismissing notices is authorized by thread_detail and
+  // turn_control.
+  agent_notifications: "",
 };
 
 function formatFederationCapabilities(

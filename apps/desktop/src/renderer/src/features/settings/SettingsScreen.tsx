@@ -1156,6 +1156,11 @@ function SettingsSectionBody(props: {
             general: { notificationsEnabled },
           });
         }}
+        onAgentNotificationsChange={async (agentNotifications) => {
+          await props.settings.writeConfig({
+            general: { agentNotifications },
+          });
+        }}
         onThemedDockIconChange={async (themedDockIcon) => {
           await props.settings.writeConfig({
             general: { appearance: { themedDockIcon } },

@@ -477,9 +477,12 @@ function keepsQueuePosition(action: ScheduledThreadAction): boolean {
 }
 
 function isProjectableAction(action: ScheduledThreadAction): boolean {
-  return ["held", "scheduled", "dispatching", "queued", "failed"].includes(
-    action.status,
-  );
+  // An agent's notice is no message to this thread. The bell list and
+  // Waiting for show and cancel it.
+  return action.kind !== "notification"
+    && ["held", "scheduled", "dispatching", "queued", "failed"].includes(
+      action.status,
+    );
 }
 
 function scopeKeyForAction(action: ScheduledThreadAction, target: FederationTarget = { scope: "local" }): string {

@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
   AgentFollowUpProtection,
+  AgentNotificationLimits,
   CreateScheduledThreadActionRequest,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   ScheduledThreadAction,
+  ScheduledThreadNotificationPayload,
   ScheduledThreadTurnPayload,
   SteerFallbackInputSource,
   ScheduledThreadActionHoldCause,
@@ -24,11 +26,16 @@ import {
   AGENT_FOLLOW_UP_MAX_DELAY_MS,
   AGENT_FOLLOW_UP_MIN_DELAY_MS,
   AGENT_FOLLOW_UP_PROMPT_MAX_CHARS,
+  AGENT_NOTIFICATION_LIMITS_DEFAULT,
+  AGENT_NOTIFICATION_MAX_DELAY_MS,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { isThreadLockRefusal } from "@pwragent/shared/thread-lock";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
+import { ownerNotifications, requestShowThread } from "../owner-host.js";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton.js";
+import { AgentNotificationCenter } from "./agent-notification-center.js";
 import { getAppScheduledThreadActionStore } from "../storage/desktop-runtime-storage.js";
 import {
   isScheduledThreadLockHold,
@@ -46,6 +53,7 @@ import {
 } from "../profile.js";
 import { AgentFollowUpRefusal } from "./agent-follow-up-refusal.js";
 import { buildAgentFollowUpToolHandler, type FollowUpThread } from "./agent-follow-up-tool.js";
+import { agentNotificationRefusalMessage, buildAgentNotificationToolHandler } from "./agent-notification-tool.js";
 
 const scheduledActionLog = getMainLogger("pwragent:scheduled-actions");
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
@@ -87,25 +95,67 @@ export type ScheduledThreadActionServiceOptions = {
     delayMs: number,
   ) => ReturnType<typeof setInterval>;
   clearLeaseTimer?: (timer: ReturnType<typeof setInterval>) => void;
+  /**
+   * Shows a notice that came due. It runs after the claim and before the
+   * action is marked delivered; a throw marks it failed.
+   */
+  deliverAgentNotification?: (action: ScheduledThreadAction) => void | Promise<void>;
+  /** The operator's notice bounds, read on every send. */
+  agentNotificationLimits?: () => AgentNotificationLimits;
 };
 
 let service: ScheduledThreadActionService | null = null;
 let serviceRegistry: DesktopBackendRegistry | null = null;
+let notificationCenter: AgentNotificationCenter | null = null;
+
+/** This owner's agent notices, once the scheduler has started. */
+export function getAgentNotificationCenter(): AgentNotificationCenter | undefined {
+  return notificationCenter ?? undefined;
+}
 
 export function initializeScheduledThreadActionService(
   registry = getDesktopBackendRegistry(),
   resolveStartedReviewTodo?: ScheduledThreadActionServiceOptions["resolveStartedReviewTodo"],
 ): ScheduledThreadActionService {
   if (!service) {
+    // The service is constructed below; the center reads it only once running.
+    const center = new AgentNotificationCenter({
+      listNotices: (request) => nextService.listAgentNotifications(request),
+      nativeNotificationsEnabled: () => {
+        try {
+          return getDesktopSettingsService().resolveNotificationsEnabled();
+        } catch {
+          return false;
+        }
+      },
+      notifyNative: (params) => ownerNotifications().notifyAttention(params),
+      clearNative: (key) => ownerNotifications().clearAttentionKey(key),
+      showThread: (thread) => requestShowThread(thread),
+      threadLabel: (backend, threadId) => registry.readNotificationThreadLabel(backend, threadId),
+      publishChanged: (thread) => registry.publishLocalEvent({
+        backend: thread.backend,
+        notification: { method: "agentNotifications/updated", params: { threadId: thread.threadId } },
+      }),
+    });
     const nextService = new ScheduledThreadActionService({
       registry,
       store: getAppScheduledThreadActionStore(),
       resolveStartedReviewTodo,
+      deliverAgentNotification: (action) => center.deliver(action),
+      agentNotificationLimits: () => getDesktopSettingsService().resolveAgentNotificationLimits(),
     });
+    notificationCenter = center;
+    // A peer's window that asked before the center existed was refused;
+    // this tells it to read again.
+    void Promise.resolve(registry.publishLocalEvent({
+      backend: "codex",
+      notification: { method: "agentNotifications/updated", params: {} },
+    })).catch(() => undefined);
     registry.setScheduledThreadActionCreator((request, options) =>
       nextService.create(request, options),
     );
     registry.setAgentFollowUpToolHandler(buildAgentFollowUpToolHandler(nextService));
+    registry.setAgentNotificationToolHandler(buildAgentNotificationToolHandler(nextService));
     service = nextService;
     serviceRegistry = registry;
   }
@@ -114,8 +164,10 @@ export function initializeScheduledThreadActionService(
 
 export function disposeScheduledThreadActionService(): void {
   service?.dispose();
+  notificationCenter = null;
   serviceRegistry?.setScheduledThreadActionCreator(undefined);
   serviceRegistry?.setAgentFollowUpToolHandler(undefined);
+  serviceRegistry?.setAgentNotificationToolHandler(undefined);
   service = null;
   serviceRegistry = null;
 }
@@ -258,6 +310,9 @@ export class ScheduledThreadActionService {
     if (!current || current.backend !== thread.backend || current.threadId !== thread.threadId) {
       throw new AgentFollowUpRefusal("not_found", "No follow-up with that id waits on this thread. Use action list.");
     }
+    if (current.kind === "notification") {
+      throw new AgentFollowUpRefusal("forbidden", "That is a notice for the operator, not a follow-up. Cancel it with notify_operator.");
+    }
     if (current.origin !== "agent") {
       throw new AgentFollowUpRefusal("forbidden", current.origin === "messaging"
         ? "A messaging contact scheduled that action. The contact or the operator cancels it."
@@ -267,6 +322,72 @@ export class ScheduledThreadActionService {
       throw new AgentFollowUpRefusal("not_found", `That follow-up is already ${current.status}. Cancel cannot undo a turn that started.`);
     }
     return (await this.cancel({ id })).action;
+  }
+
+  /**
+   * An agent's notice for the operator, now or at `scheduledFor`. The thread
+   * comes from the tool call's trusted context. A notice due now is
+   * delivered before this returns.
+   */
+  async createAgentNotification(request: FollowUpThread & {
+    scheduledFor: number;
+    notification: ScheduledThreadNotificationPayload;
+  }): Promise<ScheduledThreadAction> {
+    const now = this.now();
+    if (!Number.isFinite(request.scheduledFor)) {
+      throw new AgentFollowUpRefusal("invalid_arguments", "Provide delayMinutes or an ISO 8601 time in at, or neither to send now.");
+    }
+    if (request.scheduledFor > now + AGENT_NOTIFICATION_MAX_DELAY_MS) {
+      throw new AgentFollowUpRefusal("invalid_arguments", "A notice is delivered within a year. Ask the operator for an automation for a longer or recurring schedule.");
+    }
+    const created = this.options.store.createAgentNotification({
+      id: `scheduled-action:${randomUUID()}`,
+      backend: request.backend,
+      threadId: request.threadId,
+      kind: "notification",
+      origin: "agent",
+      // A time in the past is due now.
+      scheduledFor: Math.max(now, request.scheduledFor),
+      displayText: request.notification.title,
+      notification: request.notification,
+      now,
+    }, this.agentNotificationLimits());
+    if ("refused" in created) {
+      throw new AgentFollowUpRefusal("forbidden", agentNotificationRefusalMessage(created.refused, created.count, this.agentNotificationLimits()));
+    }
+    await this.publish(created.action);
+    this.scheduleNextTimer();
+    if (created.action.scheduledFor <= now) await this.evaluateDueActions();
+    return this.options.store.get(created.action.id) ?? created.action;
+  }
+
+  /** An agent cancels only a notice on its own thread that still waits. */
+  async cancelAgentNotification(thread: FollowUpThread, id: string): Promise<ScheduledThreadAction> {
+    const current = this.options.store.get(id);
+    if (!current || current.kind !== "notification"
+      || current.backend !== thread.backend || current.threadId !== thread.threadId) {
+      throw new AgentFollowUpRefusal("not_found", "No notice with that id is on this thread. Use action list.");
+    }
+    if (current.status !== "scheduled" && current.status !== "held") {
+      throw new AgentFollowUpRefusal("not_found", `That notice is already ${current.status === "started" ? "delivered" : current.status}.`);
+    }
+    return (await this.cancel({ id })).action;
+  }
+
+  agentNotificationLimits(): AgentNotificationLimits {
+    return this.options.agentNotificationLimits?.() ?? AGENT_NOTIFICATION_LIMITS_DEFAULT;
+  }
+
+  agentNotificationUsage(thread: FollowUpThread) {
+    return this.options.store.agentNotificationUsage(thread, this.now());
+  }
+
+  listAgentNotifications(request: {
+    deliveredSince: number;
+    limit: number;
+    thread?: FollowUpThread;
+  }): ScheduledThreadAction[] {
+    return this.options.store.listAgentNotifications(request);
   }
 
   agentFollowUpProtection(thread: FollowUpThread): AgentFollowUpProtection {
@@ -292,6 +413,10 @@ export class ScheduledThreadActionService {
     request: CreateScheduledThreadActionRequest,
     options?: { id?: string; steerFallbackInputSource?: SteerFallbackInputSource },
   ): Promise<ScheduledThreadActionMutationResponse> {
+    // Only notify_operator, which applies the operator's bounds, writes one.
+    if (request.kind === "notification") {
+      throw new Error("Agent notices are created with notify_operator.");
+    }
     if (request.turn) request = { ...request, turn: withSteerFallbackSource(request.turn, options?.steerFallbackInputSource) };
     validateScheduledActionRequest(request);
     // The desktop, messaging and peer surfaces share this path. Only
@@ -550,6 +675,18 @@ export class ScheduledThreadActionService {
 
   private async dispatch(action: ScheduledThreadAction): Promise<void> {
     try {
+      if (action.kind === "notification") {
+        if (!action.notification) {
+          throw new Error("Scheduled notice payload is missing.");
+        }
+        // Claimed, so no other scheduler delivers it. A crash between the
+        // delivery and this mark leaves it dispatching, and recovery marks
+        // it failed rather than showing it twice.
+        await this.options.deliverAgentNotification?.(action);
+        const delivered = this.options.store.markStarted(action.id, undefined, this.now(), this.ownerId);
+        if (delivered) await this.publish(delivered);
+        return;
+      }
       if (action.kind === "review") {
         if (!action.review) {
           throw new Error("Scheduled review payload is missing.");
@@ -849,6 +986,14 @@ export class ScheduledThreadActionService {
         params: { action },
       },
     });
+    // A peer's windows follow notices on their own event, not on scheduled
+    // actions. Delivery announces itself through the notification center.
+    if (action.kind === "notification" && action.status !== "dispatching" && action.status !== "started") {
+      await this.options.registry.publishLocalEvent({
+        backend: action.backend,
+        notification: { method: "agentNotifications/updated", params: { threadId: action.threadId } },
+      });
+    }
   }
 
   /** Waiting for redraws when a claim trips a thread's loop guard. */
@@ -1035,6 +1180,9 @@ function validateScheduledActionRequest(
   }
   if (request.kind === "review" && !request.displayText.trim()) {
     throw new Error("Scheduled review display text is required.");
+  }
+  if (request.kind === "notification") {
+    throw new Error("An agent notice cannot be edited. Cancel it instead.");
   }
 }
 

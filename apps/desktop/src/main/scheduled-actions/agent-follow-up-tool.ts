@@ -127,7 +127,8 @@ function summarize(action: ScheduledThreadAction): AgentFollowUpSummary {
     status: action.status,
     scheduledFor: new Date(action.scheduledFor).toISOString(),
     setBy: action.origin === "agent" ? "agent" : action.origin === "messaging" ? "messaging" : "operator",
-    cancellable: action.origin === "agent"
+    // A notice is cancelled with notify_operator, not as a follow-up.
+    cancellable: action.origin === "agent" && action.kind !== "notification"
       && (action.status === "scheduled" || action.status === "held" || action.status === "queued"),
     prompt: text.length > PROMPT_PREVIEW_MAX_CHARS ? `${text.slice(0, PROMPT_PREVIEW_MAX_CHARS - 1).trimEnd()}…` : text,
   };

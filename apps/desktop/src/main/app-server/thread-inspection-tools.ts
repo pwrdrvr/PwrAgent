@@ -157,6 +157,7 @@ export interface ThreadInspectionToolsHost extends Pick<RegistryHostPorts,
   readonly federatedThreadInspectionHandler: RegistryHandlers["federatedThreadInspectionHandler"];
   readonly threadDependencyToolHandler: RegistryHandlers["threadDependencyToolHandler"];
   readonly agentFollowUpToolHandler: RegistryHandlers["agentFollowUpToolHandler"];
+  readonly agentNotificationToolHandler: RegistryHandlers["agentNotificationToolHandler"];
   /** A managed Research worker, which works to its run's deadline and no later. */
   isResearchWorker(thread: { backend: AppServerBackendKind; threadId: string }): boolean;
   readonly threadPrAutoDispatchHandler: RegistryHandlers["threadPrAutoDispatchHandler"];
@@ -586,6 +587,20 @@ export class ThreadInspectionTools {
         request.args,
         { backend: request.context.backend, threadId: request.context.threadId },
         await host.readCausalMessagingContext(request.context),
+      );
+    }
+
+    if (request.operation === "notify_operator") {
+      const host = this.host();
+      if (!host.agentNotificationToolHandler) return threadInspectionFailure("unsupported_operation", "Operator notices are not available.");
+      // A worker reports to its coordinating thread, which decides what
+      // reaches the operator.
+      if (host.isResearchWorker(request.context)) {
+        return threadInspectionFailure("forbidden", "Research workers cannot notify the operator. Post a finding and let the coordinating thread decide.");
+      }
+      return await host.agentNotificationToolHandler(
+        request.args,
+        { backend: request.context.backend, threadId: request.context.threadId },
       );
     }
 

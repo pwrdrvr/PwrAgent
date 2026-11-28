@@ -16,6 +16,8 @@ import { NewThreadButton } from "./NewThreadButton";
 export type MastheadActionsProps = {
   /** Director voice's mic, first in the actions. It subscribes to voice itself. */
   voiceControl?: ReactNode;
+  /** The agent notices bell; it renders nothing while there is none. */
+  notificationsControl?: ReactNode;
   addingProjectDirectory?: boolean;
   automationsActive?: boolean;
   /** Shown paused when another instance on the profile runs automations. */
@@ -58,6 +60,7 @@ export function MastheadActions(props: MastheadActionsProps): ReactElement {
           <SearchIcon size={16} strokeWidth={1.5} aria-hidden="true" />
         </button>
       ) : null}
+      {isFederationWindow ? null : props.notificationsControl}
       {isFederationWindow ? null : (
         <AutomationsButton
           active={props.automationsActive}

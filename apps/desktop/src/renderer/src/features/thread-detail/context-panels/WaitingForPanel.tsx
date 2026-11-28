@@ -598,7 +598,9 @@ function describeWake(
     }
     case "scheduled_action": {
       // The agent set this one for itself; the operator's are messages.
-      const noun = wake.actionKind === "review" ? "Review" : wake.createdBy === "agent" ? "Follow-up" : "Message";
+      const noun = wake.actionKind === "review" ? "Review"
+        : wake.actionKind === "notification" ? "Notice"
+        : wake.createdBy === "agent" ? "Follow-up" : "Message";
       const plainTitle = wake.status === "held"
         ? `${noun} held`
         : wake.wakesAt !== undefined && wake.wakesAt > now

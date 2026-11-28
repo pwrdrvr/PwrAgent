@@ -472,9 +472,11 @@ function endedDependency(dependency: ThreadDependency): ThreadPendingWakeEnded[]
 function endedScheduledAction(action: PendingWakeScheduledAction): ThreadPendingWakeEnded[] {
   if (action.status !== "started" && action.status !== "cancelled" && action.status !== "failed") return [];
   const noun = action.kind === "review" ? "Scheduled review"
+    : action.kind === "notification" ? "Agent notice"
     : action.origin === "agent" ? "Agent follow-up" : "Scheduled message";
   const summary = action.status === "started"
-    ? action.kind === "review" ? `${noun} started` : `${noun} sent`
+    ? action.kind === "review" ? `${noun} started`
+      : action.kind === "notification" ? `${noun} delivered` : `${noun} sent`
     : action.status === "cancelled" ? `${noun} cancelled` : `${noun} failed`;
   return [{
     key: buildThreadPendingWakeKey("scheduled_action", action.id),

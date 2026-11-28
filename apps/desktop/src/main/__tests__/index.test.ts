@@ -472,6 +472,10 @@ vi.mock("../resource-checkouts/checkout-runtime", () => {
   };
 });
 
+vi.mock("../shell/ipc/agent-notifications-ipc", () => ({
+  registerAgentNotificationIpcHandlers: vi.fn(),
+}));
+
 vi.mock("../shell/ipc/scheduled-actions-ipc", () => ({
   registerScheduledActionIpcHandlers: registerScheduledActionIpcHandlersMock,
   disposeScheduledActionIpcHandlers: disposeScheduledActionIpcHandlersMock,

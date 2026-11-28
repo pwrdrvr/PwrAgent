@@ -60,6 +60,7 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "rename_current_thread",
   "manage_thread_dependencies",
   "schedule_follow_up",
+  "notify_operator",
   "agent_memory",
   "mutate_thread",
   "mark_project_read",
@@ -1041,6 +1042,7 @@ export type PwrAgentThreadInspectionToolArgsByOperation = {
   manage_thread_dependencies: import("./thread-dependencies").ManageThreadDependenciesRequest;
   agent_memory: import("./agent-memory").AgentMemoryArgs;
   schedule_follow_up: import("./scheduled-thread-actions").ScheduleFollowUpToolArgs;
+  notify_operator: import("./scheduled-thread-actions").NotifyOperatorToolArgs;
   search_threads: SearchThreadsToolArgs;
   read_thread: ReadThreadToolArgs;
   get_thread_status: GetThreadStatusToolArgs;
@@ -1082,6 +1084,9 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             followUps: import("./scheduled-thread-actions").ScheduleFollowUpToolResult;
+          }
+        | {
+            notifications: import("./scheduled-thread-actions").NotifyOperatorToolResult;
           }
         | { memory: import("./agent-memory").AgentMemoryResult }
         | {

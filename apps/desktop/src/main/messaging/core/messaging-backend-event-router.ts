@@ -202,6 +202,34 @@ export class MessagingBackendEventRouter {
       }
       return;
     }
+    if (
+      scheduledAction?.kind === "notification"
+      && scheduledAction.status === "started"
+      && scheduledAction.notification
+    ) {
+      // An agent's notice reaches each conversation bound to its thread
+      // once, as the operator's windows get it.
+      const notice = scheduledAction.notification;
+      const bindings = this.context.host().filterBindingsForChannel(
+        await this.context.store.findActiveBindingsForThread({ backend: event.backend, threadId }),
+      ).filter((binding) => bindingMatchesFederationTarget(binding, event.federationTarget));
+      for (const binding of bindings) {
+        const key = `${binding.id}\0${scheduledAction.id}\0notice`;
+        if (this.context.host().deliveredThreadNoticeKeys.has(key)) continue;
+        rememberBoundedKey(this.context.host().deliveredThreadNoticeKeys, key);
+        const link = notice.link?.kind === "url" ? `\n${notice.link.url}` : "";
+        await this.context.host().deliver({
+          id: this.context.host().newIntentId("agent-notice"),
+          kind: "message",
+          bindingId: binding.id,
+          createdAt: this.context.now(),
+          role: "system",
+          attribution: { label: "PwrAgent notification" },
+          parts: [{ type: "text", text: `${notice.title}\n${notice.body}${link}`, markdown: "plain" }],
+        }, binding);
+      }
+      return;
+    }
     const eventTurnId = turnIdForBackendEvent(event);
     const turnQueueUpdate = turnQueueUpdateForBackendEvent(event);
     if (turnQueueUpdate) {

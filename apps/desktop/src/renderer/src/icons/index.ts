@@ -5,6 +5,7 @@ export { ArrowRightToLineIcon } from "./ArrowRightToLineIcon";
 export { ArrowUpIcon } from "./ArrowUpIcon";
 export { AutomationsIcon } from "./AutomationsIcon";
 export { BanIcon } from "./BanIcon";
+export { BellIcon } from "./BellIcon";
 export { BookmarkIcon } from "./BookmarkIcon";
 export { BranchIcon } from "./BranchIcon";
 export { CelestialBlackHoleIcon } from "./celestial/CelestialBlackHoleIcon";

@@ -95,6 +95,7 @@ import type {
   TokenMiserGateProvider,
   TokenMiserSummarizerMode,
   DesktopSettingsConfigPatch,
+  DesktopAgentNotificationPolicy,
   DesktopSpendAlertPolicy,
   DesktopTextSize,
   DesktopToolOutputAlertPolicy,
@@ -209,6 +210,7 @@ export type DesktopSettingsConfig = {
     tokenMiserEnabled?: boolean;
     toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
+    agentNotifications?: Partial<DesktopAgentNotificationPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       darkTheme?: DesktopDarkTheme;
@@ -1159,6 +1161,9 @@ export function desktopSettingsPatchToEdits(
       ["general", "spend_alerts", "thread_spend_threshold_usd"],
       patch.general.spendAlerts.threadSpendThresholdUsd,
     );
+  }
+  if (patch.general?.agentNotifications) {
+    edits.push(...agentNotificationSettingsEdits(patch.general.agentNotifications));
   }
 
   if (patch.experimental?.fullAccessRiskWarningDismissed !== undefined) {
@@ -2601,6 +2606,7 @@ function normalizeDesktopConfig(
   const generalMarkdown = tables["general.markdown"];
   const generalToolOutputAlerts = tables["general.tool_output_alerts"];
   const generalSpendAlerts = tables["general.spend_alerts"];
+  const generalAgentNotifications = tables["general.agent_notifications"];
   const generalMessagingAck = tables["general.messaging_acknowledgment"];
   const onboarding = tables["onboarding"];
   const experimental = tables["experimental"];
@@ -2715,6 +2721,17 @@ function normalizeDesktopConfig(
         ),
         threadSpendThresholdUsd: readNumber(
           generalSpendAlerts?.thread_spend_threshold_usd,
+        ),
+      },
+      agentNotifications: {
+        maxPerThreadPerDay: readNumber(
+          generalAgentNotifications?.max_per_thread_per_day,
+        ),
+        maxPerProfilePerDay: readNumber(
+          generalAgentNotifications?.max_per_profile_per_day,
+        ),
+        maxScheduledPerThread: readNumber(
+          generalAgentNotifications?.max_scheduled_per_thread,
         ),
       },
       appearance: {
@@ -3180,6 +3197,20 @@ function normalizeDesktopConfig(
  * team must be a MathOS team id and the origin a plain HTTPS origin. The hosted
  * platform's origin is the default and is not written.
  */
+/** `[general.agent_notifications]`: the operator's bounds on agent notices. */
+function agentNotificationSettingsEdits(
+  policy: Partial<DesktopAgentNotificationPolicy>,
+): TomlEdit[] {
+  const table = ["general", "agent_notifications"];
+  const keys = [
+    ["max_per_thread_per_day", policy.maxPerThreadPerDay],
+    ["max_per_profile_per_day", policy.maxPerProfilePerDay],
+    ["max_scheduled_per_thread", policy.maxScheduledPerThread],
+  ] as const;
+  return keys.flatMap(([key, value]): TomlEdit[] =>
+    value === undefined ? [] : [{ op: "set", path: [...table, key], value }]);
+}
+
 function researchMathosEdits(mathos: { team?: string | null; origin?: string | null }): TomlEdit[] {
   const table = ["research", "mathos"];
   const edits: TomlEdit[] = [];
@@ -3303,6 +3334,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     toolOutputAlerts && hasDefinedValue(toolOutputAlerts);
   const spendAlerts = config.general?.spendAlerts;
   const spendAlertsDefined = spendAlerts && hasDefinedValue(spendAlerts);
+  const agentNotifications = config.general?.agentNotifications;
+  const agentNotificationsDefined = agentNotifications && hasDefinedValue(agentNotifications);
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
   const markdown = config.general?.markdown;
@@ -3331,6 +3364,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     notificationsEnabled !== undefined ||
     toolOutputAlertsDefined ||
     spendAlertsDefined ||
+    agentNotificationsDefined ||
     appearanceDefined ||
     markdownDefined ||
     codexProfileModel !== undefined ||
@@ -3403,6 +3437,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (spendAlertsDefined) {
       pruned.general.spendAlerts = spendAlerts;
+    }
+    if (agentNotificationsDefined) {
+      pruned.general.agentNotifications = agentNotifications;
     }
     if (appearanceDefined) {
       pruned.general.appearance = appearance;

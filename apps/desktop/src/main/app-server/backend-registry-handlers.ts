@@ -80,6 +80,7 @@ export interface RegistryHandlers {
   threadMaintenanceToolHandler?: ThreadMaintenanceToolHandler;
   threadDependencyToolHandler?: ((args: import("@pwragent/shared/contracts/thread-dependencies").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">, actor?: string) => Promise<PwrAgentThreadInspectionResponse>);
   agentFollowUpToolHandler?: AgentFollowUpToolHandler;
+  agentNotificationToolHandler?: AgentNotificationToolHandler;
   directoryGitStatusWriter?: DirectoryGitStatusWriter;
   threadPrAutoDispatchHandler?: ThreadPrAutoDispatchHandler;
   threadPullRequestDetachHandler?: ThreadPullRequestDetachHandler;
@@ -93,6 +94,15 @@ export interface RegistryHandlers {
   threadPullRequestRefreshHandler?: ThreadPullRequestRefreshHandler;
   threadGitWorkingStateRefreshHandler?: ThreadGitWorkingStateRefreshHandler;
 }
+
+/**
+ * `notify_operator` for the calling thread. `thread` comes from the tool
+ * call's trusted context, never from a tool argument.
+ */
+export type AgentNotificationToolHandler = (
+  args: import("@pwragent/shared/contracts/scheduled-thread-actions").NotifyOperatorToolArgs,
+  thread: { backend: AppServerBackendKind; threadId: string },
+) => Promise<PwrAgentThreadInspectionResponse>;
 
 /**
  * `schedule_follow_up` for the calling thread. `thread` comes from the tool

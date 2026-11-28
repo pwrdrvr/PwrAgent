@@ -225,6 +225,123 @@ orphaned holds on the heartbeat is a read; it writes only when it takes one.
 `agent-follow-up.property.test.ts` holds the lifecycle model and the guard
 property.
 
+## Agent notices
+
+An agent raises a notice for the operator with the `notify_operator` tool:
+send, list and cancel. A notice is a scheduled action of kind
+`notification` with origin `agent`, on the calling thread. A notice sent now
+is due at once, so the same service claims and delivers it before the tool
+returns; a scheduled one waits for the scheduler's clock like a follow-up,
+survives a restart, and is delivered at the next launch if its time passed
+while PwrAgent was closed. Title, body, urgency and the optional link live in
+the payload file, never in SQLite.
+
+- **No turn.** Dispatch hands the claimed notice to the owner's
+  `AgentNotificationCenter` and marks it `started` (delivered). It starts no
+  turn, so lock, archive and project pause do not hold it.
+- **Exactly once.** A notice found `dispatching` under a dead owner is marked
+  `failed`, as any dispatching claim is. It may have been shown; it is never
+  shown twice.
+- **Own thread only.** The thread comes from the call's trusted context. An
+  agent cancels only its own thread's waiting notices. A Research worker is
+  refused; its coordinator decides what reaches the operator. A messaging
+  contact's turn needs `thread.control.schedule`.
+- **Only the tool writes kind `notification`.** `create` refuses it from the
+  desktop, messaging and peer surfaces, and `update` refuses to edit one.
+- **Not a follow-up.** The follow-up guard counts and suspends `origin =
+  agent AND kind <> notification` only. A notice never spends a follow-up
+  slot and is delivered while the thread's follow-ups are suspended.
+  `schedule_follow_up` lists a notice but cannot cancel it, and neither the
+  composer queue nor messaging `/scheduled` shows one as a message.
+- **Mixed builds.** A build from before notices that shares the profile
+  treats any agent-origin scheduled row as a follow-up. If it claims a
+  notice first, it marks the notice failed (no turn payload) and spends a
+  follow-up slot. It cannot show the notice twice.
+
+### Bounds
+
+`[general.agent_notifications]` in the profile's `config.toml`; zero turns a
+bound off. The counts and the insert are one immediate transaction. A window
+counts every notice an agent created in it, cancelled ones too, so cancel
+and resend cannot spend more.
+
+| Key | Default |
+|---|---|
+| `max_per_thread_per_day` (rolling 24 hours) | 12 |
+| `max_per_profile_per_day` (rolling 24 hours) | 60 |
+| `max_scheduled_per_thread` (waiting) | 8 |
+
+### Surfaces
+
+- **Windows.** The center keeps the delivered notices the operator has not
+  dismissed, in process memory, and publishes `agentNotifications/updated`.
+  Each window shows them as durable cards in the notice stack and as a count
+  on the masthead bell, which also lists scheduled notices with Cancel and
+  the last day's delivered ones (read from the scheduler, so they survive a
+  restart). Dismissing writes nothing; a restart clears read state.
+- **Native.** `DesktopNotificationService.notifyAttention` with key
+  `agent-notification:<id>`: only when Desktop notifications are on and no
+  window is focused, deduplicated by key, cleared on dismiss. Each machine
+  shows its own, so a notice can appear on every machine that is not in
+  use.
+- **Messaging.** The backend event router posts a delivered notice once to
+  each conversation bound to the thread.
+- **Federation.** Every window that can see a machine's threads shows its
+  notices: a main window shows this machine's and every connected peer's,
+  and a peer's window shows that peer's. The owner keeps each notice, its
+  schedule, bounds and read state; dismissing one anywhere dismisses it on
+  the owner, so it leaves every window.
+
+### Notices across Federation
+
+An owner that advertises `agent_notifications` answers two RPC methods and
+sends one event. A contained Outpost is an owner like any other: viewers
+read from it, and it never calls them.
+
+| RPC method | Required capability | Behavior on the owner |
+| --- | --- | --- |
+| `agentNotifications.snapshot` | `thread_detail` | Unread, scheduled and earlier notices, with each thread's title |
+| `agentNotifications.manage` | `turn_control` | Dismiss, dismiss all, or cancel a waiting notice |
+
+Dismiss all names the notices the window listed (`ids`), so a notice
+delivered while the request is out stays unread. An owner that predates
+`ids` dismisses every unread notice.
+
+`agentNotifications/updated` travels in its own threadless
+`agent_notifications` event class, so a viewer follows an owner's notices
+without following its threads. The owner sends it when a notice is
+delivered, dismissed, scheduled, cancelled or fails.
+
+The viewer's main process (`FederatedAgentNotifications`) keeps the last
+snapshot of each connected peer that advertises the capability, reads it
+again on each event and after a stream gap, and keeps it through a failed
+read. A stream that restarts because this viewer opened another of the
+peer's threads (`navigationContinuous`) is not read, and windows are told
+to read again only when a peer's notices changed. Every reply carries the peer's whole snapshot. Requests reach the
+peer in the order they were sent, on the one connection to it, but replies
+can return in any order, so each request is numbered when it is sent and a
+reply older than the stored one is dropped. So is a reply for a peer the
+viewer has since dropped. `federated-agent-notifications.model.test.ts`
+runs the real owner and viewer over a transport that reorders replies and
+events. It tags each notice with its owner, and dismiss and cancel go to that
+owner. A peer's window acts only on its own peer's notices. The viewer
+raises its own native notification, key
+`agent-notification:<instance>:<id>`, for each notice that arrives while it
+is connected, under the same eligibility as its own notices. Notices unread
+when a peer connects are listed, not announced. A peer that disconnects
+leaves the windows and withdraws its banners. Behind a gateway that
+predates the event class, a viewer reads a peer's notices when it connects
+but not live. None of this writes to SQLite.
+
+### Budgets
+
+`agent-notice-*` in `sqlite-write-budgets.json`: three commits per notice
+(create; claim; delivered), two for create and cancel. About 62 KB of WAL
+per notice: 3.7 MB/day at the default profile bound of 60, about 0.3 MB/day
+at five. `agent-notification.property.test.ts` holds the delivery model and
+the bound oracle; `federated-agent-notifications.property.test.ts` holds the
+viewer model.
+
 ## Surface contract
 
 Desktop IPC and the messaging backend bridge expose the same operations:

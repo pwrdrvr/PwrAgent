@@ -17,6 +17,7 @@ input schema for argument details and result semantics.
 | A GitHub Actions run or GitLab pipeline with no PR, such as a tag-push release: its approval gate, a failed job, or its finish | `manage_thread_dependencies` with a `ci_run` condition. |
 | A queued resource checkout, such as CPU slots or a lab machine | `resource_checkout_wait` with the request key and a `continuation`, then end the turn. Never a sleep, a loop, or repeated `resource_checkout_status` calls. |
 | A time: "check again in two hours", "look at this tomorrow at 9" | `schedule_follow_up`. Never a polling monitor, a sleep, or a backend `/loop`. |
+| The operator, at a time: "remind me in an hour" | `notify_operator` with `delayMinutes` or `at`. It reaches the operator outside this thread and does not wake it. |
 | A long job or repeatable check that no workflow above covers | `create_monitor_delegation`. |
 
 Use `create_monitor_delegation` if the operator specifically asks for a Job

@@ -538,6 +538,16 @@ export type DesktopSpendAlertPolicy = {
   threadSpendThresholdUsd: number;
 };
 
+/** The shape of `[general.agent_notifications]`; zero turns a bound off. */
+export type DesktopAgentNotificationPolicy = {
+  maxPerThreadPerDay: number;
+  maxPerProfilePerDay: number;
+  maxScheduledPerThread: number;
+};
+
+/** A ceiling on what a bound can be set to, so a typo cannot overflow it. */
+export const MAX_AGENT_NOTIFICATION_BOUND = 100_000;
+
 export const MIN_SPEND_ALERT_THRESHOLD_USD = 0.01;
 export const MAX_SPEND_ALERT_THRESHOLD_USD = 10_000;
 
@@ -1071,6 +1081,15 @@ export type DesktopGeneralSettingsSnapshot = {
     activeTurnSpendThresholdUsd: DesktopSettingsValue<number>;
     threadSpendEnabled: DesktopSettingsValue<boolean>;
     threadSpendThresholdUsd: DesktopSettingsValue<number>;
+  };
+  /**
+   * Bounds on agents' `notify_operator` notices, in
+   * `[general.agent_notifications]`. Zero turns a bound off.
+   */
+  agentNotifications?: {
+    maxPerThreadPerDay: DesktopSettingsValue<number>;
+    maxPerProfilePerDay: DesktopSettingsValue<number>;
+    maxScheduledPerThread: DesktopSettingsValue<number>;
   };
   appearance: DesktopAppearanceSnapshot;
   /**
@@ -1984,6 +2003,7 @@ export type DesktopSettingsConfigPatch = {
     notificationsEnabled?: boolean;
     toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
+    agentNotifications?: Partial<DesktopAgentNotificationPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       darkTheme?: DesktopDarkTheme;

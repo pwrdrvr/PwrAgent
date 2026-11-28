@@ -75,6 +75,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   watch_thread_pull_request: "wake notify stop cancel list watches watching",
   manage_thread_dependencies: "wait waiting prerequisite dependency dependencies dag notify notification continue after turn completion compaction compact recovery instruction reread subscription hook CI PR remind reminder operator todo mark done blocked hold merge do not merge until finishes follow up checklist peer local_file watch existing watcher marker terminal file",
   agent_memory: "memory index notes progress lessons already reported past attempts durable",
+  notify_operator: "notify notification alert remind reminder ping tell operator user human attention toast desktop banner message later blocked approval finished done render complete scheduled at time cancel list",
   schedule_follow_up: "schedule later remind reminder wake timer time delay follow up check back again in minutes hours tomorrow sleep wait until cron loop one-shot survive restart cancel list",
   mutate_thread: "close closing archive restore rename pin lock unlock park freeze model fast priority mode settings",
   rename_current_thread: "rename name title this thread conversation self",

@@ -3,9 +3,11 @@ import { createHash } from "node:crypto";
 import {
   AGENT_FOLLOW_UP_FIRED_WINDOW_MS,
   AGENT_FOLLOW_UP_MAX_FIRED_PER_WINDOW,
+  AGENT_NOTIFICATION_WINDOW_MS,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type {
   AgentFollowUpProtection,
+  AgentNotificationLimits,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   ScheduledThreadAction,
@@ -16,6 +18,8 @@ import type {
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { PendingWakeScheduledActions } from "@pwragent/shared/contracts/thread-pending-wakes";
 import type {
+  AgentNotificationRefusal,
+  AgentNotificationUsage,
   CreateScheduledThreadActionRecord,
   ScheduledThreadActionClaim as ClaimParams,
   ScheduledThreadActionHold,
@@ -76,9 +80,16 @@ type AgentFollowUpGuard = {
   unreadable?: true;
 };
 
+/**
+ * An agent follow-up: a turn an agent scheduled. An agent's notice
+ * (`notification`) starts no turn, so the follow-up guard never counts or
+ * suspends it.
+ */
+const AGENT_FOLLOW_UP = "(origin = 'agent' AND kind <> 'notification')";
+
 /** An agent follow-up on a thread whose loop guard has tripped. */
 const SUSPENDED_AGENT_FOLLOW_UP = `(
-  origin = 'agent' AND EXISTS (
+  ` + AGENT_FOLLOW_UP + ` AND EXISTS (
     SELECT 1 FROM thread_agent_follow_up_guards AS guard
     WHERE guard.backend = scheduled_thread_actions.backend
       AND guard.thread_id = scheduled_thread_actions.thread_id
@@ -97,6 +108,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   private readonly hasLegacyPayloadColumn: boolean;
   // Payload refs are immutable. Retain only compact text, never execution inputs.
   private readonly wakePreviewCache = new Map<string, string>();
+  private readonly noticePayloadCache = new Map<string, ScheduledThreadActionPayload>();
   private suspendedAgentFollowUpThreads: Array<{ backend: ScheduledThreadAction["backend"]; threadId: string }> = [];
 
   constructor(
@@ -134,6 +146,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
       manualReleaseRequired: input.manualReleaseRequired,
       turn: input.turn,
       review: input.review,
+      notification: input.notification,
       createdAt: input.now,
       updatedAt: input.now,
     };
@@ -155,9 +168,108 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   countActiveAgentFollowUps(thread: { backend: string; threadId: string }): number {
     return (this.stateDb.raw.prepare(
       `SELECT COUNT(*) AS active FROM scheduled_thread_actions
-       WHERE backend = ? AND thread_id = ? AND origin = 'agent'
+       WHERE backend = ? AND thread_id = ? AND ` + AGENT_FOLLOW_UP + `
          AND status IN ('held', 'scheduled', 'dispatching', 'queued')`,
     ).get(thread.backend, thread.threadId) as { active: number }).active;
+  }
+
+  /**
+   * Stores an agent's notice unless an operator bound refuses it. The counts
+   * and the insert are one immediate transaction, so two owners on the
+   * profile cannot both spend the last slot.
+   */
+  createAgentNotification(
+    input: CreateScheduledThreadActionRecord,
+    limits: AgentNotificationLimits,
+  ): { action: ScheduledThreadAction } | { refused: AgentNotificationRefusal; count: number } {
+    return this.stateDb.raw.transaction(() => {
+      const usage = this.agentNotificationUsage(input, input.now);
+      if (limits.maxScheduledPerThread > 0 && input.scheduledFor > input.now
+        && usage.scheduledOnThread >= limits.maxScheduledPerThread) {
+        return { refused: "scheduled_limit" as const, count: usage.scheduledOnThread };
+      }
+      if (limits.maxPerThreadPerDay > 0 && usage.threadInWindow >= limits.maxPerThreadPerDay) {
+        return { refused: "thread_limit" as const, count: usage.threadInWindow };
+      }
+      if (limits.maxPerProfilePerDay > 0 && usage.profileInWindow >= limits.maxPerProfilePerDay) {
+        return { refused: "profile_limit" as const, count: usage.profileInWindow };
+      }
+      return { action: this.create({ ...input, kind: "notification", origin: "agent" }) };
+    }).immediate();
+  }
+
+  /**
+   * What the notice bounds count. A window counts every notice an agent
+   * created in it, cancelled ones too, so cancelling and re-creating cannot
+   * spend more than the bound.
+   */
+  agentNotificationUsage(
+    thread: { backend: string; threadId: string },
+    now: number,
+  ): AgentNotificationUsage {
+    const since = now - AGENT_NOTIFICATION_WINDOW_MS;
+    const row = this.stateDb.raw.prepare(
+      `SELECT
+         COUNT(*) AS profile_in_window,
+         COALESCE(SUM(CASE WHEN backend = ? AND thread_id = ? THEN 1 ELSE 0 END), 0) AS thread_in_window
+       FROM scheduled_thread_actions
+       WHERE kind = 'notification' AND origin = 'agent' AND created_at > ?`,
+    ).get(thread.backend, thread.threadId, since) as { profile_in_window: number; thread_in_window: number };
+    const scheduled = this.stateDb.raw.prepare(
+      `SELECT COUNT(*) AS scheduled FROM scheduled_thread_actions
+       WHERE backend = ? AND thread_id = ? AND kind = 'notification'
+         AND status IN ('held', 'scheduled', 'dispatching', 'queued')`,
+    ).get(thread.backend, thread.threadId) as { scheduled: number };
+    return {
+      threadInWindow: row.thread_in_window,
+      profileInWindow: row.profile_in_window,
+      scheduledOnThread: scheduled.scheduled,
+    };
+  }
+
+  /**
+   * Notices waiting, then notices delivered at or after `deliveredSince`,
+   * each newest first, at most `limit`, so delivered ones never crowd out
+   * the waiting ones the operator may cancel. `thread` narrows to one
+   * thread.
+   */
+  listAgentNotifications(request: {
+    deliveredSince: number;
+    limit: number;
+    thread?: { backend: string; threadId: string };
+  }): ScheduledThreadAction[] {
+    const rows = this.stateDb.raw.prepare(
+      `SELECT ` + ROW_COLUMNS + ` FROM scheduled_thread_actions
+       WHERE kind = 'notification'
+         AND (? IS NULL OR (backend = ? AND thread_id = ?))
+         AND (status IN ('held', 'scheduled', 'dispatching', 'queued')
+           OR (status = 'started' AND updated_at >= ?))
+       ORDER BY CASE WHEN status = 'started' THEN 1 ELSE 0 END, updated_at DESC, action_id DESC
+       LIMIT ?`,
+    ).all(
+      request.thread?.backend ?? null,
+      request.thread?.backend ?? null,
+      request.thread?.threadId ?? null,
+      request.deliveredSince,
+      Math.max(0, Math.floor(request.limit)),
+    ) as ScheduledThreadActionRow[];
+    return rows.flatMap((row) => {
+      try {
+        // Payload refs are immutable, so a notice's text is read from disk
+        // once, not on every snapshot each window asks for.
+        const ref = row.payload_ref;
+        let payload = ref ? this.noticePayloadCache.get(ref) : undefined;
+        if (ref && !payload) {
+          payload = this.payloadStore.read(ref, 64 * 1024);
+          if (this.noticePayloadCache.size >= 256) this.noticePayloadCache.delete(this.noticePayloadCache.keys().next().value!);
+          this.noticePayloadCache.set(ref, payload);
+        }
+        return [this.actionFromRow(row, 64 * 1024, payload)];
+      } catch {
+        // An unreadable payload drops one notice, not the list.
+        return [];
+      }
+    });
   }
 
   agentFollowUpProtection(
@@ -301,7 +413,7 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     const joined = this.stateDb.raw.prepare(
       `SELECT ` + ROW_COLUMNS + `,
          guard.suspended AS follow_ups_suspended,
-         (origin = 'agent' AND guard.suspended) AS follow_up_suspended
+         (` + AGENT_FOLLOW_UP + ` AND guard.suspended) AS follow_up_suspended
        FROM (
          SELECT EXISTS (
            SELECT 1 FROM thread_agent_follow_up_guards
@@ -648,16 +760,18 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
   ): ScheduledThreadAction | undefined {
     return this.stateDb.raw.transaction(() => {
       const row = this.stateDb.raw.prepare(
-        `SELECT backend, thread_id, origin FROM scheduled_thread_actions
+        `SELECT backend, thread_id, kind, origin FROM scheduled_thread_actions
          WHERE action_id = ? AND status IN ('held', 'scheduled')`,
       ).get(id) as {
         backend: ScheduledThreadAction["backend"];
         thread_id: string;
+        kind: ScheduledThreadAction["kind"];
         origin: ScheduledThreadActionOrigin;
       } | undefined;
       if (!row) return undefined;
       const thread = { backend: row.backend, threadId: row.thread_id };
-      const reservation = row.origin === "agent"
+      // A notice is bounded when it is created, not by the follow-up guard.
+      const reservation = row.origin === "agent" && row.kind !== "notification"
         ? this.reserveAgentFollowUp(thread, id, params.now)
         : "unchanged";
       if (reservation === undefined) return undefined;
@@ -1074,12 +1188,16 @@ export class ScheduledThreadActionStore implements ScheduledThreadActionStorage 
     }
   }
 
-  private actionFromRow(row: ScheduledThreadActionRow, maxBytes?: number): ScheduledThreadAction {
+  private actionFromRow(
+    row: ScheduledThreadActionRow,
+    maxBytes?: number,
+    payload?: ScheduledThreadActionPayload,
+  ): ScheduledThreadAction {
     if (!row.payload_ref) {
       throw new Error(`Scheduled action ${row.action_id} has no payload reference.`);
     }
     return {
-      ...this.payloadStore.read(row.payload_ref, maxBytes),
+      ...(payload ?? this.payloadStore.read(row.payload_ref, maxBytes)),
       id: row.action_id,
       backend: row.backend,
       threadId: row.thread_id,
@@ -1171,5 +1289,6 @@ function payloadFromAction(
     holdCause: action.holdCause,
     turn: action.turn,
     review: action.review,
+    notification: action.notification,
   };
 }

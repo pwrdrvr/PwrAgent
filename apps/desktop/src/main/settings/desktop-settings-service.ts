@@ -31,6 +31,10 @@ import {
   DESKTOP_MARKDOWN_RENDERING_DEFAULTS,
   DESKTOP_UI_LAYOUT_DEFAULTS,
 } from "@pwragent/shared/contracts/settings";
+import {
+  AGENT_NOTIFICATION_LIMITS_DEFAULT,
+  type AgentNotificationLimits,
+} from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { FORGE_PRODUCTS, type ForgeKind } from "@pwragent/shared/forge-product";
 import { codexAuthState } from "../codex-auth-state";
 import type {
@@ -40,6 +44,7 @@ import type {
   DesktopAppearanceTheme,
   DesktopTextSize,
   DesktopContextMoonStyle,
+  DesktopAgentNotificationPolicy,
   DesktopSpendAlertPolicy,
   DesktopToolOutputAlertPolicy,
   DesktopApplicationsSnapshot,
@@ -135,6 +140,7 @@ import {
   MAX_REPEATED_LARGE_OUTPUT_PERCENT,
   isMessagingRuntimeSecret,
   MAX_SPEND_ALERT_THRESHOLD_USD,
+  MAX_AGENT_NOTIFICATION_BOUND,
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   MIN_REPEATED_LARGE_OUTPUT_CALLS,
@@ -1224,6 +1230,9 @@ export class DesktopSettingsService {
             MAX_SPEND_ALERT_THRESHOLD_USD,
           ),
         },
+        agentNotifications: this.resolveAgentNotificationSettings(
+          config.general?.agentNotifications,
+        ),
         appearance: {
           theme: this.resolveAppearanceTheme(
             config.general?.appearance?.theme,
@@ -2364,6 +2373,32 @@ export class DesktopSettingsService {
       this.readGeneralConfig().pdfAnalysisEnabled,
       true,
     ).value;
+  }
+
+  /** The operator's bounds on agents' `notify_operator` notices. */
+  resolveAgentNotificationLimits(): AgentNotificationLimits {
+    const resolved = this.resolveAgentNotificationSettings(
+      this.readGeneralConfig().agentNotifications,
+    );
+    return {
+      maxPerThreadPerDay: resolved.maxPerThreadPerDay.value,
+      maxPerProfilePerDay: resolved.maxPerProfilePerDay.value,
+      maxScheduledPerThread: resolved.maxScheduledPerThread.value,
+    };
+  }
+
+  private resolveAgentNotificationSettings(
+    config: Partial<DesktopAgentNotificationPolicy> | undefined,
+  ): NonNullable<DesktopSettingsSnapshot["general"]["agentNotifications"]> {
+    const bound = (value: number | undefined, fallback: number): DesktopSettingsValue<number> =>
+      value !== undefined && Number.isFinite(value) && value >= 0
+        ? { value: Math.min(MAX_AGENT_NOTIFICATION_BOUND, Math.floor(value)), source: "config" }
+        : { value: fallback, source: "default" };
+    return {
+      maxPerThreadPerDay: bound(config?.maxPerThreadPerDay, AGENT_NOTIFICATION_LIMITS_DEFAULT.maxPerThreadPerDay),
+      maxPerProfilePerDay: bound(config?.maxPerProfilePerDay, AGENT_NOTIFICATION_LIMITS_DEFAULT.maxPerProfilePerDay),
+      maxScheduledPerThread: bound(config?.maxScheduledPerThread, AGENT_NOTIFICATION_LIMITS_DEFAULT.maxScheduledPerThread),
+    };
   }
 
   resolveNotificationsEnabled(): boolean {

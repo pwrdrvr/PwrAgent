@@ -255,11 +255,13 @@ export class MessagingCommandHandlers {
       );
       return;
     }
-    const response = await list({
+    const listed = await list({
       backend: binding.backend,
       federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
     });
+    // An agent's notice for the operator is no scheduled message here.
+    const response = { ...listed, actions: listed.actions.filter((action) => action.kind !== "notification") };
     const [operation, candidateId, ...remaining] = event.args;
     if (!operation) {
       const body = response.actions.length > 0
