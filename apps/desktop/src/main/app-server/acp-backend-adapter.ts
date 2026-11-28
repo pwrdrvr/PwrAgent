@@ -60,6 +60,7 @@ import {
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
 import { readAntigravityUsage } from "../acp/antigravity-usage.js";
+import { withAntigravityUsageCooldown } from "../acp/antigravity-usage-cooldown.js";
 import { pwragentToolSkipsAgentApproval } from "./acp-host-tool-approval";
 import { CALL_PWRAGENT_TOOL, readPwrAgentCallTarget } from "../agent-tools/antigravity-mcp-catalog";
 import { PlanLimitStore } from "./plan-limit-store";
@@ -393,6 +394,7 @@ export type AcpBackendAdapterOptions = {
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
   readAntigravityUsage?: typeof readAntigravityUsage;
+  antigravityUsageRoot?: string;
   resolveAntigravityUsageAccountKey?: () => string | undefined;
   /**
    * Required so no caller can silently inherit machine-wide discovery.
@@ -1689,19 +1691,17 @@ export class AcpBackendAdapter {
       this.invalidateAntigravityQuota();
       this.antigravityUsageSelection = { identity, cancellation: new AbortController() };
     }
-    if (!refresh) return;
+    if (!refresh || this.providerStatusRefreshes.has(agent.backendId)) return;
     const { signal } = this.antigravityUsageSelection.cancellation;
-    this.refreshProviderStatusInBackground(agent.backendId,
-      () => this.probeAntigravityQuota(launch, signal),
-      () => !signal.aborted);
+    this.trackProviderStatusRefresh(agent.backendId, this.refreshProviderStatus(
+      agent.backendId, () => this.probeAntigravityQuota(launch, signal), () => !signal.aborted,
+    ));
   }
 
   private invalidateAntigravityQuota(): void {
     if (!this.antigravityUsageSelection) return;
     this.antigravityUsageSelection.cancellation.abort();
     this.antigravityUsageSelection = undefined;
-    this.providerStatusRefreshAttempts.delete("acp:antigravity");
-    this.providerStatusRefreshes.delete("acp:antigravity");
     this.providerStatuses.delete("acp:antigravity");
     this.planLimits.forget("acp:antigravity");
   }
@@ -1710,11 +1710,11 @@ export class AcpBackendAdapter {
     launch: AcpLaunchDescriptor,
     signal: AbortSignal,
   ): Promise<AcpProviderStatus | undefined> {
-    const probe = Promise.resolve().then(() => {
-      if (signal.aborted) return undefined;
+    const probe = withAntigravityUsageCooldown(() => {
+      if (signal.aborted) return Promise.resolve(undefined);
       this.options.assertOwnerAdmission?.();
       return (this.options.readAntigravityUsage ?? readAntigravityUsage)(launch, signal);
-    });
+    }, this.options.antigravityUsageRoot);
     this.antigravityUsageProbes.add(probe);
     try {
       return await probe;
@@ -1743,7 +1743,10 @@ export class AcpBackendAdapter {
       return;
     }
     this.providerStatusRefreshAttempts.set(backend, now);
-    const refreshPromise = this.refreshProviderStatus(backend, read, isCurrent);
+    this.trackProviderStatusRefresh(backend, this.refreshProviderStatus(backend, read, isCurrent));
+  }
+
+  private trackProviderStatusRefresh(backend: AcpBackendId, refreshPromise: Promise<void>): void {
     this.providerStatusRefreshes.set(backend, refreshPromise);
     void refreshPromise.finally(() => {
       if (this.providerStatusRefreshes.get(backend) === refreshPromise) {

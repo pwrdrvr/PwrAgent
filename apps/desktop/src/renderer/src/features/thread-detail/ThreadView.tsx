@@ -751,6 +751,7 @@ export type ThreadViewProps = {
   bindOptimisticUserMessageToTurn?: (id: string, turnId: string) => void;
   backendError?: string;
   backends: BackendSummary[];
+  onRequestAntigravityQuota?: () => void;
   applications?: DesktopApplicationsSnapshot;
   codexFastAllowed?: boolean;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
@@ -3890,6 +3891,7 @@ export function ThreadView(props: ThreadViewProps) {
               activeTab={activeContextTab}
               backendError={props.backendError}
               backends={props.backends}
+              onRequestAntigravityQuota={props.onRequestAntigravityQuota}
               ownerBackends={peerOwnerTarget ? peerOwnerSummaries.backends : undefined}
               desktopApi={props.desktopApi}
               onOpenAutomations={props.onOpenAutomations}

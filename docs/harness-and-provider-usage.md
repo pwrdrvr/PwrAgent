@@ -22,10 +22,9 @@ When the vendor's binary makes the request, the vendor sees its own client, its 
 
 t3code was asked to remove its Antigravity usage-limit reporting. t3code read the Antigravity CLI's OAuth token from the OS keyring or an `antigravity-oauth-token` file. It then called `v1internal:retrieveUserQuotaSummary` and `v1internal:fetchAvailableModels` on `https://cloudcode-pa.googleapis.com` and `https://daily-cloudcode-pa.googleapis.com`, sending a forged `antigravity/hub/...` User-Agent. t3code removed that code on 2026-11-25 in [pingdotgg/t3code#43026](https://github.com/pingdotgg/t3code/pull/43026). Julius Marminge confirmed that the violation was calling the internal API instead of using ACP.
 
-Two paths remain allowed:
+PwrAgent runs Antigravity threads through the official ACP server (`agy acp`). Its on-demand quota reader uses the official CLI's headless `agy --print /usage` command and parses the command output. Google describes third-party headless wrapping as unsupported under consumer plans. The refresh interval controls traffic and confers no provider permission. See the [ACP guide](https://antigravity.google/docs/ide/extensions/acp) and [Google's headless CLI FAQ](https://antigravity.google/docs/faq/#can-i-use-antigravity-cli-headless-mode-in-third-party-coding-agents-or-automate-account-switching).
 
-- Driving the official `agy` ACP server (`agy acp`), which is how PwrAgent runs Antigravity threads.
-- Running `agy --print /usage`. The vendor's binary makes that request, and PwrAgent parses only its output (`apps/desktop/src/main/acp/antigravity-usage.ts`). Do not reimplement that call.
+Only a usage gesture from a visible, focused window can request this CLI read. The owning PwrAgent root allows one attempt at a time, followed by at least 15 minutes before another gesture can launch the CLI. The cooldown covers unsuccessful attempts and survives restarts and profile switches. A successful reading stays cached in the owner with its observation time. The cooldown is shared across profiles in the same root. Separate machines and separate roots have independent cooldowns.
 
 ## Every harness, not only Antigravity
 

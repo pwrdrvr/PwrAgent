@@ -9,6 +9,34 @@ import {
 } from "../useBackendSummaries";
 
 describe("useBackendSummaries", () => {
+  it("sends explicit Antigravity usage intent only from a visible, focused viewer", async () => {
+    const listBackends = vi.fn().mockResolvedValue({ fetchedAt: 1, backends: [] });
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const federationTarget = { scope: "remote", instanceId: "peer" } as const;
+    const { result, unmount } = renderHook(() =>
+      useBackendSummaries({ listBackends }, { federationTarget, pollRateLimits: true }));
+    try {
+      await act(async () => {});
+      listBackends.mockClear();
+      await act(async () => { result.current.requestAntigravityQuota(); });
+      visibility.mockReturnValue("visible");
+      focus.mockReturnValue(false);
+      await act(async () => { result.current.requestAntigravityQuota(); });
+      expect(listBackends).not.toHaveBeenCalled();
+
+      focus.mockReturnValue(true);
+      await act(async () => { result.current.requestAntigravityQuota(); });
+      expect(listBackends).toHaveBeenCalledExactlyOnceWith({
+        includeUnavailable: true, refreshAntigravityQuota: true, federationTarget,
+      });
+    } finally {
+      unmount();
+      visibility.mockRestore();
+      focus.mockRestore();
+    }
+  });
+
   it("requests fresh quotas and account metadata when the provider tab opens", async () => {
     const listBackends = vi.fn().mockResolvedValue({ fetchedAt: 1, backends: [] });
     const desktopApi = { listBackends };

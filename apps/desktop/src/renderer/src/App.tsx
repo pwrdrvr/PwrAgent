@@ -2015,6 +2015,16 @@ function DesktopAppShell(props: {
   const backendSummaries = selectedPeerCatalog
     ? selectedPeerBackendSummaries
     : windowBackendSummaries;
+  const toggleSidebar = useEventCallback(() => {
+    if (sidebarHidden) windowBackendSummaries.requestAntigravityQuota();
+    setSidebarHiddenPersisted(!sidebarHidden);
+  });
+  // Bind once per window so each layout chord runs exactly one action.
+  useLayoutChordHotkeys({
+    onToggleSidebar: toggleSidebar,
+    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
+  });
   const remoteSidebarBackends = useSidebarOwnerBackends(desktopApi, navigation.threads, {
     enabled: normalAppEnabled,
     windowInstanceId: windowFederationTarget?.instanceId,
@@ -4239,6 +4249,7 @@ function DesktopAppShell(props: {
         bindOptimisticUserMessageToTurn: session.bindOptimisticUserMessageToTurn,
         backendError: backendSummaries.error,
         backends: backendSummaries.backends,
+        onRequestAntigravityQuota: backendSummaries.requestAntigravityQuota,
         applications,
         codexFastAllowed:
           settings.snapshot?.models?.codex.allowFast?.value ?? true,
@@ -4430,7 +4441,7 @@ function DesktopAppShell(props: {
             : launchpadConnectionsDock,
         onLaunchpadConnectionsDockChange: setLaunchpadConnectionsDockPersisted,
         sidebarHidden,
-        onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+        onToggleSidebar: toggleSidebar,
         mastheadActions,
         historyNav,
         starMap: starMapControls,
@@ -4653,7 +4664,7 @@ function DesktopAppShell(props: {
           layout={{
             sidebarOpen: !sidebarHidden,
             railOpen: contextRailPinned,
-            onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+            onToggleSidebar: toggleSidebar,
             onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
           }}
           starMap={starMapControls}
@@ -4698,6 +4709,7 @@ function DesktopAppShell(props: {
             backends={windowBackendSummaries.backends}
             remoteBackends={remoteSidebarBackends}
             onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
+            onRequestAntigravityQuota={windowBackendSummaries.requestAntigravityQuota}
             browseMode={navigation.browseMode}
             attentionScope={navigation.attentionScope}
             onAttentionScopeChange={navigation.setAttentionScope}
@@ -4994,7 +5006,7 @@ function DesktopAppShell(props: {
                 layout={{
                   sidebarOpen: !sidebarHidden,
                   railOpen: contextRailPinned,
-                  onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+                  onToggleSidebar: toggleSidebar,
                   onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
                 }}
                 masthead={mastheadActions}
@@ -5083,7 +5095,7 @@ function DesktopAppShell(props: {
                   layout={{
                     sidebarOpen: !sidebarHidden,
                     railOpen: contextRailPinned,
-                    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+                    onToggleSidebar: toggleSidebar,
                     onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
                   }}
                   masthead={mastheadActions}
@@ -5494,15 +5506,6 @@ function useShellLayout(settings: DesktopSettingsState) {
     },
     [writeConfig],
   );
-  // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
-  // ⌘⌥B/⌃⌥B rail, ⇧⌘B/⇧⌃B project index). Bound once here — never per
-  // PanelToggleButtons chip — so it fires exactly once regardless of how many
-  // chips are mounted.
-  useLayoutChordHotkeys({
-    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
-  });
   // Called once per drag and once per arrow-key run, on release.
   const setProjectIndexWidthPersisted = useCallback(
     (next: number | null) => {

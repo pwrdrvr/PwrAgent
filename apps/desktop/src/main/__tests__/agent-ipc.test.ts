@@ -43,6 +43,7 @@ import type { ThreadTurnQueueSubmissionResult } from "@pwragent/owner-core/threa
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const invalidateExactOwner = vi.hoisted(() => vi.fn());
 const send = vi.fn();
+const windowForSender = vi.fn();
 const mockAppServerLog = vi.hoisted(() => ({
   debug: vi.fn(),
   error: vi.fn(),
@@ -442,6 +443,7 @@ const federationMock = vi.hoisted(() => {
 
 vi.mock("electron", () => ({
   BrowserWindow: {
+    fromWebContents: (contents: unknown) => windowForSender(contents),
     getAllWindows: () => [
       {
         isDestroyed: () => false,
@@ -506,6 +508,7 @@ describe("agent ipc", () => {
   beforeEach(() => {
     handlers.clear();
     send.mockReset();
+    windowForSender.mockReset();
     mockAppServerLog.debug.mockClear();
     mockAppServerLog.error.mockClear();
     mockAppServerLog.info.mockClear();
@@ -1244,6 +1247,29 @@ describe("agent ipc", () => {
     });
     expect(registry.listBackends).not.toHaveBeenCalled();
     disposeAgentIpcHandlers();
+  });
+
+  it("only forwards Antigravity usage intent from a visible focused window to the selected owner", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = createAgentIpcHarness();
+    const { BACKEND_LIST_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote", instanceId: "client_one" } as const;
+    const sender = {};
+    const request = { federationTarget, refreshAntigravityQuota: true };
+    registerAgentIpcHandlers();
+    try {
+      for (const [focused, visible] of [[false, true], [true, false], [true, true]]) {
+        windowForSender.mockReturnValue({ isFocused: () => focused, isVisible: () => visible });
+        await handlers.get(BACKEND_LIST_CHANNEL)?.({ sender }, request);
+        expect(federationMock.remoteBackend.listBackends).toHaveBeenLastCalledWith({
+          refreshAntigravityQuota: focused && visible ? true : undefined,
+        });
+      }
+      expect(windowForSender).toHaveBeenCalledWith(sender);
+      expect(federationMock.remoteBackend.listBackends).toHaveBeenCalledTimes(3);
+      expect(registry.listBackends).not.toHaveBeenCalled();
+    } finally {
+      disposeAgentIpcHandlers();
+    }
   });
 
   it("refuses to apply this instance's model migration to a remote thread", async () => {

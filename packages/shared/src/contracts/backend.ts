@@ -416,8 +416,10 @@ export type BackendSummary = {
 };
 
 export type ListBackendsRequest = {
-  /** Refresh account quotas for already discovered providers that support it. */
+  /** Refresh quotas that support background reads. */
   refreshRateLimits?: boolean;
+  /** A visible, focused viewer requested Antigravity usage. */
+  refreshAntigravityQuota?: true;
   includeUnavailable?: boolean;
   /**
    * Re-read model capabilities before describing providers. A backend id

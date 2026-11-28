@@ -364,6 +364,7 @@ type SidebarProps = {
   runtimeIdentity?: RuntimeIdentity;
   activeProfile?: string;
   onRefreshRateLimits?: () => void;
+  onRequestAntigravityQuota?: () => void;
   automationsActive?: boolean;
   automationsSchedulingStatus?: AutomationSchedulingStatus;
   profiles?: DesktopPwrAgentProfileSummary[];
@@ -4106,6 +4107,7 @@ function SidebarContent(props: SidebarProps) {
               menuOpen={profileMenuVisible}
               tooltipText={profileTooltip}
               onRefresh={props.onRefreshRateLimits}
+              onRequestAntigravityQuota={props.onRequestAntigravityQuota}
               onToggle={(event) => {
                 // Stopped, so the other menus' outside-click listeners never
                 // see this click. Close them here instead.
@@ -5707,6 +5709,7 @@ function ProfileIdentityButton(props: {
   label: string;
   menuOpen: boolean;
   onRefresh?: () => void;
+  onRequestAntigravityQuota?: () => void;
   tooltipText?: string;
   onToggle: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }) {
@@ -5738,7 +5741,10 @@ function ProfileIdentityButton(props: {
           props.onToggle(event);
         }}
         onFocus={(event) => showTooltip(event.currentTarget)}
-        onMouseEnter={(event) => showTooltip(event.currentTarget)}
+        onMouseEnter={(event) => {
+          props.onRequestAntigravityQuota?.();
+          showTooltip(event.currentTarget);
+        }}
         onMouseLeave={tooltip.hide}
       >
         <span className="runtime-identity__text">{props.label}</span>

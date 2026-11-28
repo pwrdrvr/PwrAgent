@@ -12,6 +12,7 @@ type BackendSummaryData = {
 
 type BackendSummaryState = BackendSummaryData & {
   refreshRateLimits: () => Promise<BackendSummary[]>;
+  requestAntigravityQuota: () => void;
   refreshAcpAgents: () => Promise<BackendSummary[]>;
 };
 
@@ -47,7 +48,10 @@ export function useBackendSummaries(
   // The shown list as JSON, kept so each response is serialized only once.
   const shownJsonRef = useRef<string | undefined>(undefined);
 
-  const readSummaries = useCallback(async (refreshRateLimits = false): Promise<BackendSummary[]> => {
+  const readSummaries = useCallback(async (
+    refreshRateLimits = false,
+    refreshAntigravityQuota = false,
+  ): Promise<BackendSummary[]> => {
     if (!enabled) {
       setState({
         backends: [],
@@ -74,6 +78,7 @@ export function useBackendSummaries(
       const response = await desktopApi.listBackends({
         includeUnavailable: true,
         ...(refreshRateLimits ? { refreshRateLimits: true } : {}),
+        ...(refreshAntigravityQuota ? { refreshAntigravityQuota: true } : {}),
         ...(federationTarget ? { federationTarget } : {}),
       });
       const applied = appliedRef.current;
@@ -116,7 +121,7 @@ export function useBackendSummaries(
         return stateRef.current.backends;
       }
       setState({
-        backends: refreshRateLimits ? stateRef.current.backends : [],
+        backends: refreshRateLimits || refreshAntigravityQuota ? stateRef.current.backends : [],
         error: error instanceof Error ? error.message : String(error),
         loaded: true,
       });
@@ -129,6 +134,10 @@ export function useBackendSummaries(
     () => readSummaries(true),
     [readSummaries],
   );
+  const requestAntigravityQuota = useCallback((): void => {
+    if (!enabled || suspended || document.visibilityState !== "visible" || !document.hasFocus()) return;
+    void readSummaries(false, true);
+  }, [enabled, readSummaries, suspended]);
 
   useEffect(() => {
     if (!enabled || suspended || !options.pollRateLimits) return;
@@ -231,6 +240,7 @@ export function useBackendSummaries(
   return {
     ...state,
     refreshRateLimits,
+    requestAntigravityQuota,
     refreshAcpAgents,
   };
 }
