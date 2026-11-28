@@ -95,13 +95,32 @@ export const ProjectHeaderCardHost = forwardRef<
   // worth hearing, so the trigger names the card as its description while
   // it is up. Set here, not by each list, because only this host knows when
   // the card is visible and the lists must not re-render for it.
+  const [trigger, setTrigger] = useState<HTMLElement | null>(null);
+  // The same trigger, read by the bridge: another header is a swap (`showsFor`).
   const triggerRef = useRef<HTMLElement | null>(null);
+  bridgeCardRef.current.showsFor = (candidate) => triggerRef.current === candidate;
+  const aboutTrigger = (target: HTMLElement): void => {
+    triggerRef.current = target;
+    setTrigger(target);
+  };
   useEffect(() => {
-    const trigger = triggerRef.current;
     if (!visible || !trigger) return;
     trigger.setAttribute("aria-describedby", tooltipId);
     return () => trigger.removeAttribute("aria-describedby");
-  }, [tooltipId, visible]);
+  }, [tooltipId, trigger, visible]);
+  // A move to another header while the card is up waits here, not in the
+  // tooltip's delay, which would re-anchor the visible card at once.
+  const swapTimerRef = useRef<number | undefined>(undefined);
+  const cancelSwap = (): void => {
+    window.clearTimeout(swapTimerRef.current);
+    swapTimerRef.current = undefined;
+  };
+  useEffect(() => {
+    if (visible) return;
+    window.clearTimeout(swapTimerRef.current);
+    swapTimerRef.current = undefined;
+  }, [visible]);
+  useEffect(() => () => window.clearTimeout(swapTimerRef.current), []);
 
   useEffect(() => {
     const card = bridgeCardRef.current;
@@ -116,7 +135,7 @@ export const ProjectHeaderCardHost = forwardRef<
   useImperativeHandle(ref, () => ({
     applies: (directory) => projectHeaderCardApplies(directory, optionsRef.current),
     enter: (target, directory) => {
-      triggerRef.current = target;
+      cancelSwap();
       const content = () => (
         <ProjectHeaderCard
           directory={directory}
@@ -124,24 +143,43 @@ export const ProjectHeaderCardHost = forwardRef<
           onDone={hide}
         />
       );
-      const wait = sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, target, PROJECT_CARD_HOVER_DELAY_MS);
+      const card = bridgeCardRef.current;
+      const wait = sidebarPrCardBridge.enterTrigger(card, target, PROJECT_CARD_HOVER_DELAY_MS);
       if (wait === 0) {
+        aboutTrigger(target);
         show(target, content());
         return;
       }
+      if (visibleRef.current) {
+        // Up for another header: it stays there until the pointer rests here.
+        swapTimerRef.current = window.setTimeout(() => {
+          swapTimerRef.current = undefined;
+          if (!target.isConnected || !visibleRef.current) return;
+          aboutTrigger(target);
+          show(target, content());
+          sidebarPrCardBridge.keep(card);
+        }, wait);
+        return;
+      }
       showAfterDelay(target, () => {
-        sidebarPrCardBridge.takeOver(bridgeCardRef.current);
+        sidebarPrCardBridge.takeOver(card);
+        aboutTrigger(target);
         return content();
       }, wait);
     },
     leave: (target) => {
+      cancelSwap();
       if (visibleRef.current && cardIsBesideSidebar(getElement(), target)) {
         sidebarPrCardBridge.leaveTrigger(bridgeCardRef.current);
         return;
       }
       hide();
     },
-    hide,
+    hide: () => {
+      cancelSwap();
+      hide();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [getElement, hide, show, showAfterDelay]);
 
   return <>{tooltip.tooltipNode}</>;

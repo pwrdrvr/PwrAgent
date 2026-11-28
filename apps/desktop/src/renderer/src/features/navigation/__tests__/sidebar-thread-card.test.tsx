@@ -10,6 +10,7 @@ import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
 } from "../../../lib/native-drag-interaction";
+import { HOVER_CARD_SWAP_REST_MS } from "../../../lib/hover-card-bridge";
 import { NavigationContextWindows } from "../../../lib/navigation-context-windows";
 import { POINTER_AIM_SETTLE_MS } from "../../../lib/pointer-aim";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
@@ -179,6 +180,12 @@ function move(from: Element, to: Element): void {
   fireEvent.mouseOver(to, { relatedTarget: from });
 }
 
+/** To another row, resting there long enough for the card to follow. */
+function moveAndRest(from: Element, to: Element): void {
+  move(from, to);
+  act(() => vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS));
+}
+
 function card(): HTMLElement | null {
   return document.querySelector<HTMLElement>(".sidebar-thread-card");
 }
@@ -273,13 +280,15 @@ describe("sidebar thread card", () => {
 
   // Oracle: the card is enterable. From a row, the pointer may cross the
   // row's own chips and any number of the rows below on its way out of the
-  // sidebar; each row it crosses swaps the card at once, and the bridge
-  // across the gap then lands on the card, which stays.
+  // sidebar. The card stays up throughout and moves to a row only once the
+  // pointer has rested there for the swap rest; the bridge across the gap
+  // then lands on the card, which stays.
   it("stays open across the next rows, the row's own PR chip, and the gap", () => {
     fc.assert(fc.property(
       fc.array(fc.integer({ min: 1, max: 3 }), { maxLength: 3 }),
       fc.boolean(),
-      fc.array(fc.integer({ min: 0, max: 60 }), { minLength: 8, maxLength: 8 }),
+      // Under the PR chip's own hover delay, so crossing it never opens its card.
+      fc.array(fc.integer({ min: 0, max: TOOLTIP_HOVER_DELAY_MS - 50 }), { minLength: 8, maxLength: 8 }),
       (crossed, viaChip, dwell) => {
         mockSidebarLayout();
         const ids = ["a", "b", "c", "d"];
@@ -291,16 +300,25 @@ describe("sidebar thread card", () => {
           const hops: Element[] = [rowTitle("a")];
           if (viaChip) hops.push(row("a").querySelector("[data-pr-chip]")!, rowTitle("a"));
           for (const index of crossed) hops.push(rowTitle(ids[index]!));
-          const last = hops.at(-1)!.closest(".thread-row-shell")!.getAttribute("data-thread-key")!;
           const shown = card()!;
           hops.push(shown.querySelector(".tooltip-hover-bridge")!, shown);
+          // The row the card is about: it follows the pointer to a row only
+          // after the pointer has stayed on that row for the swap rest.
+          let about = "codex:a";
+          let onRow: string | null = "codex:a";
+          let restedFor = 0;
           for (let index = 1; index < hops.length; index += 1) {
+            const next = hops[index]!.closest(".thread-row-shell")?.getAttribute("data-thread-key") ?? null;
+            if (next !== onRow) restedFor = 0;
+            onRow = next;
             move(hops[index - 1]!, hops[index]!);
             act(() => vi.advanceTimersByTime(dwell[index - 1]!));
+            restedFor += dwell[index - 1]!;
+            if (onRow && restedFor >= HOVER_CARD_SWAP_REST_MS) about = onRow;
             expect(card()).not.toBeNull();
           }
           act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS * 2));
-          expect(card()).toHaveTextContent(`Thread ${last.replace("codex:", "")}`);
+          expect(card()).toHaveTextContent(`Thread ${about.replace("codex:", "")}`);
           // Only one sidebar card: crossing the PR chip did not open its own.
           expect(document.querySelectorAll(".pr-status-card")).toHaveLength(1);
         } finally {
@@ -317,8 +335,11 @@ describe("sidebar thread card", () => {
         // Found without `HoverCardBridge.holds`: crossing the row's own PR
         // chip swapped the thread card for the PR card on the way to it.
         [[], true, [0, 0, 0, 0, 0, 0, 0, 0]],
-        // Every row below, each dwelt on, then the gap.
+        // Every row below, each crossed under the swap rest, then the gap:
+        // the card stays on row a.
         [[1, 2, 3], false, [60, 60, 60, 60, 60, 60, 60, 60]],
+        // Every row below, each rested on: the card follows to the last.
+        [[1, 2, 3], false, [150, 150, 150, 150, 150, 150, 150, 150]],
         // The chip, then the next row, with no dwell anywhere.
         [[1], true, [0, 0, 0, 0, 0, 0, 0, 0]],
       ],
@@ -366,12 +387,16 @@ describe("sidebar thread card", () => {
       expect(card()).toHaveTextContent("Thread b");
     });
 
-    it("gives the card to the crossed row at once when the pointer turns away", () => {
+    it("gives the card to the crossed row after the swap rest when the pointer turns away", () => {
       renderSidebar({ threads: [thread("a", { updatedAt: 3 }), thread("b", { updatedAt: 2 })] });
       hoverOpen("a");
       startAt();
       cross(rowTitle("a"), rowTitle("b"), 200, 200);
       fireEvent.mouseMove(rowTitle("b"), { clientX: 60, clientY: 210 });
+      // Turning away is not resting: the row waits like any other.
+      act(() => vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS - 1));
+      expect(card()).toHaveTextContent("Thread a");
+      act(() => vi.advanceTimersByTime(1));
       expect(card()).toHaveTextContent("Thread b");
     });
   });
@@ -929,7 +954,10 @@ describe("sidebar thread card", () => {
     move(document.querySelector(".sidebar")!, first);
     act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
     expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
-    await act(async () => move(first, screen.getByText("Thread b")));
+    await act(async () => {
+      move(first, screen.getByText("Thread b"));
+      vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS);
+    });
     await act(async () => resolveLab({ applications: APPLICATIONS }));
     expect(card()).toHaveTextContent("build-mini");
     expect(within(card()!).queryByRole("button", { name: /Open terminal|Open in/, hidden: true })).toBeNull();
@@ -953,13 +981,16 @@ describe("sidebar thread card", () => {
     const second = screen.getByText("Thread b");
     move(document.querySelector(".sidebar")!, first);
     act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
-    move(first, second);
+    moveAndRest(first, second);
     expect(readApplications).toHaveBeenCalledTimes(1);
     await act(async () => rejectRead(new Error("Peer disconnected")));
     expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
     view.rerender(sidebarElement({ threads: [{ ...peers[0]!, title: "Thread a updated" }, peers[1]!] }));
     expect(readApplications).toHaveBeenCalledTimes(1);
-    await act(async () => move(second, screen.getByText("Thread a updated")));
+    await act(async () => {
+      move(second, screen.getByText("Thread a updated"));
+      vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS);
+    });
     expect(readApplications).toHaveBeenCalledTimes(2);
     fireEvent.click(within(card()!).getByRole("button", { name: "Open terminal on lab-mini", hidden: true }));
     expect(openApplication).toHaveBeenCalledWith({
@@ -986,18 +1017,30 @@ describe("sidebar thread card", () => {
     const d = screen.getByText("Thread d");
     move(document.querySelector(".sidebar")!, a);
     await act(async () => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
-    await act(async () => move(a, c));
+    await act(async () => {
+      move(a, c);
+      vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS);
+    });
     expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
-    await act(async () => move(c, d));
+    await act(async () => {
+      move(c, d);
+      vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS);
+    });
     expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
-    await act(async () => move(d, b));
+    await act(async () => {
+      move(d, b);
+      vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS);
+    });
     await act(async () => confirm(true));
     expect(within(card()!).getByRole("button", { name: "Open terminal on lab-mini", hidden: true })).toBeInTheDocument();
     const check = (instanceId: string, targetPath: string) => [{ federationTarget: { scope: "remote", instanceId }, targetPath }];
     expect(applicationWorkspaceExists.mock.calls).toEqual([
       check("lab", "/wt/mathathon"), check("build", "/wt/mathathon"), check("lab", "/wt/other"),
     ]);
-    await act(async () => move(b, a));
+    await act(async () => {
+      move(b, a);
+      vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS);
+    });
     expect(within(card()!).queryByRole("button", { name: /Open terminal/, hidden: true })).toBeNull();
     expect(applicationWorkspaceExists).toHaveBeenCalledTimes(4);
   });

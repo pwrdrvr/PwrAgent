@@ -73,8 +73,12 @@ says when to read this document. Relative links were updated for this location.
     (a stack tag, a ✕, another thread row) waits its full hover delay, so a
     pass never swaps. Otherwise it swaps after `HOVER_CARD_SWAP_REST_MS` of
     rest, so a sweep down the chips stays quick without letting a slide
-    across one steal the card. A card that falls back over the rows does not
-    bridge. Its buttons stay out of the Tab order and the chip's description;
+    across one steal the card. A card shared by many triggers (every thread
+    row, every project header) passes `showsFor`, so another of its triggers
+    is a swap too. While the pointer is on any of its triggers the card
+    stays put; it moves only once the pointer rests on one. The host waits on
+    its own timer, because the tooltip's delay re-anchors a visible card at
+    once. A card that falls back over the rows does not bridge. Its buttons stay out of the Tab order and the chip's description;
     the chip keeps Delete and its menu for the keyboard. The card stops React
     propagation of presses, since its portal sits in the row's React tree.
     A card that opens next to its trigger over other hover targets also

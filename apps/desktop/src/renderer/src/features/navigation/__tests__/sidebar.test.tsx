@@ -43,6 +43,7 @@ import type {
 } from "../../chrome/useFederationProjectStates";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_GAP } from "../../../lib/tooltip-placement";
+import { HOVER_CARD_SWAP_REST_MS } from "../../../lib/hover-card-bridge";
 import { PROJECT_CARD_HOVER_DELAY_MS } from "../ProjectHeaderCard";
 import { TOP_DOCK_CLASS, TOP_DOCK_RESERVE_PROPERTY, topDockReserve } from "../selected-thread-dock-reserve";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
@@ -11024,9 +11025,13 @@ describe("Sidebar directory pinning", () => {
                 expect(laneCard).toHaveTextContent("ProjectB");
                 expect(laneCard?.style.left).toBe(`${laneWidth + TOOLTIP_GAP}px`);
 
-                // The bridge swaps to the header's card at once.
+                // The bridge swaps to the header's card once the pointer rests there.
                 fireEvent.mouseLeave(laneName);
                 fireEvent.mouseEnter(getDirectorySummary(/ProjectA/i));
+                expect(document.querySelector<HTMLElement>(".project-card")).toHaveTextContent("ProjectB");
+                act(() => {
+                  vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS);
+                });
                 const headerCard = document.querySelector<HTMLElement>(".project-card");
                 expect(headerCard).toHaveTextContent("ProjectA");
                 expect(headerCard?.style.left).toBe(`${sidebarRight + TOOLTIP_GAP}px`);
