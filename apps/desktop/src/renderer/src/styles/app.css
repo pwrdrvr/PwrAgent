@@ -11851,7 +11851,12 @@ button.stack-display__thread,
 
 .directory-row__pin-drop-boundary {
   position: relative;
-  z-index: 7;
+  /* Above the rows its append slot reaches up over (and their sub-thread
+     toggles, z 4, which come before it), below the sticky bands that cover
+     rows: the Unpinned divider (z 5) and the project header (z 6). At z 7
+     the Keep at top slot and the append line drew over the header and the
+     stuck divider while the lane scrolled under a held card. */
+  z-index: 4;
   height: 0;
   flex: 0 0 auto;
   /* The list contributes a 2px gap on both sides of this flex item. Cancel
