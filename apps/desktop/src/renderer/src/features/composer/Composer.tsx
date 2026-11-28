@@ -17835,6 +17835,7 @@ function useComposerController(props: ComposerProps) {
   }
 
   function renderComposerView(): ReactNode {
+    const reviewFromTodo = isReviewComposerOpen && Boolean(reviewConfig?.reviewTodo);
     return (
       <>
         <form
@@ -17930,9 +17931,9 @@ function useComposerController(props: ComposerProps) {
         <div
           className={[
             "composer__box",
-            isReviewComposerOpen && reviewConfig?.reviewTodo ? "composer__box--review-from-todo" : "",
+            reviewFromTodo ? "composer__box--review-from-todo" : "",
             // Two names for one animation, so each arrival restarts it.
-            isReviewComposerOpen && reviewConfig?.reviewTodo && reviewPanelArrival > 0
+            reviewFromTodo && reviewPanelArrival > 0
               ? `is-arriving-${reviewPanelArrival % 2 === 0 ? "even" : "odd"}`
               : "",
           ].filter(Boolean).join(" ")}
