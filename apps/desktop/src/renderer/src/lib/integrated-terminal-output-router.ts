@@ -95,8 +95,11 @@ function remove(router: Router, sessionId: string | undefined, listener: OutputL
 }
 
 function dispatch(router: Router, event: IntegratedTerminalOutputEvent): void {
-  const listeners = router.bySession.get(event.sessionId);
-  // Copies: a listener may close its pane, or re-key itself, mid-dispatch.
-  if (listeners) for (const listener of [...listeners]) listener(event);
-  if (router.unrouted.size) for (const listener of [...router.unrouted]) listener(event);
+  // Both copies are taken before any listener runs: a listener may close its
+  // pane, or move a pane between the two sets, mid-dispatch.
+  const listeners = [
+    ...(router.bySession.get(event.sessionId) ?? []),
+    ...router.unrouted,
+  ];
+  for (const listener of listeners) listener(event);
 }

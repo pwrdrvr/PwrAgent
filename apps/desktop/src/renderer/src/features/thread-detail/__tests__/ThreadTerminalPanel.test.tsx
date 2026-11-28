@@ -245,16 +245,47 @@ describe("ThreadTerminalPanel", () => {
       pointer(grip, "pointerdown", 300);
       pointer(grip, "pointermove", 360);
       expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 430);
+      // Back above the start: the panel cannot paint taller, so the
+      // remembered height stands.
       pointer(grip, "pointermove", 260);
-      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 530);
+      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 560);
     });
 
-    it("steps from the painted height with the arrow keys", () => {
+    it("steps down from the painted height with the arrow keys", () => {
       const { terminals, grip } = renderShrunkPanel();
       fireEvent.keyDown(grip, { key: "ArrowDown" });
       expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 474);
+    });
+
+    // Starting from the painted height must not lower the remembered one:
+    // a press with no movement, or ArrowUp, set 490 or 506 here and the
+    // terminal came back short once the window grew.
+    it("keeps the remembered height when pressed or asked to grow", () => {
+      const { terminals, grip } = renderShrunkPanel();
+      pointer(grip, "pointerdown", 300);
+      pointer(grip, "pointermove", 300);
+      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 560);
+      pointer(grip, "pointermove", 280);
+      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 560);
       fireEvent.keyDown(grip, { key: "ArrowUp" });
-      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 506);
+      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 560);
+    });
+
+    it("reports the painted height to assistive technology", () => {
+      class ImmediateResizeObserver {
+        constructor(private readonly callback: () => void) {}
+        observe() { this.callback(); }
+        disconnect() {}
+      }
+      vi.stubGlobal("ResizeObserver", ImmediateResizeObserver);
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ height: 490 } as DOMRect);
+      try {
+        renderPanel({ ...controller("a"), heightByThread: { "codex:thread-a": 560 } }, [pane("a")]);
+        expect(screen.getByRole("separator", { name: "Resize terminal" })).toHaveAttribute("aria-valuenow", "490");
+      } finally {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
     });
   });
 });

@@ -943,32 +943,36 @@ describe("IntegratedTerminal", () => {
     // density or text size change.
     const root = document.documentElement;
     root.setAttribute("data-color-theme", "blue-dark");
-    render(<IntegratedTerminal desktopApi={terminalApiStub()} threadKey="codex:thread-a" height={260}
-      onClose={() => undefined} onExit={() => undefined} />);
-    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
-    const options = xtermState.instances[0]!.options as { theme?: unknown };
-    let themeWrites = 0;
-    let theme = options.theme;
-    Object.defineProperty(options, "theme", {
-      configurable: true,
-      get: () => theme,
-      set: (next) => { themeWrites += 1; theme = next; },
-    });
+    try {
+      render(<IntegratedTerminal desktopApi={terminalApiStub()} threadKey="codex:thread-a" height={260}
+        onClose={() => undefined} onExit={() => undefined} />);
+      await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+      const options = xtermState.instances[0]!.options as { theme?: unknown };
+      let themeWrites = 0;
+      let theme = options.theme;
+      Object.defineProperty(options, "theme", {
+        configurable: true,
+        get: () => theme,
+        set: (next) => { themeWrites += 1; theme = next; },
+      });
 
-    await act(async () => {
-      root.setAttribute("data-color-theme", "blue-dark");
-      root.setAttribute("data-density", "compact");
-      await Promise.resolve();
-    });
-    expect(themeWrites).toBe(0);
+      await act(async () => {
+        root.setAttribute("data-color-theme", "blue-dark");
+        root.setAttribute("data-density", "compact");
+        await Promise.resolve();
+      });
+      expect(themeWrites).toBe(0);
 
-    await act(async () => {
-      root.setAttribute("data-color-theme", "gray-dark");
-      await Promise.resolve();
-    });
-    expect(themeWrites).toBe(1);
-    root.removeAttribute("data-color-theme");
-    root.removeAttribute("data-density");
+      await act(async () => {
+        root.setAttribute("data-color-theme", "gray-dark");
+        await Promise.resolve();
+      });
+      expect(themeWrites).toBe(1);
+    } finally {
+      // Later tests read the palette off these attributes.
+      root.removeAttribute("data-color-theme");
+      root.removeAttribute("data-density");
+    }
   });
 });
 
