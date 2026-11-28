@@ -3894,6 +3894,16 @@ class DesktopAppServerService {
     });
   }
 
+  async listFactoryProjects() {
+    const projects = await this.getOverlayStore().listDirectoryLaunchpads();
+    return projects.flatMap((project) =>
+      project.directoryKind === "directory" && project.registeredAt !== undefined
+        && project.directoryPath && project.federationTarget?.scope !== "remote"
+        ? [{ key: project.directoryKey, label: project.directoryLabel, path: project.directoryPath }]
+        : [],
+    );
+  }
+
   getForgeCiClient(): ForgeCiClient {
     this.forgeCiClient ??= new ForgeCiClient({
       gitlab: this.getPrFetcher().gitlab,

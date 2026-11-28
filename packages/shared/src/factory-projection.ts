@@ -3,6 +3,12 @@ import type { FactoryWorkItem } from "./factory-work-item";
 /** Read-only inventory and evidence for one operator-selected local project. */
 export const FACTORY_PROJECT_PAGE_LIMIT = 25;
 
+export interface FactoryProjectOption {
+  key: string;
+  label: string;
+  path: string;
+}
+
 export interface FactoryProjectReadRequest {
   /** Exact registered directory key from this owner's project navigation. */
   projectKey: string;

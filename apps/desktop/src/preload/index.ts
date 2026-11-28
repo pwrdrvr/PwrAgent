@@ -119,8 +119,11 @@ import {
   type OpenVoiceManagerResponse,
 } from "../shared/native-voice";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
-import { FACTORY_PROJECT_READ_CHANNEL, USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
-import type { FactoryProjectProjection, FactoryProjectReadRequest } from "@pwragent/shared/factory-projection";
+import {
+  FACTORY_OPEN_THREAD_CHANNEL, FACTORY_OPEN_WINDOW_CHANNEL, FACTORY_PROJECT_READ_CHANNEL,
+  FACTORY_PROJECTS_CHANNEL, USAGE_ACTIVITY_READ_CHANNEL,
+} from "../shared/ipc";
+import type { FactoryProjectOption, FactoryProjectProjection, FactoryProjectReadRequest } from "@pwragent/shared/factory-projection";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import {
   USAGE_ACTIVITY_OPEN_THREAD_CHANNEL,
@@ -2797,6 +2800,9 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(USAGE_ACTIVITY_READ_CHANNEL, request),
   readFactoryProject: async (request: FactoryProjectReadRequest): Promise<FactoryProjectProjection> =>
     await ipcRenderer.invoke(FACTORY_PROJECT_READ_CHANNEL, request),
+  listFactoryProjects: (): Promise<FactoryProjectOption[]> => ipcRenderer.invoke(FACTORY_PROJECTS_CHANNEL),
+  openFactoryWindow: (): Promise<void> => ipcRenderer.invoke(FACTORY_OPEN_WINDOW_CHANNEL),
+  openFactoryThread: (reference: string): Promise<void> => ipcRenderer.invoke(FACTORY_OPEN_THREAD_CHANNEL, reference),
   readThreadFamilyPricing: async (request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> =>
     await ipcRenderer.invoke(THREAD_FAMILY_PRICING_READ_CHANNEL, request),
   analyzeUsageActivity: async (request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>

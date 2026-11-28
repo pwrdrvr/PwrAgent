@@ -1101,6 +1101,9 @@ export const NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL = "navigation:release-att
 
 export const USAGE_ACTIVITY_READ_CHANNEL = "usage-activity:readUsageActivity";
 export const FACTORY_PROJECT_READ_CHANNEL = "factory:readProject";
+export const FACTORY_PROJECTS_CHANNEL = "factory:projects";
+export const FACTORY_OPEN_WINDOW_CHANNEL = "factory:openWindow";
+export const FACTORY_OPEN_THREAD_CHANNEL = "factory:openThread";
 
 /** Stored pricing totals for a thread and every sub-thread under it. */
 export const THREAD_FAMILY_PRICING_READ_CHANNEL = "pricing:readThreadFamilyPricing";

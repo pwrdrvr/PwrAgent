@@ -1,8 +1,8 @@
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
+import type { FactoryProjectOption, FactoryProjectProjection, FactoryProjectReadRequest } from "@pwragent/shared/factory-projection";
 import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import type { DecisionModelListing, DecisionProviderId, DecisionProvidersReadiness } from "@pwragent/shared/decision-models";
-import type { FactoryProjectProjection, FactoryProjectReadRequest } from "@pwragent/shared/factory-projection";
 import type {
   ReadWorktreeReflinkCapabilitiesRequest,
   ReadWorktreeReflinkCapabilitiesResponse,
@@ -853,7 +853,6 @@ import type {
 } from "../../../shared/app-metadata";
 
 export type DesktopApi = Partial<NativeVoiceApi> & {
-  readFactoryProject?: (request: FactoryProjectReadRequest) => Promise<FactoryProjectProjection>;
   readThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
   setThreadGoal?: (threadId: string, objective: string, confirmedObjective?: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
   pauseThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
@@ -1542,6 +1541,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   /** Opens or raises Resources; `focus` selects one resource there. */
   openResourceCheckoutsWindow?: (focus?: ResourceCheckoutsWindowFocus) => Promise<void>;
   openResourceCheckoutThread?: (thread: ResourceThreadRef) => Promise<void>;
+  openFactoryWindow?: () => Promise<void>;
+  listFactoryProjects?: () => Promise<FactoryProjectOption[]>;
+  readFactoryProject?: (request: FactoryProjectReadRequest) => Promise<FactoryProjectProjection>;
+  openFactoryThread?: (reference: string) => Promise<void>;
   readResourceCheckouts?: () => Promise<ResourceCheckoutsSnapshot>;
   /** Marker event; re-read with `readResourceCheckouts`. */
   onResourceCheckoutsChanged?: (

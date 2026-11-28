@@ -541,6 +541,7 @@ type SidebarProps = {
    * behind it.
    */
   onOpenResources?: () => void;
+  onOpenFactory?: () => void;
   /**
    * `focusComposer` is set only for a plain click from a real mouse or
    * trackpad. A keyboard or assistive-technology activation leaves focus on
@@ -865,6 +866,7 @@ export function Sidebar(props: SidebarProps) {
     onOpenSettings: useStableRowCallback(props.onOpenSettings),
     onOpenUsageActivity: useStableRowCallback(props.onOpenUsageActivity),
     onOpenResources: useStableRowCallback(props.onOpenResources),
+    onOpenFactory: useStableRowCallback(props.onOpenFactory),
     onSelectThread: useEventCallback(props.onSelectThread),
     onThreadJumpOpenChange: useStableRowCallback(props.onThreadJumpOpenChange),
     onJumpToProject: useStableRowCallback(props.onJumpToProject),
@@ -4184,26 +4186,42 @@ function SidebarContent(props: SidebarProps) {
                     </button>
                   </>
                 ) : null}
-                {props.onOpenResources ? (
+                {props.onOpenResources || props.onOpenFactory ? (
                   <>
                     {props.onOpenUsageActivity ? null : (
                       <div className="thread-context-menu__separator" role="separator" />
                     )}
-                    <button
-                      className="sidebar__menu-item"
-                      data-testid="profile-menu-resources"
-                      role="menuitem"
-                      type="button"
-                      onClick={() => {
-                        setProfileMenuOpen(false);
-                        props.onOpenResources?.();
-                      }}
-                    >
-                      <span className="sidebar__menu-item-title">Resources</span>
-                      <span className="sidebar__menu-item-detail">
-                        Open the checkout and queue window
-                      </span>
-                    </button>
+                    {props.onOpenResources ? (
+                      <button
+                        className="sidebar__menu-item"
+                        data-testid="profile-menu-resources"
+                        role="menuitem"
+                        type="button"
+                        onClick={() => {
+                          setProfileMenuOpen(false);
+                          props.onOpenResources?.();
+                        }}
+                      >
+                        <span className="sidebar__menu-item-title">Resources</span>
+                        <span className="sidebar__menu-item-detail">
+                          Open the checkout and queue window
+                        </span>
+                      </button>
+                    ) : null}
+                    {props.onOpenFactory ? (
+                      <button
+                        className="sidebar__menu-item"
+                        role="menuitem"
+                        type="button"
+                        onClick={() => {
+                          setProfileMenuOpen(false);
+                          props.onOpenFactory?.();
+                        }}
+                      >
+                        <span className="sidebar__menu-item-title">Factory</span>
+                        <span className="sidebar__menu-item-detail">Outcomes and decision evidence</span>
+                      </button>
+                    ) : null}
                   </>
                 ) : null}
               </div>

@@ -184,6 +184,7 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       await runGitCommand(projectPath, ["branch", "target+ipc", actualBase]);
       const plus = await read({ ...params, candidate: { ...candidate, branch: "fixture+ipc", baseRef: "refs/heads/target+ipc" } });
       expect(plus.candidate).toMatchObject({ headOid: actualHead, baseOid: actualBase });
+      expect(await appServerService.listFactoryProjects()).toEqual([{ key, label: "Synthetic", path: projectPath }]);
       const git = vi.spyOn(gitExecutable, "runGitCommand");
       const unpublished = await read(params);
       const gitCalls = git.mock.calls.map(([, args]) => args);
@@ -616,4 +617,21 @@ it("opens GitHub review permalinks without credentials, query, or arbitrary frag
     const evidence = readEvidence(await collectFactoryProject(request, collector(fixture)));
     expect.soft(evidence.receipts).toContainEqual(expect.objectContaining({ kind: "review", reference: expected }));
   }
+});
+
+it.each([25, 50, 100])("reads an off-page immutable PR once at a project size of %s", async (history) => {
+  const number = history + 1;
+  const fixture = forgeFixture({ history });
+  Object.assign(fixture.data.repository.selected!, pull(number));
+  const ports = collector(fixture);
+  const result = await collectFactoryProject({ ...request, selection: { ...request.selection, number } }, ports);
+
+  expect(result.pullRequests).toHaveLength(25);
+  expect(result.pullRequests.some((pr) => pr.number === number)).toBe(false);
+  expect(readEvidence(result).pullRequest.number).toBe(number);
+  expect(ports.github).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({
+    body: expect.objectContaining({ variables: expect.objectContaining({ limit: 25, number }) }),
+  }));
+  expect(ports.resolveProject).toHaveBeenCalledTimes(1);
+  expect(ports.cachedStatus).toHaveBeenCalledTimes(1);
 });

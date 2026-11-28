@@ -47,6 +47,7 @@ export const WINDOW_KIND_AUTOMATION_RUN = "automation-run" as const;
 export const WINDOW_KIND_USAGE_ACTIVITY = "usage-activity" as const;
 export const WINDOW_KIND_RESEARCH = "research" as const;
 export const WINDOW_KIND_RESOURCES = "resources" as const;
+export const WINDOW_KIND_FACTORY = "factory" as const;
 export type WindowKind =
   | typeof WINDOW_KIND_FEDERATION_ACTIVITY
   | typeof WINDOW_KIND_MAIN
@@ -60,6 +61,7 @@ export type WindowKind =
   | typeof WINDOW_KIND_USAGE_ACTIVITY
   | typeof WINDOW_KIND_RESEARCH
   | typeof WINDOW_KIND_RESOURCES
+  | typeof WINDOW_KIND_FACTORY
   | typeof WINDOW_KIND_SUB_AGENT_TRANSCRIPT
   | typeof WINDOW_KIND_TOOL_OUTPUT_INCIDENT_EXPLORER;
 
@@ -126,6 +128,10 @@ export function isLocalResearchWebContents(
 
 export function isLocalResourceCheckoutWebContents(webContents: WebContents): boolean {
   return isLocalMainWindowWebContents(webContents) || entries.get(webContents)?.kind === WINDOW_KIND_RESOURCES;
+}
+
+export function isFactoryWindowWebContents(webContents: WebContents): boolean {
+  return entries.get(webContents)?.kind === WINDOW_KIND_FACTORY;
 }
 
 /** Return every WebContents that has subscribed to the given channel. */
