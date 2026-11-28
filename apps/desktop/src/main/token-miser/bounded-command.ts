@@ -52,6 +52,10 @@ const scope = ({ backend, threadId, turnId }: BoundedCommandCaller) => JSON.stri
 const CLAUDE_CD_PREFIX = /^cd[ \t]+(?:[A-Za-z0-9_./-]|'[^'\r\n]*'|"[^"\\$\x60\r\n]*"|\\[^\r\n])+[ \t]+&&[ \t]+/u;
 const CODEX_APPROVAL_WAIT_MS = 30_000;
 
+function assertRetained(ticket: Ticket): void {
+  if (ticket.lifetime.signal.aborted) throw new Error("Output expired or unavailable for this turn.");
+}
+
 function endsWithHighSurrogate(text: string) {
   const unit = text.charCodeAt(text.length - 1);
   return unit >= 0xd800 && unit <= 0xdbff;
@@ -325,6 +329,7 @@ export class BoundedCommandCapture {
     if (!ticket || scope(caller) !== scope(ticket.caller) || !await this.eligible(caller)) {
       throw new Error("Output expired or unavailable for this turn.");
     }
+    assertRetained(ticket);
     if (ticket.status === undefined) throw new Error("No native completion receipt for this command.");
     return ticket;
   }
@@ -334,6 +339,7 @@ export class BoundedCommandCapture {
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid byte offset.");
     const totalBytes = (await ticket.file.stat()).size;
     const { buffer, bytesRead } = await ticket.file.read(Buffer.alloc(1024), 0, 1024, offset);
+    assertRetained(ticket);
     return { totalBytes, offset, base64: buffer.subarray(0, bytesRead).toString("base64") };
   }
 
@@ -342,6 +348,7 @@ export class BoundedCommandCapture {
     if (!range) {
       const { text, bytes } = await ticket.summary!;
       if (ticket.lifetime.signal.aborted || !await this.eligible(caller)) throw new Error("Output expired or unavailable for this turn.");
+      assertRetained(ticket);
       if (!ticket.recorded && this.recordDelivery) {
         ticket.recorded = this.recordDelivery({ caller: ticket.caller, objectId: ticket.handle, itemId: ticket.itemId!,
           originalBytes: bytes, deliveredBytes: Buffer.byteLength(text) });
@@ -360,6 +367,7 @@ export class BoundedCommandCapture {
       if (query === undefined || line.includes(query)) selected.push(query ? `${number}: ${line}` : line);
       if (number === end || (end === undefined && selected.length >= 20)) break;
     }
+    assertRetained(ticket);
     return takeUtf8Prefix(selected.join("\n"), 1450);
   }
 
