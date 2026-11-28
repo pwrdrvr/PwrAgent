@@ -2626,7 +2626,7 @@ export class McpConnectionGatewayService {
     /** `elicit` can also show the upstream server's links. */
     elicitUrl?: boolean;
     /** Called for each progress report from the upstream server during a call. */
-    onProgress?: () => void;
+    onProgress?: (progress: Progress) => void;
   }): Promise<McpGatewayTool[] | McpGatewayCatalog | CallToolResult | Record<string, unknown>> {
     params.signal.throwIfAborted();
     const discovery = new McpDiscovery(params.connectionId, params.deadlineAt ?? Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, params.signal);

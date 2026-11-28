@@ -440,7 +440,11 @@ export class McpGatewayToolService {
       const elicit = this.options.elicit;
       const result = await this.options.connections.requestGatewayToolOperation({
         connectionId: args.connectionId, scopeKey: this.scopeKey(context),
-        operation: "gateway/tools/call", invocation, signal, onProgress: extend,
+        operation: "gateway/tools/call", invocation, signal,
+        onProgress: (progress) => {
+          extend();
+          context.reportMcpProgress?.(progress);
+        },
         // The thread's card shows forms and links alike.
         ...(elicit ? { elicitUrl: true, elicit: async (request: ElicitRequestParams, formSignal: AbortSignal) =>
           await elicit(request, invocation, context, AbortSignal.any([signal, formSignal])) } : {}),
