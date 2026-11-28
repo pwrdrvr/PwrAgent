@@ -36,14 +36,14 @@ async function runNativePrototype() {
   await mkdir(scratchRoot, { recursive: true });
   const scratch = await mkdtemp(join(scratchRoot, "windows-codex-mcp-"));
   try {
-    const native = buildMcpIpcRelay({ outputRoot: scratch, identityTest: true });
+    const native = buildMcpIpcRelay({ outputRoot: scratch });
     const relay = buildMcpStdioRelay({ outputRoot: scratch });
     const runner = join(scratch, "prototype.cjs");
     await buildPrototypeHarness(runner);
     const codex = process.argv[2];
     const result = spawnSync(process.execPath, [runner, native, ...(codex ? [resolve(codex)] : [])], {
       env: { ...process.env, PWRAGENT_TEST_MCP_STDIO_RELAY: relay },
-      stdio: "inherit", windowsHide: true, timeout: 85_000,
+      stdio: "inherit", windowsHide: true, timeout: 135_000,
     });
     if (result.error) throw result.error;
     process.exitCode = result.status ?? 1;

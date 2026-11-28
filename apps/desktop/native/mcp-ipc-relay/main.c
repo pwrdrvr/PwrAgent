@@ -11,11 +11,7 @@
 #include <string.h>
 
 #ifdef _WIN32
-#ifdef PWRAGENT_TEST_WINDOWS_CODEX
-#define _WIN32_WINNT 0x0A00
-#else
 #define _WIN32_WINNT 0x0602
-#endif
 #include <windows.h>
 #include <aclapi.h>
 #include <wchar.h>
@@ -76,9 +72,7 @@ static void verify_pipe_identity(HANDLE pipe) {
 static HANDLE verified_pipe(const wchar_t *path) {
   if (wcsncmp(path, L"\\\\.\\pipe\\", 9) || !path[9]
     || wcspbrk(path + 9, L"\\/:?*\"<>|")) fail("expected a local Windows pipe name");
-  /* SECURITY_IDENTIFICATION prevents the server impersonating this client.
-   * No WaitNamedPipe/retry: a busy, absent or replaced endpoint fails once.
-   */
+  // SECURITY_IDENTIFICATION prevents the server impersonating this client.
   HANDLE pipe = CreateFileW(path, GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
     0, NULL, OPEN_EXISTING,
     FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
@@ -130,15 +124,11 @@ static DWORD WINAPI copy_bytes(void *arg) {
   ExitProcess(0);
 }
 
-#ifdef PWRAGENT_TEST_WINDOWS_CODEX
-#include "windows-codex-prototype.h"
-#endif
+#include "windows-codex-owner.h"
 
 int wmain(int argc, wchar_t **argv) {
-#ifdef PWRAGENT_TEST_WINDOWS_CODEX
-  if (argc == 5 && !wcscmp(argv[1], L"--codex-windows-supervisor"))
-    return codex_windows_supervisor(argv[2], argv[3], argv[4]);
-#endif
+  if (argc == 6 && !wcscmp(argv[1], L"--codex-windows-supervisor"))
+    return codex_windows_supervisor(argv[2], argv[3], argv[4], argv[5]);
   if (argc == 4 && !wcscmp(argv[1], L"--local-file-marker")) return local_file_marker(argv[2], argv[3]);
   if (argc == 3 && !wcscmp(argv[1], L"--maintenance-lock")) return file_lock(argv[2], 0);
   if (argc == 3 && !wcscmp(argv[1], L"--stack-lock")) return file_lock(argv[2], 1);
