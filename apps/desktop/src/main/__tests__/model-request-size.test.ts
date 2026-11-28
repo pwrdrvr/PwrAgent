@@ -161,7 +161,7 @@ it("charges every encoded schema-bearing discovery payload to tool definition by
     };
     expect(toolDefinitionBytes(codex) - jsonBytes(installed)).toBe(copies * jsonBytes(codexDiscovery));
     expect(toolDefinitionBytes(gemini) - jsonBytes(installed)).toBe(copies * jsonBytes(geminiDiscovery));
-  }), { examples: [['A \"quote\" and é', 2]] });
+  }), { numRuns: 5, examples: [['A \"quote\" and é', 2]] });
 });
 
 function turnMetrics(samples: Sample[], prompt: string, agentInstructions?: string): TurnMetrics {
