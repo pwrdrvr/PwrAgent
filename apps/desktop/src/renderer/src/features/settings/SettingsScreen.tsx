@@ -1285,6 +1285,12 @@ function SettingsSectionBody(props: {
         desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
+        backends={props.cachedBackends}
+        onSaveHelperModels={async (helperModels) => {
+          return await props.settings.writeConfig({
+            models: { helperModels },
+          });
+        }}
         onTokenMiserEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { tokenMiserEnabled: enabled },

@@ -861,7 +861,7 @@ function appendCaptureInferenceEdits(
     { op: "set", path: ["experimental", "token_miser_summarizer"], value: summarizer },
   );
   if (readBoundedCommandHelper(current?.token_miser_bounded_helper)) {
-    const projection = gate !== "none" ? gate : summarizer === "configured" ? "configured" : "deterministic";
+    const projection = gate !== "none" ? gate : summarizer !== "off" ? "configured" : "deterministic";
     const legacyOnly = experimental.tokenMiserGate === undefined && experimental.tokenMiserSummarizer === undefined;
     edits.push(
       { op: "set", path: LEGACY_CAPTURE_HELPER, value: legacyOnly && legacy ? legacy : projection },

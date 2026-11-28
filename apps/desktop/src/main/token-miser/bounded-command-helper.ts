@@ -49,6 +49,7 @@ function decisionIdentity(selected: DecisionModelResolution, provider: "local" |
 }
 
 type CaptureOrigin = keyof typeof CAPTURE_HELPER_IDS;
+type CaptureHelper = (typeof CAPTURE_HELPER_IDS)[CaptureOrigin];
 type HelperClient = Pick<BackendClient, "generateStructuredObject">;
 type CaptureRoute = {
   origin: CaptureOrigin;
@@ -59,22 +60,35 @@ type CaptureRoute = {
   decisions?: { profileId: string; recordUsageLines: (lines: ThreadUsageLineRecord[]) => Promise<void> };
 };
 
-function configuredTarget(settings: Settings, route: CaptureRoute, codex: HelperClient) {
+/**
+ * The Helper model from AI Providers → Helpers, on Codex. With no Helper
+ * model saved, Automatic's first choice is requested and Codex falls back
+ * through its catalog. `settings` decides whether the thread type's own
+ * Codex effort applies.
+ */
+function helperDefaultTarget(saved: DesktopHelperModelSettings | undefined, helper: CaptureHelper, codex: HelperClient) {
+  const selection = resolveHelperModel({ helper, settings: saved, backend: "codex", models: [] });
+  if (!selection.model) return;
+  return {
+    client: codex, backend: "codex", model: selection.model, helper, effort: selection.reasoningEffort,
+    exact: Boolean(saved?.defaultModel?.trim()),
+  };
+}
+
+function captureTarget(settings: Settings, route: CaptureRoute, codex: HelperClient, mode: TokenMiserSummarizerMode) {
   const helper = CAPTURE_HELPER_IDS[route.origin];
   const saved = settings.resolveHelperModelSettings?.();
+  // Choosing a summarizer for every thread type is the consent to send each
+  // thread type's capture to the Helper model; a thread type's row narrows it.
+  if (mode === "helper") return helperDefaultTarget(saved && { ...saved, helpers: {} }, helper, codex);
   const row = saved?.helpers[helper];
-  const definition = getHelperModelDefinition(helper);
-  const backend = row?.backend ?? definition.backends[0];
+  const model = row?.model?.trim();
+  if (!model) return !row?.backend || row.backend === "codex" ? helperDefaultTarget(saved, helper, codex) : undefined;
+  const backend = row?.backend ?? getHelperModelDefinition(helper).backends[0];
   const client = backend === "claude" ? route.claude : backend === "acp:grok" ? route.grok : backend === "codex" ? codex : undefined;
   if (!client || (backend === "acp:grok" && !route.grokEnabled?.())) return;
-  // Only inherit the global Codex model on Codex threads. Other origins
-  // require an explicit row before sending any captured text to a helper.
-  if (!row?.model && route.origin !== "codex") return;
-  if (route.origin === "acp:antigravity" && !row?.backend) return;
-  const model = row?.model ?? (backend === "codex" ? saved?.defaultModel : undefined);
-  if (!model) return;
   const selection = resolveHelperModel({ helper, settings: saved, backend, models: [], requestedModel: model });
-  return { client, backend, model, helper, effort: selection.reasoningEffort };
+  return { client, backend, model, helper, effort: selection.reasoningEffort, exact: true };
 }
 
 function gateScores(raw: unknown) {
@@ -155,9 +169,10 @@ function capturePolicy(settings: Settings, codex: HelperClient, route: CaptureRo
   const provider = settings.resolveTokenMiserGate();
   const gate = provider !== "none" ? resolveGate(settings, provider, route) : undefined;
   if (provider !== "none" && !gate) return;
-  const target = settings.resolveTokenMiserSummarizer() === "configured" ? configuredTarget(settings, route, codex) : undefined;
+  const mode = settings.resolveTokenMiserSummarizer();
+  const target = mode === "off" ? undefined : captureTarget(settings, route, codex, mode);
   if (!gate && !target?.client.generateStructuredObject) return;
-  const identity = JSON.stringify([provider, gate?.identity, target?.helper, target?.backend, target?.model, target?.effort]);
+  const identity = JSON.stringify([provider, gate?.identity, target?.helper, target?.backend, target?.model, target?.effort, target?.exact]);
   const label = [gate?.label, target && `${target.backend} summarizer ${target.model}`].filter(Boolean).join(" and ");
   return { identity, label, gate, target };
 }
@@ -187,7 +202,7 @@ export function boundedCommandHelper(settings: Settings, codex: HelperClient,
     const generate = target.client.generateStructuredObject.bind(target.client);
     return await withDeadline(lifetime, BOUNDED_HELPER_TIMEOUT_MS, async signal => {
       const result = await generate({
-        helper: target.helper, model: target.model, requireExactModel: true, reasoningEffort: target.effort, disableExecution: true,
+        helper: target.helper, model: target.model, requireExactModel: target.exact, reasoningEffort: target.effort, disableExecution: true,
         system: summaryInstructions, prompt: signals + "\n" + takeUtf8Prefix(evidence.detail, 2048), signal,
         timeoutMs: BOUNDED_HELPER_TIMEOUT_MS, turnTimeoutMs: BOUNDED_HELPER_TIMEOUT_MS,
         schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"], additionalProperties: false },

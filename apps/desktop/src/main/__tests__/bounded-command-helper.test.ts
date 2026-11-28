@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { openAIDecisionSafetyMaterial } from "@pwragent/shared/openai-decisions";
 import type { TokenMiserGateProvider } from "@pwragent/shared/contracts/settings";
+import { HELPER_MODEL_AUTOMATIC_ORDER } from "@pwragent/shared/helper-models";
 import type { BackendClient } from "../app-server/backend-registry-types";
 import { boundedCommandHelper, type CaptureEvidence } from "../token-miser/bounded-command-helper";
 
@@ -58,18 +59,42 @@ it("only invokes an ungated summarizer for captures of at least 8192 bytes", asy
   expect(claude.generateStructuredObject).toHaveBeenCalledTimes(1);
 });
 
-it("uses the issuing thread type's model and requires an explicit target for a different provider", async () => {
+it("uses the issuing thread type's model, or the Helper model when it names none", async () => {
   const { settings, route, claude } = fixture("none", true);
+  const codex = { generateStructuredObject: vi.fn(async (_request: Parameters<NonNullable<BackendClient["generateStructuredObject"]>>[0]) =>
+    ({ status: "ok" as const, object: { summary: "Footer offset changed." } })) };
   const scoped = { ...settings, resolveHelperModelSettings: () => ({ defaultModel: "mini",
     helpers: { token_miser_capture_antigravity: { backend: "claude", model: "haiku" },
       token_miser_capture_codex: { backend: "claude" } } }) };
-  const helper = boundedCommandHelper(scoped, claude, undefined, { ...route, origin: "acp:antigravity" })!;
+  const helper = boundedCommandHelper(scoped, codex, undefined, { ...route, origin: "acp:antigravity" })!;
   await helper.enrich({ ...evidence, bytes: 8192 }, new AbortController().signal);
   expect(claude.generateStructuredObject).toHaveBeenCalledWith(expect.objectContaining({
     helper: "token_miser_capture_antigravity", model: "haiku", requireExactModel: true,
   }));
-  for (const origin of ["claude", "codex"] as const) {
-    expect(boundedCommandHelper(scoped, claude, undefined, { ...route, origin })).toBeUndefined();
+  // A row that names another backend but no model has chosen nothing to run.
+  expect(boundedCommandHelper(scoped, codex, undefined, { ...route, origin: "codex" })).toBeUndefined();
+  // A thread type with no row uses the saved Helper model on Codex.
+  await boundedCommandHelper(scoped, codex, undefined, { ...route, origin: "claude" })!
+    .enrich({ ...evidence, bytes: 8192 }, new AbortController().signal);
+  expect(codex.generateStructuredObject).toHaveBeenCalledWith(expect.objectContaining({
+    helper: "token_miser_capture_claude", model: "mini", requireExactModel: true,
+  }));
+});
+
+it("summarizes every thread type with the Helper model in helper mode, ignoring thread-type rows", async () => {
+  const { settings, route, claude } = fixture("none", true);
+  const codex = { generateStructuredObject: vi.fn(async (_request: Parameters<NonNullable<BackendClient["generateStructuredObject"]>>[0]) =>
+    ({ status: "ok" as const, object: { summary: "Footer offset changed." } })) };
+  // No Helper model saved: Automatic's first choice, and Codex may fall back.
+  const helperMode = { ...settings, resolveTokenMiserSummarizer: () => "helper" as const };
+  for (const origin of ["codex", "claude", "acp:antigravity"] as const) {
+    await boundedCommandHelper(helperMode, codex, undefined, { ...route, origin })!
+      .enrich({ ...evidence, bytes: 8192 }, new AbortController().signal);
+  }
+  expect(claude.generateStructuredObject).not.toHaveBeenCalled();
+  expect(codex.generateStructuredObject).toHaveBeenCalledTimes(3);
+  for (const [request] of codex.generateStructuredObject.mock.calls) {
+    expect(request).toMatchObject({ model: HELPER_MODEL_AUTOMATIC_ORDER[0], requireExactModel: false });
   }
 });
 
