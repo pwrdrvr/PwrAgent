@@ -584,7 +584,8 @@ export class OpenAIDecisionsService {
     const capability = this.imageCapabilities(record.provider);
     const validated = inputs.map((input, index) => {
       if (assessingFactoryPr && hasDecisionImageParts(input)) {
-        throw new OpenAIDecisionsError("invalid_input", "Include visual proof as a revision-bound Factory evidence reference.");
+        const message = "Include visual proof as a revision-bound Factory evidence reference.";
+        throw new OpenAIDecisionsError("invalid_input", bulk ? `inputs[${index}]: ${message}` : message);
       }
       const result = prepareDecisionInput(input, schema, capability, unsupportedImagesMessage(record.provider));
       if (!result.ok) {

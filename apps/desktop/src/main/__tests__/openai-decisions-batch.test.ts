@@ -97,10 +97,41 @@ describe("ad hoc decisions", () => {
     expect((await errorOf(() => service.invoke(CALLER, { definition, inputs: [packet, stale] }))).code).toBe("invalid_input");
     expect((await errorOf(() => service.invoke(CALLER, { definition, input: { ...packet, headSha: "main" } }))).code).toBe("invalid_input");
     const images = [{ type: "input_json", data: packet }, { type: "input_image", image_url: "data:image/png;base64,AAAA" }];
-    expect((await errorOf(() => service.invoke(CALLER, { definition, inputs: [packet, images] }))).code).toBe("invalid_input");
+    expect(await errorOf(() => service.invoke(CALLER, { definition, inputs: [packet, images] })))
+      .toMatchObject({ code: "invalid_input", message: expect.stringContaining("inputs[1]") });
     expect((await errorOf(() => service.invoke(CALLER, { definition: { ...definition, prefix: "override" }, input: packet }))).code)
       .toBe("invalid_definition");
     expect(requests).toHaveLength(3);
+  });
+
+  it.each(["reference", "observation"])("rejects a whitespace-only %s before invoking a provider", async (field) => {
+    const service = makeService(() => { throw new Error("unexpected provider request"); });
+    const headSha = "1".repeat(40);
+    const input = {
+      pullRequest: "pr/123", headSha, baseSha: "2".repeat(40), outcome: "Open settings", change: "Fix focus",
+      evidence: [{ kind: "ux", headSha, reference: "capture/12", observation: "Focus visible", [field]: " \t\n" }],
+    };
+    expect(await errorOf(() => service.invoke(CALLER, { definition: { preset: "factory_pr_review_v1" }, input })))
+      .toMatchObject({ code: "invalid_input", message: expect.stringContaining(field) });
+  });
+
+  it("assesses an issue-linked branch before a PR exists and requires a complete identity", async () => {
+    const requests: unknown[] = [];
+    const service = makeService(async (_url, init) => {
+      requests.push(JSON.parse(String(init!.body)));
+      return json(OPENAI_OK);
+    });
+    const input = {
+      headSha: "a".repeat(40), baseSha: "b".repeat(40), outcome: "Open settings", change: "Fix focus", evidence: [],
+    };
+    const definition = { provider: "openai", preset: "factory_pr_review_v1" };
+    const candidate = { issue: "PWR-123", repository: "github.com/example/app", branch: "fix/settings" };
+    await service.invoke(CALLER, { definition, input: { ...input, candidate } });
+    expect(JSON.stringify(requests)).toContain("PWR-123");
+    for (const invalid of [input, { ...input, candidate: { ...candidate, repository: " " } }, { ...input, candidate: { issue: "PWR-123" } }]) {
+      expect((await errorOf(() => service.invoke(CALLER, { definition, input: invalid }))).code).toBe("invalid_input");
+    }
+    expect(requests).toHaveLength(1);
   });
 
   it("runs a definition without registering it, with a stable cache key per definition", async () => {
