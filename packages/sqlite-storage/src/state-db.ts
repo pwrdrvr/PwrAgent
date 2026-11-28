@@ -3161,6 +3161,18 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     // claimed version 74, so a profile can hold either version without the
     // other's table. Both are idempotent.
     db.exec(DURABLE_TURN_REQUEST_SCHEMA);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS factory_admission (
+        project_key TEXT NOT NULL,
+        issue_id TEXT NOT NULL,
+        active INTEGER NOT NULL CHECK (active IN (0, 1)),
+        revision INTEGER NOT NULL,
+        row_json TEXT NOT NULL,
+        PRIMARY KEY (project_key, issue_id)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS factory_admission_active
+        ON factory_admission(active) WHERE active = 1;
+    `);
     db.exec(THREAD_REVIEW_SCHEMA);
     db.exec(OPERATOR_REQUEST_SCHEMA);
     db.exec(OPERATOR_REQUEST_SCOPE_INDEXES);

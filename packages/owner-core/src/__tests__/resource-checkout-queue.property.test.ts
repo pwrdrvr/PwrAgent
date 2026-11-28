@@ -303,3 +303,52 @@ describe("a queue order change", () => {
     expect(authority.records(RESOURCE)[0]!.queue.map((entry) => entry.purpose)).toEqual(["suite"]);
   });
 });
+
+it("keeps Factory gateways in the same capacity budget and never revives a closed reservation", () => {
+  const operation = fc.record({
+    action: fc.constantFrom("reserve" as const, "release" as const, "status" as const, "advance" as const),
+    gateway: fc.nat({ max: 3 }),
+    key: fc.nat({ max: 4 }),
+  });
+  fc.assert(fc.property(
+    fc.integer({ min: 1, max: 8 }), fc.nat({ max: 10 }),
+    fc.array(operation, { minLength: 8, maxLength: 35, size: "max" }),
+    (capacity, initialOrdinary, operations) => {
+      let now = 0;
+      let id = 0;
+      const ordinary = Math.min(capacity, initialOrdinary);
+      const authority = new ResourceCheckoutAuthority(memoryStore(), () => now, () => String(++id));
+      authority.ensure(definition(capacity));
+      if (ordinary) authority.perform(ACTORS[0]!, {
+        kind: "request", resourceId: RESOURCE, idempotencyKey: "test-hold", purpose: "Test suite",
+        expectedDurationMs: DURATION, units: ordinary,
+      });
+
+      const expected = new Map<string, Map<number, number | null>>();
+      const hold = 30 * DURATION;
+      for (const step of operations) {
+        if (step.action === "advance") {
+          now += 15 * DURATION;
+          continue;
+        }
+        const gateway = String(step.gateway);
+        const reservations = expected.get(gateway) ?? new Map<number, number | null>();
+        expected.set(gateway, reservations);
+        const used = (): number => (now < DURATION ? ordinary : 0)
+          + [...expected.values()].flatMap((items) => [...items.values()]).filter((until) => until !== null && until > now).length;
+
+        if (step.action === "release") reservations.set(step.key, null);
+        if (step.action === "reserve" && !reservations.has(step.key)) {
+          const hasSlot = [...reservations.values()].some((until) => until !== null && until > now);
+          reservations.set(step.key, !hasSlot && used() < capacity ? now + hold : null);
+        }
+        const expires = reservations.get(step.key);
+        const receipt = authority.factoryCpu(gateway, { action: step.action, resourceId: RESOURCE, requestId: String(step.key) });
+        expect(receipt?.state ?? "absent").toBe(expires === undefined ? "absent" : expires !== null && expires > now ? "granted" : "ended");
+        const pool = authority.records(RESOURCE)[0]!;
+        expect(pool.queue).toHaveLength(0);
+        expect(pool.grants.reduce((sum, grant) => sum + grant.units, 0)).toBe(used());
+      }
+    },
+  ));
+});

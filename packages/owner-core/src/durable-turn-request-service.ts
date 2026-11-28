@@ -5,6 +5,7 @@ import {
 } from "@pwragent/shared/durable-turn-request";
 import {
   DURABLE_TURN_REQUEST_RETENTION_MS,
+  FACTORY_BUILDER_ISOLATION,
   type DurableTurnPayload,
   type DurableTurnReceipt,
   type GetDurableTurnRequest,
@@ -70,7 +71,7 @@ export class DurableTurnRequestService {
       || request.input.some((item) => !item || typeof item !== "object" || item.type === ("federationBlob" as string))) this.fail("request_invalid");
     const allowed = operation === "steerTurn"
       ? new Set(["backend", "threadId", "input", "expectedTurnId"])
-      : new Set(["backend", "threadId", "input", "executionMode", "approvalPolicy", "sandbox", "model", "collaborationMode", "serviceTier", "reasoningEffort", "fastMode", "acpRuntime", "messageOrigin", "delivery"]);
+      : new Set(["backend", "threadId", "input", "executionMode", "approvalPolicy", "sandbox", "model", "collaborationMode", "serviceTier", "reasoningEffort", "fastMode", "acpRuntime", "messageOrigin", "delivery", "boundedStart", "factoryBuilderIsolation"]);
     if (Object.keys(request).some((key) => !allowed.has(key))
       || ("delivery" in request && request.delivery !== undefined && request.delivery !== "new_turn")) this.fail("request_invalid");
     if (operation === "steerTurn" && (!("expectedTurnId" in request)
@@ -81,6 +82,14 @@ export class DurableTurnRequestService {
     const expiresAt = clientRequest.createdAt + DURABLE_TURN_REQUEST_RETENTION_MS;
     if (expiresAt <= now) this.fail("request_expired");
     if (clientRequest.createdAt > now + 5 * 60_000) this.fail("request_invalid");
+    const boundedStart = "boundedStart" in request ? request.boundedStart : undefined;
+    if ("factoryBuilderIsolation" in request
+        && (request.factoryBuilderIsolation !== FACTORY_BUILDER_ISOLATION || !boundedStart)) this.fail("request_invalid");
+    if (boundedStart !== undefined && (!boundedStart || !Number.isSafeInteger(boundedStart.before)
+        || boundedStart.before <= clientRequest.createdAt || boundedStart.before > expiresAt
+        || typeof boundedStart.worktreePath !== "string" || !boundedStart.worktreePath
+        || boundedStart.worktreePath.length > 4096
+        || typeof boundedStart.repository !== "string" || !/^[a-z0-9-]{1,39}\/[a-z0-9_.-]{1,100}$/.test(boundedStart.repository))) this.fail("request_invalid");
     let canonical: string;
     try {
       canonical = operation === "steerTurn"
@@ -97,6 +106,7 @@ export class DurableTurnRequestService {
       if (replay.state !== "accepted" || replay.result) return this.reconcile(scope, replay);
     }
 
+    if (boundedStart && boundedStart.before <= this.now()) this.fail("request_expired");
     if (operation === "startTurn" && this.options.admitTurn) await this.options.admitTurn(request as DurableTurnPayload);
 
     const admitted = this.transaction(() => {
@@ -156,12 +166,16 @@ export class DurableTurnRequestService {
       // Shutdown may have retired a committed queued acceptance before the
       // dispatch promise settled. Do not acknowledge a FIFO that no longer exists.
       return await this.reconcile(scope, settled);
-    } catch {
+    } catch (error) {
+      const refusedBeforeStart = boundedStart !== undefined
+        && error instanceof DurableTurnRequestError && error.code === "request_start_refused";
       // Do not persist provider errors (may contain prompts, paths or secrets).
       return this.transaction(() => {
         const current = this.read(scope, admitted.id)!;
         if (current.state !== "completed" && current.state !== "dispatched") {
-          this.write(scope, { ...current, state: "uncertain", updatedAt: this.now() });
+          this.write(scope, refusedBeforeStart
+            ? { ...current, state: "completed", outcome: "failed", updatedAt: this.now() }
+            : { ...current, state: "uncertain", updatedAt: this.now() });
         }
         return this.read(scope, admitted.id)!;
       });
