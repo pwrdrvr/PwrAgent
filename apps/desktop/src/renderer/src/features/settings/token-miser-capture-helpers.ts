@@ -82,10 +82,8 @@ export function tokenMiserModelChoices(
 
 export type CaptureRowStatus =
   | { kind: "ready" }
-  /** No model on the row, and nothing it may inherit. */
+  /** The row names a backend other than Codex but no model on it. */
   | { kind: "needs-model" }
-  /** Antigravity rows must name the backend that runs the summarizer. */
-  | { kind: "needs-backend" }
   /** The saved backend is not one that can run the summarizer. */
   | { kind: "unsupported-backend" }
   | { kind: "backend-loading" }
@@ -98,67 +96,113 @@ export type CaptureRowState = {
   helper: CaptureHelperId;
   /** The saved row, as config.toml holds it. */
   saved?: DesktopHelperModelChoice;
-  /** The backend the row runs on: the saved one, else the helper's first. */
+  /** The backend the summary runs on. */
   backend: string;
-  /** The model that will run, when one resolves. */
+  /** The model the owner requests, when one resolves. */
   model?: string;
+  /** The model that answers, from the backend's catalog when it is read. */
+  displayModel?: string;
   /** Where `model` comes from. */
   modelSource?: "row" | "helper-default";
   /** The effort that will run with `model`. */
   effort?: string;
+  /** The owner requires exactly `model`; otherwise Codex may fall back. */
+  exact: boolean;
   /** The backend's catalog, when it has been read. */
   models: readonly BackendModelOption[];
   status: CaptureRowStatus;
 };
 
+function catalogFor(summary: BackendSummary | undefined): readonly BackendModelOption[] {
+  return summary?.available ? summary.launchpadOptions?.models ?? [] : [];
+}
+
+function finishState(
+  base: Omit<CaptureRowState, "status">,
+  summary: BackendSummary | undefined,
+): CaptureRowState {
+  if (summary?.discoveryPending) return { ...base, status: { kind: "backend-loading" } };
+  if (!summary?.available) return { ...base, status: { kind: "backend-unavailable" } };
+  const offered = (id?: string) => !!id && base.models.some((entry) => entry.id === id);
+  if (base.models.length > 0 && !offered(base.exact ? base.model : base.displayModel)) {
+    return { ...base, status: { kind: "model-not-offered" } };
+  }
+  return { ...base, status: { kind: "ready" } };
+}
+
 /**
- * What one capture origin's row will run. Mirrors the owner's routing in
- * `bounded-command-helper.ts`: only Codex threads inherit the saved Helper
- * model (Automatic does not count), Claude and Antigravity need a model on
- * their own row, and an Antigravity row must name its backend.
+ * The Helper model on Codex, as the owner's `helperDefaultTarget` requests
+ * it. Automatic asks for its first choice and lets Codex fall back through
+ * the catalog, so `displayModel` is what the catalog resolves to.
+ */
+function helperDefaultState(
+  origin: CaptureOrigin,
+  settings: DesktopHelperModelSettings,
+  backends: readonly BackendSummary[],
+  saved: DesktopHelperModelChoice | undefined,
+): CaptureRowState {
+  const helper = CAPTURE_HELPER_IDS[origin];
+  const summary = backends.find((candidate) => candidate.kind === "codex");
+  const models = catalogFor(summary);
+  const requested = resolveHelperModel({ helper, settings, backend: "codex", models: [] });
+  const exact = Boolean(settings.defaultModel?.trim());
+  const answered = exact || models.length === 0
+    ? requested.model
+    : resolveHelperModel({ helper, settings, backend: "codex", models }).model;
+  return finishState({
+    origin,
+    helper,
+    ...(saved ? { saved } : {}),
+    backend: "codex",
+    ...(requested.model ? { model: requested.model } : {}),
+    ...(answered ? { displayModel: answered } : {}),
+    modelSource: "helper-default",
+    ...(requested.reasoningEffort ? { effort: requested.reasoningEffort } : {}),
+    exact,
+    models,
+  }, summary);
+}
+
+/**
+ * What one thread type's summarizer runs. Mirrors the owner's
+ * `captureTarget` in `bounded-command-helper.ts`: in `helper` mode every
+ * thread type uses the Helper model and rows are ignored; in `configured`
+ * mode a row with a model runs that model on its backend, and a row without
+ * one uses the Helper model, unless it names a backend other than Codex.
  */
 export function captureRowState(
   origin: CaptureOrigin,
   settings: DesktopHelperModelSettings,
   backends: readonly BackendSummary[],
+  mode: Exclude<TokenMiserSummarizerMode, "off"> = "configured",
 ): CaptureRowState {
   const helper = CAPTURE_HELPER_IDS[origin];
+  if (mode === "helper") return helperDefaultState(origin, { ...settings, helpers: {} }, backends, undefined);
   const saved = settings.helpers[helper];
-  const definition = getHelperModelDefinition(helper);
-  const backend = saved?.backend ?? definition.backends[0]!;
-  const summary = backends.find((candidate) => candidate.kind === backend);
-  const models = summary?.available ? summary.launchpadOptions?.models ?? [] : [];
-  const base = { origin, helper, ...(saved ? { saved } : {}), backend, models };
-
-  if (!isCaptureRunner(backend)) return { ...base, status: { kind: "unsupported-backend" } };
-  if (origin === "acp:antigravity" && !saved?.backend) {
-    return { ...base, status: { kind: "needs-backend" } };
-  }
   const rowModel = saved?.model?.trim() || undefined;
-  const inherited = !rowModel && origin === "codex" && backend === "codex"
-    ? settings.defaultModel?.trim() || undefined
-    : undefined;
-  const model = rowModel ?? inherited;
-  if (!model) return { ...base, status: { kind: "needs-model" } };
+  if (!rowModel && (!saved?.backend || saved.backend === "codex")) {
+    return helperDefaultState(origin, settings, backends, saved);
+  }
+  const backend = saved?.backend ?? getHelperModelDefinition(helper).backends[0]!;
+  const summary = backends.find((candidate) => candidate.kind === backend);
+  const models = catalogFor(summary);
+  const base = { origin, helper, ...(saved ? { saved } : {}), backend, exact: true, models };
+  if (!isCaptureRunner(backend)) return { ...base, status: { kind: "unsupported-backend" } };
+  if (!rowModel) return { ...base, status: { kind: "needs-model" } };
   const effort = resolveHelperModel({
     helper,
     settings,
     backend,
     models: [],
-    requestedModel: model,
+    requestedModel: rowModel,
   }).reasoningEffort;
-  const resolved = {
+  return finishState({
     ...base,
-    model,
-    modelSource: rowModel ? "row" as const : "helper-default" as const,
+    model: rowModel,
+    displayModel: rowModel,
+    modelSource: "row",
     ...(effort ? { effort } : {}),
-  };
-  if (summary?.discoveryPending) return { ...resolved, status: { kind: "backend-loading" } };
-  if (!summary?.available) return { ...resolved, status: { kind: "backend-unavailable" } };
-  if (models.length > 0 && !models.some((entry) => entry.id === model)) {
-    return { ...resolved, status: { kind: "model-not-offered" } };
-  }
-  return { ...resolved, status: { kind: "ready" } };
+  }, summary);
 }
 
 /**

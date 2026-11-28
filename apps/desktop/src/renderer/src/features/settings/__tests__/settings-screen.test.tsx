@@ -5215,7 +5215,8 @@ describe("SettingsScreen", () => {
     fireEvent.click(screen.getByRole("option", { name: /^OpenAI Decisions/ }));
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserGate: "openai" } }));
     fireEvent.click(summarizer);
-    fireEvent.click(screen.getByRole("option", { name: /^Helper model for each thread type/ }));
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("option", { name: /^Helper model, with overrides/ }));
     await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserSummarizer: "configured" } }));
     // Each control writes only its own key.
     expect(settings.writeConfig).toHaveBeenCalledTimes(2);
@@ -5236,6 +5237,41 @@ describe("SettingsScreen", () => {
     expect(section.queryByText(/every capture of 8 KB or more/)).not.toBeInTheDocument();
   });
 
+  it("summarizes every thread type with the Helper model and shows no thread-type rows", async () => {
+    const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    snapshot.models.helperModels = {
+      helpers: { token_miser_capture_claude: { backend: "claude", model: "claude-haiku-5-5" } },
+    };
+    const backends = [
+      { kind: "codex", label: "Codex", available: true, launchpadOptions: {
+        models: [{ id: "gpt-6-luna", label: "GPT-6-Luna" }],
+      } },
+    ] as unknown as BackendSummary[];
+    const settings = createSettingsState(snapshot);
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      cachedBackends={backends} initialSection="experimental" settings={settings} onClose={() => undefined} />);
+    const section = within(screen.getByRole("region", { name: "Token Miser (v2)" }));
+    const summarizer = section.getByRole("combobox", { name: "Summarize with a helper model" });
+    fireEvent.click(summarizer);
+    const helperOption = screen.getByRole("option", { name: "Helper model" });
+    expect(helperOption).toHaveTextContent("GPT-6-Luna on Codex, from AI Providers → Helpers, for every thread type.");
+    fireEvent.click(helperOption);
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ experimental: { tokenMiserSummarizer: "helper" } }));
+
+    snapshot.experimental.tokenMiserSummarizer = { value: "helper", source: "config" };
+    cleanup();
+    render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      cachedBackends={backends} initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+    const after = within(screen.getByRole("region", { name: "Token Miser (v2)" }));
+    // The saved Claude override is ignored, and kept for "with overrides".
+    expect(after.getByText(/for Codex, Claude and Antigravity threads/)).toHaveTextContent(
+      "Runs GPT-6-Luna on Codex for Codex, Claude and Antigravity threads, your Helper model from AI Providers → Helpers, low effort.",
+    );
+    expect(after.queryByRole("button", { name: /Summarizer for Claude threads/ })).not.toBeInTheDocument();
+  });
+
   it("shows what each thread type's summarizer runs and saves one row without touching the others", async () => {
     const snapshot = createSnapshot();
     snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
@@ -5245,6 +5281,7 @@ describe("SettingsScreen", () => {
       defaultModel: "gpt-5.5",
       helpers: {
         thread_titles: { model: "gpt-5.5", reasoningEffort: "high" },
+        token_miser_capture_claude: { backend: "claude" },
         token_miser_capture_antigravity: { backend: "acp:grok", model: "grok-fast" },
         helper_from_a_newer_build: { model: "kept" },
       },
@@ -5267,11 +5304,12 @@ describe("SettingsScreen", () => {
       cachedBackends={backends} initialSection="experimental" settings={settings} onClose={() => undefined} />);
     const section = within(screen.getByRole("region", { name: "Token Miser (v2)" }));
     expect(section.getByRole("combobox", { name: "Summarize with a helper model" }))
-      .toHaveTextContent("Helper model for each thread type");
-    // Only Codex threads inherit the saved Helper model.
+      .toHaveTextContent("Helper model, with overrides");
+    // Codex names no model, so it runs the Helper model; Claude names a
+    // backend but no model, so it runs nothing yet.
     expect(section.getByText(/your Helper model from AI Providers → Helpers/)).toHaveTextContent("Runs GPT-5.5 on Codex");
     expect(section.getByText(/Choose a model on Claude/)).toHaveTextContent(
-      "Until then Claude threads get the digest only.",
+      "Choose a model on Claude, or choose Codex to use the Helper model. Until then Claude threads get the digest only.",
     );
     expect(section.getByText(/on Grok, low effort/)).toHaveTextContent("Runs Grok Fast on Grok, low effort.");
 
@@ -5280,7 +5318,7 @@ describe("SettingsScreen", () => {
       models: {
         helperModels: {
           ...helperModels,
-          helpers: { ...helperModels.helpers, token_miser_capture_claude: { model: "claude-haiku-5-5" } },
+          helpers: { ...helperModels.helpers, token_miser_capture_claude: { backend: "claude", model: "claude-haiku-5-5" } },
         },
       },
     }));

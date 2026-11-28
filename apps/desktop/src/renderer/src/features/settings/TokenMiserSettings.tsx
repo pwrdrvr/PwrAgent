@@ -143,28 +143,25 @@ function captureRowLine(
   state: CaptureRowState,
   harness: string,
   backends: readonly BackendSummary[],
+  everyThreadType = false,
 ): ReactNode {
   const runner = captureRunnerLabel(state.backend, backends);
   const fallback = `Until then ${harness} threads get the digest only.`;
   switch (state.status.kind) {
-    case "needs-backend":
-      return <Line warn>Antigravity can’t run the summarizer. Choose Codex, Claude or Grok to run it. {fallback}</Line>;
     case "unsupported-backend":
       return <Line warn>{runner} can’t run the summarizer. Choose Codex, Claude or Grok. {fallback}</Line>;
     case "needs-model":
-      return state.origin === "codex" && state.backend === "codex"
-        ? <Line warn>Choose a model, or save a Helper model in {PROVIDERS_PAGE} → Helpers. {fallback}</Line>
-        : <Line warn>Choose a model on {runner}. {fallback}</Line>;
+      return <Line warn>Choose a model on {runner}, or choose Codex to use the Helper model. {fallback}</Line>;
     case "backend-loading":
       return <Line>Checking {runner} models…</Line>;
     case "backend-unavailable":
       return <Line warn>{runner} is not connected. {harness} threads get the digest only until it is.</Line>;
     case "model-not-offered":
-      return <Line warn>{runner} does not offer {state.model}. {harness} threads get the digest only.</Line>;
+      return <Line warn>{runner} does not offer {state.exact ? state.model : "an Automatic Helper model"}. {harness} threads get the digest only.</Line>;
     case "ready": {
-      const name = modelLabel(state.model ?? "", state.models);
+      const name = modelLabel(state.displayModel ?? state.model ?? "", state.models);
       return state.modelSource === "helper-default"
-        ? <Line>Runs <strong>{name}</strong> on Codex, your Helper model from {PROVIDERS_PAGE} → Helpers{state.effort ? `, ${state.effort} effort` : ""}.</Line>
+        ? <Line>Runs <strong>{name}</strong> on Codex{everyThreadType ? ` for ${harness} threads` : ""}, your Helper model from {PROVIDERS_PAGE} → Helpers{state.effort ? `, ${state.effort} effort` : ""}.</Line>
         : <Line>Runs <strong>{name}</strong> on {runner}{state.effort ? `, ${state.effort} effort` : ""}.</Line>;
     }
   }
@@ -180,7 +177,7 @@ function CaptureOriginRow(props: {
   disabled: boolean;
   onSave: (next: DesktopHelperModelSettings) => void;
 }) {
-  const state = captureRowState(props.origin, props.helperModels, props.backends);
+  const state = captureRowState(props.origin, props.helperModels, props.backends, "configured");
   const saved = state.saved;
   const backendSummary = props.backends.find((backend) => backend.kind === state.backend);
   const models = state.models;
@@ -198,14 +195,10 @@ function CaptureOriginRow(props: {
     props.onSave(withCaptureRow(props.helperModels, state.helper, next));
   };
   const savedModel = saved?.model;
-  const inheritLabel = props.origin === "codex" && state.backend === "codex"
-    ? props.helperModels.defaultModel
-      ? `Helper model (${modelLabel(props.helperModels.defaultModel, models)})`
-      : "Helper model (not saved)"
+  const inheritLabel = state.backend === "codex"
+    ? `Helper model (${modelLabel(helperDefaultName(props.helperModels, props.backends), models)})`
     : "Choose a model";
-  const pillLabel = state.status.kind === "needs-backend"
-    ? "Choose who runs it"
-    : savedModel
+  const pillLabel = savedModel
       ? models.length > 0 && !models.some((model) => model.id === savedModel)
         ? `${savedModel} (not offered)`
         : modelLabel(savedModel, models)
@@ -222,7 +215,7 @@ function CaptureOriginRow(props: {
           disabled={props.disabled}
           size="setting"
           provider={{
-            label: state.status.kind === "needs-backend" ? "Choose who runs it" : runnerLabel,
+            label: runnerLabel,
             showInPill: true,
             choices: {
               options: CAPTURE_RUNNERS
@@ -239,8 +232,7 @@ function CaptureOriginRow(props: {
                   description: "Not connected",
                 })),
               unavailableLabel: "Not connected",
-              // An Antigravity row without a saved backend has chosen nothing yet.
-              value: state.status.kind === "needs-backend" ? "" : state.backend,
+              value: state.backend,
               onChange: (backend) => {
                 if (backend === saved?.backend && backend) return;
                 // A model and effort belong to one backend's catalog.
@@ -253,13 +245,12 @@ function CaptureOriginRow(props: {
             label: pillLabel,
             kind: backendSummary?.kind,
             models,
-            disabled: state.status.kind === "needs-backend",
             leadingOptions: [
               {
                 value: "",
                 label: inheritLabel,
-                ...(props.origin === "codex" && state.backend === "codex"
-                  ? { description: "Uses the Helper model saved in AI Providers → Helpers." }
+                ...(state.backend === "codex"
+                  ? { description: "Uses the Helper model from AI Providers → Helpers." }
                   : { description: "No model chosen yet." }),
               },
               ...(savedModel && !models.some((model) => model.id === savedModel)
@@ -272,8 +263,10 @@ function CaptureOriginRow(props: {
               const keepEffort = saved?.reasoningEffort
                 && next?.supportsReasoning !== false
                 && (!nextEfforts || nextEfforts.includes(saved.reasoningEffort));
+              // Name the backend: a row without one runs on the helper's
+              // first backend, which is not always the one shown here.
               save({
-                ...(saved?.backend ? { backend: saved.backend } : {}),
+                backend: state.backend,
                 model,
                 ...(keepEffort ? { reasoningEffort: saved?.reasoningEffort } : {}),
               });
@@ -284,7 +277,6 @@ function CaptureOriginRow(props: {
               stops: splitEffortChoices(efforts).stops,
               value: saved?.reasoningEffort ?? "",
               defaultOption: { value: "", label: `Default (${defaultEffort})` },
-              disabled: state.status.kind === "needs-backend",
               onChange: (reasoningEffort: string) => {
                 save({
                   ...(saved?.backend ? { backend: saved.backend } : {}),
@@ -296,7 +288,7 @@ function CaptureOriginRow(props: {
           } : {})}
           {...(saved ? {
             reset: {
-              label: props.origin === "codex" ? "Use the Helper model" : "Clear this row",
+              label: "Use the Helper model",
               onSelect: () => save({}),
             },
           } : {})}
@@ -332,14 +324,30 @@ function gateOptions(snapshot: DesktopSettingsSnapshot): SelectOption<TokenMiser
   ];
 }
 
-const SUMMARIZER_OPTIONS: SelectOption<TokenMiserSummarizerMode>[] = [
-  { value: "off", label: "Off", description: "The agent gets the digest." },
-  {
-    value: "configured",
-    label: "Helper model for each thread type",
-    description: "Choose a model for Codex, Claude and Antigravity threads.",
-  },
-];
+/** The model the Helper model runs on Codex now, as a name. */
+function helperDefaultName(
+  helperModels: DesktopHelperModelSettings,
+  backends: readonly BackendSummary[],
+): string {
+  const state = captureRowState("codex", helperModels, backends, "helper");
+  return modelLabel(state.displayModel ?? state.model ?? "Automatic", state.models);
+}
+
+function summarizerOptions(helperName: string): SelectOption<TokenMiserSummarizerMode>[] {
+  return [
+    { value: "off", label: "Off", description: "The agent gets the digest." },
+    {
+      value: "helper",
+      label: "Helper model",
+      description: `${helperName} on Codex, from AI Providers → Helpers, for every thread type.`,
+    },
+    {
+      value: "configured",
+      label: "Helper model, with overrides",
+      description: "Choose another model for any thread type; the rest use the Helper model.",
+    },
+  ];
+}
 
 /**
  * Settings → Experimental → Token Miser (v2): command capture in Codex,
@@ -364,6 +372,8 @@ export function TokenMiserV2Settings(props: {
   const { gate, summarizer, earlier } = tokenMiserModelChoices(experimental);
   const gateStatus = gate.value === "none" ? undefined : decisionProviderStatus(gate.value, props.snapshot);
   const controlsDisabled = props.saving || !captureEnabled;
+  const helperState = captureRowState("codex", helperModels, props.backends, "helper");
+  const helperName = helperDefaultName(helperModels, props.backends);
 
   return (
     <SettingsSection
@@ -462,7 +472,7 @@ export function TokenMiserV2Settings(props: {
               className={PICKER_CLASS}
               disabled={controlsDisabled}
               value={summarizer.value}
-              options={SUMMARIZER_OPTIONS}
+              options={summarizerOptions(helperName)}
               onChange={(next) => {
                 if (next === summarizer.value && summarizer.source !== "default") return;
                 void props.onWriteConfig({ experimental: { tokenMiserSummarizer: next } });
@@ -471,30 +481,34 @@ export function TokenMiserV2Settings(props: {
           }
           actions={
             <div className="settings-field__help settings-token-miser__status">
-              {summarizer.value === "configured" ? (
+              {summarizer.value !== "off" ? (
                 <>
                   {gateStatus && !gateStatus.ready ? (
                     // The owner summarizes only what a working gate recommends.
                     <Line warn>Nothing is summarized until the decision model above is ready.</Line>
                   ) : null}
                   <Line>
-                    Reads up to 2 KB of the output and writes a summary of at most 640 bytes, in its own turn on the backend you
-                    choose, not in the thread. If a thread type has no model that can run, that thread type gets the digest only.
+                    Reads up to 2 KB of the output and writes a summary of at most 640 bytes, in its own turn, not in the
+                    thread. If a thread type’s model can’t run, that thread type gets the digest only.
                   </Line>
-                  <div className="settings-token-miser__origins">
-                    {CAPTURE_ORIGINS.map((entry) => (
-                      <CaptureOriginRow
-                        key={entry.origin}
-                        origin={entry.origin}
-                        label={entry.label}
-                        harness={entry.harness}
-                        backends={props.backends}
-                        helperModels={helperModels}
-                        disabled={controlsDisabled}
-                        onSave={(next) => { void props.onSaveHelperModels(next); }}
-                      />
-                    ))}
-                  </div>
+                  {summarizer.value === "helper" ? (
+                    captureRowLine(helperState, "Codex, Claude and Antigravity", props.backends, true)
+                  ) : (
+                    <div className="settings-token-miser__origins">
+                      {CAPTURE_ORIGINS.map((entry) => (
+                        <CaptureOriginRow
+                          key={entry.origin}
+                          origin={entry.origin}
+                          label={entry.label}
+                          harness={entry.harness}
+                          backends={props.backends}
+                          helperModels={helperModels}
+                          disabled={controlsDisabled}
+                          onSave={(next) => { void props.onSaveHelperModels(next); }}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </>
               ) : (
                 <Line>Off. No summary is written.</Line>

@@ -621,7 +621,12 @@ export type DesktopSettingsSource =
 
 export const TOKEN_MISER_GATE_PROVIDERS = ["none", "openai", "jev", "local"] as const;
 export type TokenMiserGateProvider = (typeof TOKEN_MISER_GATE_PROVIDERS)[number];
-export const TOKEN_MISER_SUMMARIZER_MODES = ["off", "configured"] as const;
+/**
+ * `helper` summarizes every thread type with the Helper model; `configured`
+ * also lets a thread type name its own model, and one that names none uses
+ * the Helper model.
+ */
+export const TOKEN_MISER_SUMMARIZER_MODES = ["off", "helper", "configured"] as const;
 export type TokenMiserSummarizerMode = (typeof TOKEN_MISER_SUMMARIZER_MODES)[number];
 
 /** Legacy excerpt selection. Its consent covered only ambiguous large captures. */

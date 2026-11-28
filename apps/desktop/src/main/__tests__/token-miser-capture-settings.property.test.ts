@@ -4,6 +4,7 @@ import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import { BOUNDED_COMMAND_HELPER_MODES } from "@pwragent/shared/contracts/settings";
 import {
   CAPTURE_HELPER_IDS,
+  HELPER_MODEL_AUTOMATIC_ORDER,
   type DesktopHelperModelChoice,
   type DesktopHelperModelSettings,
 } from "@pwragent/shared/helper-models";
@@ -20,12 +21,17 @@ const MODELS = ["model-a", "model-b"];
 // Never called: the property reads only whether, and how, a route resolves.
 const client = () => ({ generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { choice: "0" } })) });
 
-/** Every runner connected and offering every model, so only the routing rule decides. */
+/**
+ * Every runner connected and offering every model, so only the routing rule
+ * decides. Codex also offers Automatic's choices.
+ */
 const BACKENDS = (["codex", "claude", "acp:grok"] as const).map((kind) => ({
   kind,
   label: kind,
   available: true,
-  launchpadOptions: { models: MODELS.map((id) => ({ id, label: id })) },
+  launchpadOptions: {
+    models: [...MODELS, ...(kind === "codex" ? HELPER_MODEL_AUTOMATIC_ORDER : [])].map((id) => ({ id, label: id })),
+  },
 })) as unknown as BackendSummary[];
 
 const choice = fc.record({
@@ -60,11 +66,16 @@ const settingsArbitrary = fc.record({
   };
 });
 
-function ownerRoute(settings: DesktopHelperModelSettings, origin: CaptureOrigin, grokEnabled = true) {
-  // No gate, summarizer on: the owner routes to the thread type's row alone.
+function ownerRoute(
+  settings: DesktopHelperModelSettings,
+  origin: CaptureOrigin,
+  grokEnabled = true,
+  mode: "helper" | "configured" = "configured",
+) {
+  // No gate, summarizer on: the owner routes to the summarizer alone.
   return boundedCommandHelper({
     resolveTokenMiserGate: () => "none",
-    resolveTokenMiserSummarizer: () => "configured",
+    resolveTokenMiserSummarizer: () => mode,
     resolveHelperModelSettings: () => settings,
     resolveDecisionModelSettings: () => ({}),
     resolveDecisionApiKey: async () => undefined,
@@ -77,14 +88,14 @@ describe("Token Miser (v2) capture rows in Settings", () => {
   // Differential: the line under each Settings row must agree with the
   // owner's routing about whether, and with what, a thread type picks.
   it("names exactly the backend, model and effort the owner will run", () => {
-    fc.assert(fc.property(settingsArbitrary, (settings) => {
+    fc.assert(fc.property(settingsArbitrary, fc.constantFrom("helper" as const, "configured" as const), (settings, mode) => {
       for (const { origin } of CAPTURE_ORIGINS) {
-        const state = captureRowState(origin, settings, BACKENDS);
-        const owner = ownerRoute(settings, origin);
+        const state = captureRowState(origin, settings, BACKENDS, mode);
+        const owner = ownerRoute(settings, origin, true, mode);
         expect(state.status.kind === "ready").toBe(owner !== undefined);
         if (owner) {
           expect(owner.identity).toBe(JSON.stringify([
-            "none", undefined, state.helper, state.backend, state.model, state.effort,
+            "none", undefined, state.helper, state.backend, state.model, state.effort, state.exact,
           ]));
         }
       }
@@ -109,22 +120,42 @@ describe("Token Miser (v2) capture rows in Settings", () => {
     ));
   });
 
-  it("does not let Claude or Antigravity threads inherit the Codex Helper model", () => {
+  it("uses the Helper model for a thread type that names no model", () => {
     const settings: DesktopHelperModelSettings = { defaultModel: "model-a", helpers: {} };
-    expect(captureRowState("codex", settings, BACKENDS)).toMatchObject({
-      status: { kind: "ready" }, model: "model-a", modelSource: "helper-default",
+    for (const { origin } of CAPTURE_ORIGINS) {
+      expect(captureRowState(origin, settings, BACKENDS)).toMatchObject({
+        status: { kind: "ready" }, backend: "codex", model: "model-a", modelSource: "helper-default", exact: true,
+      });
+      expect(ownerRoute(settings, origin)).toBeDefined();
+    }
+    // Automatic: the owner asks for its first choice and Codex may fall back.
+    expect(captureRowState("claude", { helpers: {} }, BACKENDS)).toMatchObject({
+      status: { kind: "ready" }, model: HELPER_MODEL_AUTOMATIC_ORDER[0], exact: false,
     });
-    expect(captureRowState("claude", settings, BACKENDS).status.kind).toBe("needs-model");
-    expect(captureRowState("acp:antigravity", settings, BACKENDS).status.kind).toBe("needs-backend");
-    expect(ownerRoute(settings, "claude")).toBeUndefined();
-    expect(ownerRoute(settings, "acp:antigravity")).toBeUndefined();
-    // Shrunk counterexample: a Claude row that names Codex still needs its own model.
+    // A Claude row naming Codex and no model is the Helper model too.
     const claudeOnCodex: DesktopHelperModelSettings = {
       defaultModel: "model-b",
       helpers: { [CAPTURE_HELPER_IDS.claude]: { backend: "codex" } },
     };
-    expect(captureRowState("claude", claudeOnCodex, BACKENDS).status.kind).toBe("needs-model");
-    expect(ownerRoute(claudeOnCodex, "claude")).toBeUndefined();
+    expect(captureRowState("claude", claudeOnCodex, BACKENDS)).toMatchObject({ status: { kind: "ready" }, model: "model-b" });
+    // A row naming another backend without a model has chosen nothing.
+    const claudeOnGrok: DesktopHelperModelSettings = {
+      defaultModel: "model-b",
+      helpers: { [CAPTURE_HELPER_IDS.claude]: { backend: "acp:grok" } },
+    };
+    expect(captureRowState("claude", claudeOnGrok, BACKENDS).status.kind).toBe("needs-model");
+    expect(ownerRoute(claudeOnGrok, "claude")).toBeUndefined();
+  });
+
+  it("ignores thread-type rows when every thread type uses the Helper model", () => {
+    const settings: DesktopHelperModelSettings = {
+      defaultModel: "model-a",
+      helpers: { [CAPTURE_HELPER_IDS.claude]: { backend: "claude", model: "model-b", reasoningEffort: "high" } },
+    };
+    expect(captureRowState("claude", settings, BACKENDS, "helper")).toMatchObject({
+      backend: "codex", model: "model-a", effort: "low",
+    });
+    expect(ownerRoute(settings, "claude", true, "helper")?.identity).toContain("\"codex\",\"model-a\"");
   });
 
   it("reports a runner that is not connected instead of claiming it will run", () => {
