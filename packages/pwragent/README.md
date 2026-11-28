@@ -58,7 +58,7 @@ same parameter object as the desktop owner contracts:
 | --- | --- |
 | `start-thread` | `backend`, `cwd`, optional `executionMode` and model settings |
 | `register-directory` | `path`: adds an existing folder as a project, as the desktop's Add Project Directory does |
-| `factory-board` | `projectKey` from `register-directory`, `repository` under `pwrdrvr`, optional `limit`, `candidate` and `selection` |
+| `factory-board` | `projectKey` from `register-directory`, `repository` matching the registered GitHub origin, optional `limit`, `candidate` and `selection` |
 | `show` | `backend`, `threadId` |
 | `submit` | `SubmitDurableTurnRequest`: immutable client request ID, creation time, payload hash and request |
 | `receipt` | Durable client request `id`, `backend`, `threadId` |
@@ -86,12 +86,12 @@ standard profile SQLite database directly.
 
 Run `pwragent factory-board --params-file /request.json` with the registered
 `projectKey` and the GitHub repository name, for example `PwrAgent`. The owner
-verifies the repository against the registered project's Git remotes. It
+verifies the repository against the registered project's GitHub origin. It
 returns up to 25 recent open PRs, including PRs that no local thread has
 attached. `truncated` indicates more open PRs exist.
 
 Before publishing a PR, pass `candidate` with the immutable Linear `issueId`
-from the operator's selected `pwrdrvr` issue, the local `branch` and a full
+from the operator's selected Linear issue, the local `branch` and a full
 `baseRef` such as `refs/remotes/origin/main`. Optionally supply the linked
 `worktree`, up to eight existing local `reviewIds`, and `assessment` with
 `outcome` and `change`. The owner verifies the Git checkout and reports its
@@ -112,7 +112,7 @@ owner read through `readFactoryProject`.
 
 Pass the original `candidate` alongside `selection` after publishing. The
 projection keeps the issue-derived `candidate.outcomeId` and confirms the PR
-when repository, branch, target ref and head agree. A later head change is
+when repository, branch, target ref, head and base agree. A later revision change is
 shown separately from the local candidate revision.
 
 ## Unattended execution

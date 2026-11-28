@@ -39,7 +39,7 @@ import type { ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-p
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
+import { readForgeRepositoryRemotes, resolveGitHubRepoForDirectory, type GitHubRepoRef } from "../pr-status/git-remote";
 import { collectFactoryProject } from "../factory/factory-evidence-collector";
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
@@ -3868,7 +3868,7 @@ class DesktopAppServerService {
       resolveProject: async (directoryKey) => {
         const project = await this.getOverlayStore().getDirectoryLaunchpad({ directoryKey });
         if (!project?.registeredAt || !project.directoryPath || project.federationTarget?.scope === "remote") return undefined;
-        return { path: project.directoryPath, remotes: await readForgeRepositoryRemotes(project.directoryPath) };
+        return { path: project.directoryPath, origin: await resolveGitHubRepoForDirectory(project.directoryPath, { fresh: true }) };
       },
       cachedStatus: (key) => this.getCachedPrStatus(key),
       readReview: (id) => (reviews ??= createThreadReviewStorage()).get(id),

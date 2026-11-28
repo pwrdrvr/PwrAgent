@@ -10,10 +10,10 @@ import {
 import { isGitObjectId } from "@pwragent/shared/git-object-id";
 import type { ForgeCiClient } from "../pr-status/forge-ci-client";
 import type { GitHubRepoRef } from "../pr-status/git-remote";
+import { hasWorkflowRunsStillRunning } from "../pr-status/pr-derivations";
 import { readFactoryBranch } from "./factory-branch-evidence";
 
 const HOST = "github.com";
-const ORG = "pwrdrvr";
 const CHECK_LIMIT = 64;
 const REVIEW_LIMIT = 8;
 const STATUS_MAX_AGE_MS = 60_000;
@@ -34,8 +34,9 @@ const SELECTION_QUERY = PROJECT_QUERY.replace(
 ).replace("id nameWithOwner", `id nameWithOwner
     selected: pullRequest(number: $number) {
       ${ROW}
-      headRefName baseRefName headRefOid baseRefOid mergeCommit { oid }
+      headRefName baseRefName headRefOid baseRefOid baseRef { target { oid } } mergeCommit { oid }
       commits(last: 1) { nodes { commit {
+        checkSuites(first: ${CHECK_LIMIT}) { pageInfo { hasNextPage } nodes { status workflowRun { id } } }
         oid statusCheckRollup {
           state contexts(first: ${CHECK_LIMIT}) {
             pageInfo { hasNextPage }
@@ -52,7 +53,7 @@ const SELECTION_QUERY = PROJECT_QUERY.replace(
     }`);
 
 type RecordValue = Record<string, unknown>;
-type ProjectResolver = (key: string) => Promise<{ path: string; remotes: readonly GitHubRepoRef[] } | undefined>;
+type ProjectResolver = (key: string) => Promise<{ path: string; origin?: GitHubRepoRef } | undefined>;
 type CachedStatus = { pr: Pick<PrSummary, "headSha" | "baseSha" | "checkState">; fetchedAt: number };
 
 interface FactoryEvidencePorts {
@@ -173,7 +174,14 @@ function checkStatus(node: RecordValue): FactoryReceiptStatus {
 function checkObservations(node: RecordValue, headOid: string, url: string) {
   const commits = record(node.commits).nodes;
   const commit = Array.isArray(commits) && commits.length === 1 ? record(record(commits[0]).commit) : {};
-  const rollup = oid(commit.oid) === headOid ? record(commit.statusCheckRollup) : {};
+  const matching = oid(commit.oid) === headOid;
+  const rollup = matching ? record(commit.statusCheckRollup) : {};
+  const suites = matching ? record(commit.checkSuites) : {};
+  const suiteNodes = Array.isArray(suites.nodes) ? suites.nodes : [];
+  const workflowsPending = hasWorkflowRunsStillRunning(suiteNodes.slice(0, CHECK_LIMIT).map((raw) => {
+    const suite = record(raw);
+    return { status: text(suite.status, 32), workflowRun: suite.workflowRun ? { id: text(record(suite.workflowRun).id, 256) } : null };
+  }));
   const contexts = record(rollup.contexts);
   const truncated = record(contexts.pageInfo).hasNextPage !== false;
   const nodes = Array.isArray(contexts.nodes) ? contexts.nodes : [];
@@ -187,7 +195,8 @@ function checkObservations(node: RecordValue, headOid: string, url: string) {
     }] : [];
   });
   return {
-    checks, checksTruncated: truncated || nodes.length > CHECK_LIMIT || checks.length !== nodes.length,
+    checks, workflowsPending, checksTruncated: truncated || nodes.length > CHECK_LIMIT || checks.length !== nodes.length
+      || !Array.isArray(suites.nodes) || suiteNodes.length > CHECK_LIMIT || record(suites.pageInfo).hasNextPage !== false,
     checkRollup: text(rollup.state, 32),
   };
 }
@@ -227,12 +236,13 @@ function cacheReceipt(cached: CachedStatus | undefined, revision: { headOid: str
 export async function collectFactoryProject(value: unknown, ports: FactoryEvidencePorts): Promise<FactoryProjectProjection> {
   const { projectKey, repository: name, limit = FACTORY_PROJECT_PAGE_LIMIT, selection, candidate: requestedBranch } = readRequest(value);
   const project = await ports.resolveProject(projectKey);
-  const remote = project?.remotes.find((entry) => entry.host === HOST && entry.owner.toLowerCase() === ORG && entry.repo.toLowerCase() === name.toLowerCase());
-  if (!project || !remote) requestError();
+  const remote = project?.origin;
+  if (!project || !remote || remote.host !== HOST || remote.owner.includes("/") || remote.repo.toLowerCase() !== name.toLowerCase()) requestError();
+  const owner = remote.owner;
   const now = ports.now ?? Date.now;
-  const candidate = requestedBranch ? await readFactoryBranch(project.path, `${HOST}/${ORG}/${remote.repo}`, requestedBranch, ports.readReview, now) : undefined;
+  const candidate = requestedBranch ? await readFactoryBranch(project.path, `${HOST}/${owner}/${remote.repo}`, requestedBranch, ports.readReview, now) : undefined;
   if (candidate && !selection) return {
-    projectKey, repository: { host: HOST, owner: ORG, name: remote.repo },
+    projectKey, repository: { host: HOST, owner, name: remote.repo },
     authority: { source: "local_owner_git", observedAt: candidate.authority.observedAt },
     inventory: "unobserved", pullRequests: [], truncated: false, candidate,
   };
@@ -241,20 +251,20 @@ export async function collectFactoryProject(value: unknown, ports: FactoryEviden
     path: "", graphql: true,
     body: {
       query: selection ? SELECTION_QUERY : PROJECT_QUERY,
-      variables: { owner: ORG, name, limit, ...(selection ? { number: selection.number } : {}) },
+      variables: { owner, name, limit, ...(selection ? { number: selection.number } : {}) },
     },
   }));
   const data = record(record(response.data).repository);
   const id = text(data.id, 256);
-  const fullName = text(data.nameWithOwner, 101 + ORG.length);
+  const fullName = text(data.nameWithOwner, 101 + owner.length);
   const canonicalName = fullName?.split("/")[1];
   if ((Array.isArray(response.errors) && response.errors.length > 0)
-    || !id || !canonicalName || fullName?.toLowerCase() !== `${ORG}/${name.toLowerCase()}`
+    || !id || !canonicalName || fullName?.toLowerCase() !== `${owner.toLowerCase()}/${name.toLowerCase()}`
     || (selection && id !== selection.repositoryId)) {
     throw new Error("The selected project repository could not be confirmed by GitHub.");
   }
 
-  const repository = { host: HOST, id, owner: ORG, name: canonicalName } as const;
+  const repository = { host: HOST, id, owner, name: canonicalName } as const;
   const observedAt = now();
   const page = record(data.pullRequests);
   if (!Array.isArray(page.nodes)) throw new Error("GitHub returned an invalid project PR list.");
@@ -270,12 +280,13 @@ export async function collectFactoryProject(value: unknown, ports: FactoryEviden
   const pullRequest = prRow(node, repository);
   if (pullRequest.number !== selection.number) throw new Error("GitHub returned a different PR than requested.");
   const headOid = oid(node.headRefOid);
-  const baseOid = oid(node.baseRefOid);
+  // GitHub can retain the PR's recorded base after its target branch advances.
+  const baseOid = pullRequest.lifecycle === "open" ? oid(record(record(node.baseRef).target).oid) : oid(node.baseRefOid);
   const revision = pullRequest.firstParty && headOid && baseOid && headOid.length === baseOid.length ? { headOid, baseOid } : undefined;
   const checks = revision ? checkObservations(node, revision.headOid, pullRequest.url)
     : { checks: [], checksTruncated: false, checkRollup: undefined };
   const cache = revision ? cacheReceipt(ports.cachedStatus(buildPullRequestStatusKey({
-    provider: HOST, org: ORG, repo: canonicalName, number: pullRequest.number,
+    provider: HOST, org: owner, repo: canonicalName, number: pullRequest.number,
   })), revision, observedAt, checks.checkRollup) : undefined;
   const evidence = deriveFactoryEvidence({
     repositoryId: id, pullRequest, revision, expected: selection.expected,
@@ -289,7 +300,7 @@ export async function collectFactoryProject(value: unknown, ports: FactoryEviden
   if (!pullRequest.firstParty || node.headRefName !== candidate.branch || node.baseRefName !== baseBranch) {
     return { ...result, candidate: { ...candidate, publication: "mismatch" } };
   }
-  const confirmed = revision !== undefined && candidate.headOid === revision.headOid;
+  const confirmed = revision !== undefined && candidate.headOid === revision.headOid && candidate.baseOid === revision.baseOid;
   return {
     ...result, selected: { kind: "observed", evidence },
     candidate: confirmed ? { ...candidate, stage: "published", publication: "confirmed" }

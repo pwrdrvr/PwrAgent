@@ -11,7 +11,7 @@ import { collectFactoryProject } from "../factory/factory-evidence-collector";
 import { handleOutpostCommand } from "../headless/outpost";
 import { FACTORY_PR_DEFINITION, factoryEvidenceProblem } from "../openai-decisions/factory-pr-assessment";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
-import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
+import { resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { measureSqliteWrites, readSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../storage/desktop-overlay-store";
 import { createThreadReviewStorage } from "../storage/desktop-runtime-storage";
@@ -21,7 +21,7 @@ import { createTempStateDb, openFreshStateDb, removeTempStateDbDir } from "./sql
 
 vi.mock(import("../pr-status/git-remote"), async (load) => ({
   ...await load(),
-  readForgeRepositoryRemotes: vi.fn(),
+  resolveGitHubRepoForDirectory: vi.fn(),
 }));
 vi.mock(import("../storage/desktop-runtime-storage"), async (load) => ({
   ...await load(), createThreadReviewStorage: vi.fn(),
@@ -44,12 +44,13 @@ type ForgeFixtureOptions = {
   history?: number; limit?: number; actualHead?: string; actualBase?: string; checkHead?: string;
   checks?: ReturnType<typeof check>[]; checkRollup?: string; reviews?: ReturnType<typeof review>[];
   truncated?: boolean; selected?: boolean; headRepositoryId?: string;
+  suites?: { status: string; workflowRun: { id: string } | null }[]; suitesTruncated?: boolean;
 };
 
 function forgeFixture({
   history = 25, limit = 25, actualHead = headOid, actualBase = baseOid, checkHead = actualHead,
   checks = [check()], checkRollup = "SUCCESS", reviews = [review("APPROVED")],
-  truncated = false, selected = true, headRepositoryId = repositoryId,
+  truncated = false, selected = true, headRepositoryId = repositoryId, suites = [], suitesTruncated = false,
 }: ForgeFixtureOptions = {}) {
   return { data: { repository: {
     id: repositoryId, nameWithOwner: "pwrdrvr/Synthetic",
@@ -58,8 +59,9 @@ function forgeFixture({
       pageInfo: { hasNextPage: history > limit },
     },
     selected: selected ? {
-      ...pull(7, headRepositoryId), headRefOid: actualHead, baseRefOid: actualBase, headRefName: "factory/fixture", baseRefName: "main",
-      commits: { nodes: [{ commit: { oid: checkHead, statusCheckRollup: {
+      ...pull(7, headRepositoryId), headRefOid: actualHead, baseRefOid: actualBase, baseRef: { target: { oid: actualBase } },
+      headRefName: "factory/fixture", baseRefName: "main",
+      commits: { nodes: [{ commit: { oid: checkHead, checkSuites: { nodes: suites, pageInfo: { hasNextPage: suitesTruncated } }, statusCheckRollup: {
         state: checkRollup, contexts: { pageInfo: { hasNextPage: truncated }, nodes: checks },
       } } }] },
       reviews: { nodes: reviews },
@@ -83,7 +85,7 @@ function readEvidence(page: FactoryProjectProjection) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  vi.mocked(readForgeRepositoryRemotes).mockReset();
+  vi.mocked(resolveGitHubRepoForDirectory).mockReset();
   vi.mocked(createThreadReviewStorage).mockReset();
   resetDesktopOverlayStoreForTests();
 });
@@ -121,7 +123,7 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
     setDesktopOverlayStoreForTests(store);
     vi.mocked(createThreadReviewStorage).mockReturnValue(reviews);
     resetAppServerServiceForTests();
-    vi.mocked(readForgeRepositoryRemotes).mockResolvedValue([remote]);
+    vi.mocked(resolveGitHubRepoForDirectory).mockResolvedValue(remote);
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(forgeFixture({ actualHead, actualBase })));
     vi.spyOn(appServerService, "getForgeCiClient").mockReturnValue(new ForgeCiClient({
       gitlab: {} as never, enabled: () => true, takeToken: () => true, fetch: fetcher, githubToken: async () => "synthetic-token",
@@ -142,7 +144,7 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       expect(unpublished.candidate).toMatchObject({
         stage: "branch", publication: "unobserved", headOid: actualHead, baseOid: actualBase,
         authority: { source: "local_owner_git", runtimeInstanceId: expect.any(String), profile: expect.any(String) },
-        receipts: [{ source: "owner_review", kind: "review", status: "inconclusive", headOid: actualHead, baseOid: actualBase }],
+        receipts: [{ source: "owner_review", kind: "review", status: "inconclusive", headOid: actualHead, mergeBaseOid: actualBase }],
       });
       expect(unpublished.candidate?.assessment).not.toHaveProperty("pullRequest");
       expect(validateOpenAIDecisionInput(FACTORY_PR_DEFINITION.inputSchema, unpublished.candidate?.assessment).ok).toBe(true);
@@ -159,6 +161,16 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       const changed = await read({ ...params, selection: { repositoryId, number: 7, expected: { headOid: actualHead, baseOid: actualBase } } });
       expect(readEvidence(changed).revisionState).toBe("head_changed");
       expect(changed.candidate).toMatchObject({ publication: "revision_changed", outcomeId: unpublished.candidate?.outcomeId });
+      fetcher.mockResolvedValueOnce(Response.json(forgeFixture({ actualHead, actualBase: older })));
+      const movedBase = await read({ ...params, selection: { repositoryId, number: 7 } });
+      expect(movedBase.candidate).toMatchObject({ publication: "revision_changed", outcomeId: unpublished.candidate?.outcomeId });
+      await runGitCommand(projectPath, [...commit, "advance target"]);
+      const advanced = (await runGitCommand(projectPath, ["rev-parse", "HEAD"])).stdout.trim();
+      await runGitCommand(projectPath, ["update-ref", "refs/remotes/origin/main", advanced]);
+      const behind = await read(params);
+      expect(behind.candidate?.receipts).toContainEqual(expect.objectContaining({ status: "inconclusive", mergeBaseOid: actualBase }));
+      expect(behind.candidate?.assessment?.evidence).toContainEqual(expect.objectContaining({ kind: "review", headSha: actualHead }));
+      expect(behind.candidate?.assessment?.evidence[0]).not.toHaveProperty("baseSha");
     });
     expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0 });
   } finally {
@@ -182,7 +194,7 @@ it("reads unattached project PRs and a selected revision through the Outpost ope
     });
     expect(readSqliteWriteMetrics()?.commits).toBeGreaterThan(0);
     resetAppServerServiceForTests();
-    vi.mocked(readForgeRepositoryRemotes).mockResolvedValue([remote]);
+    vi.mocked(resolveGitHubRepoForDirectory).mockResolvedValue(remote);
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
       const { query, variables } = JSON.parse(String(init?.body));
       expect(query).toContain("repository(owner: $owner, name: $name)");
@@ -203,7 +215,7 @@ it("reads unattached project PRs and a selected revision through the Outpost ope
       const second = await handleOutpostCommand(services, "factory-board", request) as FactoryProjectProjection;
       const evidence = readEvidence(second);
       expect(evidence).toMatchObject({ revision: { headOid, baseOid }, ci: "passed", review: "inconclusive", candidate: { kind: "none" } });
-      expect(evidence.assessment?.evidence).toHaveLength(1);
+      expect(evidence.assessment?.evidence).toContainEqual(expect.objectContaining({ observation: expect.stringContaining("build") }));
       expect(factoryEvidenceProblem(evidence.assessment)).toBeUndefined();
       expect(validateOpenAIDecisionInput(FACTORY_PR_DEFINITION.inputSchema, evidence.assessment).ok).toBe(true);
       await expect(handleOutpostCommand(services, "factory-board", { ...request, projectKey: "directory:/other-profile" }))
@@ -219,13 +231,46 @@ it("reads unattached project PRs and a selected revision through the Outpost ope
 
 function collector(fixture = forgeFixture()) {
   return {
-    resolveProject: vi.fn(async () => ({ path: "/synthetic/project", remotes: [remote] })),
+    resolveProject: vi.fn(async () => ({ path: "/synthetic/project", origin: remote })),
     github: vi.fn(async () => fixture),
     cachedStatus: vi.fn(() => undefined),
     readReview: vi.fn(() => undefined),
     now: () => 100_000,
   };
 }
+
+it("compares an open PR against the live target tip even when its recorded base has not changed", async () => {
+  const fixture = forgeFixture();
+  fixture.data.repository.selected!.baseRef.target.oid = older;
+  const evidence = readEvidence(await collectFactoryProject(request, collector(fixture)));
+  expect(evidence).toMatchObject({ revision: { headOid, baseOid: older }, revisionState: "base_changed" });
+  expect(evidence.assessment).toBeUndefined();
+});
+
+it("resolves repository ownership from the registered project", async () => {
+  const fixture = forgeFixture();
+  fixture.data.repository.nameWithOwner = "AnotherTeam/Synthetic";
+  const ports = {
+    ...collector(fixture),
+    resolveProject: vi.fn(async () => ({ path: "/synthetic/project", origin: { ...remote, owner: "AnotherTeam" } })),
+  };
+  const result = await collectFactoryProject(request, ports);
+  expect(result.repository.owner).toBe("AnotherTeam");
+  expect(ports.github).toHaveBeenCalledTimes(1);
+});
+
+it("carries a failing rollup and blocked review into the advisory evidence even when another test passed", async () => {
+  const result = await collectFactoryProject(request, collector(forgeFixture({
+    checks: [check(), { ...check("FAILURE"), name: "upgrade" }], checkRollup: "FAILURE",
+    reviews: [review("CHANGES_REQUESTED")],
+  })));
+  const packet = readEvidence(result).assessment;
+  expect(packet?.evidence).toEqual(expect.arrayContaining([
+    expect.objectContaining({ observation: expect.stringMatching(/failed/i) }),
+    expect.objectContaining({ observation: expect.stringMatching(/blocked/i) }),
+  ]));
+  expect(factoryEvidenceProblem(packet)).toBeUndefined();
+});
 
 it("distinguishes empty, failed, skipped, incomplete and conflicting CI receipts", async () => {
   const examples = [
@@ -235,6 +280,9 @@ it("distinguishes empty, failed, skipped, incomplete and conflicting CI receipts
     { checks: [check()], truncated: true, ci: "inconclusive" },
     { checks: [check(), check("FAILURE")], ci: "conflict" },
     { checkHead: older, ci: "absent" },
+    { suites: [{ status: "QUEUED", workflowRun: { id: "run" } }], ci: "pending" },
+    { suites: [{ status: "QUEUED", workflowRun: null }], ci: "passed" },
+    { suitesTruncated: true, ci: "inconclusive" },
   ];
   for (const { ci, ...example } of examples) {
     const evidence = readEvidence(await collectFactoryProject(request, collector(forgeFixture(example))));
@@ -264,7 +312,7 @@ it("distinguishes current contradictory receipts from an expired cache observati
   const conflicting = readEvidence(await collectFactoryProject(request, {
     ...ports, cachedStatus: () => ({ pr, fetchedAt: 99_999 }),
   }));
-  expect(conflicting).toMatchObject({ ci: "conflict", review: "conflict", assessment: { evidence: [] } });
+  expect(conflicting).toMatchObject({ ci: "conflict", review: "conflict" });
   expect(conflicting.receipts).toContainEqual(expect.objectContaining({ source: "owner_pr_status", status: "conflict" }));
   const expired = readEvidence(await collectFactoryProject(request, {
     ...ports, cachedStatus: () => ({ pr, fetchedAt: 1 }),

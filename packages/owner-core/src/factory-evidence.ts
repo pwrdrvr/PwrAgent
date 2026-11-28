@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
-  FactoryEvidenceSnapshot, FactoryProjectPullRequest, FactoryReceiptProjection, FactoryReceiptStatus,
+  FactoryAssessmentPacket, FactoryEvidenceSnapshot, FactoryProjectPullRequest, FactoryReceiptProjection, FactoryReceiptStatus,
 } from "@pwragent/shared/factory-projection";
 
 type Revision = NonNullable<FactoryEvidenceSnapshot["revision"]>;
@@ -14,6 +14,7 @@ export interface FactoryEvidenceInput {
   checks: readonly FactoryReceiptProjection[];
   checksTruncated: boolean;
   checkRollup?: string;
+  workflowsPending?: boolean;
   reviews: readonly FactoryReceiptProjection[];
   mergeCommitOid?: string;
   cache?: FactoryReceiptProjection;
@@ -50,7 +51,7 @@ function checkVerdict(input: FactoryEvidenceInput, receipts: FactoryReceiptProje
   const statuses = [...byName.values()];
   if (statuses.includes("conflict") || input.cache?.status === "conflict") return "conflict";
   if (statuses.includes("failed") || input.checkRollup === "FAILURE" || input.checkRollup === "ERROR") return "failed";
-  if (statuses.includes("pending") || input.checkRollup === "PENDING" || input.checkRollup === "EXPECTED") return "pending";
+  if (input.workflowsPending || statuses.includes("pending") || input.checkRollup === "PENDING" || input.checkRollup === "EXPECTED") return "pending";
   if (!statuses.length) return "absent";
   return !input.checksTruncated && input.checkRollup === "SUCCESS" && required.length > 0
     && required.every((status) => status === "current") ? "passed" : "inconclusive";
@@ -87,15 +88,26 @@ export function deriveFactoryEvidence(input: FactoryEvidenceInput): FactoryEvide
   const digest = createHash("sha256").update(JSON.stringify([input.repositoryId, facts])).digest("hex");
   const revision = input.revision;
   if (!input.assessment || !revision || state !== "current") return { ...facts, digest };
-  const evidence = ordered.flatMap((receipt) => receipt.kind === "test" && receipt.status === "current"
-    && receipt.headOid === revision.headOid && receipt.reference
-    ? [{ kind: "test" as const, headSha: revision.headOid, reference: receipt.reference, observation: `GitHub reported success for ${receipt.name} on this PR head.` }]
-    : []);
+  const subject = { headSha: revision.headOid, reference: input.pullRequest.url };
+  const evidence: FactoryAssessmentPacket["evidence"] = [
+    { ...subject, kind: "test", observation: `Owner CI verdict: ${ci}.` },
+    { ...subject, kind: "review", observation: `Owner review verdict: ${review}. Independent clearance is unverified.` },
+    { ...subject, kind: "integration", baseSha: revision.baseOid, observation: "No tested merge candidate was observed for this revision pair." },
+  ];
+  for (const receipt of ordered) {
+    if (evidence.length === 64) break;
+    if (receipt.kind === "test" && receipt.headOid === revision.headOid && receipt.reference) {
+      evidence.push({
+        ...subject, kind: "test", reference: receipt.reference,
+        observation: `GitHub check ${receipt.name}: ${receipt.status}.`,
+      });
+    }
+  }
   return {
     ...facts, digest,
     assessment: {
       pullRequest: input.pullRequest.url, headSha: revision.headOid, baseSha: revision.baseOid,
-      ...input.assessment, evidence: ci === "conflict" ? [] : evidence,
+      ...input.assessment, evidence,
     },
   };
 }

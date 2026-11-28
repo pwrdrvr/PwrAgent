@@ -4,7 +4,7 @@ export const FACTORY_PROJECT_PAGE_LIMIT = 25;
 export interface FactoryProjectReadRequest {
   /** Exact registered directory key from this owner's project navigation. */
   projectKey: string;
-  /** Explicit GitHub repository name under the first-party organization. */
+  /** Explicit GitHub repository name of the registered project’s origin. */
   repository: string;
   limit?: number;
   candidate?: FactoryBranchSelection;
@@ -51,6 +51,8 @@ export interface FactoryReceiptProjection {
   source: "github" | "owner_pr_status" | "owner_review";
   status: FactoryReceiptStatus;
   actor?: string;
+  /** Start of a reviewed branch diff, independent of the live target tip. */
+  mergeBaseOid?: string;
   required?: boolean;
   headOid?: string;
   baseOid?: string;
@@ -64,7 +66,7 @@ export type FactoryAssessmentPacket = ({ pullRequest: string } | {
   baseSha: string;
   outcome: string;
   change: string;
-  evidence: { kind: "test" | "review"; headSha: string; baseSha?: string; reference: string; observation: string }[];
+  evidence: { kind: "test" | "review" | "integration"; headSha: string; baseSha?: string; reference: string; observation: string }[];
 };
 
 export interface FactoryEvidenceSnapshot {
@@ -84,7 +86,7 @@ export interface FactoryEvidenceSnapshot {
 
 export interface FactoryProjectProjection {
   projectKey: string;
-  repository: { host: "github.com"; id?: string; owner: "pwrdrvr"; name: string };
+  repository: { host: "github.com"; id?: string; owner: string; name: string };
   authority: { source: "local_owner_github" | "local_owner_git"; observedAt: number };
   /** Bounded newest-open-PR snapshot. One row never triggers another read. */
   inventory: "observed" | "unobserved";
@@ -97,7 +99,7 @@ export interface FactoryProjectProjection {
 export interface FactoryBranchProjection {
   /** Derived from the immutable issue anchor. Publication never rekeys the row. */
   outcomeId: string;
-  issue: { provider: "linear"; workspace: "pwrdrvr"; id: string; source: "local_operator" };
+  issue: { provider: "linear"; id: string; source: "local_operator" };
   authority: { source: "local_owner_git"; runtimeInstanceId: string; profile: string; observedAt: number };
   branch: string;
   baseRef: string;

@@ -42,7 +42,7 @@ async function baseRefOid(root: string, ref: string, repository: string): Promis
 }
 
 function reviewReceipt(
-  review: ThreadReview | undefined, roots: Set<string>, branch: string, headOid?: string, baseOid?: string,
+  review: ThreadReview | undefined, roots: Set<string>, branch: string, headOid?: string, mergeBaseOid?: string,
 ): FactoryReceiptProjection | undefined {
   const context = review?.context;
   if (review?.origin !== "automatic" || !context || !headOid
@@ -59,9 +59,9 @@ function reviewReceipt(
   });
   return {
     kind: "review", source: "owner_review", name: review.id, reference, headOid: head,
-    baseOid: base && isGitObjectId(base) ? base : undefined,
-    status: head !== headOid ? "stale_head" : base && baseOid && base !== baseOid ? "stale_base"
-      : !baseOid || base !== baseOid ? "inconclusive"
+    mergeBaseOid: base && isGitObjectId(base) ? base : undefined,
+    status: head !== headOid ? "stale_head" : base && mergeBaseOid && base !== mergeBaseOid ? "stale_base"
+      : !mergeBaseOid || base !== mergeBaseOid ? "inconclusive"
         : review.status === "open" || review.items.some((item) => item.status === "open") ? "pending" : "inconclusive",
   };
 }
@@ -86,12 +86,16 @@ export async function readFactoryBranch(
     roots.add(canonicalizeNavigationPath(worktree.path));
     roots.add(canonicalizeNavigationPath(selection.worktree));
   }
-  const receipts = (selection.reviewIds ?? []).map((id) => reviewReceipt(
-    readReview(id), roots, selection.branch, headOid, baseOid,
+  const reviewIds = selection.reviewIds ?? [];
+  const commonAncestor = reviewIds.length && headOid && baseOid
+    ? await git(project.path, ["merge-base", "--all", headOid, baseOid]) : undefined;
+  const mergeBaseOid = commonAncestor && isGitObjectId(commonAncestor) ? commonAncestor : undefined;
+  const receipts = reviewIds.map((id) => reviewReceipt(
+    readReview(id), roots, selection.branch, headOid, mergeBaseOid,
   )).filter((receipt): receipt is FactoryReceiptProjection => receipt !== undefined);
-  const issue = { provider: "linear", workspace: "pwrdrvr", id: selection.issueId, source: "local_operator" } as const;
+  const issue = { provider: "linear", id: selection.issueId, source: "local_operator" } as const;
   const result: FactoryBranchProjection = {
-    outcomeId: `linear:pwrdrvr:${issue.id}`, issue, branch: selection.branch, baseRef: selection.baseRef,
+    outcomeId: `linear:${issue.id}`, issue, branch: selection.branch, baseRef: selection.baseRef,
     authority: {
       source: "local_owner_git", runtimeInstanceId: getProcessRuntimeIdentity().instanceId,
       profile: resolveActiveProfileName(), observedAt: now(),
@@ -104,9 +108,9 @@ export async function readFactoryBranch(
     assessment: {
       candidate: { issue: result.outcomeId, repository, branch: selection.branch },
       headSha: headOid, baseSha: baseOid, ...selection.assessment,
-      evidence: receipts.flatMap((receipt) => receipt.headOid === headOid && receipt.baseOid === baseOid && receipt.reference
+      evidence: receipts.flatMap((receipt) => mergeBaseOid && receipt.headOid === headOid && receipt.mergeBaseOid === mergeBaseOid && receipt.reference
         ? [{
-          kind: "review" as const, headSha: headOid, baseSha: baseOid, reference: receipt.reference,
+          kind: "review" as const, headSha: headOid, reference: receipt.reference,
           observation: receipt.status === "pending"
             ? "The owner review record for this revision is open."
             : "The owner recorded a review of this revision. Independent correctness is unverified.",
