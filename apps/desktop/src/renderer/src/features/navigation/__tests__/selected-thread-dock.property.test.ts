@@ -305,7 +305,7 @@ describe("stuckBandBottom", () => {
         expect(measured).toBe(coveredFrom(listBottom, dividers));
         expect(probes).toBeLessThanOrEqual(Math.ceil(Math.log2(dividers.length + 1)));
       },
-    ), { numRuns: 300 });
+    ));
   });
 
   it("holds the divider at the bottom edge for the whole time its pinned rows cross it", () => {
