@@ -27,11 +27,10 @@ export class TranscriptPrStatusStore {
     return this.entries.get(key)?.pr;
   }
 
-  subscribe(pr: PrSummary, visible: boolean, listener: () => void): () => void {
-    const key = buildPullRequestStatusKey(pr);
+  subscribe(key: string, url: string, visible: boolean, listener: () => void): () => void {
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { url: pr.url, subscribers: new Map(), visibleCount: 0, fetchedAt: 0 };
+      entry = { url, subscribers: new Map(), visibleCount: 0, fetchedAt: 0 };
       this.entries.set(key, entry);
     }
     const wasVisible = entry.visibleCount > 0;
@@ -112,17 +111,17 @@ export function useTranscriptPullRequest(
     }
     return existing;
   }, [api]);
-  const key = buildPullRequestStatusKey(fallback);
+  const key = buildPullRequestStatusKey(pr);
+  const { url } = pr;
   const subscribe = useCallback((listener: () => void) => {
     if (!interest.seen || !store || preferNavigationSnapshot) return () => {};
-    return store.subscribe(fallback, interest.visible, listener);
-  }, [fallback, interest.seen, interest.visible, preferNavigationSnapshot, store]);
+    return store.subscribe(key, url, interest.visible, listener);
+  }, [key, url, interest.seen, interest.visible, preferNavigationSnapshot, store]);
   const getSnapshot = useCallback(() => store?.getSnapshot(key), [key, store]);
   const live = useSyncExternalStore(subscribe, getSnapshot, () => undefined);
+  const liveWithAuthoredUrl = useMemo(() => live && live.url !== url ? { ...live, url } : live, [live, url]);
   // Peer-owned observations win in every window, including pinned threads in
   // the main window. A local primary attachment is selected by the metadata
   // store instead; transcript-only gaps still use the on-demand cache.
-  return useMemo(() => live && !preferNavigationSnapshot
-    ? { ...live, url: fallback.url }
-    : fallback, [live, fallback, preferNavigationSnapshot]);
+  return !preferNavigationSnapshot && liveWithAuthoredUrl ? liveWithAuthoredUrl : fallback;
 }

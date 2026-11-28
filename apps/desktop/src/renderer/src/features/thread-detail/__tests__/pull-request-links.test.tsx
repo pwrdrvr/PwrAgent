@@ -496,6 +496,78 @@ describe("pull request links in transcript markdown", () => {
     expect(screen.getByText("Draft PR:").parentElement).toBe(markdownNode);
   });
 
+  it("keeps URL and shorthand chips mounted when a status refresh compacts the sidebar preview", () => {
+    const deepUrl = `${PR_URL}/files#diff-123`;
+    const text = `Check ${deepUrl} or #13290.`;
+    const otherPrs = Array.from({ length: 16 }, (_, index) => prSummary({
+      number: index + 1,
+      url: PR_URL.replace(/\d+$/, String(index + 1)),
+      state: "passing",
+      checkState: "passing",
+      createdAt: index + 2,
+    }));
+    const pending = prSummary({ createdAt: 1 });
+    const passing = { ...pending, state: "passing", checkState: "passing" } satisfies PrSummary;
+    const detail = (pr: PrSummary) => threadSummary([pr, ...otherPrs]);
+    const preview = (prs: PrSummary[]) => ({ ...threadSummary(prs), prsTruncated: true, prCount: 17 });
+    const transcript = (activeThread: NavigationThreadSummary, row: NavigationThreadSummary) => (
+      <PullRequestLinkProvider activeThread={activeThread} threads={[row]}>
+        <ThreadMarkdown text={text} />
+      </PullRequestLinkProvider>
+    );
+    const view = render(transcript(detail(pending), preview([pending, ...otherPrs.slice(1)])));
+    const chips = screen.getAllByRole("button", { name: /#13290.*draft · checks pending/ });
+    expect(chips).toHaveLength(2);
+    const dots = chips.map((chip) => chip.querySelector(".pr-chip__dot"));
+    act(() => chips[0]?.focus());
+
+    view.rerender(transcript(detail(passing), preview(otherPrs)));
+    const updated = screen.getAllByRole("button", { name: /#13290.*draft · checks passing/ });
+    expect(updated).toHaveLength(2);
+    updated.forEach((chip, index) => {
+      expect(chip).toBe(chips[index]);
+      expect(chip.querySelector(".pr-chip__dot")).toBe(dots[index]);
+    });
+    expect(chips[0]).toHaveFocus();
+    expect(chips[0]).toHaveAttribute("data-pr-url", deepUrl);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("draft · checks passing");
+  });
+
+  it("keeps a resolved shorthand chip while its same-repository sibling row refreshes", () => {
+    const active = projectThread({ id: "active", path: "/repos/catalog-service" });
+    const sibling = (prs: PrSummary[]) => projectThread({ id: "sibling", path: "/repos/catalog-service", prs });
+    const transcript = (activeThread: NavigationThreadSummary, rows: NavigationThreadSummary[]) => (
+      <PullRequestLinkProvider activeThread={activeThread} threads={rows}>
+        <ThreadMarkdown text="The fix is in #13290." />
+      </PullRequestLinkProvider>
+    );
+    const pending = prSummary();
+    const passing = prSummary({ state: "passing", checkState: "passing" });
+    const view = render(transcript(active, [active, sibling([pending])]));
+    const chip = screen.getByRole("button", { name: /#13290.*draft · checks pending/ });
+    const dot = chip.querySelector(".pr-chip__dot");
+
+    view.rerender(transcript(active, [active]));
+    expect(screen.getByRole("button", { name: /#13290.*draft · checks pending/ })).toBe(chip);
+    view.rerender(transcript(active, [active, sibling([passing])]));
+    expect(screen.getByRole("button", { name: /#13290.*draft · checks passing/ })).toBe(chip);
+    expect(chip.querySelector(".pr-chip__dot")).toBe(dot);
+
+    const other = projectThread({ id: "other", path: "/repos/analytics" });
+    const competing = projectThread({ id: "competing", path: "/repos/analytics", prs: [prSummary({
+      repo: "analytics", url: PR_URL.replace("catalog-service", "analytics"),
+    })] });
+    const bothRepositories = { ...active, linkedDirectories: [...active.linkedDirectories, ...other.linkedDirectories] };
+    view.rerender(transcript(bothRepositories, [bothRepositories, sibling([passing]), competing]));
+    expect(screen.queryByRole("button", { name: /#13290/ })).toBeNull();
+
+    view.rerender(transcript(active, [active, sibling([passing])]));
+    expect(screen.getByRole("button", { name: /#13290.*draft · checks passing/ })).toBeInTheDocument();
+    view.rerender(transcript(other, [other]));
+    expect(screen.queryByRole("button", { name: /#13290/ })).toBeNull();
+    expect(screen.getByText(/The fix is in #13290\./)).toBeInTheDocument();
+  });
+
   it.each([
     {
       field: "additions",
