@@ -406,6 +406,10 @@ Per theme:
   `#53566b`, which leaves no room under Catppuccin's text, so primary
   darkens to keep the ladder. Peach is 2.6:1 as text, so text and marks use
   a darker orange, and `--accent-fill` keeps peach under dark ink (6.3:1).
+  Hover sits between mantle and crust, 1.06:1 off the sidebar; the first
+  hover sat 1.02:1 there and a hovered thread row drew nothing. Every text
+  and mark token is floored against the accent tints over that hover, so a
+  darker hover moves them all.
 - **Solarized** keeps the published surfaces (`base03`/`base02`,
   `base3`/`base2`), terminal canvas, foreground, and 16-color ANSI mapping.
   Its stock text does not clear AA on `base02`: `base0` is 4.1:1 and
@@ -573,7 +577,7 @@ A row under the pointer must never look like the row Enter takes, the current pa
 - **Hover rules exclude the chosen state** (`:hover:not(.is-active)`, `:not([aria-selected="true"])`, `:not(:focus-visible)`). Otherwise a hover selector with higher specificity takes the accent off the chosen row while the pointer is on it.
 - **The accent and the ring belong to the chosen row.** Menus follow the same rule: the pointer does not move focus, so a hovered item takes the wash and the focused item takes the accent and the inset ring (`.terminal-menu__item`, `.todo-split__item`). An older menu that shares one tint between hover and focus is still told apart by the ring, so never set `outline: none` on a `:focus-visible` that shares its paint with `:hover`.
 
-`styles/__tests__/hover-cursor-paint-contract.test.ts` checks this for every rule in `app.css`. A state that marks the chosen row (`.is-active`, `.is-cursor`, `.is-selected`, `[aria-selected]`, `[aria-pressed]`, `[aria-current]`, a `--active` modifier, or `:focus-visible` with the app-wide ring) must paint at least one thing that `:hover` does not paint on the same element.
+`styles/__tests__/hover-cursor-paint-contract.test.ts` checks this for every rule in `app.css`. A state that marks the chosen row (`.is-active`, `.is-cursor`, `.is-selected`, `[aria-selected]`, `[aria-pressed]`, `[aria-current]`, `[data-current]`, `[data-selected]`, a `--active` modifier, or `:focus-visible` with the app-wide ring) must paint at least one thing that `:hover` does not paint on the same element. A row hovered through its hit area (`.row:has(.row__open:hover)`) counts as hovering the row.
 
 ## Typography
 

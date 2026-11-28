@@ -3767,13 +3767,20 @@ describe("color theme contract", () => {
     // Thread rows hover in the sidebar and the panel, and secondary buttons
     // and cards sit raised on the panel. A hover or raised token equal to
     // the surface under it draws nothing, which is how both Solarized
-    // themes first shipped.
+    // themes first shipped. A hover one step off the surface draws nothing
+    // either: Catppuccin Latte's thread rows hovered at 1.02:1 in the
+    // sidebar. Every other theme's hover steps at least 1.048:1.
+    const HOVER_STEP_FLOOR = 1.04;
     for (const [name, theme] of Object.entries(themes)) {
       const surface = (token: string): string => paint(theme, theme[token], "#000000");
-      expect(surface("bg-panel-hover"), `${name}: hover on the panel`)
-        .not.toBe(surface("bg-panel"));
-      expect(surface("bg-panel-hover"), `${name}: hover in the sidebar`)
-        .not.toBe(surface("bg-sidebar"));
+      expect(
+        contrastRatio(surface("bg-panel-hover"), surface("bg-panel")),
+        `${name}: hover on the panel`,
+      ).toBeGreaterThanOrEqual(HOVER_STEP_FLOOR);
+      expect(
+        contrastRatio(surface("bg-panel-hover"), surface("bg-sidebar")),
+        `${name}: hover in the sidebar`,
+      ).toBeGreaterThanOrEqual(HOVER_STEP_FLOOR);
       expect(surface("bg-panel-elevated"), `${name}: raised on the panel`)
         .not.toBe(surface("bg-panel"));
     }

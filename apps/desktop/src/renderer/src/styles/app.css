@@ -344,7 +344,7 @@
   --theme-swatch-catppuccin-mocha-text: #cdd6f4;
   --theme-swatch-catppuccin-latte-app: #eff1f5;
   --theme-swatch-catppuccin-latte-sidebar: #e6e9ef;
-  --theme-swatch-catppuccin-latte-accent: #983801;
+  --theme-swatch-catppuccin-latte-accent: #953500;
   --theme-swatch-catppuccin-latte-text: #343648;
   --theme-swatch-solarized-dark-app: #002b36;
   --theme-swatch-solarized-dark-sidebar: #073642;
@@ -752,7 +752,11 @@
   --bg-sidebar: #e6e9ef;
   --bg-panel: #eff1f5;
   --bg-panel-elevated: #f7f8fa;
-  --bg-panel-hover: #e4e7ed;
+  /* Between mantle and crust, 1.06:1 off the sidebar. The earlier #e4e7ed
+     sat 1.02:1 off it, so a hovered thread row drew nothing there. Every
+     text and mark token below was retuned to its floor against this hover
+     (and the accent tints over it), so darkening it means moving them. */
+  --bg-panel-hover: #dfe3ea;
   --bg-row-active: #f1e3de;
   --bg-input: #f7f8fa;
 
@@ -764,11 +768,11 @@
      between it and Catppuccin's text, so primary darkens to keep a ladder. */
   --text-primary: #343648;
   --text-secondary: #454756;
-  --text-muted: #545666;
-  --text-subtle: color-mix(in srgb, var(--text-primary) 79%, transparent);
+  --text-muted: #515363;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 80%, transparent);
 
   /* Accent: Peach */
-  --accent: #983801;
+  --accent: #953500;
   --accent-strong: #933601;
   --accent-bright: #8e3401;
   /* Peach is 2.6:1 as text on base, so text and marks take a darker
@@ -805,33 +809,33 @@
   --danger-base: #d20f39;
   --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
   --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
-  --danger-text: #86001f;
-  --danger-text-light: #b1012b;
+  --danger-text: #82001c;
+  --danger-text-light: #ac0027;
   --success-soft: color-mix(in srgb, #40a02b 18%, transparent);
   --success-border: color-mix(in srgb, #40a02b 32%, transparent);
-  --success-text: #245918;
+  --success-text: #225716;
   --info-soft: color-mix(in srgb, #1e66f5 16%, transparent);
   --info-border: color-mix(in srgb, #1e66f5 28%, transparent);
-  --info-text: #0841b4;
-  --info-teal: #0f6065;
-  --brand-purple: #6e13e6;
+  --info-text: #053eb1;
+  --info-teal: #0c5e63;
+  --brand-purple: #6c0ce3;
 
   /* Status */
-  --status-ok: #28631b;
+  --status-ok: #256018;
   /* Dots, strokes, and meters take Catppuccin's yellow at the 3:1 mark floor,
      measured against the selected row (#f1e3de) as well. Warning text keeps
      the darker amber. At text strength the PR chip's pending dot read as the
      closed dot. */
-  --status-warning: #be6f00;
-  --status-error: #b1012b;
-  --status-suspended: #7c8297;
-  --status-warning-text: #7d4c00;
+  --status-warning: #bc6d00;
+  --status-error: #ac0027;
+  --status-suspended: #7a7f94;
+  --status-warning-text: #7a4900;
   --savings-over: var(--status-warning-text);
   --usage-series-1: var(--accent);
   --usage-series-2: #1e66f5;
-  --usage-series-3: #179097;
+  --usage-series-3: #148e95;
   --usage-series-4: #8839ef;
-  --usage-series-5: #b67418;
+  --usage-series-5: #b37214;
 }
 
 :root[data-color-theme="solarized-dark"] {
@@ -7337,9 +7341,14 @@ a.button {
   margin-top: 5px;
 }
 
-.stack-display__layer[data-current],
-.stack-display__layer:has(.stack-display__open:hover) {
+.stack-display__layer[data-current] {
   background: var(--accent-soft);
+}
+
+/* Hover is a neutral wash, never the current PR's accent. The current
+   layer keeps its accent under the pointer. */
+.stack-display__layer:not([data-current]):has(.stack-display__open:hover) {
+  background: var(--surface-overlay-hover);
 }
 
 .stack-display__text {
