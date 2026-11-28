@@ -36,7 +36,7 @@ import {
   threadTodoPlacementParent,
   threadTodoProjectIsChoosable,
 } from "@pwragent/shared/contracts/thread-todos";
-import { buildThreadIdentityKey, NAVIGATION_QUERY_MAX_PAGE_ROWS, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import { defaultModelOption } from "@pwragent/shared/model-defaults";
 import { normalizePullRequestUrl } from "@pwragent/shared/pull-request-review";
 import { resolveThreadTodoStartAccess } from "@pwragent/shared/thread-todo-access";
@@ -437,6 +437,7 @@ export function installThreadTodoRuntime(params: {
     if (event.notification.method === "navigation/providerThreads/refreshed") {
       // Discovery and authentication recovery can make persisted owners
       // available without changing a card. The inventory spans backends.
+      reviewAutoFixDispatcher.wake();
       params.broadcast({ at: Date.now() });
       return;
     }
@@ -458,17 +459,12 @@ export function installThreadTodoRuntime(params: {
     const queueStatus = event.notification.method === "thread/turnQueue/updated" ? event.notification.params.status : undefined;
     const queueEnded = queueStatus === "terminal" || queueStatus === "cancelled" || queueStatus === "failed";
     if (event.notification.method === "pullRequest/status/updated") {
-      const { prKey, pr } = event.notification.params as { prKey?: string; pr?: PrSummary };
-      if (prKey) reviewAutoFixDispatcher.wakeForStackUpdate({
-        prKeys: [prKey, ...event.navigationPullRequestKeyAliases ?? []], pr,
-      });
-      else reviewAutoFixDispatcher.wake();
+      reviewAutoFixDispatcher.wakeForPullRequest(event.notification.params.prKey, event.navigationPullRequestKeyAliases);
     } else if (event.notification.method === "thread/stackHold/updated") {
       const { threadId } = event.notification.params;
-      if (threadId) reviewAutoFixDispatcher.wakeForStackUpdate({ threadKey: buildThreadIdentityKey(event.backend, threadId) });
+      if (threadId) reviewAutoFixDispatcher.wakeForStackOperation({ backend: event.backend, threadId });
       else reviewAutoFixDispatcher.wake();
     } else if (event.notification.method === "thread/pullRequests/updated") {
-      // A review's captured checkout can gain or lose a covered attachment.
       reviewAutoFixDispatcher.wake({ backend: event.backend, threadId: event.notification.params.threadId });
     } else if (!handledTerminalTurn && (event.notification.method === "thread/lock/updated"
       || (status && typeof status === "object" && "type" in status && status.type === "idle")
@@ -476,7 +472,7 @@ export function installThreadTodoRuntime(params: {
       const threadId = "threadId" in event.notification.params && typeof event.notification.params.threadId === "string"
         ? event.notification.params.threadId : undefined;
       const thread = threadId ? { backend: event.backend, threadId } : undefined;
-      if (queueEnded && thread) reviewAutoFixDispatcher.wakeAfterRepairProgress(thread);
+      if (queueEnded && thread) reviewAutoFixDispatcher.onThreadAvailable(thread);
       else reviewAutoFixDispatcher.wake(thread);
     }
     const completed = completedThreadReview(event);

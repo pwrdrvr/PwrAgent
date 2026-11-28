@@ -18,40 +18,6 @@ export function grokSignInCommand(command: string, windows: boolean): string {
   return `${windows ? "& " : ""}${quoted} login`;
 }
 
-export function acpStatusLabel(entry: AcpAgentSettingsEntry): string {
-  if (grokSignInRequired(entry)) {
-    return "Sign in required";
-  }
-  if (entry.installed && entry.unavailableReason) {
-    return "Action required";
-  }
-  if (entry.installed && entry.authStatus === "required") {
-    return "Discovered - setup required";
-  }
-  if (entry.installed) {
-    return "Discovered";
-  }
-  // Only an incompatible legacy CLI is on disk (e.g. the retired
-  // Python kimi-cli). Plain "Not installed" copy would hide that the
-  // operator has something to remediate.
-  if (entry.incompatibleInstances?.length) {
-    return "Legacy CLI - action required";
-  }
-  if (entry.installStatus === "install-failed") {
-    return "Discovery failed";
-  }
-  if (entry.installStatus === "not-installed") {
-    return "Not installed";
-  }
-  if (entry.rejectedInstances?.some((instance) => instance.reason === "probe-timed-out")) {
-    return "Detected · check timed out";
-  }
-  if (entry.rejectedInstances?.length) {
-    return "Detected · unavailable";
-  }
-  return "Unavailable";
-}
-
 /**
  * "2h ago" for a settings status line. Timestamps here report when PwrAgent
  * last did something on the operator's behalf (a release check), and the exact

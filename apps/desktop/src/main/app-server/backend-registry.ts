@@ -1427,8 +1427,9 @@ export class DesktopBackendRegistry {
    */
   private readonly observedThreadNames = new Map<
     string,
-    { title: string; titleSource: AppServerRenamedTitleSource }
+    { title: string; titleSource: AppServerRenamedTitleSource; observationSequence: number }
   >();
+  private lastThreadNameEventSequence = 0;
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private readonly queuedMessageTitler: QueuedMessageTitler;
@@ -1986,7 +1987,7 @@ export class DesktopBackendRegistry {
         threadId: caller.threadId, turnId: caller.turnId ?? "",
         requestId: `bounded-command-${randomUUID()}`, serverName: "PwrAgent Token Miser",
         mode: "form", requestedSchema: { type: "object", properties: {} },
-        message: `Allow Token Miser to retain output from one native shell invocation of ${command}? The command uses the shell's working directory and permissions. Its full output will be available to this turn for up to five minutes.${helper ? ` Relevant excerpts may be sent to ${helper}.` : ""}`,
+        message: `Allow Token Miser to retain output from one native shell invocation of ${command}? The command uses the shell's working directory and permissions. Its full output will be available to this turn for up to five minutes.${helper ? ` The command, bounded output, and recent assistant message may be sent to ${helper}.` : ""}`,
         _meta: null,
       },
     });
@@ -2412,6 +2413,7 @@ export class DesktopBackendRegistry {
       recordCodexWorktreeOwnerThread: (...args: Parameters<typeof this.recordCodexWorktreeOwnerThread>) => this.recordCodexWorktreeOwnerThread(...args),
       recordMissingCodexThread: (...args: Parameters<typeof this.recordMissingCodexThread>) => this.recordMissingCodexThread(...args),
       recordQueuedMessageTitle: (...args: Parameters<typeof this.recordQueuedMessageTitle>) => this.recordQueuedMessageTitle(...args),
+      recordOpenAIDecisionsUsageLines: (lines: ThreadUsageLineRecord[]) => this.recordOpenAIDecisionsUsageLines(lines),
       recordTokenMiserHelperInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserHelperInference"]>) => this.threadUsageLedger.recordTokenMiserHelperInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
       refreshCodexProviderCatalogs: (...args: Parameters<typeof this.refreshCodexProviderCatalogs>) => this.refreshCodexProviderCatalogs(...args),
@@ -4391,7 +4393,7 @@ export class DesktopBackendRegistry {
           ...(overlay?.extraLinkedDirectories ?? []),
           ...(cachedDirectory ? [cachedDirectory] : []),
         ]),
-      });
+      }, pending.observationSequence);
       result.push(projected);
     }
     checkDeadline();
@@ -4768,7 +4770,13 @@ export class DesktopBackendRegistry {
         // Point reads omit checkout and runtime facts supplied by discovery.
         // Keep those facts and take the activity watermark and acknowledged title.
         const { title, titleSource } = projectOwnerThreadTitle(native, await this.overlayStore.getThreadMetadata?.(ref));
-        summary = this.withObservedThreadName({ ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt });
+        // Only Codex has a listing that can trail this read; other backends
+        // answer it from the store their rename wrote.
+        summary = this.withObservedThreadName(
+          { ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt },
+          observation,
+          ref.backend !== "codex",
+        );
       }
     }
     if (!summary) return undefined;
@@ -4792,6 +4800,7 @@ export class DesktopBackendRegistry {
     if (this.closed || (ref.backend === "codex" && this.isCodexBootstrapDeferredFn())) {
       throw new Error("Thread link discovery is unavailable.");
     }
+    const observationSequence = this.reserveThreadInfoObservation();
     const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
     const overlay = (await readOverlays.call(this.overlayStore, {
       backend: ref.backend, threadIds: [ref.threadId],
@@ -4832,7 +4841,7 @@ export class DesktopBackendRegistry {
           : ref.backend === "claude" ? thread.executionMode ?? overlay?.executionMode : overlay?.executionMode ?? thread.executionMode,
         model: overlay?.model ?? thread.model,
         reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
-      }),
+      }, observationSequence),
     };
   }
 
@@ -19089,6 +19098,7 @@ export class DesktopBackendRegistry {
     callerReason?: string;
     ownerId?: string;
   }): Promise<AppServerThreadSummary[]> {
+    const observationSequence = this.reserveThreadInfoObservation();
     const observedFilterThreadIds =
       this.observedCodexThreadIdsMatchingFilter(params.filter);
     let incomplete = false;
@@ -19198,6 +19208,9 @@ export class DesktopBackendRegistry {
       allThreads,
       params,
     );
+    // A pending start's placeholder carries the owner's own rename, so only a
+    // row the provider listed can acknowledge it.
+    const providerListedThreadIds = new Set(allThreads.map((thread) => thread.id));
 
     const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
     const overlaysByThreadId = await readOverlays.call(this.overlayStore, {
@@ -19294,7 +19307,10 @@ export class DesktopBackendRegistry {
 
     const statusReconciledThreads = enrichedThreads
       .map((thread) => this.reconcileCodexThreadListStatus(thread))
-      .map((thread) => this.withObservedThreadName(thread));
+      .map((thread) => this.withObservedThreadName(
+        thread,
+        providerListedThreadIds.has(thread.id) ? observationSequence : undefined,
+      ));
     const normalizedFilter = params.filter?.trim().toLowerCase();
     const filteredThreads = normalizedFilter && observedFilterThreadIds.size > 0
       ? statusReconciledThreads.filter(
@@ -20962,10 +20978,13 @@ export class DesktopBackendRegistry {
     if (params.backend === "codex" && this.codexClient.readThreadSummary) {
       // Eligibility is checked before and after helper work. Read this identity
       // each time so a late operator rename still cancels generated naming.
+      const observationSequence = this.reserveThreadInfoObservation();
       return await this.withCodexThreadClient(params.threadId, async (client) => {
         const thread = await client.readThreadSummary!(params.threadId);
         const metadata = await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: params.threadId });
-        return thread.archivedAt === undefined ? this.withObservedThreadName({ ...thread, ...projectOwnerThreadTitle(thread, metadata) }) : undefined;
+        return thread.archivedAt === undefined ? this.withObservedThreadName(
+          { ...thread, ...projectOwnerThreadTitle(thread, metadata) }, observationSequence, false,
+        ) : undefined;
       }).catch(() => undefined);
     }
     if (isAcpBackendId(params.backend)) {
@@ -22937,22 +22956,23 @@ export class DesktopBackendRegistry {
         if (trimmed) {
           const key = buildThreadIdentityKey(event.backend, threadId);
           const titleSource = normalizeRenamedTitleSource(params.titleSource);
+          const observationSequence = this.reserveThreadInfoObservation();
           this.threadInfoStore.observe({
             identity: { backend: event.backend, threadId },
-            observationSequence: this.reserveThreadInfoObservation(),
-            source: "lifecycle-notification",
+            observationSequence,
+            source: "name-notification",
             title: trimmed,
             titleSource,
           });
-          // Only where a provider can still contradict us. This map is the
-          // "provider has not echoed our rename back yet" set, and every
-          // reader of it is Codex-facing; the sole path that removes an entry
-          // is the Codex listing. An ACP rename has no such window — it wrote
-          // the session store on its way here, and that store is what ACP
-          // listings read — so remembering one only leaks an entry that
-          // nothing can ever retire.
+          // Keep the name until a provider read can confirm it. ACP listings
+          // already read the session store that the rename updated.
           if (!isAcpBackendId(event.backend)) {
-            this.observedThreadNames.set(key, { title: trimmed, titleSource });
+            this.lastThreadNameEventSequence = observationSequence;
+            this.observedThreadNames.set(key, { title: trimmed, titleSource, observationSequence });
+            // A start renamed before the provider lists it (a to-do card names
+            // its thread at once) is served from this placeholder.
+            const pending = this.pendingStartedThreads.get(key);
+            if (pending) this.pendingStartedThreads.set(key, { ...pending, title: trimmed, titleSource });
           }
         }
       }
@@ -22976,23 +22996,41 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * A fresh Codex point read can see a newer explicit name, but the pending
+   * observation stays until the provider listing catches up.
+   */
   private withObservedThreadName(
     thread: AppServerThreadSummary,
+    providerObservationSequence?: number,
+    acknowledge = true,
   ): AppServerThreadSummary {
     const key = buildThreadIdentityKey(thread.source, thread.id);
     const observed = this.observedThreadNames.get(key);
     if (!observed) {
+      // A newer listing may already have acknowledged the rename. The name
+      // still applies to provider reads that started before the event.
+      if (providerObservationSequence !== undefined && providerObservationSequence < this.lastThreadNameEventSequence) {
+        return this.threadInfoStore.projectTitleAfterNameNotification(thread, providerObservationSequence);
+      }
       return thread;
     }
-    if (thread.titleSource === observed.titleSource) {
+    if (
+      providerObservationSequence !== undefined
+      && providerObservationSequence > observed.observationSequence
+      && thread.titleSource === observed.titleSource
+      && (observed.titleSource === "explicit" || thread.title === observed.title)
+    ) {
       // Matching provenance means the provider acknowledged our event. Text
       // that differs under the same source is durable provider truth from a
       // rename this process may not have observed (profiles can be shared by
       // processes). Comparing against the recorded source rather than a
       // hardcoded `explicit` is what lets a generated title retire: stamping
       // `explicit` here would also overwrite the `derived` the rename set,
-      // leaving listThreads and getThreadInfo permanently disagreeing.
-      this.observedThreadNames.delete(key);
+      // leaving listThreads and getThreadInfo permanently disagreeing. A
+      // different `derived` text is the provider's prompt preview, not a
+      // rename, so only the same text acknowledges a generated title.
+      if (acknowledge) this.observedThreadNames.delete(key);
       return thread;
     }
     return {
@@ -23611,6 +23649,7 @@ export class DesktopBackendRegistry {
 
   private async emit(event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt): Promise<void> {
     const notification = event.notification;
+    this.boundedCommandCapture.observeIntent(event, this.resolveTokenMiserBoundedCommands);
     if (!event.federationTarget && this.boundedCommandCapture.pending
       && (notification.method === "item/started" || notification.method === "item/completed")) {
       const item = readRecord(notification.params.item);
@@ -23633,6 +23672,7 @@ export class DesktopBackendRegistry {
     if (isTerminal && !event.federationTarget) {
       const turnId = turnIdFromTerminalNotification(notification);
       if (turnId) {
+        this.boundedCommandCapture.forgetIntent({ backend: event.backend, threadId: notification.params.threadId, turnId });
         if (this.boundedCommandCapture.pending) {
           const threadId = notification.params.threadId;
           releaseBoundedCommands = this.boundedCommandCapture.endTurn({ backend: event.backend, threadId, turnId },

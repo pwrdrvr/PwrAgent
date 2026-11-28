@@ -3,13 +3,13 @@ import type {
   AppServerThreadMessageOrigin,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ReviewAfterAction } from "@pwragent/shared/contracts/agent";
-import { buildThreadIdentityKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import type {
   ReviewAutoFixRun,
   ReviewAutoFixStatus,
   ThreadReview,
 } from "@pwragent/shared/contracts/thread-reviews";
-import { threadReviewDisplayTitle } from "@pwragent/shared/contracts/thread-reviews";
+import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { reviewContextPullRequests, threadReviewDisplayTitle } from "@pwragent/shared/contracts/thread-reviews";
 import { autoFixReviewFindingsPrompt, orderReviewItems } from "../../shared/review-fix-prompts";
 
 export type ReviewAutoFixThread = { backend: AppServerBackendKind; threadId: string };
@@ -322,18 +322,17 @@ export type ReviewAutoFixTurnRequest = {
   messageOrigin: AppServerThreadMessageOrigin;
 };
 
-export type ReviewAutoFixStackUpdate =
-  | { prKeys: readonly string[]; pr?: Pick<PrSummary, "headRefName" | "baseRefName"> }
-  | { threadKey: string }
-  | { repairThreadKey: string };
-
-export type ReviewAutoFixStackWakeFilter = (update: ReviewAutoFixStackUpdate) => boolean;
-export type ReviewAutoFixStackObserver = (filter: ReviewAutoFixStackWakeFilter, needsRetry?: () => boolean) => void;
-
-const STACK_RETRY_DELAY_MS = 30_000;
+export type ReviewStackHoldObservation = {
+  /** Subscribe before the asynchronous activity read can observe a stale repair. */
+  readActivity: (threadKey: string) => void;
+  /** Keep the dependency on the repair that actually blocked the review. */
+  heldBy: (threadKey: string) => void;
+  observeOperation?: (threadKeys: readonly string[], journalHeld: boolean) => void;
+  unavailable?: () => void;
+};
 
 function scheduleStackRetry(retry: () => void): () => void {
-  const timer = setTimeout(retry, STACK_RETRY_DELAY_MS);
+  const timer = setTimeout(retry, 30_000);
   timer.unref();
   return () => clearTimeout(timer);
 }
@@ -341,9 +340,7 @@ function scheduleStackRetry(retry: () => void): () => void {
 export type ReviewAutoFixDispatcherDeps = {
   getReview: (id: string) => ThreadReview | undefined;
   isThreadArchived: (thread: ReviewAutoFixThread) => boolean;
-  readStackHold?: (
-    review: ThreadReview, setWakeFilter: ReviewAutoFixStackObserver,
-  ) => Promise<string | undefined>;
+  readStackHold?: (review: ThreadReview, observation: ReviewStackHoldObservation) => Promise<string | undefined>;
   scheduleStackRetry?: (retry: () => void) => () => void;
   threadHasActiveTurn?: (thread: ReviewAutoFixThread) => boolean;
   suspendDispatch?: (thread: ReviewAutoFixThread) => () => void;
@@ -361,282 +358,391 @@ export type ReviewAutoFixDispatcherDeps = {
 };
 
 type HandoffSuspension = {
-  backend: AppServerBackendKind;
-  threadId: string;
   reviewTurnId?: string;
   reviewTurnEnded: boolean;
   release: () => void;
 };
+
+type PendingAutoFix = {
+  id: string;
+  thread: ReviewAutoFixThread;
+  forgeScopes: readonly ForgeWakeScope[];
+  repairThreads: Set<string>;
+  changedRepairThreads: Set<string>;
+  repairBlocker?: string;
+  operationThreads?: Set<string>;
+  journalHeld?: boolean;
+  stackUnavailable?: boolean;
+  cancelStackRetry?: () => void;
+  checking: boolean;
+  recheck: boolean;
+  hold?: string;
+  handoff?: HandoffSuspension;
+};
+
+type ForgeWakeScope = {
+  repository: string | undefined;
+  idle: Set<PendingAutoFix>;
+  reviewCount: number;
+  lastWake: number;
+};
+
+function repositoryOf(prKey: unknown): string | undefined {
+  if (typeof prKey !== "string") return undefined;
+  return /^([^\s/#]+(?:\/[^\s/#]+){2,})#[1-9]\d*$/.exec(prKey)?.[1]?.toLowerCase();
+}
+
+function reviewRepositories(review: ThreadReview): readonly (string | undefined)[] {
+  const repositories = new Set(reviewContextPullRequests(review.context)
+    .map((pr) => repositoryOf(buildPullRequestStatusKey(pr))));
+  return repositories.size ? [...repositories] : [undefined];
+}
+
+function addPending<Key>(index: Map<Key, Set<PendingAutoFix>>, key: Key, pending: PendingAutoFix): void {
+  const existing = index.get(key);
+  if (existing) existing.add(pending);
+  else index.set(key, new Set([pending]));
+}
+
+function removePending<Key>(index: Map<Key, Set<PendingAutoFix>>, key: Key, pending: PendingAutoFix): void {
+  const existing = index.get(key);
+  if (!existing) return;
+  existing.delete(pending);
+  if (!existing.size) index.delete(key);
+}
 
 /**
  * Sends Auto-fix turns for landed armed reviews, honoring stack holds without
  * dropping wakeups or losing review-to-fix precedence over queued messages.
  */
 export class ReviewAutoFixDispatcher {
-  private readonly heldReviews = new Map<string, string>();
-  private readonly checkingReviews = new Set<string>();
-  private readonly recheckReviews = new Set<string>();
-  private readonly stackWakeFilters = new Map<string, {
-    matches: ReviewAutoFixStackWakeFilter;
-    needsRetry?: () => boolean;
-  }>();
-  private readonly stackRetries = new Map<string, () => void>();
-  private disposed = false;
-  private readonly handoffSuspensions = new Map<string, HandoffSuspension>();
+  private readonly pending = new Map<string, PendingAutoFix>();
+  private readonly byThread = new Map<string, Set<PendingAutoFix>>();
+  private readonly byRepository = new Map<string | undefined, ForgeWakeScope>();
+  private readonly byRepairThread = new Map<string, Set<PendingAutoFix>>();
   private readonly now: () => number;
+  private forgeWakeSequence = 0;
+  private disposed = false;
 
   constructor(private readonly deps: ReviewAutoFixDispatcherDeps) {
     this.now = deps.now ?? Date.now;
   }
 
   onReviewLanded(id: string, thread: ReviewAutoFixThread, reviewTurnId: string | undefined): void {
-    this.claimHandoffSuspension(id, thread, reviewTurnId);
-    void this.dispatch(id);
+    void this.dispatch(id, { thread, reviewTurnId });
   }
 
   onTurnEnded(thread: ReviewAutoFixThread, endedTurnIds: ReadonlySet<string>): void {
-    for (const handoff of this.handoffSuspensions.values()) {
-      if (
-        handoff.backend === thread.backend
-        && handoff.threadId === thread.threadId
-        && (!handoff.reviewTurnId || endedTurnIds.has(handoff.reviewTurnId))
-      ) {
+    for (const { handoff } of this.byThread.get(threadKey(thread)) ?? []) {
+      if (handoff && (!handoff.reviewTurnId || endedTurnIds.has(handoff.reviewTurnId))) {
         handoff.reviewTurnEnded = true;
       }
     }
-    this.wakeAfterRepairProgress(thread);
+    this.onThreadAvailable(thread);
   }
 
-  wakeAfterRepairProgress(thread: ReviewAutoFixThread): void {
-    this.wake(thread, { repairThreadKey: buildThreadIdentityKey(thread.backend, thread.threadId) });
-  }
-
-  wake(thread?: ReviewAutoFixThread, repairUpdate?: { repairThreadKey: string }): void {
-    this.wakeMatching((id) => {
-      if (!thread) return true;
-      if (repairUpdate && this.stackWakeFilters.get(id)?.matches(repairUpdate)) return true;
-      const review = this.deps.getReview(id);
-      return !review || (review.backend === thread.backend && review.threadId === thread.threadId);
-    });
-  }
-
-  wakeForStackUpdate(update: ReviewAutoFixStackUpdate): void {
-    // Readers without scoped evidence still need every possible wakeup.
-    this.wakeMatching((id) => this.stackWakeFilters.get(id)?.matches(update) ?? true);
-  }
-
-  private wakeMatching(matches: (id: string) => boolean): void {
-    for (const id of this.checkingReviews) {
-      if (matches(id)) this.recheckReviews.add(id);
+  onThreadAvailable(thread: ReviewAutoFixThread): void {
+    const key = buildThreadIdentityKey(thread.backend, thread.threadId);
+    const own = this.byThread.get(threadKey(thread));
+    this.wakePending(own ?? []);
+    for (const pending of [...this.byRepairThread.get(key) ?? []]) {
+      if (own?.has(pending) || !this.isCurrent(pending)) continue;
+      if (pending.checking) pending.changedRepairThreads.add(key);
+      else void this.dispatch(pending.id);
     }
-    for (const id of [...this.heldReviews.keys()]) {
-      if (!this.checkingReviews.has(id) && matches(id)) void this.dispatch(id);
+  }
+
+  wake(thread?: ReviewAutoFixThread): void {
+    this.wakePending(thread ? this.byThread.get(threadKey(thread)) ?? [] : this.pending.values());
+  }
+
+  wakeForStackOperation(thread: ReviewAutoFixThread): void {
+    const key = buildThreadIdentityKey(thread.backend, thread.threadId);
+    this.wakePending([...this.pending.values()].filter((pending) => pending.checking
+      || pending.journalHeld || pending.stackUnavailable || pending.operationThreads?.has(key)
+      || (pending.thread.backend === thread.backend && pending.thread.threadId === thread.threadId)));
+  }
+
+  wakeForPullRequest(prKey: unknown, aliases: readonly string[] = []): void {
+    const repository = repositoryOf(prKey);
+    if (!repository) {
+      this.wake();
+      return;
+    }
+    // A different PR in this repository may be a lower stack layer, including
+    // a layer discovered by this very observation. Its thread/backend may differ.
+    // Reviews without captured PR context can be affected by any observation.
+    const sequence = ++this.forgeWakeSequence;
+    const affected = new Set<PendingAutoFix>();
+    for (const key of new Set([undefined, repository, ...aliases.map(repositoryOf)])) {
+      const scope = this.byRepository.get(key);
+      if (!scope) continue;
+      // In-flight checks compare against this sequence when they return.
+      scope.lastWake = sequence;
+      for (const pending of scope.idle) affected.add(pending);
+    }
+    this.wakePending(affected);
+  }
+
+  private wakePending(reviews: Iterable<PendingAutoFix>): void {
+    for (const pending of [...reviews]) {
+      if (this.isCurrent(pending)) void this.dispatch(pending.id);
     }
   }
 
   onThreadArchived(thread: ReviewAutoFixThread): void {
-    const matchesThread = (id: string): boolean => {
-      const handoff = this.handoffSuspensions.get(id);
-      if (handoff) {
-        return handoff.backend === thread.backend && handoff.threadId === thread.threadId;
-      }
-      const review = this.deps.getReview(id);
-      return review !== undefined && review.backend === thread.backend && review.threadId === thread.threadId;
-    };
-    const cancelled = new Set<string>();
-    for (const id of [...this.handoffSuspensions.keys()]) {
-      if (matchesThread(id)) {
-        this.heldReviews.delete(id);
-        this.releaseHandoffSuspension(id);
-        cancelled.add(id);
-      }
-    }
-    for (const id of [...this.heldReviews.keys()]) {
-      if (matchesThread(id)) {
-        this.heldReviews.delete(id);
-        cancelled.add(id);
-      }
-    }
-    for (const id of this.checkingReviews) {
-      if (matchesThread(id)) {
-        this.recheckReviews.add(id);
-        cancelled.add(id);
-      }
-    }
-    for (const id of cancelled) {
-      this.cancelStackRetry(id);
-      this.stackWakeFilters.delete(id);
-      this.deps.recordRun(thread, id, { kind: "queue", status: "cancelled", at: this.now() });
+    for (const pending of [...this.byThread.get(threadKey(thread)) ?? []]) {
+      if (this.isCurrent(pending)) this.cancelReview(pending);
     }
   }
 
   dispose(): void {
     this.disposed = true;
-    for (const id of this.stackRetries.keys()) this.cancelStackRetry(id);
-    for (const id of [...this.handoffSuspensions.keys()]) {
-      this.releaseHandoffSuspension(id);
+    for (const pending of this.pending.values()) this.forget(pending);
+  }
+
+  private isCurrent(pending: PendingAutoFix): boolean {
+    return this.pending.get(pending.id) === pending;
+  }
+
+  private track(review: ThreadReview): PendingAutoFix {
+    const { id, backend, threadId } = review;
+    const thread = { backend, threadId };
+    const pending: PendingAutoFix = {
+      id, thread, forgeScopes: reviewRepositories(review).map((repository) => this.joinForgeScope(repository)),
+      repairThreads: new Set(), changedRepairThreads: new Set(),
+      checking: false, recheck: false,
+    };
+    this.pending.set(id, pending);
+    addPending(this.byThread, threadKey(thread), pending);
+    return pending;
+  }
+
+  private joinForgeScope(repository: string | undefined): ForgeWakeScope {
+    let scope = this.byRepository.get(repository);
+    if (!scope) {
+      scope = { repository, idle: new Set(), reviewCount: 0, lastWake: 0 };
+      this.byRepository.set(repository, scope);
     }
-    this.heldReviews.clear();
-    this.recheckReviews.clear();
-    this.stackWakeFilters.clear();
+    scope.reviewCount++;
+    return scope;
   }
 
-  private cancelStackRetry(id: string): void {
-    this.stackRetries.get(id)?.();
-    this.stackRetries.delete(id);
+  private forget(pending: PendingAutoFix): void {
+    pending.cancelStackRetry?.();
+    this.pending.delete(pending.id);
+    removePending(this.byThread, threadKey(pending.thread), pending);
+    for (const scope of pending.forgeScopes) {
+      scope.idle.delete(pending);
+      if (--scope.reviewCount === 0) this.byRepository.delete(scope.repository);
+    }
+    for (const thread of pending.repairThreads) removePending(this.byRepairThread, thread, pending);
+    this.releaseHandoffSuspension(pending);
   }
 
-  private cancelReview(id: string, thread: ReviewAutoFixThread): void {
-    this.heldReviews.delete(id);
-    this.releaseHandoffSuspension(id);
-    this.deps.recordRun(thread, id, { kind: "queue", status: "cancelled", at: this.now() });
+  private cancelReview(pending: PendingAutoFix): void {
+    this.forget(pending);
+    this.deps.recordRun(pending.thread, pending.id, { kind: "queue", status: "cancelled", at: this.now() });
   }
 
-  private releaseHandoffSuspension(id: string): void {
-    const handoff = this.handoffSuspensions.get(id);
-    if (!handoff) return;
-    this.handoffSuspensions.delete(id);
-    handoff.release();
+  private releaseHandoffSuspension(pending: PendingAutoFix): void {
+    const { handoff } = pending;
+    pending.handoff = undefined;
+    handoff?.release();
   }
 
   private claimHandoffSuspension(
-    id: string,
+    pending: PendingAutoFix,
     thread: ReviewAutoFixThread,
     reviewTurnId: string | undefined,
   ): void {
     if (!this.deps.readStackHold || !this.deps.suspendDispatch) return;
-    for (const [existingId, existing] of this.handoffSuspensions.entries()) {
-      if (existing.backend === thread.backend && existing.threadId === thread.threadId) {
-        this.releaseHandoffSuspension(existingId);
-      }
+    for (const other of this.byThread.get(threadKey(thread)) ?? []) {
+      this.releaseHandoffSuspension(other);
     }
-    this.handoffSuspensions.set(id, {
-      backend: thread.backend,
-      threadId: thread.threadId,
-      reviewTurnId,
-      reviewTurnEnded: false,
-      release: this.deps.suspendDispatch(thread),
-    });
+    if (!this.isCurrent(pending)) return;
+    const release = this.deps.suspendDispatch(thread);
+    if (this.isCurrent(pending)) pending.handoff = { reviewTurnId, reviewTurnEnded: false, release };
+    else release();
   }
 
-  private readStackHold(review: ThreadReview): Promise<string | undefined> | undefined {
-    this.stackWakeFilters.delete(review.id);
-    return this.deps.readStackHold?.(review, (matches, needsRetry) => {
-      if (!this.disposed) this.stackWakeFilters.set(review.id, { matches, needsRetry });
-    });
-  }
-
-  async dispatch(id: string): Promise<void> {
+  async dispatch(id: string, landed?: { thread: ReviewAutoFixThread; reviewTurnId?: string }): Promise<void> {
     if (this.disposed) return;
-    if (this.checkingReviews.has(id)) {
-      this.recheckReviews.add(id);
+    const existing = this.pending.get(id);
+    if (existing?.checking) {
+      existing.recheck = true;
       return;
     }
-    this.cancelStackRetry(id);
-    this.checkingReviews.add(id);
+    let pending = existing;
     try {
-      do {
-        this.recheckReviews.delete(id);
-        const review = this.deps.getReview(id);
-        const message = review && reviewAutoFixMessage(review);
-        if (!review || !message || this.deps.isThreadArchived(review)) {
-          if (review) {
-            this.cancelReview(id, review);
-          } else {
-            this.heldReviews.delete(id);
-            this.releaseHandoffSuspension(id);
-          }
-          return;
-        }
-        if (this.deps.readStackHold) {
-          this.deps.recordRun(review, id, { kind: "queue", status: "held", at: this.now() });
-        }
-        const hold = await this.readStackHold(review);
-        const current = this.deps.getReview(id);
-        const latest = current && reviewAutoFixMessage(current);
-        if (!current || !latest || this.deps.isThreadArchived(current)) {
-          this.cancelReview(id, current ?? review);
-          return;
-        }
-        if (hold) {
-          // The card names the stack hold until admission decides otherwise.
-          this.deps.recordRun(current, id, { kind: "stackHold", reason: hold, at: this.now() });
-          if (this.heldReviews.get(id) !== hold) {
-            this.deps.onHeld?.(current, hold);
-          }
-          this.heldReviews.set(id, hold);
-          // Do not freeze queued user messages while a stack hold is active.
-          this.releaseHandoffSuspension(id);
-          continue;
-        }
-        const request: ReviewAutoFixTurnRequest = {
-          backend: current.backend,
-          threadId: current.threadId,
-          input: [{ type: "text", text: latest.text }],
-          origin: "automation",
-          messageOrigin: latest.messageOrigin,
-        };
-        if (this.deps.readStackHold) {
-          // Keep ownership until admission. A queued start could otherwise
-          // outlive the observation that cleared the gate.
-          const hasHandoff = this.handoffSuspensions.has(id);
-          let admissionHold: string | undefined;
-          const result = await this.deps.submitTurnIfIdle({
-            ...request,
-            canAdmit: async () => {
-              admissionHold = await this.readStackHold(current);
-              return !admissionHold;
-            },
-            ...(hasHandoff ? { reviewAutoFixHandoff: true } : {}),
-          });
-          if (result.status === "busy") {
-            const afterBusy = this.deps.getReview(id);
-            if (!afterBusy || !reviewAutoFixMessage(afterBusy) || this.deps.isThreadArchived(afterBusy)) {
-              this.cancelReview(id, afterBusy ?? current);
-              return;
-            }
-            // Record the gate once admission answers, so a hold that closes
-            // again at admission does not flash the current-turn wording.
-            this.deps.recordRun(afterBusy, id, {
-              kind: "stackHold",
-              ...(admissionHold ? { reason: admissionHold } : {}),
-              at: this.now(),
-            });
-            this.heldReviews.set(id, admissionHold ?? "Waiting for turn admission");
-            const handoff = this.handoffSuspensions.get(id);
-            const reviewTurnStillActive = handoff !== undefined
-              && !handoff.reviewTurnEnded
-              && (this.deps.threadHasActiveTurn?.(afterBusy) ?? true);
-            if (handoff && !reviewTurnStillActive && !this.recheckReviews.has(id)) {
-              this.releaseHandoffSuspension(id);
-            }
-            continue;
-          }
-          this.deps.recordRun(current, id, { kind: "stackHold", at: this.now() });
-        } else {
-          await this.deps.submitTurn(request);
-        }
-        this.heldReviews.delete(id);
-        this.releaseHandoffSuspension(id);
+      let review = this.deps.getReview(id);
+      if (!review) {
+        if (pending) this.forget(pending);
         return;
-      } while (this.recheckReviews.has(id) && this.heldReviews.has(id));
+      }
+      pending ??= this.track(review);
+      pending.cancelStackRetry?.();
+      pending.cancelStackRetry = undefined;
+      pending.checking = true;
+      for (const scope of pending.forgeScopes) scope.idle.delete(pending);
+      if (landed) this.claimHandoffSuspension(pending, landed.thread, landed.reviewTurnId);
+      while (this.isCurrent(pending)) {
+        pending.recheck = false;
+        const forgeSnapshot = this.forgeWakeSequence;
+        await this.checkReview(pending, review, forgeSnapshot);
+        if (!this.isCurrent(pending) || !pending.hold || !this.needsRecheck(pending, forgeSnapshot)) return;
+        review = this.deps.getReview(id);
+        if (!review) {
+          this.forget(pending);
+          return;
+        }
+      }
     } catch (error) {
-      this.heldReviews.delete(id);
-      this.releaseHandoffSuspension(id);
+      if (this.disposed || (pending && !this.isCurrent(pending))) return;
+      if (pending) this.forget(pending);
       const reason = error instanceof Error ? error.message : String(error);
       const review = this.deps.getReview(id);
       if (!review) return;
       this.deps.onSendFailed?.(review, reason);
       this.deps.recordRun(review, id, { kind: "sendFailed", reason, at: this.now() });
     } finally {
-      this.checkingReviews.delete(id);
-      this.recheckReviews.delete(id);
-      if (!this.heldReviews.has(id)) {
-        this.stackWakeFilters.delete(id);
-      } else if (!this.disposed && this.stackWakeFilters.get(id)?.needsRetry?.()) {
-        const cancel = (this.deps.scheduleStackRetry ?? scheduleStackRetry)(() => void this.dispatch(id));
-        this.stackRetries.set(id, cancel);
+      if (pending && this.isCurrent(pending)) {
+        pending.checking = false;
+        pending.recheck = false;
+        for (const scope of pending.forgeScopes) scope.idle.add(pending);
+        if (pending.hold && pending.stackUnavailable) {
+          const retry = this.deps.scheduleStackRetry ?? scheduleStackRetry;
+          const held = pending;
+          held.cancelStackRetry = retry(() => {
+            if (this.isCurrent(held)) void this.dispatch(held.id);
+          });
+        }
       }
+    }
+  }
+
+  private needsRecheck(pending: PendingAutoFix, forgeSnapshot: number): boolean {
+    return pending.recheck
+      || (pending.repairBlocker !== undefined && pending.changedRepairThreads.has(pending.repairBlocker))
+      || pending.forgeScopes.some((scope) => scope.lastWake > forgeSnapshot);
+  }
+
+  private observeStackHold(pending: PendingAutoFix) {
+    pending.changedRepairThreads.clear();
+    let blocker: string | undefined;
+    let unavailable = false;
+    let journalHeld = false;
+    const operationThreads = new Set<string>();
+    const observe = (key: string) => {
+      if (!this.isCurrent(pending) || pending.repairThreads.has(key)) return;
+      pending.repairThreads.add(key);
+      addPending(this.byRepairThread, key, pending);
+    };
+    return {
+      readActivity: observe,
+      heldBy: (key) => { blocker = key; observe(key); },
+      observeOperation: (keys, journal) => {
+        for (const key of keys) operationThreads.add(key);
+        journalHeld ||= journal;
+      },
+      unavailable: () => { unavailable = true; },
+      finish: (hold: string | undefined) => {
+        if (!this.isCurrent(pending)) return;
+        pending.operationThreads = operationThreads;
+        pending.journalHeld = journalHeld;
+        pending.stackUnavailable = unavailable;
+        pending.repairBlocker = hold ? blocker : undefined;
+        for (const key of pending.repairThreads) {
+          if (key === pending.repairBlocker) continue;
+          removePending(this.byRepairThread, key, pending);
+          pending.repairThreads.delete(key);
+        }
+      },
+    } satisfies ReviewStackHoldObservation & { finish: (hold: string | undefined) => void };
+  }
+
+  private async checkReview(pending: PendingAutoFix, review: ThreadReview, forgeSnapshot: number): Promise<void> {
+    const { id } = pending;
+    if (!reviewAutoFixMessage(review) || this.deps.isThreadArchived(review)) {
+      this.cancelReview(pending);
+      return;
+    }
+    if (this.deps.readStackHold) {
+      this.deps.recordRun(review, id, { kind: "queue", status: "held", at: this.now() });
+    }
+    const observation = this.observeStackHold(pending);
+    const hold = await this.deps.readStackHold?.(review, observation);
+    observation.finish(hold);
+    if (!this.isCurrent(pending)) return;
+    const current = this.deps.getReview(id);
+    const latest = current && reviewAutoFixMessage(current);
+    if (!current || !latest || this.deps.isThreadArchived(current)) {
+      this.cancelReview(pending);
+      return;
+    }
+    if (hold) {
+      // The card names the stack hold until admission decides otherwise.
+      this.deps.recordRun(current, id, { kind: "stackHold", reason: hold, at: this.now() });
+      if (pending.hold !== hold) this.deps.onHeld?.(current, hold);
+      pending.hold = hold;
+      // Do not freeze queued user messages while a stack hold is active.
+      this.releaseHandoffSuspension(pending);
+      return;
+    }
+    const request: ReviewAutoFixTurnRequest = {
+      backend: current.backend,
+      threadId: current.threadId,
+      input: [{ type: "text", text: latest.text }],
+      origin: "automation",
+      messageOrigin: latest.messageOrigin,
+    };
+    if (this.deps.readStackHold) {
+      // Keep ownership until admission. A queued start could otherwise
+      // outlive the observation that cleared the gate.
+      let admissionHold: string | undefined;
+      const result = await this.deps.submitTurnIfIdle({
+        ...request,
+        canAdmit: async () => {
+          if (!this.isCurrent(pending)) return false;
+          const observation = this.observeStackHold(pending);
+          admissionHold = await this.deps.readStackHold?.(current, observation);
+          observation.finish(admissionHold);
+          return this.isCurrent(pending) && !admissionHold;
+        },
+        ...(pending.handoff ? { reviewAutoFixHandoff: true } : {}),
+      });
+      if (!this.isCurrent(pending)) return;
+      if (result.status === "busy") {
+        this.recordBusy(pending, admissionHold, forgeSnapshot);
+        return;
+      }
+      this.deps.recordRun(current, id, { kind: "stackHold", at: this.now() });
+    } else {
+      await this.deps.submitTurn(request);
+    }
+    if (this.isCurrent(pending)) this.forget(pending);
+  }
+
+  private recordBusy(pending: PendingAutoFix, admissionHold: string | undefined, forgeSnapshot: number): void {
+    const { id, handoff } = pending;
+    const afterBusy = this.deps.getReview(id);
+    if (!afterBusy || !reviewAutoFixMessage(afterBusy) || this.deps.isThreadArchived(afterBusy)) {
+      this.cancelReview(pending);
+      return;
+    }
+    // Record the gate once admission answers, so a hold that closes
+    // again at admission does not flash the current-turn wording.
+    this.deps.recordRun(afterBusy, id, {
+      kind: "stackHold",
+      ...(admissionHold ? { reason: admissionHold } : {}),
+      at: this.now(),
+    });
+    pending.hold = admissionHold ?? "Waiting for turn admission";
+    const reviewTurnStillActive = handoff !== undefined
+      && !handoff.reviewTurnEnded
+      && (this.deps.threadHasActiveTurn?.(afterBusy) ?? true);
+    if (handoff && !reviewTurnStillActive && !this.needsRecheck(pending, forgeSnapshot)) {
+      this.releaseHandoffSuspension(pending);
     }
   }
 }

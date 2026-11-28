@@ -3045,7 +3045,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("does not mark a listing incomplete when no Codex executable is selected", async () => {
-    const noExecutable = new Error("Codex discovery has not selected an executable. Refresh Codex in Settings.");
+    const noExecutable = new Error("Codex discovery has not selected an executable. Select Check again under Setup in Settings → Codex.");
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({ listThreadsError: noExecutable }),
       overlayStore: createOverlayStoreMock(),

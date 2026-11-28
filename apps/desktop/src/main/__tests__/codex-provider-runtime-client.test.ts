@@ -22,6 +22,7 @@ function fixture() {
   const providers = new Map<string, string>();
   const reported = new Map<string, string>();
   const raw = {
+    generateStructuredObject: vi.fn(async (params: { model?: string }) => ({ status: params.model === "Bonsai.gguf" ? "ok" : "unavailable" })),
     startThread: vi.fn(async () => ({ threadId: "new-thread" })),
     forkThread: vi.fn(async () => ({ threadId: "forked-thread" })),
     startTurn: vi.fn(async () => ({ turnId: "turn" })),
@@ -95,6 +96,17 @@ describe("provider-specific Codex runtimes", () => {
     const client = createProviderRuntimeClient(primary.client, { resolveProviders: () => providers, create });
     return { primary, local, create, client, providers };
   }
+  it("runs an exact qualified helper against only its selected runtime's native model catalog", async () => {
+    const { client, primary, local } = setup();
+    const call = (model: string) => client.generateStructuredObject({
+      model, requireExactModel: true, helper: "token_miser_capture_codex", system: "", prompt: "", schema: {}, isMatch: () => true,
+    });
+    await expect(call("@bonsai/Bonsai.gguf")).resolves.toMatchObject({ status: "ok" });
+    await expect(call("@removed/Bonsai.gguf")).resolves.toMatchObject({ status: "unavailable" });
+    expect(local.raw.generateStructuredObject).toHaveBeenCalledTimes(1);
+    expect(primary.raw.generateStructuredObject).not.toHaveBeenCalled();
+    await client.close();
+  });
 
   it("routes verified portable models to their owner independently of native search and rejects unverified models", async () => {
     await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (native, verified) => {

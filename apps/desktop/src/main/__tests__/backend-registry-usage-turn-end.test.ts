@@ -410,17 +410,20 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       threadSpendEnabled: true,
     } });
     const thread = { backend: "acp:antigravity", threadId: "thread-1" } as const;
-    const checkSpend = async () => {
+    const recover = vi.spyOn(store as unknown as {
+      readStoredThreadPricing: SqliteOverlayStore["readThreadPricing"];
+    }, "readStoredThreadPricing");
+    const checkSpend = async (baselineReads?: number) => {
       const spend = await store.readThreadSpendMicros({ ...thread, localModelIds: [], liveLines: [] });
+      if (baselineReads !== undefined) expect(recover).toHaveBeenCalledTimes(baselineReads);
       const pricing = await store.readThreadPricing(thread);
       const gaps = estimateHistoricalThreadUsageGapLines(pricing.lines);
       const expected = [...pricing.summaries, ...gaps].reduce((total, line) => total + line.totalCostMicros, 0);
       expect(spend).toBe(expected);
+      // A crossing, including equality, publishes the exact ledger plus gaps.
+      expect(await store.readThreadSpendMicros({ ...thread, localModelIds: [], liveLines: [], thresholdMicros: expected })).toBe(expected);
       return gaps;
     };
-    const recover = vi.spyOn(store as unknown as {
-      readStoredThreadPricing: SqliteOverlayStore["readThreadPricing"];
-    }, "readStoredThreadPricing");
     const turnUsage = (turnId: string, total: number) => registry.publishLocalEvent({
       backend: thread.backend, notification: { method: "thread/tokenUsage/updated", params: {
         threadId: thread.threadId, turnId, model: "gpt-5.5", tokenUsage: {
@@ -434,10 +437,9 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       await registry.publishLocalEvent(started(thread.backend, turnId));
       await turnUsage(turnId, 10_000 + i * 1000);
       await complete(registry, thread.backend, turnId);
-      // The first cumulative gap establishes a baseline. Appending a turn
-      // must reuse it, even though the durable ledger changed.
-      expect(recover).toHaveBeenCalledTimes(i === 0 ? 1 : 0);
-      const gaps = await checkSpend();
+      // Even the first possible gap is safely below the configured alert.
+      expect(recover).not.toHaveBeenCalled();
+      const gaps = await checkSpend(i === 0 ? 1 : 0);
       recover.mockClear();
       expect(gaps.some((line) => line.totalCostMicros > 0)).toBe(true);
     }

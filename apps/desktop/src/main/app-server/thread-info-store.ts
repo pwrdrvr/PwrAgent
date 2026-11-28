@@ -12,6 +12,7 @@ import {
  */
 export type ThreadInfoSource =
   | "lifecycle-notification"
+  | "name-notification"
   | "local-rename"
   | "provider-list"
   | "remote-navigation"
@@ -72,6 +73,7 @@ type ThreadInfoEntry = {
   identity: ThreadInfoIdentity;
   /** Highest sequence any accepted field on this entry carries. */
   lastObservedSequence: number;
+  lastNameNotificationSequence?: number;
   summary?: ThreadInfoSummaryEntry;
   /**
    * The latest row from a listing that ran directory enrichment, kept in its
@@ -144,6 +146,18 @@ function isUsableTitle(
     return false;
   }
   return (title?.trim().length ?? 0) > 0;
+}
+
+function projectKnownTitle(
+  thread: AppServerThreadSummary,
+  title: string,
+  titleSource: AppServerThreadTitleSource | undefined,
+): AppServerThreadSummary {
+  return {
+    ...thread,
+    title,
+    titleSource: titleSource ?? (thread.title === title ? thread.titleSource : "derived"),
+  };
 }
 
 /**
@@ -219,6 +233,9 @@ export class ThreadInfoStore {
     // a fallback source from arriving without its title and downgrading a name
     // the store already holds.
     const titleIsUsable = isUsableTitle(observation.title, observation.titleSource);
+    if (observation.source === "name-notification" && titleIsUsable) {
+      entry.lastNameNotificationSequence = Math.max(entry.lastNameNotificationSequence ?? 0, observation.observationSequence);
+    }
     const changed: ThreadInfoFieldName[] = [];
 
     for (const field of TRACKED_FIELDS) {
@@ -311,6 +328,18 @@ export class ThreadInfoStore {
       }
     }
     return info;
+  }
+
+  /** Keep a newer local title when this thread was renamed during the read. */
+  projectTitleAfterNameNotification(
+    thread: AppServerThreadSummary,
+    sequence: number,
+  ): AppServerThreadSummary {
+    const entry = this.entries.get(identityKey({ backend: thread.source, threadId: thread.id.trim() }));
+    if (!entry || (entry.lastNameNotificationSequence ?? 0) <= sequence) return thread;
+    const { title, titleSource } = entry.fields;
+    if (!title || title.observationSequence <= sequence) return thread;
+    return projectKnownTitle(thread, title.value, titleSource?.value);
   }
 
   /**
@@ -452,15 +481,7 @@ export class ThreadInfoStore {
     // here, it describes this title. Otherwise the row's source still applies
     // if the row is talking about the same string, and only a title whose
     // provenance nothing records is reported as `derived`.
-    const titleSource = entry.fields.titleSource?.value
-      ?? (summary.value.title === title.value
-        ? summary.value.titleSource
-        : "derived");
-    return {
-      ...summary.value,
-      title: title.value,
-      titleSource,
-    };
+    return projectKnownTitle(summary.value, title.value, entry.fields.titleSource?.value);
   }
 
   /**

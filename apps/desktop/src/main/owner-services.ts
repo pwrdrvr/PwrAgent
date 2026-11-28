@@ -805,7 +805,7 @@ wireOwnerRendererEvents();
   const queues = startOwnerQueues(federationRuntime, {
     registry,
     readDefaultMergeMethod: () => settings.resolveDefaultMergeMethod(),
-    readReviewStackHold: (review, setWakeFilter) => getDesktopAppServerService().automationStackHold(review, setWakeFilter),
+    readReviewStackHold: (review, observation) => getDesktopAppServerService().automationStackHold(review, observation),
     registerContinueAfter: async ({ backend, threadId, continueAfter }) => {
       await getDesktopAppServerService().manageThreadDependencies({
         action: "create",

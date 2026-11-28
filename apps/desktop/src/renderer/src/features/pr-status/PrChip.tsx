@@ -12,11 +12,12 @@ import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contra
 import { CloseIcon, EyeIcon, MergeQueueIcon } from "../../icons";
 import {
   cardIsBesideSidebar,
+  elementRect,
   sidebarAnchorRect,
   sidebarPrCardBridge,
   type BridgedHoverCard,
 } from "../../lib/hover-card-bridge";
-import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip, type TooltipKeep } from "../../lib/useViewportTooltip";
 import { observeElementVisibility } from "../../lib/observe-element-visibility";
 import { statusPulseRef } from "../../lib/status-pulse";
 import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
@@ -118,6 +119,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   // This chip's card, as the shared bridge knows it.
   const bridgeCardRef = useRef<BridgedHoverCard>({ hide: hideTooltip });
   bridgeCardRef.current.hide = hideTooltip;
+  bridgeCardRef.current.getRect = () => elementRect(tooltipController.getElement());
   const updateTooltip = tooltipController.update;
   const label = prNumberLabel(pr, props.showRepoPrefix);
   const repoPrefix = props.showRepoPrefix ? label.slice(0, label.lastIndexOf("#")) : "";
@@ -140,8 +142,8 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   );
   // The merge control changes the card's height; placing it again keeps a
   // card near the window's bottom edge on screen.
-  const relayoutCard = useCallback(() => {
-    updateTooltip(latestCardRef.current);
+  const relayoutCard = useCallback((keep?: TooltipKeep) => {
+    updateTooltip(latestCardRef.current, keep ? { keep } : undefined);
   }, [updateTooltip]);
   const card = (
     <>
@@ -263,8 +265,8 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     updateTooltip(latestCardRef.current);
   }, [cardKey, mergeBuildWatch, tooltipVisible, updateTooltip]);
 
-  // The bridge tracks which sidebar card is up, so entering another chip can
-  // close this one at once.
+  // The bridge tracks which sidebar card is up, so the card that shows next
+  // closes this one.
   useEffect(() => {
     if (!cardActions) return;
     const bridgeCard = bridgeCardRef.current;
@@ -386,14 +388,22 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         }
       }}
       onMouseEnter={(event) => {
-        // Another sidebar card is up: swap to this one at once.
-        if (cardActions && sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, event.currentTarget)) {
+        // The bridge decides how long this chip waits while another sidebar
+        // card is up: crossing the chip on the way to that card never swaps.
+        const wait = cardActions
+          ? sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, event.currentTarget, TOOLTIP_HOVER_DELAY_MS)
+          : TOOLTIP_HOVER_DELAY_MS;
+        if (wait === 0) {
           tooltipController.show(event.currentTarget, latestCardRef.current);
           return;
         }
         tooltipController.showAfterDelay(
           event.currentTarget,
-          () => latestCardRef.current,
+          () => {
+            if (cardActions) sidebarPrCardBridge.takeOver(bridgeCardRef.current);
+            return latestCardRef.current;
+          },
+          wait,
         );
       }}
       onMouseLeave={(event) => {

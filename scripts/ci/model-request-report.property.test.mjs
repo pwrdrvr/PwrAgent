@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
 import report from "./model-request-report.cjs";
-import { mainSha, result, runUrl, source } from "./fixtures/model-request-report.fixture.mjs";
+import { legacyMcpResult, mainSha, mcpResult, result, runUrl, source } from "./fixtures/model-request-report.fixture.mjs";
 
 it("accepts only bounded numeric measurements and keeps untrusted text out of the report", () => {
   fc.assert(fc.property(
@@ -77,25 +77,79 @@ it("requires every provider and rejects a primary body larger than its whole tur
   expect(report.validateResult(current)).toBeUndefined();
 });
 
-it("selects artifacts only from the completed attempt across full and partial reruns", () => {
+it("selects each artifact independently from the completed attempt", () => {
+  const kinds = ["default", "mcp"];
+  const names = { default: "model-request-results", mcp: "model-request-mcp-results" };
   fc.assert(fc.property(
-    fc.array(fc.constantFrom("partial-rerun", "full-without-upload", "full-with-upload"), { minLength: 1, maxLength: 8 }),
+    fc.array(fc.subarray(kinds), { minLength: 1, maxLength: 8 }),
     (reruns) => {
       const artifacts = [];
       const completed = new Map();
-      for (const [index, kind] of ["full-with-upload", ...reruns].entries()) {
+      for (const [index, uploads] of [kinds, ...reruns].entries()) {
         const attempt = index + 1;
-        if (kind === "full-with-upload") {
-          const id = attempt * 100;
-          artifacts.unshift({ id, name: `model-request-results-attempt-${attempt}`, size_in_bytes: 500 });
-          completed.set(attempt, id);
+        for (const kind of uploads) {
+          const id = attempt * 100 + kinds.indexOf(kind);
+          artifacts.unshift({ id, name: `${names[kind]}-attempt-${attempt}`, size_in_bytes: 500 });
+          completed.set(`${attempt}:${kind}`, id);
         }
-        // GitHub retains prior uploads under the same run ID. Even a
-        // redelivered event can describe only what that attempt uploaded.
+        // GitHub retains prior uploads under the same run ID. A redelivery
+        // can describe only what that attempt uploaded for each kind.
         for (let delivered = attempt; delivered > 0; delivered--) {
-          expect(report.findAttemptArtifact(artifacts, delivered)?.id).toBe(completed.get(delivered));
+          for (const kind of kinds) {
+            expect(report.findAttemptArtifact(artifacts, delivered, kind)?.id).toBe(completed.get(`${delivered}:${kind}`));
+          }
         }
       }
     },
-  ), { examples: [[["partial-rerun", "full-without-upload", "full-with-upload"]]] });
+  ), { examples: [[[[], ["mcp"], ["default"]]]] });
+});
+
+it("matches MCP catalog deltas to the same provider, turn and metric in historical uploads", () => {
+  fc.assert(fc.property(
+    fc.tuple(...Array.from({ length: 5 }, () => fc.integer({ min: 1, max: 400 }))),
+    fc.boolean(),
+    ([base, current, baselineTools, currentTools, followUp], reversed) => {
+      const currentMcp = mcpResult(401, current, 402);
+      const baselineMcp = legacyMcpResult(403, base, 404);
+      for (const [artifact, bytes, tools] of [[currentMcp, current, currentTools], [baselineMcp, base, baselineTools]]) {
+        const claude = artifact.results.find(({ provider }) => provider === "claude");
+        Object.assign(claude.first, { bytes: bytes + 400, primaryBytes: bytes + 400, toolBytes: 400 });
+        Object.assign(claude.next, { bytes: followUp + 400, primaryBytes: followUp + 400, toolBytes: tools });
+      }
+      if (reversed) baselineMcp.results.reverse();
+      expect(report.validateMcpResult(currentMcp)).toBe(currentMcp);
+      expect(report.validateMcpResult(baselineMcp)).toBe(baselineMcp);
+      const comment = report.renderComment({
+        current: result(110, 120), currentMcp, baseline: result(119, 130), baselineMcp,
+        source, baselineRun: { id: 10, sha: mainSha }, exactBase: true, runUrl,
+      }).split("### 240 configured MCP tools")[1];
+      expect(comment).toContain(`| Claude | First turn total body bytes | ${base + 400} B | ${current + 400} B |`);
+      expect(comment).toContain(`| Claude | Follow-up total body bytes | ${followUp + 400} B | ${followUp + 400} B | 0 |`);
+      const row = comment.split("\n").find((line) => line.startsWith("| Claude | Follow-up tool definitions |"));
+      expect(row).toContain(`| ${baselineTools} B | ${currentTools} B |`);
+      expect(row.includes("**+")).toBe(currentTools > baselineTools);
+      expect(row.endsWith(currentTools > 40 ? "❌ |" : "✅ |")).toBe(true);
+    },
+  ), { examples: [[[101, 114, 39, 60, 111], true]] });
+});
+
+it("validates legacy and extended MCP artifacts without admitting data from untrusted text fields", () => {
+  fc.assert(fc.property(
+    fc.constantFrom("bytes", "primaryBytes", "toolBytes", "continuationBytes", "calls", "roundTripCalls"),
+    fc.constantFrom(null, "| @owner", ["9"], {}, 1.5, Number.MAX_SAFE_INTEGER + 1, -1),
+    (key, value) => {
+      const legacy = legacyMcpResult(100, 200, 220);
+      const extended = mcpResult(100, 200, 220);
+      expect(report.validateMcpResult(legacy)).toBe(legacy);
+      expect(report.validateMcpResult(extended)).toBe(extended);
+      extended.toolUse[0].observed[key] = value;
+      expect(report.validateMcpResult(extended)).toBeUndefined();
+    },
+  ));
+  const extended = mcpResult(100, 200, 220);
+  extended.results[0].provider = { toString: "codex" };
+  expect(report.validateMcpResult(extended)).toBeUndefined();
+  extended.results[0].provider = "codex";
+  extended.results[1].provider = "codex";
+  expect(report.validateMcpResult(extended)).toBeUndefined();
 });

@@ -654,7 +654,7 @@ describe("discoverLocalAcpAgentRecords", () => {
           reason: "probe-timed-out",
         },
       ],
-      lastError: `${timedOutPath} was found, but its ACP verification timed out. Refresh to try again.`,
+      lastError: `${timedOutPath} was found, but its ACP verification timed out. Select Check again in Setup to try again.`,
     });
     expect(record).not.toHaveProperty("launchDescriptor");
   });

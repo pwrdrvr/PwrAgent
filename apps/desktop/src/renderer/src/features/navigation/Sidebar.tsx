@@ -5951,7 +5951,7 @@ function AttentionLensTab(props: {
         }}
         onFocus={(event) => tooltip.show(event.currentTarget, card)}
         onMouseEnter={(event) => {
-          if (pickable) sidebarPrCardBridge.enterTrigger(bridgeCardRef.current);
+          if (pickable) sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, event.currentTarget, 0);
           tooltip.show(event.currentTarget, card);
         }}
         onMouseLeave={() => {

@@ -257,6 +257,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // The thread and parent spend indexes add two VACUUM pages.
     // The retained owner job lookup index adds one root page to VACUUM.
     // The sidebar context-window index adds one root page to VACUUM.
+    // The open replay gate index adds one root page to VACUUM.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));

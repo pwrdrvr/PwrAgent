@@ -41,6 +41,10 @@ class ScriptedAgent implements AcpJsonRpcTransport {
     return () => { this.requestHandler = undefined; };
   }
 
+  usage(update: Record<string, unknown>): void {
+    for (const listener of this.listeners) listener("session/update", { sessionId: "grok-session", update });
+  }
+
   say(text: string): void {
     for (const listener of this.listeners) {
       listener("session/update", {
@@ -128,6 +132,21 @@ describe("ACP ephemeral prompt", () => {
     expect(agent.calls.slice(5).map((call) => call.params)).toEqual([{ sessionId: "grok-session" }, { sessionId: "grok-session" }]);
   });
 
+  it("uses the final turn usage once after a model-call usage event", async () => {
+    const agent = new ScriptedAgent({ "session/prompt": (_params, session) => {
+      session.usage({ sessionUpdate: "response_completed", usage: { input_tokens: 3, output_tokens: 1 } });
+      session.usage({ sessionUpdate: "turn_completed", usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } });
+      return { stopReason: "end_turn" };
+    } });
+    expect(await runAcpEphemeralPrompt(agent, request)).toMatchObject({ tokenUsage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } });
+  });
+
+  it("never sends a prompt when its dispatch permission has been withdrawn during setup", async () => {
+    const agent = new ScriptedAgent();
+    await expect(runAcpEphemeralPrompt(agent, { ...request, allowPrompt: () => false })).rejects.toThrow();
+    expect(agent.methods()).not.toContain("session/prompt");
+  });
+
   it("refuses every permission and client request the agent makes", async () => {
     const answers: unknown[] = [];
     const agent = new ScriptedAgent({
@@ -150,6 +169,21 @@ describe("ACP ephemeral prompt", () => {
       { refused: "fs/read_text_file is not available to this session" },
     ]);
     expect(result).toMatchObject({ text: '{"analysis":"Answered without tools."}', refusedRequests: 2 });
+  });
+
+  it("cancels only the isolated helper when the capture ends and discards the session", async () => {
+    const started = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const agent = new ScriptedAgent({ "session/prompt": () => {
+      started.resolve();
+      return new Promise(() => undefined);
+    } });
+    const run = runAcpEphemeralPrompt(agent, { ...request, signal: controller.signal });
+    await started.promise;
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ failure: "stopped" });
+    expect(agent.notified).toEqual([{ method: "session/cancel", params: { sessionId: "grok-session" } }]);
+    expect(agent.methods().slice(-2)).toEqual(["session/close", "_x.ai/session/delete"]);
   });
 
   it("cancels a turn that outlives the budget, and still discards the session", async () => {

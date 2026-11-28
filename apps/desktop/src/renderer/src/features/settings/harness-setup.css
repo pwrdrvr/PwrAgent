@@ -1,0 +1,167 @@
+/* Settings → AI Providers → a harness: the Setup checklist
+   (HarnessSetupChecklist.tsx). Theme tokens only. */
+
+/* Inset like a settings field (.settings-field: 14px 18px). */
+.harness-setup {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 14px 18px 4px;
+  list-style: none;
+}
+
+.harness-setup__step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: start;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.harness-setup__step:last-child {
+  border-bottom: 0;
+}
+
+.harness-setup__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--text-muted);
+  font: 700 11px/1 var(--font-mono);
+}
+
+.harness-setup__step--done .harness-setup__mark {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.harness-setup__step--next .harness-setup__mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+.harness-setup__step--attention .harness-setup__mark {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.harness-setup__step--working .harness-setup__mark {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.harness-setup__step--waiting .harness-setup__mark,
+.harness-setup__step--unknown .harness-setup__mark {
+  border-style: dashed;
+}
+
+.harness-setup__body {
+  min-width: 0;
+}
+
+.harness-setup__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin: 2px 0 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.harness-setup__state {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.harness-setup__step--done .harness-setup__state {
+  color: var(--success-text);
+}
+
+.harness-setup__step--attention .harness-setup__state {
+  color: var(--danger-text);
+}
+
+.harness-setup__step--next .harness-setup__state,
+.harness-setup__step--working .harness-setup__state {
+  color: var(--accent-bright);
+}
+
+.harness-setup__step--waiting .harness-setup__title {
+  color: var(--text-muted);
+}
+
+.harness-setup__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font: 500 11.5px/1.4 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.harness-setup__detail {
+  max-width: 64ch;
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.harness-setup__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 9px;
+  min-width: 0;
+}
+
+.harness-setup__change {
+  align-self: center;
+}
+
+.harness-setup__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 10px 18px 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* The status text is small; the button keeps the size of every other. */
+.harness-setup__checked {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.harness-setup__foot > .button {
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .harness-setup__step {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .harness-setup__change {
+    grid-column: 2;
+    justify-self: start;
+  }
+}

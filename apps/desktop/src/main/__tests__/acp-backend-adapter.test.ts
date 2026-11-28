@@ -510,7 +510,7 @@ describe("describeInstalledAcpBackend", () => {
           expect(settings.unavailableReason).toBe(summary.unavailableReason);
           if (deprecated) {
             expect(settings.lastDiscoveryError).toContain("Antigravity");
-            expect(settings.lastDiscoveryError).toContain("Re-probe");
+            expect(settings.lastDiscoveryError).toContain("Check again in Setup");
           } else {
             expect(settings.lastDiscoveryError).toBe(lastDiscoveryError);
           }
@@ -1141,6 +1141,26 @@ describe("AcpBackendAdapter", () => {
       examples: [["path", true, undefined], ["override", true, undefined]],
       numRuns: 20,
     });
+  });
+
+  it("skips process launch when helper admission changes during installed-agent lookup", async () => {
+    const agent = buildAntigravityQuotaAgent("/fixture/agent");
+    const lookup = Promise.withResolvers<AcpInstalledAgentRecord>();
+    const createAcpTransport = vi.fn(() => new FakeAcpAgentTransport());
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [], createAcpTransport, emit: async () => {}, handleServerRequest: async () => ({}),
+    });
+    vi.spyOn(adapter, "resolveInstalledAgent").mockReturnValue(lookup.promise);
+    let enabled = true;
+    try {
+      const run = adapter.runEphemeralPrompt(agent.backendId, {
+        cwd: "/fixture", prompt: "fixture", timeoutMs: 5000, maxOutputChars: 100, allowPrompt: () => enabled,
+      });
+      enabled = false;
+      lookup.resolve(agent);
+      await expect(run).rejects.toThrow("disabled");
+      expect(createAcpTransport).not.toHaveBeenCalled();
+    } finally { await adapter.close(); }
   });
 
   it("remembers failed ephemeral disposal after the prompt has already settled", async () => {

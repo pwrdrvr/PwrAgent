@@ -157,3 +157,31 @@ export class LivePricingLines extends LivePricingMap<ThreadUsageLineRecord> {
     }
   }
 }
+
+/** The gross live gate charge bounds the extra spend after replacing stored
+ * rows by ID. Maintain it at the same boundary as gate insertion and removal. */
+export class LiveGatePricingLines extends LivePricingLines {
+  private grossMicros = 0;
+  get positiveUsdMicros(): number { return this.grossMicros; }
+
+  constructor() { super(); }
+
+  override set(id: string, line: ThreadUsageLineRecord): this {
+    this.grossMicros += this.positiveCost(line) - this.positiveCost(this.get(id));
+    return super.set(id, line);
+  }
+
+  override delete(id: string): boolean {
+    this.grossMicros -= this.positiveCost(this.get(id));
+    return super.delete(id);
+  }
+
+  override clear(): void {
+    this.grossMicros = 0;
+    super.clear();
+  }
+
+  private positiveCost(line: ThreadUsageLineRecord | undefined): number {
+    return line?.priceStatus === "priced" && line.currency.toUpperCase() === "USD" ? Math.max(0, line.totalCostMicros) : 0;
+  }
+}

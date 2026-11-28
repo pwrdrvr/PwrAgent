@@ -10,6 +10,7 @@ import {
   operatorSystemConfig,
   validateBundledGit,
 } from "./bundled-git";
+import { buildPwrAgentChildProcessEnv } from "./child-process-env";
 import { getConfiguredGitCommand, getSelectedManagedGit } from "./git-command";
 import { managedGitRoot } from "./managed-git-paths";
 import { resolveManagedGitRuntime } from "./managed-git-runtime";
@@ -102,6 +103,14 @@ export function gitRuntimeEnvironment(source: NodeJS.ProcessEnv, preference = gi
     // rather than the rejected one.
     return customGitEnvironment(source, "git");
   }
+}
+
+export function gitCommandEnvironment(source: NodeJS.ProcessEnv, preference?: string): NodeJS.ProcessEnv {
+  return {
+    ...gitRuntimeEnvironment(buildPwrAgentChildProcessEnv(source), preference),
+    GIT_TERMINAL_PROMPT: "0",
+    GCM_INTERACTIVE: "Never",
+  };
 }
 
 export async function resolveRuntimeGitExecutable(source: NodeJS.ProcessEnv): Promise<string> {

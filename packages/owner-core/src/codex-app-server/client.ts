@@ -12004,6 +12004,7 @@ export class CodexAppServerClient {
    * generation path; the output record is identified by `isMatch`.
    */
   async generateStructuredObject(params: {
+    requireExactModel?: boolean;
     /** Which helper is running, for its per-helper override and effort. */
     signal?: AbortSignal;
     helper: HelperModelId;
@@ -12122,6 +12123,7 @@ export class CodexAppServerClient {
   }
 
   private async runHelperStructuredTurn(params: {
+    requireExactModel?: boolean;
     signal?: AbortSignal;
     helper: HelperModelId;
     model?: string;
@@ -12167,6 +12169,9 @@ export class CodexAppServerClient {
       reasoningEffort: params.reasoningEffort,
     });
     const helperModel = selection.model;
+    if (params.requireExactModel && helperModel !== params.model) {
+      return { status: "unavailable", reason: "configured_helper_model_unavailable" };
+    }
     if (!helperModel) {
       return { status: "unavailable", reason: "codex_helper_no_available_model" };
     }

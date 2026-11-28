@@ -16,7 +16,7 @@ import { buildPullRequestStatusKey, type NavigationThreadSummary, type PrSummary
 import { CloseIcon, EyeIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
-import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip } from "../../lib/useViewportTooltip";
+import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip, type TooltipKeep } from "../../lib/useViewportTooltip";
 import {
   type AimPoint,
   POINTER_AIM_SETTLE_MS,
@@ -261,7 +261,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   // Read from the live list, so a status update reaches an open card.
   const cardPr = ordered.find((pr) => pr.url === cardUrl);
   const latestCardRef = useRef<ReactNode>(null);
-  const relayoutCard = useCallback(() => updateCard(latestCardRef.current), [updateCard]);
+  const relayoutCard = useCallback(
+    (keep?: TooltipKeep) => updateCard(latestCardRef.current, keep ? { keep } : undefined),
+    [updateCard],
+  );
   const { branchDrift, prWatches, autoFixRepository, merge, onDetach, stackThread } = props;
   const renderCard = useCallback((pr: PrSummary) => (
     <>

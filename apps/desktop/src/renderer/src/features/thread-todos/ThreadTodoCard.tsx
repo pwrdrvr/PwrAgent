@@ -159,11 +159,16 @@ export type ThreadTodoCardHandlers = {
 
 /**
  * The to-do card whose Start review opened the composer's review panel.
- * That card waits on the panel, with Show, rather than offering Start review
- * a second time; Cancel in the panel clears `todoId`.
+ * That card waits on the panel rather than opening it a second time; Cancel
+ * in the panel clears `todoId`. Where its Start review was, the card offers
+ * the panel's Start review (`start`) while that button is enabled and on
+ * screen, so a second click in the same spot starts the review as set up,
+ * and Show otherwise.
  */
 export type ThreadTodoReviewSetup = {
   todoId?: string;
+  /** Runs the panel's Start review; its label is the panel's. */
+  start?: { label: string; run: () => void };
   onShow: (todo: ThreadTodo) => void;
   /**
    * Cards whose review waits in a thread's queue. Each says its review is
@@ -991,22 +996,36 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       case "start_review":
         if (props.reviewSetup?.todoId === todo.id) {
           const reviewSetup = props.reviewSetup;
+          const start = reviewSetup.start;
           return (
             <>
               <span role="status" className="thread-todo-card__waiting">
                 <span className="thread-todo-card__waiting-dot" aria-hidden="true" />
-                Finish setup in the composer
+                <span className="thread-todo-card__waiting-text">
+                  {start ? "Ready to start" : "Finish setup in the composer"}
+                </span>
               </span>
               {done}
-              <button
-                type="button"
-                className="button thread-todo-card__button"
-                aria-label={`Show review setup for ${todo.title}`}
-                onClick={() => reviewSetup.onShow(todo)}
-              >
-                <ChevronDownIcon size={12} />
-                Show
-              </button>
+              {start ? (
+                <button
+                  type="button"
+                  className="button button--primary thread-todo-card__button"
+                  onClick={start.run}
+                >
+                  <ReviewIcon size={12} />
+                  {start.label}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="button thread-todo-card__button"
+                  aria-label={`Show review setup for ${todo.title}`}
+                  onClick={() => reviewSetup.onShow(todo)}
+                >
+                  <ChevronDownIcon size={12} />
+                  Show
+                </button>
+              )}
             </>
           );
         }
@@ -1015,7 +1034,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             <>
               <span role="status" className="thread-todo-card__waiting">
                 <span className="thread-todo-card__waiting-dot" aria-hidden="true" />
-                Review queued
+                <span className="thread-todo-card__waiting-text">Review queued</span>
               </span>
               {done}
             </>
@@ -1048,6 +1067,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               <button
                 type="button"
                 className="button thread-todo-card__button thread-todo-card__button--quiet"
+                aria-describedby={confirmTextId}
                 onClick={() => setConfirmingMerge(undefined)}
               >
                 Cancel
@@ -1055,6 +1075,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               <button
                 type="button"
                 className="button button--primary thread-todo-card__button"
+                aria-describedby={confirmTextId}
                 onClick={() => {
                   const confirmation = confirmingMerge;
                   setConfirmingMerge(undefined);
@@ -1402,18 +1423,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         </div>
       ) : null}
 
-      {confirmingApproval && ciTitle ? (
-        <p id={confirmTextId} className="thread-todo-card__confirm">
-          {confirmCiApprovalText(confirmingApproval, todo.federationTarget !== undefined)}
-        </p>
-      ) : confirmingMerge && action?.type === "merge_pull_request" ? (
-        <p className="thread-todo-card__confirm">
-          {openSteps > 0 ? `${openStepsText} ` : ""}
-          {mergeQueue
-            ? confirmQueueText(action.pullRequest, mergeQueue.kind, mergePullRequest?.baseRefName, todo.targetProject?.label)
-            : confirmMergeText(action.pullRequest, confirmingMerge.method, todo.targetProject?.label)}
-        </p>
-      ) : mergeQueue && action?.type === "merge_pull_request" && !stepsConfirmation ? (
+      {mergeQueue && action?.type === "merge_pull_request" ? (
         <p
           role="status"
           className={`thread-todo-card__queue${mergeQueue.state === "removed" ? " is-removed" : ""}`}
@@ -1421,16 +1431,31 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           {mergeQueueLine(mergeQueue, mergePullRequest?.baseRefName)}
         </p>
       ) : null}
-      {stepsConfirmation ? (
-        <p id={confirmTextId} className="thread-todo-card__confirm">
-          {openStepsText} {stepsConfirmation.question}
-        </p>
-      ) : null}
 
       <div className="thread-todo-card__footer">
         {props.pager ? <ThreadTodoCardPager pager={props.pager} /> : null}
         <div ref={actionsRef} className="thread-todo-card__actions">{renderAction()}</div>
       </div>
+      {/* A confirmation's question opens under the buttons. The stack hangs
+          from the top, so text above them would push the button that goes
+          ahead out from under the pointer that just pressed the first step. */}
+      {confirmingApproval && ciTitle ? (
+        <p id={confirmTextId} className="thread-todo-card__confirm">
+          {confirmCiApprovalText(confirmingApproval, todo.federationTarget !== undefined)}
+        </p>
+      ) : confirmingMerge && action?.type === "merge_pull_request" ? (
+        <p id={confirmTextId} className="thread-todo-card__confirm">
+          {openSteps > 0 ? `${openStepsText} ` : ""}
+          {mergeQueue
+            ? confirmQueueText(action.pullRequest, mergeQueue.kind, mergePullRequest?.baseRefName, todo.targetProject?.label)
+            : confirmMergeText(action.pullRequest, confirmingMerge.method, todo.targetProject?.label)}
+        </p>
+      ) : null}
+      {stepsConfirmation ? (
+        <p id={confirmTextId} className="thread-todo-card__confirm">
+          {openStepsText} {stepsConfirmation.question}
+        </p>
+      ) : null}
       {copying.menu}
     </article>
   );

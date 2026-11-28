@@ -18,6 +18,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   } else if (request.method === "tools/list") {
     appendFileSync(listingLog, `${tools.length}\n`);
     response.result = { tools };
+  } else if (request.method === "tools/call" && tools.some(({ name }) => name === request.params.name)) {
+    const { name, arguments: args } = request.params;
+    appendFileSync(listingLog + ".calls", JSON.stringify({ name, arguments: args }) + "\n");
+    response.result = { content: [{ type: "text", text: `Fixture lookup completed. field_0=${args?.field_0}` }] };
   } else {
     response.error = { code: -32601, message: "Unsupported benchmark fixture method" };
   }

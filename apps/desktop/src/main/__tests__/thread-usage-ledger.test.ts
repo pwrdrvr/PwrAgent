@@ -352,8 +352,8 @@ describe("ThreadUsageLedger", () => {
         const stops: Array<{ objectId: string; stoppedAt: number }> = [];
         const tokenMiserStore = {
           prune: async () => {},
-          *listMetadataPages(_limit: number, threadId: string) {
-            const scoped = entries.filter((entry) => entry.threadId === threadId);
+          *listOpenReplayPages(_limit: number, threadId: string) {
+            const scoped = entries.filter((entry) => entry.threadId === threadId && entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined);
             for (let offset = 0; offset < scoped.length; offset += 3) {
               yield scoped.slice(offset, offset + 3).map((entry) => ({ ...entry }));
             }
@@ -429,7 +429,7 @@ describe("ThreadUsageLedger", () => {
       };
       const tokenMiserStore = {
         prune: async () => {},
-        *listMetadataPages() {
+        *listOpenReplayPages() {
           yield [{ ...entries[0]! }];
           yield entries.slice(1).map((entry) => ({ ...entry }));
         },
@@ -490,7 +490,7 @@ describe("ThreadUsageLedger", () => {
         imported = true;
       },
       hasCompletedLegacyImport: () => imported,
-      *listMetadataPages() { if (imported) yield [entry]; },
+      *listOpenReplayPages() { if (imported) yield [entry]; },
       restoreReplayTracking,
     };
     const { ledger, internals } = createLedger({

@@ -1,12 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { buildPullRequestStatusKey, buildThreadIdentityKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
-import { createReviewStackWakeScope } from "../stacks/review-stack-wake-scope";
 import {
   ReviewAutoFixDispatcher,
   ReviewAutoFixRuns,
-  type ReviewAutoFixStackUpdate,
 } from "../thread-reviews/review-auto-fix";
 
 const THREAD = { backend: "codex" as const, threadId: "review-owner" };
@@ -35,97 +33,6 @@ function makeReview(id: string, open = true): ThreadReview {
   };
 }
 
-type StackStep = "ci-settled" | "operation-ended" | "unrelated-pr" | "unrelated-operation" | "unrelated-turn";
-type StackRelease = Extract<StackStep, "ci-settled" | "operation-ended">;
-type StackBlocker = "operation" | "journal" | "repair";
-
-async function replayStackWake(
-  steps: readonly StackStep[], earlyRelease?: StackRelease, blocker: StackBlocker = "operation",
-) {
-  const review = makeReview("upper-review");
-  const lowerThreadKey = buildThreadIdentityKey("claude", "lower-owner");
-  const upper: PrSummary = {
-    provider: "github.com", org: "example", repo: "stack", number: 2,
-    url: "https://github.com/example/stack/pull/2", state: "passing",
-    headRefName: "upper", baseRefName: "lower",
-  };
-  const lower = { ...upper, number: 1, url: "https://github.com/example/stack/pull/1", headRefName: "lower", baseRefName: "main" };
-  const unrelated = { ...upper, number: 3, url: "https://github.com/example/stack/pull/3", headRefName: "other", baseRefName: "main" };
-  let ciPending = true;
-  let operationRunning = true;
-  let reads = 0;
-  let starts = 0;
-  const firstRead = earlyRelease ? Promise.withResolvers<void>() : undefined;
-  const dispatcher = new ReviewAutoFixDispatcher({
-    getReview: () => review,
-    isThreadArchived: () => false,
-    readStackHold: async (_review, setWakeFilter) => {
-      reads++;
-      const operationHeld = operationRunning;
-      const held = ciPending || operationHeld;
-      const scope = createReviewStackWakeScope(buildThreadIdentityKey(review.backend, review.threadId), [upper]);
-      setWakeFilter(scope.matches);
-      if (reads === 1 && firstRead) await firstRead.promise;
-      scope.observe(upper, [{
-        key: "stack", name: "lower", repository: "github.com:example/stack", trunk: "main", inferred: false,
-        ...(blocker === "journal" && { githubStack: 42, ...(operationHeld && { journalHeld: true as const }) }),
-        layers: [
-          { branch: "lower", parent: "main", pullRequest: lower,
-            health: operationHeld && blocker !== "repair" ? "held" : "in_sync",
-            ...(operationHeld && blocker === "repair" && { unsettled: "repair in progress" as const }),
-            role: "layer", thread: { key: lowerThreadKey, title: "Lower owner" } },
-          { branch: "upper", parent: "lower", pullRequest: upper,
-            health: operationHeld && blocker === "journal" ? "held" : "in_sync", role: "holder" },
-        ],
-      }]);
-      scope.finish();
-      return held ? "Held by #1" : undefined;
-    },
-    submitTurn: async () => { throw new Error("Expected fresh admission"); },
-    submitTurnIfIdle: async ({ canAdmit }) => {
-      if (!await canAdmit()) return { status: "busy" };
-      starts++;
-      return { status: "started" };
-    },
-    recordRun: () => {},
-  });
-
-  const initialDispatch = dispatcher.dispatch(review.id);
-  if (!firstRead) await initialDispatch;
-  for (const step of earlyRelease ? [earlyRelease, ...steps] : steps) {
-    const before = reads;
-    const alreadyStarted = !ciPending && !operationRunning;
-    const affectsStack = step === "ci-settled"
-      || (step === "operation-ended" && (operationRunning || blocker === "operation"))
-      || (blocker === "journal" && operationRunning && step === "unrelated-operation");
-    let update: ReviewAutoFixStackUpdate;
-    if (step === "ci-settled" || step === "unrelated-pr") {
-      if (step === "ci-settled") ciPending = false;
-      const pr = step === "ci-settled" ? lower : unrelated;
-      update = { prKeys: [buildPullRequestStatusKey(pr)], pr };
-    } else {
-      if (step === "operation-ended") operationRunning = false;
-      update = { threadKey: step === "operation-ended" ? lowerThreadKey : buildThreadIdentityKey("codex", "lower-owner") };
-    }
-    if (step === "unrelated-turn") {
-      dispatcher.onTurnEnded({ backend: "codex", threadId: "lower-owner" }, new Set(["unrelated-turn"]));
-    } else if (step === "operation-ended" && blocker === "repair") {
-      dispatcher.onTurnEnded({ backend: "claude", threadId: "lower-owner" }, new Set(["repair-turn"]));
-    } else if (step === "operation-ended" && blocker === "journal") {
-      dispatcher.wakeForStackUpdate({ threadKey: buildThreadIdentityKey("claude", "other-stack-owner") });
-    } else {
-      dispatcher.wakeForStackUpdate(update);
-    }
-    firstRead?.resolve();
-    // Drain the dispatcher and its final admission check before the next observation.
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const ready = !ciPending && !operationRunning;
-    expect(starts).toBe(ready ? 1 : 0);
-    expect(reads - before).toBe(alreadyStarted || !affectsStack ? 0 : ready ? 2 : 1);
-  }
-  dispatcher.dispose();
-}
-
 /**
  * Model: once a review lands with open findings on an unarchived thread and
  * every blocker (active review turn, stack hold, thread lock, blocking turns)
@@ -134,20 +41,6 @@ async function replayStackWake(
  * Dispatch suspensions always return to zero.
  */
 describe("review auto-fix dispatcher", () => {
-  it.each([
-    ["PR status", ["operation-ended", "unrelated-pr", "ci-settled"]],
-    ["stack hold", ["ci-settled", "unrelated-operation", "operation-ended"]],
-  ] as const)("resumes after the lower layer's %s update", (_signal, steps) => replayStackWake(steps));
-
-  it("resumes a numbered local stack when another stack's operation releases the shared journal", () =>
-    replayStackWake(["ci-settled", "operation-ended"], undefined, "journal"));
-
-  it("resumes when the lower layer's repair turn ends without a PR change", () =>
-    replayStackWake(["ci-settled", "unrelated-turn", "operation-ended"], undefined, "repair"));
-
-  it("ignores a duplicate lower repair terminal after an in-flight check records its release", () =>
-    replayStackWake(["operation-ended", "ci-settled"], "operation-ended", "repair"));
-
   it("retries only the review with unavailable evidence without a PR update", async () => {
     const unavailable = makeReview("unavailable");
     const held = { ...makeReview("held"), threadId: "other-owner" };
@@ -159,10 +52,10 @@ describe("review auto-fix dispatcher", () => {
     const dispatcher = new ReviewAutoFixDispatcher({
       getReview: (id) => reviews.get(id),
       isThreadArchived: () => false,
-      readStackHold: async (review, setWakeFilter) => {
+      readStackHold: async (review, observation) => {
         reads.push(review.id);
         const needsRetry = review.id === unavailable.id && !checkoutAvailable;
-        setWakeFilter(() => false, () => needsRetry);
+        if (needsRetry) observation.unavailable?.();
         return needsRetry ? "Held while stack settlement is unavailable"
           : review.id === held.id ? "Held by #1" : undefined;
       },
@@ -197,16 +90,6 @@ describe("review auto-fix dispatcher", () => {
     }
   });
 
-  it("agrees with the lower-layer hold model across update ordering and redelivery", async () => {
-    const step = fc.constantFrom<StackStep>("ci-settled", "operation-ended", "unrelated-pr", "unrelated-operation", "unrelated-turn");
-    const earlyRelease = fc.option(fc.constantFrom<StackRelease>("ci-settled", "operation-ended"), { nil: undefined });
-    const blocker = fc.constantFrom<StackBlocker>("operation", "journal", "repair");
-    await fc.assert(fc.asyncProperty(fc.array(step, { maxLength: 12 }), fc.boolean(), earlyRelease, blocker,
-      async (steps, ciFirst, early, kind) => {
-        const releaseOrder: StackStep[] = ciFirst ? ["ci-settled", "operation-ended"] : ["operation-ended", "ci-settled"];
-        await replayStackWake([...steps, ...releaseOrder], early, kind);
-      }), { numRuns: 8 });
-  });
 
   it("never strands Auto-fix, leaks suspensions, or violates stack holds across async interleavings", async () => {
     let runCounter = 0;
@@ -222,6 +105,7 @@ describe("review auto-fix dispatcher", () => {
           lockDuringReview: fc.boolean(),
           otherTurnAfterReview: fc.constantFrom("none" as const, "completed" as const, "failed" as const, "cancelled" as const),
           flakyHoldFlip: fc.boolean(),
+          stackWake: fc.constantFrom("global", "forge", "repair"),
           outcome: fc.constantFrom("normal" as const, "settle" as const, "archive" as const, "error" as const),
           outcomeDelayTicks: fc.integer({ min: 0, max: 3 }),
         }),
@@ -229,8 +113,19 @@ describe("review auto-fix dispatcher", () => {
           const runId = ++runCounter;
           const reviewId = `rev-${runId}`;
           const reviewTurnId = `review-turn-${runId}`;
-          const review = makeReview(reviewId, true);
+          const review = {
+            ...makeReview(reviewId, true),
+            context: { workspacePath: "/repo", pullRequest: {
+              provider: "github.com", org: "example", repo: "atlas", number: 2,
+              url: "https://github.com/example/atlas/pull/2",
+            } },
+          };
+          const unrelated = { ...makeReview("unrelated"), threadId: "other-thread" };
+          const lower = { backend: "claude" as const, threadId: "lower-repair" };
+          const lowerKey = buildThreadIdentityKey(lower.backend, lower.threadId);
           const runs = new ReviewAutoFixRuns();
+          let unrelatedLookups = 0;
+          let unrelatedTerminalLookups = 0;
 
           let activeTurnId: string | undefined = reviewTurnId;
           let stackHold: string | undefined = scenario.initialStackHold ? "Held by #1: CI running" : undefined;
@@ -243,6 +138,11 @@ describe("review auto-fix dispatcher", () => {
           let sendFailed = false;
 
           let dispatcher!: ReviewAutoFixDispatcher;
+          const wakeStack = () => {
+            if (scenario.stackWake === "repair") dispatcher.onTurnEnded(lower, new Set(["lower-turn"]));
+            else if (scenario.stackWake === "forge") dispatcher.wakeForPullRequest("github.com/example/atlas#1");
+            else dispatcher.wake();
+          };
 
           const drainQueuedUser = () => {
             if (archived || dispatchSuspensions > 0 || locked || activeTurnId !== undefined || queuedUser.length === 0) return;
@@ -258,9 +158,20 @@ describe("review auto-fix dispatcher", () => {
           };
 
           dispatcher = new ReviewAutoFixDispatcher({
-            getReview: (id) => (id === reviewId ? review : undefined),
-            isThreadArchived: () => archived,
-            readStackHold: async () => await s.schedule(Promise.resolve().then(() => stackHold), "readStackHold"),
+            getReview: (id) => {
+              if (id === reviewId) return review;
+              if (id !== unrelated.id) return undefined;
+              unrelatedLookups++;
+              return unrelated;
+            },
+            isThreadArchived: (thread) => thread.threadId === THREAD.threadId && archived,
+            readStackHold: async (candidate, observation) => {
+              if (candidate.id === unrelated.id) return "Other stack is held";
+              if (scenario.stackWake === "repair") observation.readActivity(lowerKey);
+              const hold = await s.schedule(Promise.resolve().then(() => stackHold), "readStackHold");
+              if (hold && scenario.stackWake === "repair") observation.heldBy(lowerKey);
+              return hold;
+            },
             threadHasActiveTurn: () => activeTurnId !== undefined,
             suspendDispatch: () => {
               dispatchSuspensions++;
@@ -312,6 +223,8 @@ describe("review auto-fix dispatcher", () => {
             now: () => 1,
           });
 
+          await dispatcher.dispatch(unrelated.id);
+
           // 1. Review artifact lands while review turn is still active.
           s.scheduleFunction(async () => {
             dispatcher.onReviewLanded(reviewId, THREAD, reviewTurnId);
@@ -328,7 +241,10 @@ describe("review auto-fix dispatcher", () => {
           s.scheduleFunction(async () => {
             activeTurnId = undefined;
             drainQueuedUser();
+            // A terminal event must do no review reads on another thread.
+            const before = unrelatedLookups;
             dispatcher.onTurnEnded(THREAD, new Set([reviewTurnId]));
+            unrelatedTerminalLookups += unrelatedLookups - before;
             if (scenario.emitIdle && !scenario.idleBeforeCompleted) {
               dispatcher.wake(THREAD);
             }
@@ -338,7 +254,7 @@ describe("review auto-fix dispatcher", () => {
           if (scenario.flakyHoldFlip) {
             s.scheduleFunction(async () => {
               stackHold = stackHold ? undefined : "Held by #1: restack";
-              dispatcher.wake();
+              wakeStack();
             })();
           }
           if (scenario.otherTurnAfterReview !== "none") {
@@ -386,10 +302,11 @@ describe("review auto-fix dispatcher", () => {
           }
           if (stackHold) {
             stackHold = undefined;
-            dispatcher.wake();
+            wakeStack();
           }
           await s.waitIdle();
 
+          expect(unrelatedTerminalLookups).toBe(0);
           // No dispatch suspension ever leaks.
           expect(dispatchSuspensions).toBe(0);
           // Auto-fix never runs while a stack hold is active.
@@ -712,5 +629,31 @@ describe("review auto-fix dispatcher", () => {
     await Promise.resolve();
     expect(submitCalls).toBe(1);
     expect(runs.of(THREAD)[review.id]).toBeUndefined();
+  });
+
+  it("releases a handoff on disposal while a stack check is in flight", async () => {
+    const review = makeReview("rev-dispose");
+    let finishCheck!: (hold: string | undefined) => void;
+    const check = new Promise<string | undefined>((resolve) => { finishCheck = resolve; });
+    let releases = 0;
+    let admissionAttempts = 0;
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => false,
+      readStackHold: () => check,
+      suspendDispatch: () => () => { releases++; },
+      submitTurn: async () => {},
+      submitTurnIfIdle: async () => {
+        admissionAttempts++;
+        return { status: "started" };
+      },
+      recordRun: () => {},
+    });
+    dispatcher.onReviewLanded(review.id, THREAD, "review-turn");
+    dispatcher.dispose();
+    finishCheck(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    dispatcher.wake();
+    expect({ releases, admissionAttempts }).toEqual({ releases: 1, admissionAttempts: 0 });
   });
 });

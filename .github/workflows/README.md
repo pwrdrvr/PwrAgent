@@ -101,23 +101,40 @@ embedded in a user message count toward input and history. The totals include
 auxiliary model calls, including PwrAgent's title helper and Antigravity's
 native title generation.
 
-The same job configures three fake MCP connections with 80 tools each and
-checks the first turn and follow-up again for each provider. It fails on
-excess total bytes, tool bytes, or model calls. It also fails if Codex, Claude,
-or Antigravity in gateway mode adds fixture tool schemas before discovery.
-Antigravity's stdio fallback has a separate ceiling that accounts for eager
-tool schemas.
+The same job configures three fake MCP connections with 80 tools each. It
+measures the first turn and follow-up with the catalog configured. It checks
+deferred fixture schemas on Codex and Claude and the bounded eager subset on
+Antigravity's native stdio route. Codex also runs
+this case with Kimi K3 registered as a custom Responses provider using the
+portable Code Mode adapter and a loopback endpoint. The test checks the model,
+route, and bootstrap schemas received by the endpoint.
+
+Scripted model replies drive discovery and one approved MCP call through each
+harness, including the Kimi K3 configuration. The suite has a separate
+Antigravity gateway script for when the expected route switches away from
+native stdio. It also checks schema validation and an approval denial. The
+tests compare the invocation arguments at the model endpoint and stdio fixture
+and confirm the matching results reach the model. Separate ceilings cover the
+total turn, the largest conversation request, peak tool definition bytes,
+continuation bytes, and number of model calls. Peak tool definition bytes
+include schema-bearing discovery results. Continuations are model requests after
+tool results and exclude title generation.
 
 The job uploads `model-request-results-attempt-N` for the default case and
-`model-request-mcp-results-attempt-N` for the large catalog even when a ceiling fails.
-The publisher on `main` compares the default case in one comment per PR into
-`main`. It uses the first parent of the merge CI actually tested, and falls
-back to a recent successful `main` push when the exact base has no usable
-measurements. Docs-only PRs that skip Lint do not produce measurements.
+`model-request-mcp-results-attempt-N` for the large catalog and tool-use cases.
+Completed MCP cases and budget violations remain visible when another case
+fails. The trusted publisher on `main` updates one numeric report per PR into
+`main`. Each artifact uses the first parent of the tested merge as its baseline
+when a successful `main` run has that measurement. Otherwise it uses a recent
+successful `main` push. The report identifies missing cases and historical
+measurements. Catalog deltas span Antigravity routes. Scripted tool-use deltas
+require the same route in both runs. Docs-only PRs that skip Lint have no
+measurements.
 
 For a local run, set `PWRAGENT_MODEL_BENCH_CODEX` and `PWRAGENT_MODEL_BENCH_AGY`
-to the pinned executables in an OS temp directory, then run
-`pnpm test apps/desktop/src/main/__tests__/model-request-size.test.ts --maxWorkers=2`.
+to the pinned executables in the OS temp directory. Use the full Codex npm
+installation so the executable can find its sibling `codex-code-mode-host`.
+Then run `pnpm test apps/desktop/src/main/__tests__/model-request-size.test.ts --maxWorkers=2`.
 The benchmark uses the workspace's pinned Claude SDK binary. Set
 `PWRAGENT_MODEL_BENCH_RESULT` or `PWRAGENT_MODEL_BENCH_MCP_RESULT` to output files
 to export the respective numeric results.

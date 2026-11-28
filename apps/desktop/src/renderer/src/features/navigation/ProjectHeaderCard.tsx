@@ -12,6 +12,7 @@ import { copyText } from "../../lib/copy-text";
 import {
   type BridgedHoverCard,
   cardIsBesideSidebar,
+  elementRect,
   sidebarAnchorRect,
   sidebarPrCardBridge,
 } from "../../lib/hover-card-bridge";
@@ -82,6 +83,7 @@ export const ProjectHeaderCardHost = forwardRef<
   });
   const hide = tooltip.hide;
   bridgeCardRef.current.hide = hide;
+  bridgeCardRef.current.getRect = () => elementRect(tooltip.getElement());
   const visible = tooltip.visible;
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
@@ -122,11 +124,15 @@ export const ProjectHeaderCardHost = forwardRef<
           onDone={hide}
         />
       );
-      if (sidebarPrCardBridge.enterTrigger(bridgeCardRef.current)) {
+      const wait = sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, target, PROJECT_CARD_HOVER_DELAY_MS);
+      if (wait === 0) {
         show(target, content());
         return;
       }
-      showAfterDelay(target, content, PROJECT_CARD_HOVER_DELAY_MS);
+      showAfterDelay(target, () => {
+        sidebarPrCardBridge.takeOver(bridgeCardRef.current);
+        return content();
+      }, wait);
     },
     leave: (target) => {
       if (visibleRef.current && cardIsBesideSidebar(getElement(), target)) {

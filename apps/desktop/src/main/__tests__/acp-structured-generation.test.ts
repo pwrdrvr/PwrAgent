@@ -4,10 +4,10 @@ import { generateAcpStructuredObject, hasAcpStructuredHelper } from "../app-serv
 
 const schema = { type: "object", properties: { analysis: { type: "string" } }, required: ["analysis"], additionalProperties: false };
 
-function generate(answer: string | Error) {
+function generate(answer: string | Error, tokenUsage?: { totalTokens: number }) {
   const run = vi.fn(async (_request: AcpEphemeralPromptRequest) => {
     if (answer instanceof Error) throw answer;
-    return { text: answer, model: "grok-4.7-build-fast", refusedRequests: 0 };
+    return { text: answer, model: "grok-4.7-build-fast", refusedRequests: 0, tokenUsage };
   });
   const result = generateAcpStructuredObject({
     backend: "acp:grok", cwd: "/profile/state/acp-helper-workspace", run,
@@ -55,6 +55,13 @@ describe("ACP structured generation", () => {
   ])("fails an answer with %s", async (_case, answer) => {
     await expect(generate(answer).result).resolves.toEqual({
       status: "failed", reason: "Grok did not answer with the requested JSON.",
+    });
+  });
+
+  it("retains reported usage when the completed answer fails schema validation", async () => {
+    const tokenUsage = { totalTokens: 12 };
+    await expect(generate("invalid", tokenUsage).result).resolves.toMatchObject({
+      status: "failed", model: "grok-4.7-build-fast", tokenUsage,
     });
   });
 

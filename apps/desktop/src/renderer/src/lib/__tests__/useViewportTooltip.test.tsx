@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import fc from "fast-check";
 import {
   act,
   cleanup,
@@ -1024,6 +1025,96 @@ describe("beside viewport tooltips", () => {
     rerender(<BesideTooltipFixture content="Larger card" />);
     expect(screen.getByRole("tooltip")).toHaveTextContent("Larger card");
     expect(screen.getByRole("tooltip")).toHaveStyle({ top: "488px" });
+  });
+});
+
+// A beside card told to keep an element in place puts it back at the same
+// screen position after its content changes, wherever the window lets it:
+// the card's new top is the kept top less the element's new offset, clamped
+// to the window like any other placement.
+describe("beside cards that keep an element in place", () => {
+  const PADDING = 12;
+  const VIEWPORT = 900;
+
+  function KeepFixture(props: { generation: number; keepTop?: number }) {
+    const tooltip = useViewportTooltip({
+      className: "pr-status-card",
+      placement: "beside",
+      getAnchorRect: (target) => target.parentElement!.getBoundingClientRect(),
+    });
+    const update = tooltip.update;
+    const { generation, keepTop } = props;
+    useEffect(() => {
+      if (generation === 0) return;
+      const element = document.querySelector<HTMLElement>("[data-testid='kept-row']");
+      update(
+        <div data-testid="kept-row">Merge row {generation}</div>,
+        element && keepTop !== undefined ? { keep: { element, top: keepTop } } : undefined,
+      );
+    }, [generation, keepTop, update]);
+    return (
+      <div data-testid="list-anchor">
+        <button onFocus={(event) => tooltip.show(event.currentTarget, <div data-testid="kept-row">Merge row</div>)}>
+          Row
+        </button>
+        {tooltip.tooltipNode}
+      </div>
+    );
+  }
+
+  it("keeps the element where it was unless the window edge forbids it", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 860 }),
+        fc.integer({ min: 120, max: 600 }),
+        fc.integer({ min: -100, max: 200 }),
+        fc.double({ min: 0, max: 1, noNaN: true }),
+        fc.double({ min: 0, max: 1, noNaN: true }),
+        (rowTop, firstHeight, growth, firstPlace, secondPlace) => {
+          cleanup();
+          vi.restoreAllMocks();
+          const geometry = { height: firstHeight, offset: Math.floor(firstPlace * (firstHeight - 30)) };
+          vi.stubGlobal("innerWidth", 1200);
+          vi.stubGlobal("innerHeight", VIEWPORT);
+          vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+            if (this.dataset.testid === "list-anchor") return rectangle({ top: 100, right: 356, bottom: 260, left: 16 });
+            if (this.tagName === "BUTTON") return rectangle({ top: rowTop, left: 32, width: 300, height: 32 });
+            const card = this.closest<HTMLElement>("[role='tooltip']");
+            const cardTop = card ? Number.parseFloat(card.style.top) || 0 : 0;
+            if (this.getAttribute("role") === "tooltip") return rectangle({ top: cardTop, width: 272, height: geometry.height });
+            if (this.dataset.testid === "kept-row") return rectangle({ top: cardTop + geometry.offset, width: 240, height: 28 });
+            return rectangle({});
+          });
+          const { rerender } = render(<KeepFixture generation={0} />);
+          fireEvent.focus(screen.getByRole("button"));
+          const keptTop = screen.getByTestId("kept-row").getBoundingClientRect().top;
+          // The content changes: the card grows or shrinks, the row moves inside it.
+          geometry.height = Math.max(60, firstHeight + growth);
+          geometry.offset = Math.floor(secondPlace * (geometry.height - 30));
+          rerender(<KeepFixture generation={1} keepTop={keptTop} />);
+          const maxTop = Math.max(PADDING, VIEWPORT - PADDING - geometry.height);
+          const expectedTop = Math.max(PADDING, Math.min(keptTop - geometry.offset, maxTop));
+          expect(Number.parseFloat(screen.getByRole("tooltip").style.top)).toBe(expectedTop);
+          if (expectedTop === keptTop - geometry.offset) {
+            expect(screen.getByTestId("kept-row").getBoundingClientRect().top).toBe(keptTop);
+          }
+        },
+      ),
+      // A rendered tooltip is a heavy fixture: a few random runs plus named
+      // cases. The first is the counterexample the old placement failed on.
+      {
+        numRuns: 5,
+        examples: [
+          [13, 120, 0, 0, 0.011111111111111112],
+          // Low in the window: the card grows up around the kept row.
+          [800, 400, 40, 0.8, 0.85],
+          // Room on both sides: the card moves up by what grew above the row.
+          [300, 300, 40, 0.8, 0.9],
+          // Near the top: the window's top edge stops the card.
+          [20, 300, 60, 0.5, 0.7],
+        ],
+      },
+    );
   });
 });
 

@@ -770,7 +770,7 @@ function placeholderAcpAgentSettingsEntry(
     authStatus: "not-required",
     verificationStatus: "unverified-allowed",
     ...(strategy.id === "antigravity"
-      ? { unavailableReason: "Install Antigravity CLI 1.5 or later, enable Antigravity CLI if it is off, then click Refresh under Re-probe." }
+      ? { unavailableReason: "Install Antigravity CLI 1.5 or later, enable Antigravity CLI if it is off, then click Check again in Setup." }
       : {}),
     instances: [],
   };

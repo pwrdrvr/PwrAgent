@@ -1,0 +1,317 @@
+import fc from "fast-check";
+import { describe, expect, it, vi } from "vitest";
+import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
+import { LiveNavigationIndex } from "../app-server/live-navigation-index";
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { createDeferred, createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
+
+// Raise MBT_RUNS locally to search; CI uses five generated cases.
+const RUNS = Number(process.env.MBT_RUNS ?? 5);
+
+type Command =
+  | { kind: "rename"; n: number }
+  | { kind: "renameDuringListing"; n: number; acknowledgeFirst: boolean }
+  | { kind: "generated"; n: number }
+  | { kind: "echo" }
+  | { kind: "materialize" }
+  | { kind: "catchUp" }
+  | { kind: "nativeFails"; on: boolean }
+  | { kind: "nav"; method: "thread/started" | "navigation/providerThreads/refreshed" | "turn/completed" | "thread-created" | "turn/started" }
+  | { kind: "read" };
+
+const command: fc.Arbitrary<Command> = fc.oneof(
+  fc.record({ kind: fc.constant("rename" as const), n: fc.integer({ min: 1, max: 3 }) }),
+  fc.record({ kind: fc.constant("renameDuringListing" as const), n: fc.integer({ min: 1, max: 3 }), acknowledgeFirst: fc.boolean() }),
+  fc.record({ kind: fc.constant("generated" as const), n: fc.integer({ min: 1, max: 3 }) }),
+  fc.constant({ kind: "echo" as const }),
+  fc.constant({ kind: "materialize" as const }),
+  fc.constant({ kind: "catchUp" as const }),
+  fc.record({ kind: fc.constant("nativeFails" as const), on: fc.boolean() }),
+  fc.record({ kind: fc.constant("nav" as const), method: fc.constantFrom(
+    "thread/started", "navigation/providerThreads/refreshed", "turn/completed", "thread-created", "turn/started") }),
+  fc.constant({ kind: "read" as const }),
+);
+
+// The owner names a thread it just started (a to-do card's title, an
+// operator rename, a generated title). Codex's point read can carry that name
+// before thread/list does, or before thread/list includes the thread at all.
+// The model only issues owner renames. Every settled read serves the latest one.
+describe("started thread titles", () => {
+  async function replay([lag, commands]: [lag: boolean, commands: Command[]]): Promise<void> {
+    const id = "thread-1";
+    // What Codex itself knows, and what its listing reports.
+    let codexName: string | undefined;
+    let listedName: string | undefined;
+    let materialized = false;
+    let nativeFails = false;
+    let delayNextListing: (() => Promise<void>) | undefined;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/start", "thread/name/set"] }, threads: [],
+    });
+    const codexRow = (name: string | undefined): AppServerThreadSummary => ({
+      id, source: "codex", linkedDirectories: [], projectKey: "/repo-a",
+      ...(name ? { title: name, titleSource: "explicit" as const } : { title: "Prompt", titleSource: "derived" as const }),
+    });
+    Object.assign(codexClient, {
+      renameThread: async (params: { threadId: string; name: string }) => {
+        codexName = params.name;
+        // Lag: a name set before the listing has one appears there only later.
+        if (!lag || listedName !== undefined) listedName = codexName;
+        return { threadId: params.threadId };
+      },
+      listThreads: async (params?: { skipArchivedMetadataRefresh?: boolean }) => {
+        const rows = materialized ? [codexRow(listedName)] : [];
+        if (params?.skipArchivedMetadataRefresh && delayNextListing) {
+          const delay = delayNextListing;
+          delayNextListing = undefined;
+          await delay();
+        }
+        return rows;
+      },
+      readThreadSummary: async () => {
+        if (nativeFails) throw new Error("thread not loaded");
+        return codexRow(codexName);
+      },
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const project = (rows: AppServerThreadSummary[]): NavigationThreadSummary[] =>
+      rows.map((row) => ({ ...row, inbox: { inInbox: false } }));
+    const failures: unknown[] = [];
+    const live = new LiveNavigationIndex({
+      backend: "codex", version: () => "0:0", changedKeys: () => undefined,
+      sqlite: async (rows) => rows,
+      list: async () => ({ rows: await registry.listThreads({ backend: "codex" }), coverage: { state: "complete" } }),
+      join: async (rows, coverage) => {
+        const threads = project(rows);
+        return { threads, coverage, directories: buildDirectorySummaries({ threads }) };
+      },
+      cached: (backend, threadId) => registry.getCachedNavigationThread({ backend, threadId }),
+      refresh: (backend, threadId, activity, workers) => registry.refreshNavigationThread({ backend, threadId }, activity, workers),
+      projectRows: async (rows) => project(rows),
+      directories: async (threads) => ({ directories: buildDirectorySummaries({ threads }) }),
+      inputKeys: () => new Set(), notify: () => {}, failed: (error) => { failures.push(error); },
+    });
+    const stop = registry.onEvent((event) => live.event(event));
+    let expected = "Untitled thread";
+    let explicit = false;
+    let named = false;
+    const settle = async () => {
+      for (let attempt = 0; attempt < 50; attempt++) {
+        const index = await live.read();
+        if (live.isCurrent(index)) return index;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      throw new Error("navigation index did not settle");
+    };
+    const check = async (label: string) => {
+      const index = await settle();
+      const row = index.threads.find((thread) => thread.id === id);
+      const listed = (await registry.listThreads({ backend: "codex" })).find((thread) => thread.id === id);
+      const cached = registry.getCachedNavigationThread({ backend: "codex", threadId: id });
+      const info = registry.getThreadInfo?.({ backend: "codex", threadId: id });
+      const actual = { label, live: row?.title, listed: listed?.title, cached: cached?.title, info: info?.title };
+      // Before the owner names it, any placeholder or preview-derived title is fine.
+      if (!named) {
+        for (const title of [actual.live, actual.listed, actual.cached, actual.info]) {
+          expect([undefined, "Untitled thread", "Prompt"], label).toContain(title);
+        }
+        return;
+      }
+      expect(actual).toEqual({ label, live: expected, listed: expected, cached: expected, info: expected });
+    };
+    try {
+      await live.read();
+      await registry.startThread({ backend: "codex", cwd: "/repo-a" });
+      for (const [step, cmd] of commands.entries()) {
+        const label = `${step}:${JSON.stringify(cmd)}`;
+        if (cmd.kind === "rename" || cmd.kind === "renameDuringListing") {
+          const name = `Name ${cmd.n}`;
+          const rename = () => registry.renameThread({ backend: "codex", threadId: id, name });
+          if (cmd.kind === "renameDuringListing") {
+            // Exercise a listing that has already read a different explicit name.
+            if (!materialized || listedName === undefined || listedName === name) continue;
+            const started = Promise.withResolvers<void>();
+            const release = Promise.withResolvers<void>();
+            delayNextListing = () => {
+              started.resolve();
+              return release.promise;
+            };
+            // Use a separate cache key so the controlled read cannot join a
+            // background live-index listing or consume its provider response.
+            const pending = registry.listThreads({ backend: "codex", forceRefresh: true, skipArchivedMetadataRefresh: true });
+            try {
+              await Promise.race([started.promise, pending.then(() => {
+                throw new Error("listing finished before reaching the provider");
+              })]);
+              await rename();
+              if (cmd.acknowledgeFirst) {
+                const newer = await registry.listThreads({ backend: "codex", forceRefresh: true });
+                expect(newer.find((thread) => thread.id === id)?.title, label).toBe(name);
+              }
+            } finally {
+              release.resolve();
+            }
+            expect((await pending).find((thread) => thread.id === id), label).toMatchObject({
+              title: name, titleSource: "explicit",
+            });
+          } else {
+            await rename();
+          }
+          expected = name;
+          named = true;
+          explicit = true;
+        } else if (cmd.kind === "generated") {
+          // The title helper never runs over an explicit name.
+          if (explicit) continue;
+          await registry.renameThread({ backend: "codex", threadId: id, name: `Generated ${cmd.n}` }, { titleSource: "derived" });
+          expected = `Generated ${cmd.n}`;
+          named = true;
+        } else if (cmd.kind === "echo") {
+          // Codex's own notification for the name it holds.
+          if (!codexName) continue;
+          await registry.publishLocalEvent({ backend: "codex", notification: {
+            method: "thread/name/updated", params: { threadId: id, threadName: codexName } } });
+        } else if (cmd.kind === "materialize") {
+          if (!materialized && !lag) listedName = codexName;
+          materialized = true;
+        } else if (cmd.kind === "catchUp") {
+          listedName = codexName;
+        } else if (cmd.kind === "nativeFails") {
+          nativeFails = cmd.on;
+        } else if (cmd.kind === "nav") {
+          const notification = cmd.method === "thread-created"
+            ? { method: "navigation/threadDirectories/updated", params: { reason: "thread-created", threadIds: [id] } }
+            : cmd.method === "navigation/providerThreads/refreshed"
+              ? { method: cmd.method, params: { failedProviders: 0, backend: "codex" } }
+              : cmd.method === "turn/completed"
+                ? { method: cmd.method, params: { threadId: id, turn: { id: "turn-1", status: "completed" } } }
+                : cmd.method === "turn/started"
+                  ? { method: cmd.method, params: { threadId: id, turn: { id: "turn-1", status: "inProgress" } } }
+                  : { method: cmd.method, params: { threadId: id } };
+          // Through the registry, which observes some of these before the index does.
+          await registry.publishLocalEvent({ backend: "codex", notification } as Parameters<typeof registry.publishLocalEvent>[0]);
+        } else {
+          await check(label);
+        }
+      }
+      await check("final");
+      expect(failures).toEqual([]);
+    } finally {
+      stop();
+      live.close();
+      await registry.close();
+    }
+  }
+
+  // A listing captures the first explicit name, then returns it after the second
+  // rename has been accepted.
+  it("keeps an explicit rename when an earlier listing completes", () => replay([
+    false, [{ kind: "materialize" }, { kind: "rename", n: 1 }, { kind: "renameDuringListing", n: 2, acknowledgeFirst: false }],
+  ]));
+
+  // A newer listing can acknowledge the rename while the stale listing is still held.
+  it("keeps a rename after a newer listing acknowledges it first", () => replay([
+    false, [{ kind: "materialize" }, { kind: "rename", n: 1 }, { kind: "renameDuringListing", n: 2, acknowledgeFirst: true }],
+  ]));
+
+  it("keeps a pending start's rename when a point read sees it first", () => replay([
+    false, [{ kind: "rename", n: 1 }, { kind: "nav", method: "thread/started" }],
+  ]));
+
+  it("keeps a rename when thread/list still lists the thread unnamed", () => replay([
+    true, [{ kind: "materialize" }, { kind: "rename", n: 1 }],
+  ]));
+
+  it("keeps an owner-generated title over a derived prompt preview", () => replay([
+    true, [{ kind: "generated", n: 1 }, { kind: "materialize" }, { kind: "read" }, { kind: "rename", n: 1 }],
+  ]));
+
+  it("keeps the rename when a pending start lands unnamed after a listing", () => replay([
+    true, [{ kind: "rename", n: 1 }, { kind: "read" }, { kind: "materialize" }, { kind: "nav", method: "thread/started" }],
+  ]));
+
+  it("every settled read shows the owner's latest name for a started thread", async () => {
+    // `lag`: thread/list shows a name set before it listed one only after catchUp.
+    const scenario = fc.tuple(fc.boolean(), fc.array(command, { minLength: 1, maxLength: 24, size: "max" }));
+    await fc.assert(fc.asyncProperty(scenario, replay), { numRuns: RUNS });
+  });
+});
+
+async function replayPointRead(startsBeforeRename: boolean) {
+  const ref = { backend: "codex" as const, threadId: "point-read" };
+  const native: AppServerThreadSummary = {
+    id: ref.threadId, source: ref.backend, title: "Shared profile name", titleSource: "explicit", linkedDirectories: [],
+  };
+  const codexClient = new MockBackendClient({ threads: [{ ...native, title: "Prompt", titleSource: "derived" }] });
+  const readStarted = createDeferred<void>();
+  const releaseRead = createDeferred<void>();
+  Object.assign(codexClient, {
+    readThreadSummary: async () => {
+      readStarted.resolve();
+      await releaseRead.promise;
+      return native;
+    },
+  });
+  const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+  const rename = () => registry.publishLocalEvent({ backend: ref.backend, notification: {
+    method: "thread/name/updated", params: { threadId: ref.threadId, threadName: "Owner rename", titleSource: "explicit" },
+  } });
+  try {
+    if (!startsBeforeRename) await rename();
+    const read = registry.refreshNavigationThread(ref, true, false);
+    await readStarted.promise;
+    if (startsBeforeRename) await rename();
+    releaseRead.resolve();
+    expect((await read)?.title).toBe(startsBeforeRename ? "Owner rename" : native.title);
+    // A listing that still sees a prompt needs the pending owner name.
+    const listed = await registry.listThreads({ backend: ref.backend });
+    expect(listed.find((row) => row.id === ref.threadId)?.title).toBe("Owner rename");
+  } finally {
+    releaseRead.resolve();
+    await registry.close();
+  }
+}
+
+async function replayAggregateSearch(unrelated: { backend: "codex" | "claude"; threadId: string }) {
+  const claudeRow: AppServerThreadSummary = {
+    id: "claude-search", source: "claude", title: "Before", titleSource: "explicit", linkedDirectories: [],
+  };
+  const codexClient = new MockBackendClient({ threads: [] });
+  const codexStarted = createDeferred<void>();
+  const releaseCodex = createDeferred<void>();
+  vi.spyOn(codexClient, "listThreads").mockImplementation(async () => {
+    codexStarted.resolve();
+    await releaseCodex.promise;
+    return [];
+  });
+  const registry = createDesktopBackendRegistry({
+    codexClient, overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
+  });
+  const listClaude = vi.spyOn(registry["claudeBackend"], "listThreads").mockResolvedValue([claudeRow]);
+  try {
+    const pending = registry.listThreadSearchCandidates({});
+    await codexStarted.promise;
+    await registry.listThreads({ backend: "claude" });
+    expect(registry.getThreadInfo({ backend: "claude", threadId: claudeRow.id })?.title).toBe("Before");
+    listClaude.mockResolvedValue([{ ...claudeRow, title: "After" }]);
+    await registry.publishLocalEvent({ backend: unrelated.backend, notification: {
+      method: "thread/name/updated", params: { threadId: unrelated.threadId, threadName: "Unrelated rename" },
+    } });
+    releaseCodex.resolve();
+    expect((await pending).find((row) => row.source === "claude")?.title).toBe("After");
+  } finally {
+    releaseCodex.resolve();
+    await registry.close();
+  }
+}
+
+it("keeps a fresh Codex point title while the listing still lags", () => replayPointRead(false));
+it("keeps an owner rename over an older Codex point read", () => replayPointRead(true));
+
+it.each([
+  { backend: "codex" as const, threadId: "codex-other" },
+  { backend: "codex" as const, threadId: "claude-search" },
+  { backend: "claude" as const, threadId: "claude-other" },
+])("keeps the aggregate search title when $backend/$threadId is renamed", replayAggregateSearch);

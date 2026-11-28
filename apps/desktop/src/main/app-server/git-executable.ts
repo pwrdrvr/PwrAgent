@@ -2,22 +2,13 @@ import { execFile as execFileCallback, spawn } from "node:child_process";
 import os from "node:os";
 import { promisify } from "node:util";
 import { noteBundledGitCommand } from "../bundled-git-lfs-advisory";
-import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { gitRuntimeEnvironment, resolveRuntimeGitExecutable } from "../git-runtime";
+import { gitCommandEnvironment, resolveRuntimeGitExecutable } from "../git-runtime";
 import { formatWindowsJobStartupTimeout, startWindowsJobReadyPoll, windowsJobCleanupVerified, wrapCommandInWindowsJob } from "../windows-job-wrapper";
 import { windowsJobLauncherPath } from "../windows-job-launcher-path";
 import { terminateOwnedProcessTree } from "../process-tree";
 import { gitSubprocessDiagnostics, type GitSubprocessPurpose } from "../diagnostics/git-subprocess-diagnostics";
 
 const execFile = promisify(execFileCallback);
-
-function gitEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return {
-    ...gitRuntimeEnvironment(buildPwrAgentChildProcessEnv(env)),
-    GIT_TERMINAL_PROMPT: "0",
-    GCM_INTERACTIVE: "Never",
-  };
-}
 
 export async function resolveGitExecutable(env: NodeJS.ProcessEnv = process.env): Promise<string> {
   return await resolveRuntimeGitExecutable(env);
@@ -33,18 +24,18 @@ export async function runGitCommand(
     maxBuffer?: number;
     signal?: AbortSignal;
     input?: string;
-    beforeSpawn?: (executable: string) => void;
+    beforeSpawn?: (executable: string, env: NodeJS.ProcessEnv) => void;
     purpose?: GitSubprocessPurpose;
   } = {},
 ): Promise<{
   stdout: string;
   stderr: string;
 }> {
-  const env = gitEnvironment(options.env ?? process.env);
+  const env = gitCommandEnvironment(options.env ?? process.env);
   options.signal?.throwIfAborted();
   const git = await resolveGitExecutable(options.env ?? process.env);
   // Admission must survive the executable resolver's asynchronous boundary.
-  options.beforeSpawn?.(git);
+  options.beforeSpawn?.(git, env);
   options.signal?.throwIfAborted();
   const gitArgs = ["-C", cwd, ...args];
   const windowsJobLaunch =
@@ -250,7 +241,7 @@ export async function runGitCommandBinary(
     maxBuffer?: number;
   } = {},
 ): Promise<Buffer> {
-  const env = gitEnvironment(options.env ?? process.env);
+  const env = gitCommandEnvironment(options.env ?? process.env);
   const git = await resolveGitExecutable(options.env ?? process.env);
   const finishDiagnostic = gitSubprocessDiagnostics.startGit(cwd, args);
   let failed = true;
@@ -282,7 +273,7 @@ export async function streamGitCommand(
     onStdout: (chunk: string) => boolean;
   },
 ): Promise<{ stopped: boolean }> {
-  const env = gitEnvironment(options.env ?? process.env);
+  const env = gitCommandEnvironment(options.env ?? process.env);
   const command = await resolveGitExecutable(options.env ?? process.env);
   const gitArgs = ["-C", cwd, ...args];
   const job = process.platform === "win32"
