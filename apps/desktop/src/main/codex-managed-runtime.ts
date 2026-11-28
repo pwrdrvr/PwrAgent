@@ -1820,7 +1820,7 @@ async function pruneSupersededVersions(
   }
 }
 
-async function hasActiveRuntimeMarker(
+export async function hasActiveRuntimeMarker(
   versionRoot: string,
   processAlive: (pid: number) => boolean,
 ): Promise<boolean> {
@@ -1846,7 +1846,7 @@ async function hasActiveRuntimeMarker(
   return active;
 }
 
-function isProcessAlive(pid: number): boolean {
+export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

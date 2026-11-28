@@ -237,6 +237,20 @@ export function buildCodexVersionNotice(params: {
     };
   }
 
+  if (advisory.installer === "pwragent-openai") {
+    // PwrAgent installed this Codex from OpenAI and updates it itself, so
+    // there is no command to run; the next update check replaces it.
+    return {
+      ...base,
+      title: "Update Codex for GPT-6.1-Sol",
+      message,
+      detail:
+        "PwrAgent installed this Codex from OpenAI and updates it on its own."
+        + " Once the newer release downloads, check again in Codex settings to use it.",
+      actions: [{ ...openSettings, tone: "primary" }],
+    };
+  }
+
   if (advisory.upgradeCommand) {
     const command = advisory.upgradeCommand;
     return {

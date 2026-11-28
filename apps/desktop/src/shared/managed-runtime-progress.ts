@@ -5,7 +5,7 @@
 // shape describes all three and one strip in Settings renders any of them.
 // Git's last step installs without switching: Use is a separate action.
 
-export type ManagedRuntimeId = "codex" | "grok" | "git" | "antigravity";
+export type ManagedRuntimeId = "codex" | "openai-codex" | "grok" | "git" | "antigravity";
 
 /**
  * `idle` clears the strip: a check that found nothing new, or an abort. It is

@@ -34,7 +34,10 @@ export function classifyCodexInstaller(params: {
   source?: DesktopCodexCandidateSource;
   /** Whether the command is the build PwrAgent downloaded and manages itself. */
   managedByPwrAgent?: boolean;
+  /** Whether the command is OpenAI's Codex that PwrAgent installed and updates. */
+  openAiInstalledByPwrAgent?: boolean;
 }): CodexInstallerClassification {
+  if (params.openAiInstalledByPwrAgent) return { installer: "pwragent-openai" };
   if (params.managedByPwrAgent) return { installer: "pwragent" };
   const paths = [params.resolvedPath, params.command]
     .filter((entry): entry is string => Boolean(entry))
@@ -71,6 +74,7 @@ export async function buildCodexVersionAdvisory(params: {
   version: string | undefined;
   source?: DesktopCodexCandidateSource;
   managedByPwrAgent?: boolean;
+  openAiInstalledByPwrAgent?: boolean;
   /** Injected so tests need no real filesystem. */
   resolvePath?: (command: string) => Promise<string | undefined>;
 }): Promise<DesktopCodexVersionAdvisory | undefined> {
@@ -81,12 +85,15 @@ export async function buildCodexVersionAdvisory(params: {
   const resolvePath = params.resolvePath ?? defaultResolvePath;
   const classification = classifyCodexInstaller({
     command,
-    ...(params.managedByPwrAgent
+    ...(params.managedByPwrAgent || params.openAiInstalledByPwrAgent
       ? {}
       : { resolvedPath: await resolvePath(command) }),
     ...(params.source ? { source: params.source } : {}),
     ...(params.managedByPwrAgent !== undefined
       ? { managedByPwrAgent: params.managedByPwrAgent }
+      : {}),
+    ...(params.openAiInstalledByPwrAgent !== undefined
+      ? { openAiInstalledByPwrAgent: params.openAiInstalledByPwrAgent }
       : {}),
   });
   return {

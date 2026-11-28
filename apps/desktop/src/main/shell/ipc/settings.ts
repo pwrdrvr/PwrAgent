@@ -2206,6 +2206,7 @@ export function registerSettingsIpcHandlers(
         snapshot: applyRuntimeMessagingSnapshot(
           await getService(service).refreshCodexDiscovery(
             issueProviderDiscoveryPermit(request.discoveryIntent),
+            { installOpenAiCodex: request.installOpenAiCodex === true },
           ),
         ),
       };

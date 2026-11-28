@@ -50,6 +50,7 @@ const STEP_LABELS: Record<ManagedRuntimeInstallPhase, string> = {
 const RUNTIME_NAMES: Record<ManagedRuntimeId, string> = {
   antigravity: "Google Antigravity",
   codex: "pwrdrvr/codex",
+  "openai-codex": "OpenAI Codex",
   grok: "pwrdrvr/grok-build",
   git: "PwrDrvr Git",
 };
@@ -149,7 +150,9 @@ export function managedRuntimeProgressCopy(
         eyebrow: "Checking for a build",
         message: progress.runtime === "antigravity"
           ? "Checking Google’s release manifest…"
-          : `Asking GitHub for the latest ${runtimeName} release…`,
+          : progress.runtime === "openai-codex"
+            ? "Asking npm for OpenAI’s latest Codex release…"
+            : `Asking GitHub for the latest ${runtimeName} release…`,
       };
     case "downloading": {
       const { receivedBytes, totalBytes } = progress;
@@ -174,7 +177,9 @@ export function managedRuntimeProgressCopy(
           ? "Checking the archive against Google’s published SHA-512…"
           : progress.runtime === "git"
             ? "Checking the archive against its published SHA-256…"
-            : "Checking the SHA-256 and the signature…",
+            : progress.runtime === "openai-codex"
+              ? "Checking the archive against OpenAI’s published SHA-256…"
+              : "Checking the SHA-256 and the signature…",
       };
     case "unpacking":
       return {
@@ -192,7 +197,9 @@ export function managedRuntimeProgressCopy(
         eyebrow: progress.runtime === "git" ? "Installing" : "Activating",
         message: progress.runtime === "antigravity"
           ? "Checking ACP startup and activating the verified release…"
-          : "Moving the verified build into place…",
+          : progress.runtime === "openai-codex"
+            ? "Starting the new Codex to confirm its version…"
+            : "Moving the verified build into place…",
       };
     case "ready":
       if (progress.runtime === "git") {

@@ -93,6 +93,14 @@ describe("Codex installer classification", () => {
       managedByPwrAgent: true,
     })).toEqual({ installer: "pwragent" });
   });
+
+  it("names OpenAI's Codex that PwrAgent installed, not PwrAgent's own build", () => {
+    expect(classifyCodexInstaller({
+      command: "/Users/x/.pwragent/agents/codex/openai/versions/0.172.0/bin/codex",
+      source: "application",
+      openAiInstalledByPwrAgent: true,
+    })).toEqual({ installer: "pwragent-openai" });
+  });
 });
 
 describe("Codex version advisory", () => {

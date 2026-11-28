@@ -102,11 +102,12 @@ export function codexAgentState(params: {
 }
 
 /**
- * Why Get started should offer PwrAgent's own Codex build, if it should.
+ * Why Get started should offer to install OpenAI's Codex, if it should.
  *
  * T3 Code and similar apps install Codex for the user instead of leaving them
- * at a terminal. PwrAgent already ships a verified Codex build, so the three
- * dead ends a new user can hit all lead to the same one-click install:
+ * at a terminal. PwrAgent installs OpenAI's release under its own root and
+ * keeps it current, so the three dead ends a new user can hit all lead to the
+ * same one-click install:
  * - `missing`: no Codex at all;
  * - `broken`: a Codex was found but does not start;
  * - `outdated`: a working Codex too old for the newest models.
