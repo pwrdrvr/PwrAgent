@@ -446,6 +446,33 @@ describe("review auto-fix dispatcher", () => {
     expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #12: CI running" });
   });
 
+  it("does not announce a cleared gate that admission closes again", async () => {
+    // Counterexample from the scaling probe: the first check saw the stack
+    // clear and admission saw it held, so every wake announced two changes.
+    // Viewers must hear only real changes, however many wakes arrive.
+    const review = makeReview("rev-flapping-gate", true);
+    let changes = 0;
+    const runs = new ReviewAutoFixRuns(() => { changes++; });
+    let read = 0;
+
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => false,
+      readStackHold: async () => (read++ % 2 === 0 ? undefined : "Held by #12: CI running"),
+      threadHasActiveTurn: () => false,
+      submitTurn: async () => ({ status: "started" }),
+      submitTurnIfIdle: async ({ canAdmit }) => ((await canAdmit()) ? { status: "started" } : { status: "busy" }),
+      recordRun: (thread, id, event) => runs.record(thread, id, event),
+      now: () => 1,
+    });
+
+    await dispatcher.dispatch(review.id);
+    const afterFirst = changes;
+    for (let wake = 0; wake < 8; wake++) await dispatcher.dispatch(review.id);
+    expect(changes).toBe(afterFirst);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #12: CI running" });
+  });
+
   it("cancels queued run state when a thread is archived while Auto-fix is held", async () => {
     const review = makeReview("rev-archive-held", true);
     const runs = new ReviewAutoFixRuns();

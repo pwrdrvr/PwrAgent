@@ -500,11 +500,9 @@ export class ReviewAutoFixDispatcher {
           this.cancelReview(id, current ?? review);
           return;
         }
-        if (this.deps.readStackHold) {
-          // The card names a stack hold; without one it waits on the turn.
-          this.deps.recordRun(current, id, { kind: "stackHold", ...(hold ? { reason: hold } : {}), at: this.now() });
-        }
         if (hold) {
+          // The card names the stack hold until admission decides otherwise.
+          this.deps.recordRun(current, id, { kind: "stackHold", reason: hold, at: this.now() });
           if (this.heldReviews.get(id) !== hold) {
             this.deps.onHeld?.(current, hold);
           }
@@ -539,10 +537,13 @@ export class ReviewAutoFixDispatcher {
               this.cancelReview(id, afterBusy ?? current);
               return;
             }
-            if (admissionHold) {
-              // The gate closed again at admission: say so, not the turn.
-              this.deps.recordRun(afterBusy, id, { kind: "stackHold", reason: admissionHold, at: this.now() });
-            }
+            // Record the gate once admission answers, so a hold that closes
+            // again at admission does not flash the current-turn wording.
+            this.deps.recordRun(afterBusy, id, {
+              kind: "stackHold",
+              ...(admissionHold ? { reason: admissionHold } : {}),
+              at: this.now(),
+            });
             this.heldReviews.set(id, admissionHold ?? "Waiting for turn admission");
             const handoff = this.handoffSuspensions.get(id);
             const reviewTurnStillActive = handoff !== undefined
@@ -553,6 +554,7 @@ export class ReviewAutoFixDispatcher {
             }
             continue;
           }
+          this.deps.recordRun(current, id, { kind: "stackHold", at: this.now() });
         } else {
           await this.deps.submitTurn(request);
         }
