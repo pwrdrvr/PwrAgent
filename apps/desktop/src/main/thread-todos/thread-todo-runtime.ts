@@ -461,9 +461,11 @@ export function installThreadTodoRuntime(params: {
     if (event.notification.method === "pullRequest/status/updated") {
       reviewAutoFixDispatcher.wakeForPullRequest(event.notification.params.prKey, event.navigationPullRequestKeyAliases);
     } else if (event.notification.method === "thread/stackHold/updated") {
-      // A stack operation can unblock another thread, and the event carries
-      // no PR or repository identity.
-      reviewAutoFixDispatcher.wake();
+      const { threadId } = event.notification.params;
+      if (threadId) reviewAutoFixDispatcher.wakeForStackOperation({ backend: event.backend, threadId });
+      else reviewAutoFixDispatcher.wake();
+    } else if (event.notification.method === "thread/pullRequests/updated") {
+      reviewAutoFixDispatcher.wake({ backend: event.backend, threadId: event.notification.params.threadId });
     } else if (!handledTerminalTurn && (event.notification.method === "thread/lock/updated"
       || (status && typeof status === "object" && "type" in status && status.type === "idle")
       || queueEnded)) {

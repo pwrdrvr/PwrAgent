@@ -223,7 +223,13 @@ describe("review tracking runtime eligibility", () => {
 
     it("bounds SQLite review reads for unrelated turn and forge events", async () => {
       let hold: string | undefined = "CI running";
-      const readHold = vi.fn(async () => hold);
+      let journalHeld = false;
+      const readHold = vi.fn<NonNullable<Parameters<typeof installThreadTodoRuntime>[0]["readReviewStackHold"]>>(
+        async (review, observation) => {
+          if (review.threadId === THREAD.threadId) observation.observeOperation?.(["claude:lower-layer"], journalHeld);
+          return hold;
+        },
+      );
       install(readHold);
       const second = { ...THREAD, threadId: "second-owner" };
       const otherPr = { ...PR, repo: "other", url: "https://github.com/example/other/pull/7" };
@@ -260,10 +266,19 @@ describe("review tracking runtime eligibility", () => {
         // A PR event can unblock a different thread, even after a repository rename.
         await checkWork({ backend: "claude", notification: forge }, 0, 0);
         await checkWork(lowerLayerUpdated, 2, 1);
-        // A stack operation with no repository identity can affect either review.
-        await checkWork({ backend: "claude", notification: {
+        const release: AgentEvent = { backend: "claude", notification: {
           method: "thread/stackHold/updated", params: { threadId: "lower-layer", opId: "restack", held: false },
-        } }, 4, 2);
+        } };
+        await checkWork(release, 2, 1);
+        const otherRelease: AgentEvent = { backend: "claude", notification: {
+          method: "thread/stackHold/updated", params: { threadId: "another-stack", opId: "restack", held: false },
+        } };
+        await checkWork(otherRelease, 0, 0);
+        // A journal can be held by a participant on another stack in the clone.
+        journalHeld = true;
+        await checkWork(release, 2, 1);
+        journalHeld = false;
+        await checkWork(otherRelease, 2, 1);
         hold = undefined;
         await checkWork(lowerLayerUpdated, 2, 2);
         await checkWork(lowerLayerUpdated, 0, 0);

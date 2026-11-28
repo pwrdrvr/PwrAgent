@@ -1120,6 +1120,7 @@ async function projectClone(
         key: key.length <= 512 ? key : createHash("sha256").update(key).digest("hex"),
         name, repository, inferred: false, trunk: stack.trunk.branch,
         ...(stack.number !== undefined ? { githubStack: stack.number } : {}),
+        ...(busy && !forge && { journalHeld: true }),
         layers: busy && !forge ? layers.map((layer) => ({ ...layer, health: "held" })) : layers,
       });
     }

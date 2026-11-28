@@ -12597,7 +12597,7 @@ describe("app server ipc", () => {
         linkedDirectories: [{ id: cwd, path: cwd, kind: "local", label: "Lower" }],
       }],
     });
-    const observation = { readActivity: vi.fn(), heldBy: vi.fn() };
+    const observation = { readActivity: vi.fn(), heldBy: vi.fn(), observeOperation: vi.fn(), unavailable: vi.fn() };
     let repairing = true;
     const activity = vi.spyOn(appServerService, "stackThreadActivity").mockImplementation(async (key) => {
       expect(observation.readActivity).toHaveBeenCalledWith(key);
@@ -12606,10 +12606,16 @@ describe("app server ipc", () => {
     onTestFinished(() => activity.mockRestore());
     await expect(appServerService.automationStackHold(review, observation)).resolves.toBe("Held by #1: repair in progress");
     expect(observation.heldBy).toHaveBeenCalledExactlyOnceWith(lowerKey);
+    expect(observation.observeOperation).toHaveBeenCalledWith(expect.arrayContaining([lowerKey]), false);
     repairing = false;
     observation.heldBy.mockClear();
     await expect(appServerService.automationStackHold(review, observation)).resolves.toBeUndefined();
     expect(observation.heldBy).not.toHaveBeenCalled();
+    const preflight = vi.spyOn(getDesktopStackReader(), "preflightCatalogs").mockResolvedValueOnce([{ status: "unavailable" }]);
+    onTestFinished(() => preflight.mockRestore());
+    await expect(appServerService.automationStackHold(review, observation))
+      .resolves.toBe("Held while stack settlement is unavailable");
+    expect(observation.unavailable).toHaveBeenCalledOnce();
   });
 
   it("rechecks late PR attachments for the workspace and branch captured by the review", async () => {

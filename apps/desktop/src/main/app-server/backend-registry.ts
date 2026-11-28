@@ -3886,7 +3886,7 @@ export class DesktopBackendRegistry {
   async stackRepairActive(thread: StackThreadRef): Promise<boolean> {
     // The queue owns the fix during preparation, before a backend turn has
     // a starting origin. A review waiting for admission owns no queue entry.
-    if (this.threadTurnQueue.hasActiveReviewAutoFix(thread)) return true;
+    if (this.threadTurnQueue.hasActiveReviewAutoFix(thread, { includePublishingTerminal: false })) return true;
     const active = this.getActiveTurnForThread(thread);
     const starting = this.findStartingTurnOrigin(active ?? thread);
     const isRepair = (origin?: AppServerThreadMessageOrigin, reviewFix?: boolean) =>

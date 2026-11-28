@@ -27,6 +27,36 @@ function buildEntry(
 }
 
 describe("ThreadTurnQueue", () => {
+  it.each(["before", "after"] as const)("reports repair settlement during terminal publication %s acknowledgment", async (when) => {
+    const target = { backend: "codex" as const, threadId: "thread-1" };
+    const terminal = { ...target, turnId: "repair-turn", status: "turn/completed" };
+    const observations: boolean[][] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: async () => {
+        if (when === "before") await queue.releaseThread(terminal);
+        return terminal;
+      },
+      onLifecycle: (event) => {
+        if (event.type !== "terminal") return;
+        // Queue ownership survives publication. The completed turn can
+        // already stop holding dependent stack layers during that callback.
+        observations.push([
+          queue.hasActiveReviewAutoFix(target),
+          queue.hasActiveReviewAutoFix(target, { includePublishingTerminal: false }),
+        ]);
+      },
+    });
+    await queue.submitIfIdle(buildEntry({
+      messageOrigin: { kind: "pwragent", reviewAutoFix: { reviewId: "review", findingCount: 1 } },
+    }));
+    if (when === "after") {
+      expect(queue.hasActiveReviewAutoFix(target, { includePublishingTerminal: false })).toBe(true);
+      await queue.releaseThread(terminal);
+    }
+    expect(observations).toEqual([[true, false]]);
+    expect(queue.hasActiveReviewAutoFix(target)).toBe(false);
+  });
+
   it.each(["turn/completed", "turn/cancelled", "turn/failed"])("settles %s during a queued started callback", async (status) => {
     const target = { backend: "codex" as const, threadId: "thread-1" };
     const events: ThreadTurnQueueLifecycleEvent[] = [];

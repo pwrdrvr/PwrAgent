@@ -3967,16 +3967,17 @@ class DesktopAppServerService {
   private async prStackHoldEvidence(
     pr: PrSummary,
     readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>,
-    observeRepairBlocker?: ReviewStackHoldObservation["heldBy"],
+    observation?: ReviewStackHoldObservation,
   ): Promise<{ reason: string; lowerKey?: string } | undefined> {
     try {
       for (const stack of await this.readPrStacks(pr, readScope)) {
+        observation?.observeOperation?.(stack.layers.flatMap(({ thread }) => thread ? [thread.key] : []), stack.journalHeld === true);
         const layer = stack.layers.find((entry) => entry.pullRequest?.number === pr.number);
         const block = layer && stackDispatchBlock(layer);
         if (!block) continue;
-        if (observeRepairBlocker && block.reason === "repair in progress") {
+        if (observation && block.reason === "repair in progress") {
           const lower = stack.layers.find(({ branch }) => branch === block.branch);
-          if (lower?.thread) observeRepairBlocker(lower.thread.key);
+          if (lower?.thread) observation.heldBy(lower.thread.key);
         }
         return {
           reason: describeStackAutomationBlock(block),
@@ -3986,6 +3987,7 @@ class DesktopAppServerService {
         };
       }
     } catch (error) {
+      observation?.unavailable?.();
       appServerLog.debug("could not read stack automation gate", { pr: pr.url, error: String(error) });
       return { reason: "Held while stack settlement is unavailable" };
     }
@@ -3994,9 +3996,9 @@ class DesktopAppServerService {
   private async prStackHold(
     pr: PrSummary,
     readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>,
-    observeRepairBlocker?: ReviewStackHoldObservation["heldBy"],
+    observation?: ReviewStackHoldObservation,
   ): Promise<string | undefined> {
-    return (await this.prStackHoldEvidence(pr, readScope, observeRepairBlocker))?.reason;
+    return (await this.prStackHoldEvidence(pr, readScope, observation))?.reason;
   }
 
   async automationStackHold(
@@ -4028,7 +4030,7 @@ class DesktopAppServerService {
             ?? getDesktopBackendRegistry().getCachedThreadSummary(review) ?? { linkedDirectories: [] });
         if (!paths.some((value) => workspacePaths.has(pathKey(value)))) continue;
       }
-      const hold = await this.prStackHold(pr, readScope, observation?.heldBy);
+      const hold = await this.prStackHold(pr, readScope, observation);
       if (hold) return hold;
     }
   }

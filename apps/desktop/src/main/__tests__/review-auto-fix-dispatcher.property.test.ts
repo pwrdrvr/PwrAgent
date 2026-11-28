@@ -41,6 +41,56 @@ function makeReview(id: string, open = true): ThreadReview {
  * Dispatch suspensions always return to zero.
  */
 describe("review auto-fix dispatcher", () => {
+  it("retries only the review with unavailable evidence without a PR update", async () => {
+    const unavailable = makeReview("unavailable");
+    const held = { ...makeReview("held"), threadId: "other-owner" };
+    const reviews = new Map([[unavailable.id, unavailable], [held.id, held]]);
+    const scheduled = new Set<() => void>();
+    const reads: string[] = [];
+    const starts: string[] = [];
+    let checkoutAvailable = false;
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: (id) => reviews.get(id),
+      isThreadArchived: () => false,
+      readStackHold: async (review, observation) => {
+        reads.push(review.id);
+        const needsRetry = review.id === unavailable.id && !checkoutAvailable;
+        if (needsRetry) observation.unavailable?.();
+        return needsRetry ? "Held while stack settlement is unavailable"
+          : review.id === held.id ? "Held by #1" : undefined;
+      },
+      scheduleStackRetry: (retry) => {
+        scheduled.add(retry);
+        return () => { scheduled.delete(retry); };
+      },
+      submitTurn: async () => { throw new Error("Expected fresh admission"); },
+      submitTurnIfIdle: async ({ canAdmit, threadId }) => {
+        if (!await canAdmit()) return { status: "busy" };
+        starts.push(threadId);
+        return { status: "started" };
+      },
+      recordRun: () => {},
+    });
+    try {
+      await dispatcher.dispatch(unavailable.id);
+      await dispatcher.dispatch(held.id);
+      expect(scheduled.size).toBe(1);
+      scheduled.values().next().value?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts).toEqual([]);
+      expect(scheduled.size).toBe(1);
+      checkoutAvailable = true;
+      scheduled.values().next().value?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts).toEqual([unavailable.threadId]);
+      expect(reads).toEqual([unavailable.id, held.id, unavailable.id, unavailable.id, unavailable.id]);
+      expect(scheduled.size).toBe(0);
+    } finally {
+      dispatcher.dispose();
+    }
+  });
+
+
   it("never strands Auto-fix, leaks suspensions, or violates stack holds across async interleavings", async () => {
     let runCounter = 0;
 

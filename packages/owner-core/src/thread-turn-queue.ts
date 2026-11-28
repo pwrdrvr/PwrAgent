@@ -262,6 +262,7 @@ export type ThreadTurnQueueDispatchCandidate = {
 type RunningEntry = {
   entry: ThreadTurnQueueEntry;
   turnId?: string;
+  publishingTerminal?: true;
   /** The queued entries a combined `entry` delivered; each hears the terminal. */
   members?: readonly ThreadTurnQueueEntry[];
 };
@@ -951,11 +952,18 @@ export class ThreadTurnQueue {
   }
 
   /** A review fix owns its turn from dispatch through terminal, including against steers. */
-  hasActiveReviewAutoFix(params: { backend: AppServerBackendKind; threadId: ThreadIdentifier }): boolean {
+  hasActiveReviewAutoFix(
+    params: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
+    { includePublishingTerminal = true }: { includePublishingTerminal?: boolean } = {},
+  ): boolean {
     const key = this.keyFor(params);
     const admission = this.admissions.get(key);
-    return (admission?.phase !== "idle" && admission?.kind === "review-auto-fix")
-      || this.runningEntries.get(key)?.entry.messageOrigin?.reviewAutoFix !== undefined;
+    const running = this.runningEntries.get(key);
+    // Stack settlement can act on the outcome during terminal publication.
+    // The queue still owns the turn through its lifecycle callbacks.
+    return (admission?.phase !== "idle" && admission?.kind === "review-auto-fix"
+      && (includePublishingTerminal || admission.phase === "starting" || !admission.terminal))
+      || (running?.entry.messageOrigin?.reviewAutoFix !== undefined && (includePublishingTerminal || !running.publishingTerminal));
   }
 
   /**
@@ -1468,6 +1476,7 @@ export class ThreadTurnQueue {
       if (released) {
         // Terminal publication can await controls that schedule a drain. Keep
         // this turn's queue ownership until those observers have settled.
+        running.publishingTerminal = true;
         await this.emitForMembers(running.members ?? [running.entry], (member) => ({
           type: "terminal",
           entry: member,

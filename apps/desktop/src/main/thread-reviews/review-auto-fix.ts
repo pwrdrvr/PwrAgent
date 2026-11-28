@@ -327,12 +327,21 @@ export type ReviewStackHoldObservation = {
   readActivity: (threadKey: string) => void;
   /** Keep the dependency on the repair that actually blocked the review. */
   heldBy: (threadKey: string) => void;
+  observeOperation?: (threadKeys: readonly string[], journalHeld: boolean) => void;
+  unavailable?: () => void;
 };
+
+function scheduleStackRetry(retry: () => void): () => void {
+  const timer = setTimeout(retry, 30_000);
+  timer.unref();
+  return () => clearTimeout(timer);
+}
 
 export type ReviewAutoFixDispatcherDeps = {
   getReview: (id: string) => ThreadReview | undefined;
   isThreadArchived: (thread: ReviewAutoFixThread) => boolean;
   readStackHold?: (review: ThreadReview, observation: ReviewStackHoldObservation) => Promise<string | undefined>;
+  scheduleStackRetry?: (retry: () => void) => () => void;
   threadHasActiveTurn?: (thread: ReviewAutoFixThread) => boolean;
   suspendDispatch?: (thread: ReviewAutoFixThread) => () => void;
   submitTurn: (request: ReviewAutoFixTurnRequest) => Promise<unknown>;
@@ -361,6 +370,10 @@ type PendingAutoFix = {
   repairThreads: Set<string>;
   changedRepairThreads: Set<string>;
   repairBlocker?: string;
+  operationThreads?: Set<string>;
+  journalHeld?: boolean;
+  stackUnavailable?: boolean;
+  cancelStackRetry?: () => void;
   checking: boolean;
   recheck: boolean;
   hold?: string;
@@ -443,6 +456,13 @@ export class ReviewAutoFixDispatcher {
     this.wakePending(thread ? this.byThread.get(threadKey(thread)) ?? [] : this.pending.values());
   }
 
+  wakeForStackOperation(thread: ReviewAutoFixThread): void {
+    const key = buildThreadIdentityKey(thread.backend, thread.threadId);
+    this.wakePending([...this.pending.values()].filter((pending) => pending.checking
+      || pending.journalHeld || pending.stackUnavailable || pending.operationThreads?.has(key)
+      || (pending.thread.backend === thread.backend && pending.thread.threadId === thread.threadId)));
+  }
+
   wakeForPullRequest(prKey: unknown, aliases: readonly string[] = []): void {
     const repository = repositoryOf(prKey);
     if (!repository) {
@@ -509,6 +529,7 @@ export class ReviewAutoFixDispatcher {
   }
 
   private forget(pending: PendingAutoFix): void {
+    pending.cancelStackRetry?.();
     this.pending.delete(pending.id);
     removePending(this.byThread, threadKey(pending.thread), pending);
     for (const scope of pending.forgeScopes) {
@@ -560,6 +581,8 @@ export class ReviewAutoFixDispatcher {
         return;
       }
       pending ??= this.track(review);
+      pending.cancelStackRetry?.();
+      pending.cancelStackRetry = undefined;
       pending.checking = true;
       for (const scope of pending.forgeScopes) scope.idle.delete(pending);
       if (landed) this.claimHandoffSuspension(pending, landed.thread, landed.reviewTurnId);
@@ -587,6 +610,13 @@ export class ReviewAutoFixDispatcher {
         pending.checking = false;
         pending.recheck = false;
         for (const scope of pending.forgeScopes) scope.idle.add(pending);
+        if (pending.hold && pending.stackUnavailable) {
+          const retry = this.deps.scheduleStackRetry ?? scheduleStackRetry;
+          const held = pending;
+          held.cancelStackRetry = retry(() => {
+            if (this.isCurrent(held)) void this.dispatch(held.id);
+          });
+        }
       }
     }
   }
@@ -600,6 +630,9 @@ export class ReviewAutoFixDispatcher {
   private observeStackHold(pending: PendingAutoFix) {
     pending.changedRepairThreads.clear();
     let blocker: string | undefined;
+    let unavailable = false;
+    let journalHeld = false;
+    const operationThreads = new Set<string>();
     const observe = (key: string) => {
       if (!this.isCurrent(pending) || pending.repairThreads.has(key)) return;
       pending.repairThreads.add(key);
@@ -608,8 +641,16 @@ export class ReviewAutoFixDispatcher {
     return {
       readActivity: observe,
       heldBy: (key) => { blocker = key; observe(key); },
+      observeOperation: (keys, journal) => {
+        for (const key of keys) operationThreads.add(key);
+        journalHeld ||= journal;
+      },
+      unavailable: () => { unavailable = true; },
       finish: (hold: string | undefined) => {
         if (!this.isCurrent(pending)) return;
+        pending.operationThreads = operationThreads;
+        pending.journalHeld = journalHeld;
+        pending.stackUnavailable = unavailable;
         pending.repairBlocker = hold ? blocker : undefined;
         for (const key of pending.repairThreads) {
           if (key === pending.repairBlocker) continue;
