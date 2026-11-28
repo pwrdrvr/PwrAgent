@@ -610,6 +610,11 @@ vi.mock("../shell/ipc/quit-blockers", () => ({
   disposeQuitBlockerIpcHandlers: disposeQuitBlockerIpcHandlersMock,
 }));
 
+vi.mock("../shell/ipc/codex-user-update", () => ({
+  registerCodexUserUpdateIpc: vi.fn(),
+  disposeCodexUserUpdateIpc: vi.fn(),
+}));
+
 vi.mock("../shell/ipc/restart-gate", () => ({
   registerRestartGateIpcHandlers: vi.fn(),
   disposeRestartGateIpcHandlers: vi.fn(),

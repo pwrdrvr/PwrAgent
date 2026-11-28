@@ -12,7 +12,6 @@ import { CodexUserUpdateService, fetchLatestCodexVersion } from "../../codex-use
 import { getMainLogger } from "../../log.js";
 import { pathIsExecutable, resolveCommandOnPath } from "../../settings/command-discovery";
 import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
-import { issueProviderDiscoveryPermit } from "../../settings/provider-discovery-permit";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 
@@ -32,22 +31,21 @@ function broadcast(state: CodexUserUpdateState): void {
  * Wire the stock Codex update check and Update button. Both act on this
  * machine's Codex, so a Federation viewer window reads nothing and cannot
  * start a run.
+ *
+ * `rediscoverCodex` runs only after the operator presses Update and the
+ * installer succeeds. The caller supplies it because discovery permits are
+ * issued only in the files `config-store-boundary.test.ts` lists.
  */
-export function registerCodexUserUpdateIpc(): void {
-  current?.unsubscribe();
-  current?.service.dispose();
+export function registerCodexUserUpdateIpc(params: {
+  rediscoverCodex: () => Promise<void>;
+}): void {
+  disposeCodexUserUpdateIpc();
   const service = new CodexUserUpdateService({
     readTarget: async () => await getDesktopSettingsService().readCodexUpdateTarget(),
     resolvePath: async (command) => await realpath(command).catch(() => undefined),
     resolveEnv: async () => await getDesktopSettingsService().resolveCodexSpawnEnvAsync(),
     fetchLatestVersion: async () => await fetchLatestCodexVersion(),
-    rediscover: async () => {
-      // The operator pressed Update: that is the same consent as Settings'
-      // own rediscovery, and the only way to learn the new version.
-      await getDesktopSettingsService().refreshCodexDiscovery(
-        issueProviderDiscoveryPermit("settings-user-action"),
-      );
-    },
+    rediscover: params.rediscoverCodex,
     restartCodex: async () => {
       await getDesktopBackendRegistry().invalidateProviderRuntimeSelections({
         acp: false,
@@ -75,4 +73,12 @@ export function registerCodexUserUpdateIpc(): void {
     }
     return await service.startUpdate();
   });
+}
+
+export function disposeCodexUserUpdateIpc(): void {
+  current?.unsubscribe();
+  current?.service.dispose();
+  current = undefined;
+  ipcMain.removeHandler(CODEX_USER_UPDATE_READ_CHANNEL);
+  ipcMain.removeHandler(CODEX_USER_UPDATE_START_CHANNEL);
 }
