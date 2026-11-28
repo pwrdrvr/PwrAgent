@@ -3860,9 +3860,11 @@ export class AcpAgentClient {
       } else if (this.agentToolCatalogIsStale(params.sessionId)) {
         await this.refreshAgentToolCatalog(params.sessionId);
       }
-      const orientation = isCompactCommand || systemCapability === "system"
+      const readOrientation = isCompactCommand || systemCapability === "system"
         ? undefined
-        : await this.sessionMcpServers.get(params.sessionId)?.readCapabilityOrientation?.();
+        : this.sessionMcpServers.get(params.sessionId)?.readCapabilityOrientation;
+      // A session without an orientation reader can dispatch in this tick.
+      const orientation = readOrientation ? await readOrientation() : undefined;
       const orientationDigest = orientation ? agentInstructionsDigest(params.protocolSessionId, orientation) : lastOrientation;
       const sendOrientation = Boolean(orientation && orientationDigest !== lastOrientation);
       if (cancelledBeforePrompt) return cancelled;

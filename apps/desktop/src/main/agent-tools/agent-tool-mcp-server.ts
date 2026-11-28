@@ -43,6 +43,7 @@ import {
 import {
   buildPwrAgentCapabilityOrientation,
   CREATE_JOB_MONITOR,
+  HANDOFF_TASK,
   ORIENTED_PWRAGENT_TOOLS,
 } from "./pwragent-capability-orientation.js";
 import { PWRAGENT_TOOL_SEARCH, searchPwrAgentMcpTools } from "./pwragent-tool-search.js";
@@ -280,7 +281,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         const current = this.contextsByToken.get(token);
         if (!current || current.managedReview) return undefined;
         const catalog = await this.resolveMcpTools(current, ORIENTED_PWRAGENT_TOOLS);
-        return this.capabilityOrientation(current, catalog, await this.resolveAcpDiscoveryTools(current));
+        return this.capabilityOrientation(current, catalog, await this.resolveAcpDiscoveryTools(current, catalog));
       },
       readTool: async (name, scope = "listed") => {
         const current = this.contextsByToken.get(token);
@@ -507,7 +508,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const disconnectSignal = AbortSignal.any([clientGone.signal, params.request.signal]);
     const catalog = await this.resolveMcpTools(params.clientContext);
     const toolNames = catalog.map((tool) => tool.name);
-    const discoveryTools = await this.resolveAcpDiscoveryTools(params.clientContext);
+    const discoveryTools = await this.resolveAcpDiscoveryTools(params.clientContext, catalog);
     const deferTools = canDeferAcpTools(discoveryTools);
     const oriented = Boolean(this.capabilityOrientation(params.clientContext, catalog, discoveryTools));
     const hasToolGuide = toolNames.includes("read_tool_guide");
@@ -569,6 +570,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     });
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
       const catalog = await this.resolveMcpTools(params.clientContext);
+      const discoveryTools = await this.resolveAcpDiscoveryTools(params.clientContext, catalog);
+      const deferTools = canDeferAcpTools(discoveryTools);
       // Only defer tools if the agent may invoke them through the dispatcher.
       const tools = [
         ...catalog.filter(({ name }) => deferTools
@@ -817,13 +820,22 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     return (await this.options.isToolAdvertised?.(name, context)) ?? true;
   }
 
-  private async resolveAcpDiscoveryTools(context: AgentToolMcpClientContext): Promise<AgentMcpTool[]> {
+  private async resolveAcpDiscoveryTools(
+    context: AgentToolMcpClientContext,
+    catalog?: readonly AgentMcpTool[],
+  ): Promise<AgentMcpTool[]> {
     if (!usesAcpCatalogDiscovery(context)) return [];
+    // Antigravity's HTTP catalog already defers general PwrAgent tools.
+    const antigravityHttp = context.backend === "acp:antigravity" && !context.stdioFallback;
+    if (!antigravityHttp) {
+      const candidates = catalog ?? await this.resolveMcpTools(context, ORIENTED_PWRAGENT_TOOLS);
+      if (!candidates.some(({ name }) => name === HANDOFF_TASK || name === CREATE_JOB_MONITOR)) return [];
+    }
     const tools: AgentMcpTool[] = [];
     for (const tool of ACP_MCP_TOOL_DISCOVERY) {
       if (await this.isToolAdvertised(tool.name, context)) tools.push(tool);
     }
-    return context.stdioFallback && !canDeferAcpTools(tools) ? [] : tools;
+    return antigravityHttp || canDeferAcpTools(tools) ? tools : [];
   }
 
   private capabilityOrientation(

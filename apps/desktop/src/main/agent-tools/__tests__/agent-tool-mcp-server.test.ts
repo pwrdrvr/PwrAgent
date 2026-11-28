@@ -44,8 +44,8 @@ describe("AgentToolMcpServer", () => {
     const server = new AgentToolMcpServer({
       resolveCatalogs: () => [{ id: "thread_orchestration", router }],
       resolveCallContext: () => undefined,
-      isToolAdvertised: async () => {
-        if (--visitsUntilBlocked === 0) {
+      isToolAdvertised: async (name) => {
+        if (name === "create_monitor_delegation" && --visitsUntilBlocked === 0) {
           listingEntered.resolve();
           await releaseListing.promise;
         }
@@ -339,7 +339,7 @@ describe("AgentToolMcpServer", () => {
         "read_star_map_view", "read_operator_focus", "list_todos", "list_reviews",
         "search_mcp_tools", "search_token_miser_output", "read_token_miser_output",
         "read_token_miser_output_batch", "read_all_token_miser_output", "read_token_miser_segment",
-        "read_tool_guide",
+        "tool_search",
         "scan_thread_maintenance",
         "decisions_list",
         "decisions_batch_results",
@@ -350,7 +350,7 @@ describe("AgentToolMcpServer", () => {
       for (const tool of tools) {
         expect(tool.annotations?.readOnlyHint, tool.name).toBe(readOnlyNames.includes(tool.name));
       }
-      expect(tools.map((tool) => tool.name)).not.toContain("tool_search");
+      expect(tools.map((tool) => tool.name)).not.toContain("read_tool_guide");
       expect(tools.map((tool) => tool.name)).not.toContain("get_current_location");
       expect(tools.map((tool) => tool.name)).not.toContain("render_messaging_pdf_pages");
 
@@ -365,7 +365,9 @@ describe("AgentToolMcpServer", () => {
       expect(PWRAGENT_TOOL_GUIDE).toMatch(/workMode=worktree for Git work unless .*share/);
       expect(PWRAGENT_TOOL_GUIDE).toMatch(/do not ask the child to create .*worktree/i);
 
-      expect(client.getInstructions()).toBe(buildPwrAgentMcpInstructions(tools.map((tool) => tool.name)));
+      expect(client.getInstructions()).toBe(buildPwrAgentMcpInstructions(
+        catalogs.flatMap((catalog) => catalog.router.buildMcpTools()).map(({ name }) => name), true,
+      ));
       expect(client.getInstructions()).toContain("skill://waiting-on-work/SKILL.md");
       expect(client.getInstructions()).toContain("follow prAutomation.guidance and use watch_thread_pull_request");
       expect(client.getInstructions()).toContain("ci_run for standalone CI, and local_file for watcher markers");
@@ -374,12 +376,17 @@ describe("AgentToolMcpServer", () => {
       expect(PWRAGENT_TOOL_GUIDE).toContain("Use list_ci_artifacts and download_ci_artifact");
       expect(PWRAGENT_TOOL_GUIDE).toMatch(/inputsFile by script.*\$TMPDIR \(not \/tmp on macOS\)/);
       expect(PWRAGENT_TOOL_GUIDE).toMatch(/pass outputFile .*filter scores by script, and read only flagged items/);
-      // Native dynamic-tool discovery reaches the same definition as MCP tools/list.
+      // Native and MCP discovery reach the same authored guide.
       expect(searchPwrAgentTools(catalogs.flatMap((catalog) => catalog.dynamicTools), "PwrAgent tool guide")[0]?.name).toBe("read_tool_guide");
-      await expect(client.callTool({ name: "read_tool_guide", arguments: {} })).resolves.toMatchObject({
-        content: [{ type: "text", text: PWRAGENT_TOOL_GUIDE }],
-        structuredContent: { guide: PWRAGENT_TOOL_GUIDE },
-      });
+      await expect(client.callTool({ name: "tool_search", arguments: { query: "read_tool_guide", limit: 1 } }))
+        .resolves.toMatchObject({ structuredContent: { tools: [expect.objectContaining({
+          name: "read_tool_guide", annotations: { readOnlyHint: true },
+        })] } });
+      await expect(client.callTool({ name: "call_pwragent_tool", arguments: { toolName: "read_tool_guide", arguments: {} } }))
+        .resolves.toMatchObject({
+          content: [{ type: "text", text: PWRAGENT_TOOL_GUIDE }],
+          structuredContent: { guide: PWRAGENT_TOOL_GUIDE },
+        });
     } finally {
       await client.close();
     }

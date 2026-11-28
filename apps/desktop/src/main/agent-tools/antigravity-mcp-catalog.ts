@@ -38,6 +38,7 @@ export const ACP_MCP_TOOL_DISCOVERY: readonly AgentMcpTool[] = [
   {
     name: CALL_PWRAGENT_TOOL,
     description: "Run a PwrAgent tool by the exact name from tool_search. Pass an arguments object matching its returned input schema.",
+    annotations: { readOnlyHint: false },
     inputSchema: {
       type: "object",
       additionalProperties: false,
