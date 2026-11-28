@@ -110,6 +110,7 @@ import {
   type OpenAiCodexRuntime,
 } from "../codex-openai-runtime";
 import { buildCodexVersionAdvisory } from "./codex-version-advisory";
+import type { CodexUpdateTarget } from "../../shared/codex-user-update";
 import path from "node:path";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
@@ -969,24 +970,7 @@ export class DesktopSettingsService {
       : new Set<string>();
     const managedCodexRuntime = this.managedCodexRuntime;
     const managedCodexError = this.managedCodexError;
-    const codexDiscoveryCommand = this.resolveActiveCodexCommand(config);
-    let codexDiscovery = this.codexDiscoveryCoordinator.peek?.(
-      codexDiscoveryCommand,
-    ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
-    // Startup discovery may find the next launch's executable while this
-    // process retains its current one. "Using" must describe that selection.
-    const sessionCommand = this.sessionCodexCommand;
-    if (sessionCommand) {
-      const candidates = codexDiscovery.candidates
-        .filter((candidate) => candidate.command !== sessionCommand.command)
-        .map((candidate) => ({ ...candidate, selected: false }));
-      codexDiscovery = {
-        ...codexDiscovery,
-        selectedCommand: sessionCommand.command,
-        selectedSource: sessionCommand.source,
-        candidates: [{ ...sessionCommand, executable: true, selected: true }, ...candidates],
-      };
-    }
+    const codexDiscovery = this.readActiveCodexDiscovery(config);
     const codexProfiles = this.readCodexProfiles();
     const codexVersionAdvisory = await this.readCodexVersionAdvisory(
       codexDiscovery,
@@ -2422,6 +2406,56 @@ export class DesktopSettingsService {
       this.readGeneralConfig().notificationsEnabled,
       false,
     ).value;
+  }
+
+  /** Discovery as "Using" shows it: the session's retained command wins. */
+  private readActiveCodexDiscovery(
+    config: Pick<DesktopSettingsConfig, "models">,
+  ): DesktopCodexDiscoverySnapshot {
+    const codexDiscoveryCommand = this.resolveActiveCodexCommand(config);
+    let codexDiscovery = this.codexDiscoveryCoordinator.peek?.(
+      codexDiscoveryCommand,
+    ) ?? codexDiscoveryFromProvider(this.configStore.read("providers").codex);
+    // Startup discovery may find the next launch's executable while this
+    // process retains its current one. "Using" must describe that selection.
+    const sessionCommand = this.sessionCodexCommand;
+    if (sessionCommand) {
+      const candidates = codexDiscovery.candidates
+        .filter((candidate) => candidate.command !== sessionCommand.command)
+        .map((candidate) => ({ ...candidate, selected: false }));
+      codexDiscovery = {
+        ...codexDiscovery,
+        selectedCommand: sessionCommand.command,
+        selectedSource: sessionCommand.source,
+        candidates: [{ ...sessionCommand, executable: true, selected: true }, ...candidates],
+      };
+    }
+    return codexDiscovery;
+  }
+
+  /**
+   * The Codex PwrAgent launches, with its version and where it came from, for
+   * the update check. Waits for a discovery that is already running, and never
+   * starts one: an unanswered discovery means there is nothing to check yet.
+   */
+  async readCodexUpdateTarget(): Promise<CodexUpdateTarget | undefined> {
+    await this.codexDiscoveryPromise?.catch(() => undefined);
+    const { config } = this.readConfig();
+    const discovery = this.readActiveCodexDiscovery(config);
+    const managed = this.managedCodexRuntime;
+    const selected = discovery.candidates.find((candidate) => candidate.selected);
+    const command = managed?.command ?? discovery.selectedCommand;
+    const version = managed?.metadata.version ?? selected?.version;
+    if (!command || !version) return undefined;
+    return {
+      command,
+      version,
+      ...(discovery.selectedSource ? { source: discovery.selectedSource } : {}),
+      managedByPwrAgent:
+        managed !== undefined || managedCodexTagForCommand(command) !== undefined,
+      openAiInstalledByPwrAgent:
+        managed === undefined && openAiCodexVersionForCommand(command) !== undefined,
+    };
   }
 
   /**

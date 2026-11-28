@@ -1,5 +1,6 @@
 import { startOwnerServices, disposeOwnerServices, disposeOwnerServicesSync, prepareOwnerShutdown, releaseOwnerFederationLeaseSync } from "../owner-services";
 
+import { registerCodexUserUpdateIpc } from "./ipc/codex-user-update";
 import { createDesktopOwnerHostServices } from "./owner-host-services";
 import { nativeVoiceBusy, nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
 import { registerAudioTranscriptionIpc } from "./ipc/audio-transcription";
@@ -1481,6 +1482,7 @@ export function bootstrapApp(): void {
     registerQuitBlockerIpcHandlers();
     registerRestartGateIpcHandlers();
     registerAppIconDragIpcHandlers();
+    registerCodexUserUpdateIpc();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch, previousProviderDefaults) => {
         await ownerServices.onConfigPatchWritten(patch, previousProviderDefaults);

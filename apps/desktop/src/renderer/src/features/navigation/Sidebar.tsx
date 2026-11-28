@@ -317,6 +317,8 @@ type SidebarProps = {
   mastheadVoiceControl?: ReactNode;
   /** The agent notices bell; it renders nothing while there is none. */
   mastheadNotificationsControl?: ReactNode;
+  /** A small status at the rail's foot, such as a Codex update; renders nothing while idle. */
+  footerStatus?: ReactNode;
   directoryDisclosure?: NavigationDirectoryDisclosure;
   /** True while a full-window layer (Settings, Automations) covers it. */
   inert?: boolean;
@@ -4483,6 +4485,7 @@ function SidebarContent(props: SidebarProps) {
             )}
           </div>
         </section>
+        {federationLabel ? null : props.footerStatus}
 
         {(function renderThreadContextMenu() {
           return (

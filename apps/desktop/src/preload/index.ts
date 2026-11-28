@@ -877,6 +877,7 @@ import type {
 import type { HotCpuFinalCaptureFailedEvent, HotCpuPostCapEvent, HotCpuProfileCapturedEvent, HotCpuRearmableCapture, RearmHotCpuProfileRequest } from "../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
 import type { ManagedRuntimeProgress } from "../shared/managed-runtime-progress";
+import type { CodexUserUpdateState } from "../shared/codex-user-update";
 import type {
   PwrSuiteAppId,
   PwrSuiteInstallerActionResult,
@@ -1092,6 +1093,9 @@ import {
   MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL,
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
+  CODEX_USER_UPDATE_EVENT_CHANNEL,
+  CODEX_USER_UPDATE_READ_CHANNEL,
+  CODEX_USER_UPDATE_START_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   THREAD_SEARCH_PROGRESS_CHANNEL,
@@ -4037,6 +4041,22 @@ const desktopApi = Object.freeze({
   },
   readManagedRuntimeProgress: async (): Promise<ManagedRuntimeProgress[]> =>
     await ipcRenderer.invoke(MANAGED_RUNTIME_PROGRESS_READ_CHANNEL),
+  readCodexUserUpdate: async (): Promise<CodexUserUpdateState> =>
+    await ipcRenderer.invoke(CODEX_USER_UPDATE_READ_CHANNEL),
+  startCodexUserUpdate: async (): Promise<CodexUserUpdateState> =>
+    await ipcRenderer.invoke(CODEX_USER_UPDATE_START_CHANNEL),
+  onCodexUserUpdate: (
+    callback: (state: CodexUserUpdateState) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: CodexUserUpdateState,
+    ) => callback(payload);
+    ipcRenderer.on(CODEX_USER_UPDATE_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(CODEX_USER_UPDATE_EVENT_CHANNEL, listener);
+    };
+  },
   onGithubPrAuthenticationFailure: (
     callback: (event: GithubPrAuthenticationFailureEvent) => void,
   ): (() => void) => {
