@@ -14,14 +14,15 @@ describe("native helper fixture ownership", () => {
     const cargo = path.resolve("apps/desktop/src/main/__tests__/maintenance-cargo-output.property.test.ts");
     const allocation = path.resolve("apps/desktop/src/main/__tests__/maintenance-disk-usage.property.test.ts");
     const ipc = path.resolve("apps/desktop/src/main/__tests__/mcp-ipc-http.test.ts");
+    const codexIpc = path.resolve("apps/desktop/src/main/__tests__/codex-agent-tool-ipc.property.test.ts");
     const launcher = path.resolve("apps/desktop/src/main/__tests__/windows-git-job-launcher.test.ts");
     fc.assert(fc.property(
-      fc.array(fc.constantFrom(cargo, allocation, ipc, launcher, path.resolve("unrelated.test.ts"))),
+      fc.array(fc.constantFrom(cargo, allocation, ipc, codexIpc, launcher, path.resolve("unrelated.test.ts"))),
       (files) => {
         const relayConsumers = [
           ...(files.includes(cargo) ? ["maintenanceCargo"] : []),
           ...(files.includes(allocation) ? ["maintenanceAllocation"] : []),
-          ...(files.includes(ipc) ? ["mcpIpc"] : []),
+          ...(files.includes(ipc) || files.includes(codexIpc) ? ["mcpIpc"] : []),
         ];
         expect(nativeHelperConsumers(files, "darwin")).toEqual(relayConsumers);
         expect(nativeHelperConsumers(files, "win32")).toEqual([
@@ -29,7 +30,7 @@ describe("native helper fixture ownership", () => {
           ...(files.includes(launcher) ? ["windowsGitJobLauncher"] : []),
         ]);
       },
-    ), { examples: [[[launcher]]] });
+    ), { examples: [[[launcher]], [[codexIpc]], [[ipc, codexIpc]]] });
   });
 
   it("prepares the native pipe probe only for its selected Windows x64 suite", () => {

@@ -319,6 +319,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node apps/desktop/scripts/stage-grok-bundle.mjs --platform macos-universal
 
+      - name: Install Rust targets for the universal MCP stdio relay
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       - name: Prepare release stage
         env:
           RELEASE_TAG: ${{ github.ref_name }}

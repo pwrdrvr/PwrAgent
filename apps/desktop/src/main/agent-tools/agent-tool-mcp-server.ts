@@ -10,6 +10,7 @@ import type { AddressInfo, Socket } from "node:net";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type {
   CallToolRequest,
+  RequestId,
   ServerNotification,
   ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -17,7 +18,8 @@ import { PWRAGENT_MCP_HTTP_MAX_REQUEST_BYTES, PWRAGENT_TOOL_NAMESPACE } from "@p
 import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { getMainLogger } from "../log.js";
 import { lazyModule } from "../lazy-module.js";
-import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
+import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStdio, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
+import { CodexAgentToolIpc, type CodexAgentToolStdioConfig, type OwnedCodexProcess } from "./codex-agent-tool-ipc.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
 import {
@@ -139,8 +141,14 @@ export type AgentToolHttpMcpServerConfig = {
   }>;
 };
 
-export type AgentToolMcpRegistration = {
-  server: AgentToolHttpMcpServerConfig;
+export type AgentToolMcpRegistration = AgentToolRegistration & { server: AgentToolHttpMcpServerConfig };
+export type CodexAgentToolMcpRegistration = AgentToolRegistration & { server: CodexAgentToolStdioConfig };
+export type OwnedAgentToolMcpRegistration = AgentToolRegistration & {
+  server: CodexAgentToolStdioConfig & { name: string; type: "stdio" };
+  revoke: () => void;
+};
+
+type AgentToolRegistration = {
   bindThread: (threadId: string) => void;
   revokeUnbound?: () => void;
   readListedJobMonitorCreation?: () => boolean | undefined;
@@ -154,6 +162,11 @@ export type AgentToolMcpServerLike = {
   registerClient(
     context: AgentToolMcpClientContext,
   ): Promise<AgentToolMcpRegistration>;
+  registerCodexClient?(context: AgentToolMcpClientContext): Promise<CodexAgentToolMcpRegistration>;
+  registerOwnedClient?(
+    context: AgentToolMcpClientContext,
+    owned: OwnedCodexProcess,
+  ): Promise<OwnedAgentToolMcpRegistration | undefined>;
   close(): Promise<void>;
 };
 
@@ -182,6 +195,7 @@ export type AgentToolMcpAuthorization = {
 
 export type AgentToolMcpServerOptions = {
   verifyCodexThreadId?: boolean;
+  codexRelayExecutable?: () => string;
   resolveCatalogs: (
     context: AgentToolMcpClientContext,
   ) => AgentToolMcpCatalog[] | Promise<AgentToolMcpCatalog[]>;
@@ -211,8 +225,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     string,
     AgentToolMcpClientContext
   >();
+  private readonly codexStdioTokens = new Set<string>();
   private readonly tokensByBoundThread = new Map<string, string>();
   private readonly jobMonitorListings = new Map<string, JobMonitorCatalogListing>();
+  private readonly ownedClientReleases = new WeakMap<OwnedCodexProcess["child"], Set<() => void>>();
   private readonly sessionSigningKey = randomBytes(32);
   private readonly connectionsWithoutRequests = new Set<Socket>();
   /** Ends each open standalone event stream (a client's GET). */
@@ -221,8 +237,14 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private port?: number;
   private startPromise?: Promise<void>;
   private closed = false;
+  private readonly codexIpc: CodexAgentToolIpc;
 
-  constructor(private readonly options: AgentToolMcpServerOptions) {}
+  constructor(private readonly options: AgentToolMcpServerOptions) {
+    this.codexIpc = new CodexAgentToolIpc(
+      (socket, token, isAuthorized) => this.openCodexSession(socket, token, isAuthorized),
+      options.codexRelayExecutable,
+    );
+  }
 
   async registerClient(
     context: AgentToolMcpClientContext,
@@ -253,6 +275,66 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           },
         ],
       },
+      ...this.registration(token, listing),
+    };
+  }
+
+  async registerCodexClient(context: AgentToolMcpClientContext): Promise<CodexAgentToolMcpRegistration> {
+    if (context.backend !== "codex" || this.closed) throw new Error("Codex MCP registration is unavailable.");
+    const token = this.tokenForContext(context, "stdio");
+    this.codexStdioTokens.add(token);
+    try {
+      const server = await this.codexIpc.configuration(token);
+      return { server, ...this.registration(token, undefined, "stdio") };
+    } catch (error) {
+      this.registration(token).revokeUnbound?.();
+      throw error;
+    }
+  }
+
+  async registerOwnedClient(
+    context: AgentToolMcpClientContext,
+    owned: OwnedCodexProcess,
+  ): Promise<OwnedAgentToolMcpRegistration | undefined> {
+    if (this.closed || process.platform !== "darwin" || context.backend === "codex") return undefined;
+    const token = randomBytes(32).toString("base64url");
+    const threadId = context.threadId?.trim() || undefined;
+    this.contextsByToken.set(token, { ...context, threadId });
+    this.codexStdioTokens.add(token);
+    const listing = context.observeJobMonitorCatalog ? { scope: randomUUID() } : undefined;
+    if (listing) this.jobMonitorListings.set(token, listing);
+    const releases = this.ownedClientReleases.get(owned.child) ?? new Set<() => void>();
+    if (!this.ownedClientReleases.has(owned.child)) {
+      this.ownedClientReleases.set(owned.child, releases);
+      owned.child.once("close", () => {
+        for (const release of releases) release();
+        this.ownedClientReleases.delete(owned.child);
+      });
+    }
+    const revoke = () => {
+      releases.delete(revoke);
+      this.contextsByToken.delete(token);
+      this.codexStdioTokens.delete(token);
+      this.jobMonitorListings.delete(token);
+      this.codexIpc.revoke(token);
+    };
+    releases.add(revoke);
+    try {
+      const server = await this.codexIpc.configuration(token);
+      await this.codexIpc.bindRuntime(token, owned);
+      return {
+        server: { name: PWRAGENT_TOOL_NAMESPACE, type: "stdio", ...server },
+        ...this.registration(token, listing, null),
+        revoke,
+      };
+    } catch {
+      revoke();
+      return undefined;
+    }
+  }
+
+  private registration(token: string, listing?: JobMonitorCatalogListing, transport: "http" | "stdio" | null = "http"): AgentToolRegistration {
+    return {
       ...(listing ? {
         readListedJobMonitorCreation: () => this.jobMonitorListings.get(token) === listing ? listing.enabled : undefined,
       } : {}),
@@ -269,12 +351,14 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       revokeUnbound: () => {
         if (this.contextsByToken.get(token)?.threadId) return;
         this.contextsByToken.delete(token);
+        this.codexStdioTokens.delete(token);
+        this.codexIpc.revoke(token);
         this.jobMonitorListings.delete(token);
       },
       bindThread: (threadId) => {
         const normalizedThreadId = threadId.trim();
         const current = this.contextsByToken.get(token);
-        if (!normalizedThreadId || !current) {
+        if (!normalizedThreadId || !current || (current.threadId && current.threadId !== normalizedThreadId)) {
           return;
         }
         const bound = {
@@ -287,9 +371,9 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           previousThreadId: current.threadId ?? null,
           threadId: normalizedThreadId,
         });
-        const key = boundThreadKey(bound, normalizedThreadId);
-        if (!this.tokensByBoundThread.has(key)) {
-          this.tokensByBoundThread.set(key, token);
+        if (transport) {
+          const key = boundThreadKey(bound, normalizedThreadId, transport);
+          if (!this.tokensByBoundThread.has(key)) this.tokensByBoundThread.set(key, token);
         }
       },
     };
@@ -297,6 +381,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
 
   async close(): Promise<void> {
     this.closed = true;
+    await this.codexIpc.close();
     await this.startPromise?.catch(() => undefined);
     const httpServer = this.httpServer;
     this.httpServer = undefined;
@@ -321,11 +406,12 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
     this.port = undefined;
     this.contextsByToken.clear();
+    this.codexStdioTokens.clear();
     this.tokensByBoundThread.clear();
     this.jobMonitorListings.clear();
   }
 
-  private tokenForContext(context: AgentToolMcpClientContext): string {
+  private tokenForContext(context: AgentToolMcpClientContext, transport: "http" | "stdio" = "http"): string {
     const normalizedThreadId = context.threadId?.trim();
     const normalizedContext = {
       backend: context.backend,
@@ -335,7 +421,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       ...(normalizedThreadId ? { threadId: normalizedThreadId } : {}),
     };
     if (normalizedThreadId) {
-      const key = boundThreadKey(context, normalizedThreadId);
+      const key = boundThreadKey(context, normalizedThreadId, transport);
       const existing = this.tokensByBoundThread.get(key);
       if (existing) {
         this.contextsByToken.set(existing, normalizedContext);
@@ -346,7 +432,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     this.contextsByToken.set(token, normalizedContext);
     if (normalizedThreadId) {
       this.tokensByBoundThread.set(
-        boundThreadKey(context, normalizedThreadId),
+        boundThreadKey(context, normalizedThreadId, transport),
         token,
       );
     }
@@ -445,21 +531,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     // A tool call can wait for the operator, a renderer or long work, so it
     // is answered as a stream whose headers go out at once. Every other
     // request answers at once and stays a single JSON response.
-    const [
-      { Server: McpProtocolServer },
-      { WebStandardStreamableHTTPServerTransport },
-      {
-        CallToolRequestSchema,
-        ErrorCode,
-        isInitializeRequest,
-        ListResourcesRequestSchema,
-        ListResourceTemplatesRequestSchema,
-        ListToolsRequestSchema,
-        McpError,
-        ReadResourceRequestSchema,
-      },
-      { ListSkillsRequestSchema, GetSkillRequestSchema },
-    ] = await Promise.all([mcpServerSdk.load(), mcpServerStreamableHttp.load(), mcpTypes.load(), skillRequestSchemas.load()]);
+    const [{ WebStandardStreamableHTTPServerTransport }, { isInitializeRequest }] =
+      await Promise.all([mcpServerStreamableHttp.load(), mcpTypes.load()]);
     const body = await readMcpRequestBody(params.request);
     const messages = Array.isArray(body) ? body : [body];
     const streamed = !params.clientContext.stdioFallback && messages.some((message) =>
@@ -477,9 +550,68 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const toolCalls: Promise<unknown>[] = [];
     const clientGone = new AbortController();
     const disconnectSignal = AbortSignal.any([clientGone.signal, params.request.signal]);
-    const toolNames = (await this.resolveMcpTools(params.clientContext)).map((tool) => tool.name);
-    const isAntigravity = usesAntigravityCatalog(params.clientContext);
-    const discoveryTools = isAntigravity ? await this.resolveAntigravityDiscoveryTools(params.clientContext) : [];
+    const mcpServer = await this.createProtocolServer({
+      readContext: () => params.clientContext,
+      sessionNonce,
+      token: params.token,
+      disconnectSignal,
+      responseFlushed: () => params.responseFlushed,
+      onToolCall: (call) => toolCalls.push(call.catch(() => undefined)),
+      ...(observedListing ? { observedListing } : {}),
+    });
+    await mcpServer.connect(transport);
+    const close = async () => {
+      // Never close before a call settles: closing aborts it, and a call that
+      // already raised a card or started work must finish as it would have.
+      await Promise.all(toolCalls);
+      await mcpServer.close().catch(() => undefined);
+    };
+    let response: Response;
+    try {
+      response = await transport.handleRequest(params.request, {
+        authInfo: {
+          token: params.token,
+          clientId: `${PWRAGENT_TOOL_NAMESPACE}:${params.clientContext.backend}`,
+          scopes: ["tools"],
+        },
+      });
+    } catch (error) {
+      await close();
+      throw error;
+    }
+    if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
+      await close();
+      return response;
+    }
+    return new Response(closeWhenDone(response.body, close, () => clientGone.abort()), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+
+  private async createProtocolServer(params: {
+    readContext: () => AgentToolMcpClientContext;
+    sessionNonce?: string;
+    token: string;
+    disconnectSignal: AbortSignal;
+    responseFlushed: (id: RequestId) => Promise<void> | undefined;
+    onToolCall?: (call: Promise<unknown>) => void;
+    observedListing?: JobMonitorCatalogListing;
+    isAuthorized?: () => boolean;
+  }) {
+    const [
+      { Server: McpProtocolServer },
+      {
+        CallToolRequestSchema, ErrorCode, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema,
+        ListToolsRequestSchema, McpError, ReadResourceRequestSchema,
+      },
+      { ListSkillsRequestSchema, GetSkillRequestSchema },
+    ] = await Promise.all([mcpServerSdk.load(), mcpTypes.load(), skillRequestSchemas.load()]);
+    const context = params.readContext();
+    const toolNames = (await this.resolveMcpTools(context)).map((tool) => tool.name);
+    const isAntigravity = usesAntigravityCatalog(context);
+    const discoveryTools = isAntigravity ? await this.resolveAntigravityDiscoveryTools(context) : [];
     const deferTools = canDeferAntigravityTools(discoveryTools);
     const hasToolGuide = toolNames.includes("read_tool_guide");
     // The PDF-only MCP surface shares this server but has no workflow tools.
@@ -495,7 +627,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           resources: {},
           extensions: { [PWRAGENT_SKILLS_EXTENSION]: {} },
         },
-        instructions: params.clientContext.managedReview
+        instructions: context.managedReview
           ? "PwrAgent in-memory review candidate ledger for this review turn."
           : buildPwrAgentMcpInstructions(toolNames)
             + (deferTools
@@ -539,13 +671,13 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       return { contents: [content] };
     });
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-      const catalog = await this.resolveMcpTools(params.clientContext);
+      const catalog = await this.resolveMcpTools(params.readContext());
       // Only defer tools if the agent may invoke them through the dispatcher.
       const tools = deferTools
         ? [...catalog.filter(({ name }) => ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name)), ...discoveryTools]
         : [...catalog, ...discoveryTools];
-      if (observedListing && sessionNonce) {
-        observedListing.enabled = tools.some(({ name }) => name === "create_monitor_delegation");
+      if (params.observedListing && params.sessionNonce) {
+        params.observedListing.enabled = tools.some(({ name }) => name === "create_monitor_delegation");
       }
       return { tools };
     });
@@ -577,66 +709,131 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           settled = true;
           clearInterval(heartbeat);
         };
-        clientGone.signal.addEventListener("abort", stopHeartbeat, { once: true });
+        params.disconnectSignal.addEventListener("abort", stopHeartbeat, { once: true });
         const reportProgress = progressToken === undefined
           ? undefined
           : (line: string) => {
               message = line;
               if (Date.now() - lastSentAt >= AGENT_TOOL_MCP_REPORTED_PROGRESS_MIN_GAP_MS) sendProgress();
             };
-        const call = this.callTool(request, extra, disconnectSignal, sessionNonce, params.responseFlushed, reportProgress);
-        toolCalls.push(call.catch(() => undefined));
+        const call = this.callTool(request, extra, params.token, params.disconnectSignal, params.sessionNonce,
+          params.responseFlushed(extra.requestId), reportProgress, params.isAuthorized);
+        params.onToolCall?.(call);
         try {
           return await call;
         } finally {
-          clientGone.signal.removeEventListener("abort", stopHeartbeat);
+          params.disconnectSignal.removeEventListener("abort", stopHeartbeat);
           stopHeartbeat();
         }
       },
     );
-    await mcpServer.connect(transport);
-    const close = async () => {
-      // Never close before a call settles: closing aborts it, and a call that
-      // already raised a card or started work must finish as it would have.
-      await Promise.all(toolCalls);
-      await mcpServer.close().catch(() => undefined);
-    };
-    let response: Response;
-    try {
-      response = await transport.handleRequest(params.request, {
-        authInfo: {
-          token: params.token,
-          clientId: `${PWRAGENT_TOOL_NAMESPACE}:${params.clientContext.backend}`,
-          scopes: ["tools"],
-        },
-      });
-    } catch (error) {
-      await close();
-      throw error;
+    return mcpServer;
+  }
+
+  private async openCodexSession(socket: Socket, token: string, isAuthorized: () => boolean): Promise<void> {
+    const context = this.contextsByToken.get(token);
+    if (!context || !this.codexStdioTokens.has(token) || !isAuthorized()) {
+      socket.destroy();
+      return;
     }
-    if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
-      await close();
-      return response;
-    }
-    return new Response(closeWhenDone(response.body, close, () => clientGone.abort()), {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
+    const [{ StdioServerTransport }, types] = await Promise.all([mcpServerStdio.load(), mcpTypes.load()]);
+    const transport = new StdioServerTransport(socket, socket, { maxBufferSize: PWRAGENT_MCP_HTTP_MAX_REQUEST_BYTES });
+    const disconnected = new AbortController();
+    const responses = new Map<RequestId, ReturnType<typeof createResponseFlush>>();
+    const inFlight = new Set<RequestId>();
+    socket.once("close", () => {
+      disconnected.abort();
+      for (const flush of responses.values()) flush.finish(new Error("Codex MCP connection closed."));
+      responses.clear();
+      void transport.close();
     });
+    const server = await this.createProtocolServer({
+      readContext: () => this.contextsByToken.get(token) ?? context,
+      token,
+      sessionNonce: randomUUID(),
+      disconnectSignal: disconnected.signal,
+      observedListing: this.jobMonitorListings.get(token),
+      isAuthorized,
+      responseFlushed: (id) => {
+        const flush = createResponseFlush();
+        responses.set(id, flush);
+        return flush.promise;
+      },
+    });
+    if (!isAuthorized()) {
+      socket.destroy();
+      return;
+    }
+    socket.setTimeout(10_000, () => socket.destroy());
+    transport.onerror = () => socket.destroy();
+    transport.onclose = () => socket.destroy();
+    let initializeId: RequestId | undefined;
+    let initializeAnswered = false;
+    transport.send = async (message) => {
+      if (!isAuthorized() || socket.writableLength > 4 * PWRAGENT_MCP_HTTP_MAX_REQUEST_BYTES) {
+        socket.destroy();
+        throw new Error("Codex MCP connection is unavailable.");
+      }
+      let flush: ReturnType<typeof createResponseFlush> | undefined;
+      if ((types.isJSONRPCResultResponse(message) || types.isJSONRPCErrorResponse(message)) && message.id !== undefined) {
+        flush = responses.get(message.id);
+        responses.delete(message.id);
+        inFlight.delete(message.id);
+        if (message.id === initializeId) initializeAnswered = types.isJSONRPCResultResponse(message);
+      }
+      await new Promise<void>((resolve, reject) => {
+        socket.write(JSON.stringify(message) + "\n", (error) => {
+          flush?.finish(error ?? undefined);
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    };
+    // The SDK owns parsing and negotiation. Guard message admission at the
+    // socket boundary, including reads that are not tied to an active turn.
+    let initialized = false;
+    const connect = server.connect(transport);
+    const receive = transport.onmessage;
+    transport.onmessage = (message) => {
+      if (!isAuthorized()) return void socket.destroy();
+      if (!initialized) {
+        if (initializeId === undefined && types.isJSONRPCRequest(message) && types.isInitializeRequest(message)) {
+          initializeId = message.id;
+        } else if (initializeAnswered && types.isInitializedNotification(message)) {
+          initialized = true;
+          socket.setTimeout(0);
+        }
+        else return void socket.destroy();
+      }
+      if (types.isJSONRPCRequest(message)) {
+        if (inFlight.has(message.id) || inFlight.size >= 64) return void socket.destroy();
+        inFlight.add(message.id);
+      } else if (types.isJSONRPCNotification(message) && message.method === "notifications/cancelled") {
+        const cancelled = types.CancelledNotificationSchema.safeParse(message);
+        const id = cancelled.data?.params.requestId;
+        if (id !== undefined) {
+          inFlight.delete(id);
+          responses.get(id)?.finish(new Error("The Codex MCP request was cancelled."));
+          responses.delete(id);
+        }
+      }
+      receive?.(message);
+    };
+    await connect;
+    socket.resume();
   }
 
   private async callTool(
     request: CallToolRequest,
     extra: CallToolExtra,
+    token: string,
     disconnectSignal: AbortSignal,
     sessionNonce: string | undefined,
     responseFlushed?: Promise<void>,
     reportProgress?: (message: string) => void,
+    isAuthorized?: () => boolean,
   ): Promise<AgentMcpToolCallResponse> {
-    const token = extra.authInfo?.token;
-    const clientContext = token
-      ? this.contextsByToken.get(token)
-      : undefined;
+    const clientContext = this.contextsByToken.get(token);
     if (!clientContext) {
       return forbiddenMcpResponse("Unknown PwrAgent MCP client.");
     }
@@ -701,6 +898,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         "This tool requires an MCP session to prevent duplicate mutations. Initialize the connection and send the returned Mcp-Session-Id header.",
       );
     }
+    if (isAuthorized && !isAuthorized()) return forbiddenMcpResponse("The Codex MCP registration has ended.");
     const result = await catalog.router.handleMcpToolCall({
       backend: callContext.backend,
       threadId: callContext.threadId,
@@ -827,8 +1025,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
     const token = readBearerToken(request.headers.authorization);
     const clientContext = token
-      ? this.contextsByToken.get(token)
-      : undefined;
+      && !this.codexStdioTokens.has(token) ? this.contextsByToken.get(token) : undefined;
     if (!token || !clientContext) {
       response.setHeader("WWW-Authenticate", 'Bearer realm="pwragent-mcp"');
       writeJsonResponse(response, 401, {
@@ -982,8 +1179,10 @@ function canDeferAntigravityTools(discoveryTools: readonly AgentMcpTool[]): bool
 function boundThreadKey(
   context: AgentToolMcpClientContext,
   threadId: string,
+  transport: "http" | "stdio",
 ): string {
   return JSON.stringify([
+    transport,
     context.backend,
     threadId,
     context.stdioFallback === true,

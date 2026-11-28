@@ -956,7 +956,7 @@ function createCodexObserverWithConfigReadRedaction(
 
   return {
     onMessage: async (event) => {
-      const redactedEvent = redactCodexThreadMcpHeaders(event);
+      const redactedEvent = redactCodexThreadMcpCredentials(event);
       const requestId = redactedEvent.envelope.id;
       const requestKey = requestId === null || requestId === undefined
         ? undefined
@@ -1004,7 +1004,7 @@ function createCodexObserverWithConfigReadRedaction(
   };
 }
 
-function redactCodexThreadMcpHeaders(
+function redactCodexThreadMcpCredentials(
   event: JsonRpcObserverEvent,
 ): JsonRpcObserverEvent {
   if (
@@ -1029,7 +1029,8 @@ function redactCodexThreadMcpHeaders(
     Object.entries(servers).map(([name, value]) => {
       const server = asRecord(value);
       const headers = asRecord(server?.http_headers);
-      if (!server || !headers) {
+      const environment = asRecord(server?.env);
+      if (!server || (!headers && !environment)) {
         return [name, value];
       }
       redacted = true;
@@ -1037,9 +1038,12 @@ function redactCodexThreadMcpHeaders(
         name,
         {
           ...server,
-          http_headers: Object.fromEntries(
-            Object.keys(headers).map((headerName) => [headerName, "[redacted]"]),
-          ),
+          ...(headers ? {
+            http_headers: Object.fromEntries(Object.keys(headers).map((key) => [key, "[redacted]"])),
+          } : {}),
+          ...(environment ? {
+            env: Object.fromEntries(Object.keys(environment).map((key) => [key, "[redacted]"])),
+          } : {}),
         },
       ];
     }),

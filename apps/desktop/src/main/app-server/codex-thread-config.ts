@@ -1,3 +1,4 @@
+import { CODEX_AGENT_TOOL_SERVER_NAME } from "../agent-tools/codex-agent-tool-ipc";
 import type { OwnerRuntimePolicy } from "../owner-runtime-policy";
 import { MCP_PROJECT_TOOL_APPROVAL_OFFER_META_KEY } from "@pwragent/shared/contracts/mcp-connections";
 import { encodeCodexMcpConnectionId, PWRAGENT_MCP_SERVER_HASH_LENGTH, PWRAGENT_MCP_SERVER_PREFIX } from "../../shared/tool-activity";
@@ -30,7 +31,7 @@ import {
 } from "../token-miser/token-miser-types";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
-import { type AgentToolMcpRegistration } from "../agent-tools/agent-tool-mcp-server";
+import { type AgentToolMcpRegistration, type CodexAgentToolMcpRegistration } from "../agent-tools/agent-tool-mcp-server";
 
 
 
@@ -184,37 +185,29 @@ export function buildCodexTokenMiserDynamicToolSpecs(
 }
 
 export const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
-export const PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME = "pwragent_apps";
 
 export function buildCodexPdfMcpConfig(
   registration: AgentToolMcpRegistration,
 ): CodexThreadStartParams["config"] {
-  return buildCodexOwnedMcpConfig(PWRAGENT_PDF_MCP_SERVER_NAME, registration, false);
-}
-
-export function buildCodexAgentToolsMcpConfig(
-  registration: AgentToolMcpRegistration,
-): CodexThreadStartParams["config"] {
-  return buildCodexOwnedMcpConfig(PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME, registration, true);
-}
-
-function buildCodexOwnedMcpConfig(
-  serverName: string,
-  registration: AgentToolMcpRegistration,
-  required: boolean,
-): CodexThreadStartParams["config"] {
   return {
     mcp_servers: {
-      [serverName]: {
+      [PWRAGENT_PDF_MCP_SERVER_NAME]: {
         enabled: true,
-        ...(required ? { required: true } : {}),
-        http_headers: Object.fromEntries(
-          registration.server.headers.map(({ name, value }) => [name, value]),
-        ),
+        http_headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])),
         url: registration.server.url,
       },
     },
-  } as CodexThreadStartParams["config"];
+  };
+}
+
+export function buildCodexAgentToolsMcpConfig(
+  registration: CodexAgentToolMcpRegistration,
+): CodexThreadStartParams["config"] {
+  return {
+    mcp_servers: {
+      [CODEX_AGENT_TOOL_SERVER_NAME]: { enabled: true, required: true, ...registration.server },
+    },
+  };
 }
 
 export function buildCodexPdfMcpDisabledConfig(): CodexThreadStartParams["config"] {

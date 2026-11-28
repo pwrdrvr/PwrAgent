@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { checkPublicRegistry, releaseMetadata } from "./release.mjs";
 import { currentReleaseSource, requiresReadOnlyRecovery } from "./release-context.mjs";
@@ -33,7 +34,10 @@ try {
   const files = new Set(packed.files.map((file) => file.path));
   for (const required of ["package.json", "bin/pwragent.js", "src/cli.js", "src/daemon.js", "dist/index.js", "dist/runtime.json",
     "dist/storage-maintenance-worker.js", "dist/claude-session-reader-worker.js", "dist/mcp-connection-bridge.js", "dist/token-miser-hook.js", "dist/outpost-codex-sandbox.js",
-    "dist/chunks.json", "dist/THIRD_PARTY_LICENSES", "resources/custom-git-runtime.json", "native/mcp-ipc-relay/main.c", "scripts/install.mjs", "scripts/stage-runtime.mjs", "LICENSE", "README.md"]) {
+    "dist/chunks.json", "dist/THIRD_PARTY_LICENSES", "resources/custom-git-runtime.json", "native/mcp-ipc-relay/main.c",
+    "native/mcp-stdio-relay/Cargo.lock", "native/mcp-stdio-relay/Cargo.toml", "native/mcp-stdio-relay/src/main.rs",
+    "native/mcp-stdio-relay/LICENSE-PwrDisk", "native/mcp-stdio-relay/THIRD_PARTY_LICENSES", "scripts/build-mcp-stdio-relay.mjs",
+    "scripts/install.mjs", "scripts/stage-runtime.mjs", "LICENSE", "README.md"]) {
     assert.ok(files.has(required), `Missing packed file: ${required}`);
   }
   assert.ok([...files].some(file => file.endsWith(".js.map")), "Normal packed builds retain debugging source maps");
@@ -59,7 +63,9 @@ try {
   assert.equal(unpacked("LICENSE"), readFileSync(path.join(root, "LICENSE"), "utf8"));
   assert.ok(!/require\(["'](?:\/|[A-Za-z]:)/.test(unpacked("dist/index.js")), "Portable bundle must not require build-host absolute paths");
   assert.deepEqual(packed.bundled, []);
-  assert.ok(![...files].some(file => file.startsWith("resources/git/") || file === "resources/mcp-ipc-relay/mcp-ipc-relay"), "Do not pack build-host binaries");
+  assert.ok(![...files].some(file => file.startsWith("resources/git/") || file === "resources/mcp-ipc-relay/mcp-ipc-relay"
+    || file.startsWith("resources/mcp-stdio-relay/") || file.startsWith("native/mcp-stdio-relay/target/")),
+    "Do not pack build-host binaries");
   assert.equal(unpacked("scripts/stage-runtime.mjs"), readFileSync(new URL("../../../apps/desktop/scripts/stage-runtime.mjs", import.meta.url), "utf8"));
   assert.equal(unpacked("dist/THIRD_PARTY_LICENSES"), readFileSync(path.join(root, "dist/THIRD_PARTY_LICENSES"), "utf8"));
   assert.equal(unpacked("licenses/xterm-LICENSE"), readFileSync(path.join(root, "licenses/xterm-LICENSE"), "utf8"));
@@ -71,6 +77,8 @@ try {
   writeFileSync(npmrc, "");
   const prefix = path.join(temporary, "install");
   const env = { ...process.env, HOME: home, NODE_PATH: "", NODE_OPTIONS: "",
+    CARGO_HOME: process.env.CARGO_HOME ?? path.join(homedir(), ".cargo"),
+    RUSTUP_HOME: process.env.RUSTUP_HOME ?? path.join(homedir(), ".rustup"),
     NPM_CONFIG_USERCONFIG: npmrc, NPM_CONFIG_CACHE: path.join(temporary, "cache") };
   // Install the tarball away from the checkout. npm selects target-native packages.
   run("npm", ["install", "--global", "--prefix", prefix, "--no-audit", "--no-fund", tarball],

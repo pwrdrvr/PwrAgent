@@ -33,6 +33,8 @@ apps/desktop/build/bundled-agents/grok/
 apps/desktop/build/bundled-tools/ripgrep/
 apps/desktop/build/native/
 apps/desktop/build/mcp-ipc-relay/
+apps/desktop/build/mcp-stdio-relay/
+apps/desktop/native/mcp-stdio-relay/target/
 
 # Release-time secrets — must never land in the repo
 .envrc.release
@@ -56,4 +58,5 @@ packages/pwragent/native/
 packages/pwragent/build/
 packages/pwragent/scripts/stage-runtime.mjs
 packages/pwragent/scripts/build-mcp-ipc-relay.mjs
+packages/pwragent/scripts/build-mcp-stdio-relay.mjs
 packages/pwragent/scripts/native-helper-cache.mjs

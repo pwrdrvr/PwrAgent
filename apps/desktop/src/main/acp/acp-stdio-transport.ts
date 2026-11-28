@@ -1,11 +1,12 @@
 import type { SpawnOptionsWithoutStdio } from "node:child_process";
-import { spawn } from "node:child_process";
+import { ChildProcess, spawn } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import {
   normalizeAcpLaunchDescriptor,
   type AcpLaunchDescriptor,
 } from "./acp-launch-descriptor.js";
 import type { AcpJsonRpcTransport } from "./acp-client.js";
+import type { OwnedCodexProcess } from "../agent-tools/codex-agent-tool-ipc";
 import {
   createCommandInvocation,
   readJsonRpcLines,
@@ -111,6 +112,16 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
 
   get disconnected(): boolean {
     return this.current?.line.stopped ?? false;
+  }
+
+  readOwnedMcpProcess(): OwnedCodexProcess | undefined {
+    const connection = this.current;
+    const child = connection?.line.ownedChild;
+    if (!connection || !child) return undefined;
+    return {
+      child,
+      isCurrent: () => !this.closed && this.current === connection && connection.line.ownedChild === child,
+    };
   }
 
   disableReconnect(): void {
@@ -281,6 +292,12 @@ class AcpLineStdioTransport implements JsonRpcTransport {
 
   get stopped(): boolean {
     return this.failure !== undefined;
+  }
+
+  get ownedChild(): ChildProcess | undefined {
+    const child = this.childProcess;
+    return child instanceof ChildProcess && !this.stopped && !child.killed
+      && child.exitCode === null && child.signalCode === null ? child : undefined;
   }
 
   assertOpen(): void {

@@ -30,6 +30,7 @@ import {
   resolveCodexCommand,
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
+import type { OwnedCodexProcess } from "../agent-tools/codex-agent-tool-ipc";
 import { resolveWindowsCodexLaunchCommand } from "../codex-windows-launch";
 import { readCodexExecutableIdentity, type CodexExecutableIdentity } from "./executable-identity";
 
@@ -413,6 +414,15 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
         this.closePromise = undefined;
       });
     return await this.closePromise;
+  }
+
+  ownedProcess(): OwnedCodexProcess | undefined {
+    const child = this.childProcess;
+    if (!child?.pid) return undefined;
+    return {
+      child,
+      isCurrent: () => !this.closeRequested && this.childProcess === child && child.exitCode === null && child.signalCode === null,
+    };
   }
 
   /** The running app server, or `undefined` when none is running. */

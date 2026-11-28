@@ -627,6 +627,7 @@ import {
   type AgentToolMcpClientContext,
   type AgentToolMcpRegistration,
   type AgentToolMcpServerLike,
+  type CodexAgentToolMcpRegistration,
   type ResolvedAgentToolMcpCallContext,
 } from "../agent-tools/agent-tool-mcp-server";
 
@@ -10181,7 +10182,7 @@ export class DesktopBackendRegistry {
         : buildLocalLinkedDirectory(cwd);
     let result: { threadId: string };
     let pdfMcpRegistration: AgentToolMcpRegistration | undefined;
-    let agentToolsMcpRegistration: AgentToolMcpRegistration | undefined;
+    let agentToolsMcpRegistration: CodexAgentToolMcpRegistration | undefined;
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
     if (backend === "claude") {
@@ -12464,11 +12465,11 @@ export class DesktopBackendRegistry {
   private async registerCodexAgentToolsMcp(params: {
     threadId?: string;
     tokenMiserEnabled: boolean;
-  }): Promise<AgentToolMcpRegistration> {
-    if (!this.agentToolMcpServer) {
+  }): Promise<CodexAgentToolMcpRegistration> {
+    if (!this.agentToolMcpServer?.registerCodexClient) {
       throw new Error("PwrAgent tools via MCP are unavailable on this instance.");
     }
-    return await this.agentToolMcpServer.registerClient({ backend: "codex", ...params });
+    return await this.agentToolMcpServer.registerCodexClient({ backend: "codex", ...params });
   }
 
   private async buildCodexAgentToolsMcpConfigForThread(
@@ -12706,6 +12707,11 @@ export class DesktopBackendRegistry {
             instructions,
             readAgentMemory: this.readAgentMemoryContext.bind(this, { backend: params.backend, threadId: params.threadId }),
             mcpServers,
+            ...(owned && this.agentToolMcpServer?.registerOwnedClient ? {
+              registerOwnedMcp: async (child, isCurrent) => await this.agentToolMcpServer?.registerOwnedClient?.({
+                backend: "claude", threadId: params.threadId,
+              }, { child, isCurrent }),
+            } : {}),
             ...(this.subAgentMonitorService.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
             // PwrAgent's server lists tools by this member's containment.
             ...(owned ? { agentToolCatalogKey: localMemberRole() } : {}),

@@ -204,6 +204,7 @@ export type AcpMcpServerRegistration = {
   managedConnectionsViaGateway?: true;
   managedReviewLedgerAvailable?: true;
   bindThread?: (threadId: string) => Promise<void> | void;
+  release?: () => void;
   readListedJobMonitorCreation?: () => boolean | undefined;
   /**
    * Whether the agent's permission prompt for `toolName` on the named server
@@ -225,6 +226,7 @@ export function mergeMcpServerRegistrations(
   );
   const approvers = present.flatMap((registration) =>
     registration.hostApprovesToolCall ? [registration.hostApprovesToolCall] : []);
+  const releases = present.flatMap((registration) => registration.release ? [registration.release] : []);
   return {
     servers: present.flatMap((registration) => registration.servers),
     ...(present.some((registration) => registration.managedConnectionsViaGateway)
@@ -234,6 +236,7 @@ export function mergeMcpServerRegistrations(
       ? { managedReviewLedgerAvailable: true }
       : {}),
     readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
+    ...(releases.length ? { release: () => { for (const release of releases) release(); } } : {}),
     ...(approvers.length ? {
       hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {
         for (const approves of approvers) {
@@ -303,6 +306,7 @@ type AcpSessionMcpServers = {
   /** Names a live registration can vouch for. Absent while awaiting reload. */
   registeredNames?: ReadonlySet<string>;
   hostApprovesToolCall?: AcpMcpServerRegistration["hostApprovesToolCall"];
+  release?: AcpMcpServerRegistration["release"];
   managedConnectionsViaGateway?: true;
 };
 
@@ -837,6 +841,7 @@ export class AcpAgentClient {
         { sessionId: protocolSessionId },
         ACP_SESSION_CLOSE_REQUEST_TIMEOUT_MS,
       );
+      this.sessionMcpServers.get(sessionId)?.release?.();
       this.sessionLastActivityAt.delete(sessionId);
       return true;
     } catch (error) {
@@ -962,6 +967,7 @@ export class AcpAgentClient {
     this.managedReviewLedgerToolCalls.delete(sessionId);
     this.sessionAgentToolCatalogKeys.delete(sessionId);
     const previousMcpServers = this.sessionMcpServers.get(sessionId);
+    previousMcpServers?.release?.();
     if (retainMcpGrants && previousMcpServers && this.sessionMcpToolGrants.has(sessionId)) {
       // Keep the names for reload validation, without the closed worker's
       // live tool registration.
@@ -1037,6 +1043,7 @@ export class AcpAgentClient {
     this.grokBackgroundSessions.clear();
     this.antigravityBackgroundCommands.clear();
     this.sessionAgentToolCatalogKeys.clear();
+    for (const registration of this.sessionMcpServers.values()) registration.release?.();
     this.sessionMcpServers.clear();
     this.sessionMcpToolGrants.clear();
     this.sessionNotificationQueues.clear();
@@ -1485,6 +1492,7 @@ export class AcpAgentClient {
       mcpServers: mcpServerWireConfigs,
       ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
     }).catch(async (error: unknown) => {
+      mcpRegistration.release?.();
       // A failed publication must never replace the provider's error.
       await this.options.onSessionStartError?.(error).catch(() => undefined);
       throw error;
@@ -1498,6 +1506,7 @@ export class AcpAgentClient {
           ? record.session_id
           : undefined;
     if (!sessionId) {
+      mcpRegistration.release?.();
       throw new Error("ACP session/new did not return a session id");
     }
     const appSessionId = params.sessionId ?? sessionId;
@@ -1525,6 +1534,7 @@ export class AcpAgentClient {
           },
         });
       } catch (error) {
+        mcpRegistration.release?.();
         await this.options.transport.request("session/close", { sessionId }, ACP_SESSION_CLOSE_REQUEST_TIMEOUT_MS)
           .catch((closeError: unknown) => acpClientLog.warn("Could not close an unbound Antigravity session", {
             sessionId, error: closeError instanceof Error ? closeError.message : String(closeError),
@@ -3464,6 +3474,9 @@ export class AcpAgentClient {
           throw error;
         }
       }
+    } catch (error) {
+      mcpRegistration.release?.();
+      throw error;
     } finally {
       this.loadingSessions.delete(protocolSessionId);
     }
@@ -3596,6 +3609,7 @@ export class AcpAgentClient {
     // A grant names a tool as the agent flattened it. When the servers behind
     // those names change, the same name can reach a different server.
     const previous = this.sessionMcpServers.get(sessionId);
+    previous?.release?.();
     if (previous && !sameNames(previous.agentNames, agentNames)) {
       this.sessionMcpToolGrants.delete(sessionId);
     }
@@ -3608,6 +3622,7 @@ export class AcpAgentClient {
       ...(registration.hostApprovesToolCall
         ? { hostApprovesToolCall: registration.hostApprovesToolCall }
         : {}),
+      ...(registration.release ? { release: registration.release } : {}),
     });
   }
 

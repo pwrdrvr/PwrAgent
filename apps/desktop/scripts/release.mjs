@@ -42,6 +42,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -59,6 +60,7 @@ import {
 import { handoffPreloadedCodesignIdentity } from "./release-signing-environment.mjs";
 import { packageMacDryrun } from "./macos-dryrun-signing.mjs";
 import { createDesktopDebugArtifact } from "./desktop-debug-artifacts.mjs";
+import { buildMcpStdioRelay, mcpStdioRelayName, stagedMcpStdioRelay } from "./build-mcp-stdio-relay.mjs";
 // The checksum manifest is written here and parsed by the signing job when it
 // cuts the stable aliases; one module owns both halves of that format.
 import { writeWindowsChecksums } from "./windows-release-artifacts.mjs";
@@ -795,6 +797,10 @@ function maybePrepareCodesignKeychain() {
   return true;
 }
 
+const relayPlatform = win ? "win32" : linux ? "linux" : "darwin";
+const relayArchitectures = win ? ["x64"] : linux ? [currentLinuxBuilderArch()]
+  : macArch === "universal" ? ["x64", "arm64"] : [macArch];
+
 if (!signStageOnly) {
   // 2. Build (electron-vite -> apps/desktop/out/).
   step("stage pinned ripgrep");
@@ -888,6 +894,15 @@ if (!signStageOnly) {
   for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
     copyFileSync(join(repoRoot, file), join(stageDir, file));
   }
+  step("build the target MCP stdio relays before signing");
+  const relayWork = mkdtempSync(join(tmpdir(), "pwragent-release-relay-"));
+  try {
+    for (const arch of relayArchitectures) {
+      buildMcpStdioRelay({ arch, outputRoot: relayWork, destination: stagedMcpStdioRelay(stageDir, relayPlatform, arch) });
+    }
+  } finally {
+    rmSync(relayWork, { recursive: true, force: true });
+  }
   assertRequiredGrokBundle();
   assertRequiredRipgrepBundle();
 
@@ -902,6 +917,11 @@ if (!signStageOnly) {
   }
   assertRequiredGrokBundle();
   assertRequiredRipgrepBundle();
+  for (const arch of relayArchitectures) {
+    if (!existsSync(stagedMcpStdioRelay(stageDir, relayPlatform, arch))) {
+      throw new Error(`The signing stage is missing the prepared MCP stdio relay for ${relayPlatform}-${arch}.`);
+    }
+  }
 }
 
 // 5. electron-builder.
@@ -1082,6 +1102,7 @@ verifyBundledGit(join(builtApp, "Contents", "Resources"));
 
 step(`verify ${macArch} binary slices`);
 verifyMacSlices(join(builtApp, "Contents", "MacOS", "PwrAgent"));
+verifyMacSlices(join(builtApp, "Contents", "Resources", "mcp-stdio-relay", mcpStdioRelayName("darwin")));
 verifyMacSlices(dockTilePluginExecutable);
 runChecked("plutil", [
   "-lint",
