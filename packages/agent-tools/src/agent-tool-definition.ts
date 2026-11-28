@@ -3,7 +3,7 @@ import type {
   ThreadIdentifier,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { DynamicToolCallResponse } from "@pwrdrvr/codex-app-server-protocol/v2";
-import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, Progress, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 
 export type AgentToolTransport = "codex_dynamic_tool" | "mcp";
 
@@ -21,6 +21,8 @@ export type AgentToolCallContext = {
    * progress message; transports without one ignore it.
    */
   reportProgress?: (message: string) => void;
+  /** Relay the managed MCP server's progress values under the caller's token. */
+  reportMcpProgress?: (progress: Progress) => void;
 };
 
 export type AgentToolCallContentItems = NonNullable<

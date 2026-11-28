@@ -110,16 +110,15 @@ native title generation.
 
 The same job configures three fake MCP connections with 80 tools each. It
 measures the first turn and follow-up with the catalog configured. It checks
-deferred fixture schemas on Codex and Claude and the bounded eager subset on
-Antigravity's native stdio route. Codex also runs
+that fixture schemas stay out of both turns on Codex, Claude, and Antigravity.
+Antigravity uses the managed gateway through its stdio bridge. Codex also runs
 this case with Kimi K3 registered as a custom Responses provider using the
 portable Code Mode adapter and a loopback endpoint. The test checks the model,
 route, and bootstrap schemas received by the endpoint.
 
 Scripted model replies drive discovery and one approved MCP call through each
-harness, including the Kimi K3 configuration. The suite has a separate
-Antigravity gateway script for when the expected route switches away from
-native stdio. It also checks schema validation and an approval denial. The
+harness, including the Kimi K3 configuration. The Antigravity gateway case also
+checks schema validation and an approval denial. The
 tests compare the invocation arguments at the model endpoint and stdio fixture
 and confirm the matching results reach the model. Separate ceilings cover the
 total turn, the largest conversation request, peak tool definition bytes,

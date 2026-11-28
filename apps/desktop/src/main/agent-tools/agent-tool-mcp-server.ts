@@ -10,6 +10,7 @@ import type { AddressInfo, Socket } from "node:net";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type {
   CallToolRequest,
+  Progress,
   ServerNotification,
   ServerRequest,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -117,7 +118,8 @@ const agentToolMcpLog = getMainLogger("pwragent:agent-tool-mcp");
 export type AgentToolMcpClientContext = {
   backend: AppServerBackendKind;
   threadId?: string;
-  stdioFallback?: boolean;
+  /** A stdio credential may reach managed connections only on a gateway-enabled Antigravity registration. */
+  stdioFallback?: boolean | "managed-connections";
   managedReview?: boolean;
   observeJobMonitorCatalog?: boolean;
   tokenMiserEnabled?: boolean;
@@ -337,7 +339,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const normalizedThreadId = context.threadId?.trim();
     const normalizedContext = {
       backend: context.backend,
-      ...(context.stdioFallback ? { stdioFallback: true } : {}),
+      ...(context.stdioFallback ? { stdioFallback: context.stdioFallback } : {}),
       ...(context.managedReview ? { managedReview: true } : {}),
       ...(context.tokenMiserEnabled ? { tokenMiserEnabled: true } : {}),
       ...(normalizedThreadId ? { threadId: normalizedThreadId } : {}),
@@ -470,7 +472,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     ] = await Promise.all([mcpServerSdk.load(), mcpServerStreamableHttp.load(), mcpTypes.load(), skillRequestSchemas.load()]);
     const body = await readMcpRequestBody(params.request);
     const messages = Array.isArray(body) ? body : [body];
-    const streamed = !params.clientContext.stdioFallback && messages.some((message) =>
+    const streamed = params.clientContext.stdioFallback !== true && messages.some((message) =>
       !!message && typeof message === "object" && (message as { method?: unknown }).method === "tools/call");
     const initializing = messages.some(isInitializeRequest);
     if (initializing && sessionNonce) {
@@ -576,7 +578,16 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
             params: { progressToken: progressToken!, progress, message },
           }).catch(() => undefined);
         };
-        const heartbeat = progressToken === undefined
+        // The native bridge relays upstream units and totals unchanged. A
+        // synthetic heartbeat would share that token and corrupt its counter.
+        const relayUpstream = params.clientContext.stdioFallback === "managed-connections"
+          && request.params.name === "call_mcp_tool";
+        const reportMcpProgress = !relayUpstream || progressToken === undefined ? undefined : (update: Progress) => {
+          if (!settled) void extra.sendNotification({
+            method: "notifications/progress", params: { ...update, progressToken },
+          }).catch(() => undefined);
+        };
+        const heartbeat = progressToken === undefined || relayUpstream
           ? undefined
           : setInterval(sendProgress, this.options.progressIntervalMs ?? AGENT_TOOL_MCP_PROGRESS_INTERVAL_MS);
         heartbeat?.unref?.();
@@ -586,13 +597,13 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           clearInterval(heartbeat);
         };
         clientGone.signal.addEventListener("abort", stopHeartbeat, { once: true });
-        const reportProgress = progressToken === undefined
+        const reportProgress = progressToken === undefined || relayUpstream
           ? undefined
           : (line: string) => {
               message = line;
               if (Date.now() - lastSentAt >= AGENT_TOOL_MCP_REPORTED_PROGRESS_MIN_GAP_MS) sendProgress();
             };
-        const call = this.callTool(request, extra, disconnectSignal, sessionNonce, params.responseFlushed, reportProgress);
+        const call = this.callTool(request, extra, disconnectSignal, sessionNonce, params.responseFlushed, reportProgress, reportMcpProgress);
         toolCalls.push(call.catch(() => undefined));
         try {
           return await call;
@@ -640,6 +651,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     sessionNonce: string | undefined,
     responseFlushed?: Promise<void>,
     reportProgress?: (message: string) => void,
+    reportMcpProgress?: (update: Progress) => void,
   ): Promise<AgentMcpToolCallResponse> {
     const token = extra.authInfo?.token;
     const clientContext = token
@@ -671,7 +683,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       );
     }
     if (!allowsStdioFallbackTool(clientContext, request.params.name)) {
-      return forbiddenMcpResponse("This ACP stdio client may call agent_memory and list_reviews only.");
+      return forbiddenMcpResponse("This tool is unavailable to this ACP stdio client.");
     }
     let { name, arguments: args } = request.params;
     if (usesAntigravityCatalog(clientContext) && (name === PWRAGENT_TOOL_SEARCH || name === CALL_PWRAGENT_TOOL)) {
@@ -720,10 +732,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         : randomUUID(),
       tool: name,
       args,
-      signal: name === "resource_checkout_acquire"
+      signal: name === "resource_checkout_acquire" || isManagedStdioGatewayTool(clientContext, name)
         ? AbortSignal.any([extra.signal, disconnectSignal])
         : extra.signal,
       responseFlushed,
+      ...(reportMcpProgress ? { reportMcpProgress } : {}),
       ...(reportProgress ? { reportProgress } : {}),
     });
     if (callContext.backend === "codex") {
@@ -852,10 +865,17 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       return;
     }
     const flush = createResponseFlush();
+    // Capture stdio cancellation even during catalog resolution, before the
+    // response stream exists and its reader can observe the disconnect.
+    const stdioDisconnect = clientContext.stdioFallback === "managed-connections" ? new AbortController() : undefined;
     response.once("finish", () => flush.finish());
-    response.once("close", () => { if (!response.writableFinished) flush.finish(new Error("MCP client disconnected before acknowledgement.")); });
+    response.once("close", () => {
+      if (response.writableFinished) return;
+      stdioDisconnect?.abort();
+      flush.finish(new Error("MCP client disconnected before acknowledgement."));
+    });
     const webResponse = await this.handleMcpProtocolRequest({
-      request: await toWebRequest(request, requestUrl),
+      request: await toWebRequest(request, requestUrl, stdioDisconnect?.signal),
       token,
       clientContext,
       responseFlushed: flush.promise,
@@ -980,7 +1000,13 @@ function unsupportedMcpTool(): AgentMcpToolCallResponse {
 }
 
 function allowsStdioFallbackTool(context: AgentToolMcpClientContext, name: string): boolean {
-  return !context.stdioFallback || name === "agent_memory" || name === "list_reviews";
+  return !context.stdioFallback || name === "agent_memory" || name === "list_reviews"
+    || isManagedStdioGatewayTool(context, name);
+}
+
+function isManagedStdioGatewayTool(context: AgentToolMcpClientContext, name: string): boolean {
+  return context.backend === "acp:antigravity" && context.stdioFallback === "managed-connections"
+    && (name === "search_mcp_tools" || name === "call_mcp_tool" || name === "read_mcp_context");
 }
 
 function usesAntigravityCatalog(context: AgentToolMcpClientContext): boolean {
@@ -1001,7 +1027,7 @@ function boundThreadKey(
   return JSON.stringify([
     context.backend,
     threadId,
-    context.stdioFallback === true,
+    context.stdioFallback ?? false,
     context.managedReview === true,
   ]);
 }
@@ -1041,6 +1067,7 @@ function writeJsonResponse(
 async function toWebRequest(
   request: IncomingMessage,
   url: URL,
+  signal?: AbortSignal,
 ): Promise<Request> {
   const headers = new Headers();
   for (const [name, value] of Object.entries(request.headers)) {
@@ -1061,6 +1088,7 @@ async function toWebRequest(
     method,
     headers,
     body: body?.toString("utf8"),
+    signal,
   });
 }
 

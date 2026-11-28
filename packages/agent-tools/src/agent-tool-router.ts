@@ -151,6 +151,7 @@ export class AgentToolRouter {
     signal?: AbortSignal;
     responseFlushed?: Promise<void>;
     reportProgress?: (message: string) => void;
+    reportMcpProgress?: AgentToolCallContext["reportMcpProgress"];
   }): Promise<AgentMcpToolCallResponse> {
     const definition = this.findMcpDefinition(params.namespace, params.tool);
     if (!definition) {
@@ -170,6 +171,7 @@ export class AgentToolRouter {
       transport: "mcp",
       signal: params.signal,
       responseFlushed: params.responseFlushed,
+      ...(params.reportMcpProgress ? { reportMcpProgress: params.reportMcpProgress } : {}),
       ...(params.reportProgress ? { reportProgress: params.reportProgress } : {}),
     };
     return toMcpToolResponse(

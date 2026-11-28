@@ -2,6 +2,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { buildAgentToolStdioServer } from "../agent-tool-mcp-stdio";
+import { buildMcpGatewayToolDefinitions } from "../pwragent-mcp-gateway-tools";
+import { McpGatewayToolService, type McpGatewayToolServiceOptions } from "../../mcp-connections/mcp-gateway-tool-service";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { ErrorCode, ResultSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -149,6 +153,122 @@ describe("AgentToolMcpServer", () => {
       expect((await client.callTool({ name: "update_review_item", arguments: {} })).isError).toBe(true);
       expect(dispatch).toHaveBeenCalledOnce();
     } finally { await client.close(); }
+  });
+
+  it("scopes the Antigravity stdio gateway grant to the selected registration", async () => {
+    const dispatch = vi.fn<AgentToolDefinition["dispatch"]>(() => agentToolSuccess({}));
+    const gateway = ["call_mcp_tool", "read_mcp_context", "search_mcp_tools"];
+    const names = ["agent_memory", "list_reviews", ...gateway, "update_review_item"];
+    const router = new AgentToolRouter(names.map((name) => ({
+      namespace: "pwragent", name, description: name, inputSchema: { type: "object" }, dispatch,
+    })));
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => [buildCatalog(router)],
+      resolveCallContext: () => ({ backend: "acp:antigravity", threadId: "thread", turnId: "turn" }),
+    });
+    openServers.push(server);
+    const context = { backend: "acp:antigravity", threadId: "thread" } as const;
+    const restricted = await connectClient(await server.registerClient({ ...context, stdioFallback: true }));
+    const managed = await connectClient(await server.registerClient({ ...context, stdioFallback: "managed-connections" }));
+    try {
+      expect((await restricted.listTools()).tools.map(({ name }) => name)).toEqual(["agent_memory", "list_reviews"]);
+      expect((await managed.listTools()).tools.map(({ name }) => name)).toEqual(["agent_memory", "list_reviews", ...gateway].sort());
+      for (const name of gateway) {
+        expect((await restricted.callTool({ name, arguments: {} })).isError).toBe(true);
+      }
+      for (const name of ["update_review_item", "call_pwragent_tool"]) {
+        expect((await managed.callTool({ name, arguments: {} })).isError).toBe(true);
+      }
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      await Promise.all([managed.close(), restricted.close()]);
+    }
+  });
+
+  async function connectManagedStdio(options: Pick<McpGatewayToolServiceOptions, "approve" | "connections">) {
+    const service = new McpGatewayToolService({ selectedConnections: async () => ["fixture"], ...options });
+    const router = new AgentToolRouter(buildMcpGatewayToolDefinitions(service));
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => [buildCatalog(router)],
+      resolveCallContext: () => ({ backend: "acp:antigravity", threadId: "thread", turnId: "turn" }),
+    });
+    openServers.push(server);
+    const registration = await server.registerClient({
+      backend: "acp:antigravity", threadId: "thread", stdioFallback: "managed-connections",
+    });
+    const client = new Client({ name: "stdio-fixture", version: "1" });
+    await client.connect(new StdioClientTransport(buildAgentToolStdioServer(registration.server)));
+    return client;
+  }
+
+  const entry = {
+    connectionId: "fixture", toolName: "work", serverName: "Fixture", schemaRevision: "revision",
+    definition: { name: "work", inputSchema: { type: "object" as const } },
+  };
+  const invocation = {
+    name: "call_mcp_tool",
+    arguments: { connectionId: entry.connectionId, toolName: entry.toolName, schemaRevision: entry.schemaRevision, arguments: {} },
+  };
+
+  it("revokes only the cancelled stdio call while approval is pending", async () => {
+    const approval = Promise.withResolvers<boolean>();
+    const admitted = vi.fn<(_request: unknown, signal: AbortSignal) => void>();
+    const invoke = vi.fn();
+    const client = await connectManagedStdio({
+      approve: async (request, _context, signal) => {
+        admitted(request.arguments, signal);
+        return await approval.promise;
+      },
+      connections: { requestGatewayToolOperation: async ({ operation, invocation: upstream }) => {
+        if (operation === "gateway/tools/list") return [entry];
+        invoke(upstream?.arguments);
+        return { content: [] };
+      } },
+    });
+    const controller = new AbortController();
+    const cancelled = client.callTool(invocation, undefined, { signal: controller.signal }).catch(() => undefined);
+    const other = { ...invocation, arguments: { ...invocation.arguments, arguments: { other: true } } };
+    const survivor = client.callTool(other);
+    try {
+      // Both requests have the same method, session and approval gate. Only
+      // the request identified by the SDK's cancellation may lose its grant.
+      await expect.poll(() => admitted.mock.calls.length).toBe(2);
+      controller.abort();
+      await expect.poll(() => admitted.mock.calls.filter(([, signal]) => signal.aborted).map(([args]) => args)).toEqual([{}]);
+      approval.resolve(true);
+      expect((await survivor).isError).not.toBe(true);
+      await cancelled;
+      expect(invoke.mock.calls).toEqual([[{ other: true }]]);
+    } finally {
+      approval.resolve(true);
+      await Promise.allSettled([cancelled, survivor]);
+      await client.close();
+    }
+  });
+
+  it("forwards upstream progress under the stdio caller's token before the tool completes", async () => {
+    const finish = Promise.withResolvers<void>();
+    const progress = { progress: 3, total: 7, message: "Read page 3" };
+    const report = vi.fn();
+    const client = await connectManagedStdio({
+      approve: async () => true,
+      connections: { requestGatewayToolOperation: async ({ operation, onProgress }) => {
+        if (operation === "gateway/tools/list") return [entry];
+        onProgress?.(progress);
+        await finish.promise;
+        return { content: [{ type: "text", text: "done" }] };
+      } },
+    });
+    const call = client.callTool(invocation, undefined, { onprogress: report });
+    try {
+      await expect.poll(() => report.mock.calls).toEqual([[progress]]);
+      finish.resolve();
+      expect((await call).content).toEqual([{ type: "text", text: "done" }]);
+    } finally {
+      finish.resolve();
+      await call.catch(() => undefined);
+      await client.close();
+    }
   });
 
   it("reads a tool exactly as the registration's tools/list describes it", async () => {

@@ -1,6 +1,8 @@
 import fc from "fast-check";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
+import { Readable } from "node:stream";
+import { json } from "node:stream/consumers";
 import { runInNewContext } from "node:vm";
 import { buildAgentToolStdioServer } from "../agent-tools/agent-tool-mcp-stdio";
 import path from "node:path";
@@ -79,27 +81,72 @@ it("the ACP stdio bridge forwards MCP frames with its bound credential", async (
   const initialized = { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } };
   const response = { jsonrpc: "2.0", id: 7, result: { content: [] } };
   const written: string[] = [];
+  const complete = Promise.withResolvers<void>();
   const fetched: unknown[][] = [];
-  await runInNewContext(config.args[1]!, {
-    AbortSignal,
-    process: { env: config.env, stdin: {}, stdout: { write: (line: string) => written.push(line) } },
-    require: () => ({ createInterface: () => [JSON.stringify(initialize), JSON.stringify(call)] }),
-    fetch: async (...args: unknown[]) => {
-      fetched.push(args);
-      return fetched.length === 1
-        ? { ok: true, status: 200, headers: new Headers({ "mcp-session-id": "fixture-session" }), json: async () => initialized }
-        : { ok: true, status: 200, json: async () => response };
-    },
-  });
-  expect(fetched).toEqual([
-    [config.env.PWRAGENT_STDIO_MCP_URL, expect.objectContaining({
-      body: JSON.stringify(initialize), headers: expect.objectContaining({ authorization: "Bearer fixture-token" }),
-    })],
-    [config.env.PWRAGENT_STDIO_MCP_URL, expect.objectContaining({
-      body: JSON.stringify(call), headers: expect.objectContaining({
-        authorization: "Bearer fixture-token", "mcp-session-id": "fixture-session", "mcp-protocol-version": "2025-06-18",
+  const deadline = new AbortController();
+  const requestSignals: AbortSignal[] = [];
+  const timeouts: number[] = [];
+  const gateway = { ...call, id: 8, params: { name: "call_mcp_tool", arguments: {} } };
+  const lines = [initialize, call, gateway].map((frame) => JSON.stringify(frame));
+  const http = {
+    request: (url: string, options: { signal: AbortSignal }, resolve: (response: Readable) => void) => ({
+      on: () => ({
+        end: (body: string) => {
+          fetched.push([url, options, body]);
+          requestSignals.push(options.signal);
+          const frame = fetched.length === 1 ? initialized : { ...response, id: JSON.parse(body).id };
+          resolve(Object.assign(Readable.from([Buffer.from(JSON.stringify(frame))]), {
+            statusCode: 200, headers: { "mcp-session-id": "fixture-session" },
+          }));
+        },
       }),
-    })],
-  ]);
-  expect(written).toEqual([JSON.stringify(initialized) + "\n", JSON.stringify(response) + "\n"]);
+    }),
+  };
+  const modules: Record<string, unknown> = {
+    "node:http": http,
+    "node:stream/consumers": { json },
+    "node:readline": {
+      async *createInterface() {
+        yield* lines;
+        await complete.promise;
+      },
+    },
+  };
+  await runInNewContext(config.args[1]!, {
+    AbortController,
+    AbortSignal: {
+      any: (signals: AbortSignal[]) => AbortSignal.any(signals),
+      timeout: (ms: number) => {
+        timeouts.push(ms);
+        return deadline.signal;
+      },
+    },
+    process: {
+      env: config.env, stdin: {},
+      stdout: {
+        write(line: string) {
+          written.push(line);
+          if (written.length === lines.length) complete.resolve();
+        },
+      },
+    },
+    require: (name: string) => modules[name],
+  });
+  expect(fetched).toEqual(lines.map((line, index) => [
+    config.env.PWRAGENT_STDIO_MCP_URL,
+    expect.objectContaining({
+      signal: expect.any(AbortSignal),
+      headers: expect.objectContaining({
+        authorization: "Bearer fixture-token",
+        ...(index ? { "mcp-session-id": "fixture-session", "mcp-protocol-version": "2025-06-18" } : {}),
+      }),
+    }),
+    line,
+  ]));
+  expect(written[0]).toBe(JSON.stringify(initialized) + "\n");
+  expect(written.slice(1).sort()).toEqual([response, { ...response, id: 8 }].map((frame) => JSON.stringify(frame) + "\n").sort());
+  // Approval and execution deadlines for gateway calls belong to the owner.
+  expect(timeouts).toEqual([15_000, 15_000]);
+  deadline.abort();
+  expect(requestSignals.map((signal) => signal.aborted)).toEqual([true, true, false]);
 });
