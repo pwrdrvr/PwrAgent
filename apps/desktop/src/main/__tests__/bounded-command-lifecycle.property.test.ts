@@ -1,16 +1,13 @@
-import { mkdtemp, open, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { mkdtemp, open, rm, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { boundedCommandTools } from "../agent-tools/bounded-command-tool";
-import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { BoundedCommandCapture } from "../token-miser/bounded-command";
-import { TokenMiserService } from "../token-miser/token-miser-service";
-import { TestTokenMiserStore } from "./token-miser-test-store";
+import { prepareCapture } from "./fixtures/bounded-command-capture-fixture";
 
 const owner = { backend: "claude", threadId: "parent", turnId: "turn", transport: "mcp" } as const;
-const output = "first line\nsecond line 💡\n";
 const readModes = ["digest", "lines", "query", "bytes"] as const;
 const edges = ["end", "close", "other turn"] as const;
 type ReadMode = typeof readModes[number];
@@ -26,17 +23,6 @@ afterAll(async () => {
   vi.unstubAllEnvs();
   if (captureDirectory) await rm(captureDirectory, { recursive: true, force: true });
 });
-
-async function prepareCapture(capture: BoundedCommandCapture, caller: AgentToolCallContext) {
-  const ticket = await capture.prepare(caller, "git diff");
-  // Model the native provider writing the capture and reporting the generated receipt.
-  // The existing shell oracle checks this wire shape against a POSIX execution.
-  const log = ticket.command.match(/pwragent-capture-[\w-]+\.log/u)![0];
-  const receipt = ticket.command.match(/echo (pwragent-[a-f\d-]+):/u)![1];
-  const filename = path.join(tmpdir(), log);
-  await writeFile(filename, output);
-  return { ...ticket, filename, receipt: receipt + ":0" };
-}
 
 async function replayRead(mode: ReadMode, retirement: Retirement) {
   const entered = Promise.withResolvers<void>();
@@ -203,57 +189,6 @@ it.skipIf(process.platform === "win32")("agrees with a capture model across rece
       await capture.close();
     }
   }), { numRuns: Number(process.env.MBT_RUNS ?? 5) });
-});
-
-it.skipIf(process.platform === "win32")("records only visible Code Mode digests and exact reads", async () => {
-  const store = new TestTokenMiserStore(captureDirectory);
-  const reducer = new TokenMiserService({ store, isEnabled: () => true, generateSummary: async () =>
-    ({ status: "failed", reason: "Unexpected reduction" }) });
-  let thread = 0;
-  await fc.assert(fc.asyncProperty(fc.constantFrom("raw", "quoted", "discarded", "truncated"), async (mode) => {
-    const caller = { ...owner, backend: "codex", transport: "codex_dynamic_tool", threadId: `capture-${++thread}` } as const;
-    const direct = vi.fn(() => true);
-    const capture = new BoundedCommandCapture(() => store.issueOutputHandle(), async () => true, async () => true, undefined, direct);
-    try {
-      const ticket = await prepareCapture(capture, caller);
-      capture.observe(caller, { id: "native", command: ticket.command, completed: true, output: ticket.receipt });
-      const [tool] = boundedCommandTools(capture, store);
-      const send = async (args: Record<string, unknown>) => {
-        const result = await tool!.dispatch({ objectId: ticket.objectId, ...args }, caller);
-        const item = result.contentItems?.[0];
-        if (!result.ok || item?.type !== "inputText") throw new Error("Missing capture receipt");
-        return { wrapped: item.text, data: result.data };
-      };
-      const digest = await send({});
-      const padding = ".".repeat(1024);
-      const emitted = mode === "raw" || mode === "quoted";
-      const visible = mode === "raw" ? digest.wrapped : mode === "quoted" ? JSON.stringify(digest.wrapped)
-        : mode === "truncated" ? padding + digest.wrapped + padding : padding;
-      await reducer.prepareCodeModeOutput({ version: 1, thread_id: caller.threadId, turn_id: caller.turnId,
-        call_id: "cell", cell_id: "cell", script_status: "Script completed", max_output_tokens: 80, model_visible_overhead_characters: 0,
-        content_items: [{ type: "input_text", text: visible }],
-      });
-      expect(direct).not.toHaveBeenCalled();
-      const rows = await store.listMetadata(caller.threadId);
-      expect(rows.length).toBe(Number(emitted));
-      if (!emitted) return;
-      const raw = String(digest.data);
-      const digestBytes = Buffer.byteLength(mode === "quoted" ? JSON.stringify(raw).slice(1, -1) : raw);
-      expect(rows[0]?.replacementCharacters).toBe(digestBytes);
-
-      let retrieved = 0;
-      for (const args of [{ startLine: 1, endLine: 1 }, { query: "second" }, { byteOffset: 0 }]) {
-        const read = await send(args);
-        if (typeof read.data === "string") retrieved += Buffer.byteLength(read.data);
-        else retrieved += Buffer.byteLength(JSON.stringify(read.data, null, 2));
-        await store.confirmModelVisibleRetrievals({ threadId: caller.threadId, output: read.wrapped });
-        await store.confirmModelVisibleRetrievals({ threadId: caller.threadId, output: read.wrapped });
-      }
-      expect((await store.listMetadata(caller.threadId))[0]?.retrievedCharacters).toBe(retrieved);
-    } finally {
-      await capture.close();
-    }
-  }), { numRuns: 5 });
 });
 
 it.skipIf(process.platform === "win32").each([true, false])("credits a direct MCP digest only after a successful flush (%s)", async (sent) => {
