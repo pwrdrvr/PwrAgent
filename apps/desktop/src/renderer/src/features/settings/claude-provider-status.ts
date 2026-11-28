@@ -1,4 +1,5 @@
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import { claudeSetupStatus } from "./harness-setup-status";
 import type { SettingsChipTone } from "./SettingsLayout";
 
 type ClaudeInstallation = BackendSummary["claude"];
@@ -7,7 +8,8 @@ type ClaudeInstallation = BackendSummary["claude"];
  * The one reading of Claude's setup state. The Settings nav, the AI Providers
  * list, the Claude pane, and the thread's AI providers panel all render from
  * this, so they cannot describe the same installation in different words or
- * tones.
+ * tones. It is the headline of `claudeSetupStatus`, which also carries the
+ * ordered setup steps.
  */
 export type ClaudeProviderStatus = {
   /** Sentence-case label for the provider list chip and the pane's status. */
@@ -22,28 +24,6 @@ export type ClaudeProviderStatus = {
 export function claudeProviderStatus(
   installation: ClaudeInstallation | undefined,
 ): ClaudeProviderStatus {
-  if (!installation) {
-    return { label: "Not checked", tone: "muted", dot: "off" };
-  }
-  if (!installation.executable) {
-    return { label: "Not installed", tone: "muted", dot: "off", navChip: "not installed" };
-  }
-  if (installation.authStatus === "session-expired") {
-    return { label: "Sign-in expired", tone: "warn", dot: "warn", navChip: "sign in" };
-  }
-  if (installation.authStatus === "sign-in-required") {
-    return { label: "Sign-in required", tone: "warn", dot: "warn", navChip: "sign in" };
-  }
-  if (installation.authStatus !== "signed-in") {
-    return { label: "Check failed", tone: "warn", dot: "warn", navChip: "check failed" };
-  }
-  return {
-    label: installation.authMethod === "api-key"
-      ? "API key"
-      : installation.authMethod === "gateway"
-        ? "Gateway"
-        : installation.authMethod === "external" ? "External provider" : "Signed in",
-    tone: "ok",
-    dot: "ok",
-  };
+  const { label, tone, dot, navChip } = claudeSetupStatus(installation);
+  return { label, tone, dot, ...(navChip ? { navChip } : {}) };
 }

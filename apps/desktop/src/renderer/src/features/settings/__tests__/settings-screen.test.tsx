@@ -1663,8 +1663,10 @@ describe("SettingsScreen", () => {
 
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     fireEvent.click(within(nav).getByRole("button", { name: "Codex" }));
-    const refresh = await screen.findByRole("button", {
-      name: "Refresh Codex",
+    // Setup's one recheck of the runtime and its models.
+    const setup = await screen.findByRole("list", { name: "Codex setup steps" });
+    const refresh = within(setup.closest("section") ?? setup).getByRole("button", {
+      name: "Check again",
     });
     await waitFor(() => expect(listBackends).toHaveBeenCalled());
     expect(refreshCodexDiscovery).not.toHaveBeenCalled();
@@ -1707,7 +1709,10 @@ describe("SettingsScreen", () => {
         onClose={() => undefined}
       />,
     );
-    const refresh = await screen.findByRole("button", { name: "Refresh Codex" });
+    const setup = await screen.findByRole("list", { name: "Codex setup steps" });
+    const refresh = within(setup.closest("section") ?? setup).getByRole("button", {
+      name: "Check again",
+    });
     await waitFor(() => expect(refresh).toBeEnabled());
     listBackends.mockClear();
     fireEvent.click(refresh);

@@ -3570,7 +3570,7 @@ export class DesktopSettingsService {
       }
     }
     throw new Error(
-      "Codex discovery has not selected an executable. Refresh Codex in Settings.",
+      "Codex discovery has not selected an executable. Select Check again under Setup in Settings → Codex.",
     );
   }
 

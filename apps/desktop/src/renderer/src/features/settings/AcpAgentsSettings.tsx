@@ -20,11 +20,15 @@ import {
 } from "./ManagedRuntimeProgress";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { AntigravitySetup } from "./AntigravitySetup";
+import {
+  acpManualPathFieldId,
+  acpPathsFieldId,
+  AcpSetupChecklist,
+} from "./HarnessSetupPanels";
+import { acpSetupStatus } from "./harness-setup-status";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import {
   acpRelativeTime,
-  acpStatusLabel,
-  grokSignInCommand,
   grokSignInRequired,
   MANAGED_BUILD_TRACK_SUB,
   managedBuildTrackOptions,
@@ -104,6 +108,9 @@ export function AcpAgentsSettings(props: {
   onManagedGrokBuildChannelChange?: (
     channel: DesktopUpdateChannel,
   ) => Promise<boolean>;
+  /** The focused screen's other sections, shown between the Setup
+   *  checklist and the agent's runtime details. Only with `only`. */
+  children?: ReactNode;
 }) {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -151,8 +158,8 @@ export function AcpAgentsSettings(props: {
   }
 
   // Run the initial cache read exactly once. Mounting or focusing a provider
-  // must never probe or launch it; the row's Refresh/Save actions own that
-  // provider-scoped discovery budget. The ref only collapses StrictMode's
+  // must never probe or launch it; Setup's Check again and the row's Save own
+  // that provider-scoped discovery budget. The ref only collapses StrictMode's
   // double-invoked mount effect.
   const didInitialLoad = useRef(false);
   useEffect(() => {
@@ -171,9 +178,45 @@ export function AcpAgentsSettings(props: {
   const visibleEntries = props.only
     ? entries.filter((entry) => entry.registryId === props.only)
     : displayOrderedAcpEntries(entries);
+  const focused = props.only ? visibleEntries[0] : undefined;
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string>();
+  const checkFocused = async (): Promise<void> => {
+    setChecking(true);
+    setCheckError(undefined);
+    try {
+      if (!await refresh(true, true)) {
+        setCheckError("PwrAgent couldn't check this agent. Try again.");
+      }
+    } finally {
+      setChecking(false);
+    }
+  };
 
   return (
     <>
+      {props.only && (focused || !loading) ? (
+        <AcpSetupChecklist
+          entry={focused}
+          registryId={props.only}
+          name={focused?.name ?? props.only}
+          enabled={acpAgentEnabledInSnapshot(props.snapshot, props.only)}
+          desktopApi={props.desktopApi}
+          busy={props.saving === true || props.catalogRefreshing === true}
+          checking={checking || refreshing}
+          checkError={checkError}
+          onCheck={() => void checkFocused()}
+          onEnable={props.onEnabledChange
+            ? async () => {
+                const registryId = props.only;
+                if (!registryId) return;
+                await props.onEnabledChange?.(registryId, true);
+                await checkFocused();
+              }
+            : undefined}
+        />
+      ) : null}
+      {props.only ? props.children : null}
       {visibleEntries.map((entry) => (
         <Fragment key={entry.backendId}>
           {entry.registryId === "kimi"
@@ -188,6 +231,7 @@ export function AcpAgentsSettings(props: {
             desktopApi={props.desktopApi}
             cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
             enabled={acpAgentEnabledInSnapshot(props.snapshot, entry.registryId)}
+            underSetup={Boolean(props.only)}
             managedGrokBuilds={managedGrokBuildsSnapshot(props.snapshot)}
             managedGrokBuildChannel={
               managedGrokBuildChannelSnapshot(props.snapshot)
@@ -306,7 +350,7 @@ function LegacyKimiCompatibilityCard(props: {
         {!hasCurrentKimiCode ? (
           <SettingsField
             label="Install Kimi Code"
-            sub="Install the current TypeScript-based CLI, then click Refresh in the Kimi Code section. PwrAgent also checks the official ~/.kimi-code/bin location automatically."
+            sub="Install the current TypeScript-based CLI, then select Check again in Setup. PwrAgent also checks the official ~/.kimi-code/bin location automatically."
             control={
               <div className="settings-fields">
                 <SettingsCopyValue
@@ -342,6 +386,8 @@ function AcpAgentSection(props: {
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
   desktopApi?: DesktopApi;
   enabled: boolean;
+  /** Setup sits above this section and states the agent's status. */
+  underSetup?: boolean;
   managedGrokBuilds: boolean;
   /** Track the config holds, which the control follows. */
   managedGrokBuildChannel?: DesktopUpdateChannel;
@@ -369,6 +415,12 @@ function AcpAgentSection(props: {
   const [draft, setDraft] = useState(savedPath);
   const [pathUpdating, setPathUpdating] = useState(false);
   const [pathActionError, setPathActionError] = useState<string | undefined>();
+  // A saved path that could not be verified; any later check of this agent,
+  // such as Setup's Check again, supersedes it.
+  const [pathUnverified, setPathUnverified] = useState(false);
+  useEffect(() => {
+    if (props.refreshing) setPathUnverified(false);
+  }, [props.refreshing]);
   useEffect(() => {
     setDraft(savedPath);
   }, [savedPath]);
@@ -376,6 +428,11 @@ function AcpAgentSection(props: {
   const detail =
     entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason;
   const signInRequired = grokSignInRequired(entry);
+  // Setup above states some diagnostics word for word; this section does not
+  // repeat those under Detected paths, and keeps every other one.
+  const shownBySetup = new Set(props.underSetup
+    ? acpSetupStatus(entry, { enabled }).steps.flatMap((step) => step.detail ?? [])
+    : []);
   const accountActionRequired = entry.installed && Boolean(entry.unavailableReason);
   const normalizedSavedPath = savedPath.trim();
   const envForced = props.cliPathSnapshot?.source === "env";
@@ -390,7 +447,7 @@ function AcpAgentSection(props: {
   const overrideHelp = normalizedSavedPath === ""
     ? undefined
     : !enabled
-      ? "Enable this provider, then click Refresh to verify the saved path before use."
+      ? "Turn this agent on in Setup to verify the saved path before use."
       : checkingPath
         ? "Checking this path and provider capabilities…"
         : overrideActive
@@ -424,6 +481,7 @@ function AcpAgentSection(props: {
     }
     setDraft(nextPath);
     setPathActionError(undefined);
+    setPathUnverified(false);
     setPathUpdating(true);
     try {
       const result = await props.onCliPathChange(entry.registryId, nextPath);
@@ -431,9 +489,7 @@ function AcpAgentSection(props: {
         setDraft(savedPath);
         setPathActionError("PwrAgent couldn't save this path.");
       } else if (result.verification === "failed") {
-        setPathActionError(
-          "Path was saved, but PwrAgent couldn't verify it. Click Refresh to try again.",
-        );
+        setPathUnverified(true);
       }
     } catch (error) {
       setDraft(savedPath);
@@ -443,12 +499,16 @@ function AcpAgentSection(props: {
     }
   }
 
+  const pathUnverifiedError = pathUnverified
+    ? "Path was saved, but PwrAgent couldn't verify it. Select Check again in Setup to try again."
+    : undefined;
+
   async function refreshPathStatus(): Promise<void> {
     setPathActionError(undefined);
     const refreshed = await props.onRefresh();
     if (!refreshed && normalizedSavedPath !== "") {
       setPathActionError(
-        "PwrAgent couldn't verify the saved path. Click Refresh to try again.",
+        "PwrAgent couldn't verify the saved path. Select Check again in Setup to try again.",
       );
     }
   }
@@ -457,18 +517,12 @@ function AcpAgentSection(props: {
     props.saving || pathUpdating || props.refreshing || envForced;
 
   return (
+    // The Setup section above carries this agent's status; this one holds
+    // the controls that change it.
     <SettingsSection
-      eyebrow="Models"
+      eyebrow="Runtime"
       title={entry.name}
       sectionId={`acp-${entry.registryId}`}
-      chip={enabled ? acpStatusLabel(entry) : "Disabled"}
-      chipKind={
-        enabled
-          ? (signInRequired || (entry.installed && entry.unavailableReason)
-              ? "warn"
-              : entry.installed ? "ok" : "muted")
-          : "muted"
-      }
     >
       <div className="settings-fields">
         {props.onEnabledChange ? (
@@ -484,42 +538,6 @@ function AcpAgentSection(props: {
               return props.onEnabledChange?.(entry.registryId, next)
                 ?? Promise.resolve();
             }}
-          />
-        ) : null}
-
-        {enabled && signInRequired ? (
-          <SettingsField
-            label="Authentication"
-            sub="Run this in your terminal to sign in to Grok, then check sign-in."
-            error="Grok requires sign-in before PwrAgent can discover models or start new threads."
-            control={
-              <div className="settings-fields">
-                <SettingsCopyValue
-                  value={grokSignInCommand(
-                    entry.activeCommand ?? "grok",
-                    /Windows/i.test(window.navigator.userAgent),
-                  )}
-                  desktopApi={props.desktopApi}
-                  label="Grok sign-in command"
-                />
-                <div className="settings-inline-actions">
-                  <button
-                    className="button button--secondary"
-                    disabled={props.saving || props.refreshing || pathUpdating}
-                    type="button"
-                    onClick={() => void props.onRefresh()}
-                  >
-                    {props.refreshing ? "Checking sign-in…" : "Check sign-in"}
-                  </button>
-                </div>
-                {detail ? (
-                  <details>
-                    <summary>Technical details</summary>
-                    <p className="settings-empty">{detail}</p>
-                  </details>
-                ) : null}
-              </div>
-            }
           />
         ) : null}
 
@@ -609,15 +627,20 @@ function AcpAgentSection(props: {
         <Setup desktopApi={props.desktopApi} entry={entry} onChanged={props.onSetupChanged}>
           <SettingsField
           label="Detected paths"
+          fieldId={acpPathsFieldId(entry.registryId)}
           sub={
             enabled
               ? accountActionRequired
                 ? "Binaries detected on this machine. Click Use to change the selected path."
                 : "Binaries detected on this machine. The active one runs new threads — click Use to pick another."
-              : "Previously detected binaries. Enable this provider and Refresh before launching new threads."
+              : "Previously detected binaries. Turn this agent on in Setup to check them again."
           }
           source={`${instances.length + rejectedInstances.length} found`}
-          error={signInRequired || (hasAntigravitySetup && (!entry.installed || entry.unavailableReason)) ? undefined : detail}
+          error={(props.underSetup && signInRequired)
+            || (hasAntigravitySetup && (!entry.installed || entry.unavailableReason))
+            || (detail !== undefined && shownBySetup.has(detail))
+            ? undefined
+            : detail}
           control={
             <div className="settings-paths" aria-label={`${entry.name} installs`}>
               {instances.length === 0 && rejectedInstances.length === 0 ? (
@@ -725,6 +748,7 @@ function AcpAgentSection(props: {
         {props.onCliPathChange ? (
           <SettingsField
             label="Manual path"
+            fieldId={acpManualPathFieldId(entry.registryId)}
             sub={
               envForced
                 ? "This path is controlled by an environment override set before PwrAgent launched."
@@ -732,7 +756,7 @@ function AcpAgentSection(props: {
                   ? accountActionRequired
                     ? "Enter an absolute path. Save checks it immediately and updates the selected binary."
                     : "Enter an absolute path. Save checks it immediately and updates the binary used by new threads."
-                  : "Save an absolute path now. Enable this provider, then Refresh to verify it before use."
+                  : "Save an absolute path now. Turning this agent on in Setup verifies it before use."
             }
             source={
               envForced
@@ -750,12 +774,12 @@ function AcpAgentSection(props: {
                 ? `This path pins one PwrAgent build. ${pinnedManagedBuild.installedTag} is already downloaded and verified but will never run. Clear it to follow the newest build again.`
                 : overrideHelp
             }
-            error={pathActionError ?? inactiveOverrideError}
+            error={pathActionError ?? pathUnverifiedError ?? inactiveOverrideError}
             control={
               <div className="settings-secret">
                 <input
                   aria-label={`${entry.name} manual path`}
-                  aria-invalid={Boolean(pathActionError ?? inactiveOverrideError)}
+                  aria-invalid={Boolean(pathActionError ?? pathUnverifiedError ?? inactiveOverrideError)}
                   className="settings-input"
                   disabled={pathControlsDisabled}
                   placeholder="Manual path — e.g. /Users/you/.local/bin/agent"
@@ -787,26 +811,6 @@ function AcpAgentSection(props: {
           />
         ) : null}
 
-        <SettingsField
-          label="Re-probe"
-          sub={
-            entry.registryId === "grok" && entry.managedBuild
-              ? "Re-run discovery for enabled agents (versions, installs, capabilities). Release checks have their own control above."
-              : "Re-run discovery for enabled agents (versions, installs, capabilities)."
-          }
-          control={
-            <div className="settings-inline-actions">
-              <button
-                className="button button--secondary"
-                disabled={props.refreshing || pathUpdating}
-                type="button"
-                onClick={() => void refreshPathStatus()}
-              >
-                {props.refreshing ? "Discovering…" : "Refresh"}
-              </button>
-            </div>
-          }
-        />
       </div>
     </SettingsSection>
   );

@@ -19,6 +19,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";
 import { describeGitCommandState } from "./CommandToolsSettings";
 import { claudeProviderStatus } from "./claude-provider-status";
+import { acpSetupStatus, codexSetupStatus } from "./harness-setup-status";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { GuidedSetupDialog } from "./guided-setup/GuidedSetupDialog";
@@ -604,9 +605,12 @@ export function SettingsScreen(props: {
       ];
     }
     if (target === "models") {
-      const codexConfigured = Boolean(
-        snapshot?.models.codex.discovery.selectedCommand,
-      );
+      const codex = snapshot
+        ? codexSetupStatus({
+            codex: snapshot.models.codex,
+            backend: props.cachedBackends?.find((backend) => backend.kind === "codex"),
+          })
+        : undefined;
       const claude = claudeProviderStatus(
         props.cachedBackends?.find((backend) => backend.kind === "claude")?.claude,
       );
@@ -630,7 +634,8 @@ export function SettingsScreen(props: {
           label: "Codex",
           sub: "codex",
           group: harnesses,
-          dot: snapshot ? (codexConfigured ? "ok" : "off") : undefined,
+          dot: codex?.dot,
+          ...(codex?.navChip ? { chip: codex.navChip } : {}),
         },
         {
           key: "claude",
@@ -642,13 +647,14 @@ export function SettingsScreen(props: {
         },
         ...displayOrderedAcpEntries(acpCatalog.entries).map((entry) => {
           const enabled = acpAgentEnabledInSnapshot(snapshot, entry.registryId);
+          const status = acpSetupStatus(entry, { enabled });
           return {
             key: entry.registryId,
             label: entry.name,
             sub: entry.registryId,
             group: harnesses,
-            dot: (enabled && entry.installed ? "ok" : "off") as "ok" | "off",
-            ...(enabled ? {} : { chip: "off" }),
+            dot: status.dot,
+            ...(status.navChip ? { chip: status.navChip } : {}),
           };
         }),
         ...services,

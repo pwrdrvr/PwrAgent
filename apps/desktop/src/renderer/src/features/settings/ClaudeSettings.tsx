@@ -1,16 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatFilesystemPath } from "@pwragent/shared/path-display";
 import { type BackendSummary } from "@pwragent/shared/contracts/backend";
-import { type SettingsCredentialTestResult } from "@pwragent/shared/contracts/settings";
 import type { ClaudeGatewaySignInProgress } from "@pwragent/shared/contracts/claude-gateway";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { claudeProviderStatus } from "./claude-provider-status";
 import { ClaudeGatewaySignInDialog, ClaudeGatewayStopDialog, claudeGatewayErrorMessage } from "./ClaudeGatewaySignInDialog";
 import { SegmentedControl, SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsCopyValue } from "./SettingsCopyValue";
-import { SettingsTestBlock } from "./SettingsTestBlock";
+import { CLAUDE_SIGN_IN_FIELD_ID } from "./HarnessSetupPanels";
 
-const CLAUDE_SETUP_GUIDE_URL = "https://code.claude.com/docs/en/setup";
 const CLAUDE_TOKEN_GUIDE_URL = "https://code.claude.com/docs/en/authentication#generate-a-long-lived-token";
 const CLAUDE_SIGN_IN_COMMAND = "claude auth login";
 const CLAUDE_PROVIDERS_GUIDE_URL = "https://code.claude.com/docs/en/third-party-integrations";
@@ -22,25 +19,14 @@ export function ClaudeSettings(props: {
   desktopApi?: DesktopApi;
   onSignIn?: () => void;
   signingIn?: boolean;
-  /** A connection test finished; re-read the summary it refreshed. */
+  /** A gateway sign-in or sign-out finished; re-read Claude's summary. */
   onChecked: () => Promise<void>;
 }) {
-  // Results older than the pane are the remembered last test, not a new one.
-  const [mountedAt] = useState(() => Date.now());
-  const handledTestRef = useRef(mountedAt);
   const onCheckedRef = useRef(props.onChecked);
   useEffect(() => {
     onCheckedRef.current = props.onChecked;
   }, [props.onChecked]);
-  // Stable, and once per result: the test block reports from an effect keyed
-  // on this callback, and the refresh it starts re-renders this pane.
-  const onResult = useCallback((result: SettingsCredentialTestResult | undefined): void => {
-    if (!result || result.testedAt < handledTestRef.current) return;
-    handledTestRef.current = result.testedAt + 1;
-    void onCheckedRef.current();
-  }, []);
   const installation = props.backend?.claude;
-  const status = claudeProviderStatus(installation);
   const executable = installation?.executable;
   const loginCommand = installation?.loginCommand ?? CLAUDE_SIGN_IN_COMMAND;
   const apiKey = installation?.authStatus === "signed-in" && installation.authMethod === "api-key";
@@ -93,38 +79,13 @@ export function ClaudeSettings(props: {
   };
 
   return (
+    // Setup above carries Claude's status; this section holds the runtime
+    // facts and the sign-in method controls that change it.
     <SettingsSection
-      title="Runtime"
+      title="Runtime and sign-in"
       description="Uses your installed Claude Code, or the copy bundled with PwrAgent if yours is older."
-      chip={status.label}
-      chipKind={status.tone}
     >
       <div className="settings-fields">
-        {installation && !executable ? (
-          <SettingsField
-            label="Install Claude Code"
-            sub="Install it, sign in from your terminal, then test again."
-            control={
-              <div className="settings-fields">
-                <SettingsCopyValue
-                  value={CLAUDE_SIGN_IN_COMMAND}
-                  desktopApi={props.desktopApi}
-                  label="Claude sign-in command"
-                />
-                <div className="settings-inline-actions">
-                  <a
-                    className="button button--secondary"
-                    href={CLAUDE_SETUP_GUIDE_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open install guide
-                  </a>
-                </div>
-              </div>
-            }
-          />
-        ) : null}
         {executable ? (
           <SettingsField
             label="Claude Code"
@@ -144,6 +105,7 @@ export function ClaudeSettings(props: {
         {executable && external ? (
           <SettingsField
             label="Sign-in"
+            fieldId={CLAUDE_SIGN_IN_FIELD_ID}
             sub="Claude Code is set up for another provider, such as Bedrock, Vertex AI, Foundry, or an API key. PwrAgent uses that setup as it is."
             control={
               <div className="settings-inline-actions">
@@ -157,6 +119,7 @@ export function ClaudeSettings(props: {
         {executable && !external && (canSignInToGateway || gatewayConfigured) ? (
           <SettingsField
             label="Sign-in"
+            fieldId={CLAUDE_SIGN_IN_FIELD_ID}
             sub="How Claude Code reaches a model."
             control={
               <SegmentedControl<ClaudeSignInMode>
@@ -247,21 +210,26 @@ export function ClaudeSettings(props: {
             error={gatewayError}
           />
         ) : null}
-        {executable && !external && mode === "account" ? (
+        {/* Setup owns the sign-in while Claude is signed out. Once signed
+            in, switching accounts lives here, beside the command. */}
+        {executable && !external && mode === "account" && signedIn ? (
           <SettingsField
             label="Claude sign-in"
-            sub={props.onSignIn ? "Sign in through your browser or run the command in your terminal." : "Run this in your terminal, then test again."}
+            // Without a gateway choice above, this is the row Setup's Change
+            // brings into view.
+            fieldId={canSignInToGateway || gatewayConfigured ? undefined : CLAUDE_SIGN_IN_FIELD_ID}
+            sub="To use another Claude account, sign in again or run the command in your terminal."
             control={
               <div className="settings-fields">
                 {props.onSignIn ? (
                   <div className="settings-inline-actions">
                     <button
                       type="button"
-                      className={`button button--${installation?.authStatus === "signed-in" ? "secondary" : "primary"}`}
+                      className="button button--secondary"
                       disabled={props.signingIn}
                       onClick={props.onSignIn}
                     >
-                      {props.signingIn ? "Waiting for Claude sign-in…" : "Sign in to Claude"}
+                      {props.signingIn ? "Waiting for Claude sign-in…" : "Sign in again"}
                     </button>
                   </div>
                 ) : null}
@@ -286,20 +254,6 @@ export function ClaudeSettings(props: {
             control={<span>Billed by your gateway. Claude plan limits do not apply.</span>}
           />
         ) : null}
-        <SettingsField
-          label="Connection test"
-          sub="Checks Claude Code’s saved sign-in. It does not check credits or usage limits."
-          control={
-            <SettingsTestBlock
-              kind="claude"
-              desktopApi={props.desktopApi}
-              icon={<span aria-hidden="true">C</span>}
-              defaultName={formatFilesystemPath(executable ?? "claude")}
-              defaultSub={executable ? "claude auth status" : "Claude Code not found"}
-              onResult={onResult}
-            />
-          }
-        />
         {executable && mode === "account" && !external ? (
           <SettingsField
             label="Unattended CLI jobs"

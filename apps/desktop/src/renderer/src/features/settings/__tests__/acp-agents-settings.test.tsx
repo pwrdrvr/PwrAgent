@@ -410,9 +410,9 @@ describe("AcpAgentsSettings", () => {
       }),
     );
 
-    render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
+    render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} only="gemini" />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Refresh" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
     await waitFor(() => {
       expect(onBackendSummariesRefresh).toHaveBeenCalledTimes(1);
     });
@@ -482,27 +482,29 @@ describe("AcpAgentsSettings", () => {
           : { fetchedAt: 1000, entries: [cachedEntry] },
     );
 
-    render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
+    render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} only="gemini" />);
 
     expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenCalledWith({
         discoveryIntent: "settings-user-action",
         force: true,
         refresh: true,
+        registryIds: ["gemini"],
       });
     });
     // The agent's section shows its discovered install with the "Using" badge
     // and stays visible while the registry refresh is in flight.
-    expect(screen.getByText("gemini")).toBeInTheDocument();
-    expect(screen.getByText("Using")).toBeInTheDocument();
+    const installs = within(screen.getByLabelText("Gemini CLI installs"));
+    expect(installs.getByText("gemini")).toBeInTheDocument();
+    expect(installs.getByText("Using")).toBeInTheDocument();
     expect(screen.getByText("previous probe failed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Discovering…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
 
     resolveRefresh?.({ fetchedAt: 2000, entries: [cachedEntry] });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
     });
     expect(dispatchEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -592,6 +594,7 @@ describe("AcpAgentsSettings", () => {
     render(
       <AcpAgentsSettings
         desktopApi={{ listAcpAgents } as DesktopApi}
+        only="grok"
         snapshot={acpSnapshot("grok", "")}
         onCliPathChange={onCliPathChange}
       />,
@@ -599,15 +602,15 @@ describe("AcpAgentsSettings", () => {
 
     expect(await screen.findByText("Grok")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
     });
     fireEvent.change(screen.getByLabelText("Grok manual path"), {
       target: { value: "/Users/me/bin/grok-next" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
 
     expect(
-      await screen.findByRole("button", { name: "Discovering…" }),
+      await screen.findByRole("button", { name: "Checking…" }),
     ).toBeDisabled();
     expect(screen.getByLabelText("Grok manual path")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
@@ -645,6 +648,7 @@ describe("AcpAgentsSettings", () => {
       return (
         <AcpAgentsSettings
           desktopApi={{ listAcpAgents } as DesktopApi}
+          only="grok"
           snapshot={snapshot}
           onCliPathChange={async (registryId, cliPath) => {
             setSnapshot(acpSnapshot(registryId as "grok", cliPath));
@@ -658,7 +662,7 @@ describe("AcpAgentsSettings", () => {
 
     expect(await screen.findByText("Grok")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
     });
     fireEvent.change(screen.getByLabelText("Grok manual path"), {
       target: { value: overridePath },
@@ -672,6 +676,7 @@ describe("AcpAgentsSettings", () => {
         discoveryIntent: "settings-user-action",
         refresh: true,
         force: true,
+        registryIds: ["grok"],
       });
     });
     expect(await screen.findByText("active override")).toBeInTheDocument();
@@ -680,7 +685,8 @@ describe("AcpAgentsSettings", () => {
     expect(
       screen.getByText("Active for new threads · v2.0.0."),
     ).toBeInTheDocument();
-    expect(screen.getByText(overridePath)).toBeInTheDocument();
+    expect(within(screen.getByLabelText("Grok installs")).getByText(overridePath))
+      .toBeInTheDocument();
     expect(screen.getByText("Using")).toBeInTheDocument();
   });
 
@@ -697,6 +703,7 @@ describe("AcpAgentsSettings", () => {
       return (
         <AcpAgentsSettings
           desktopApi={{ listAcpAgents } as DesktopApi}
+          only="grok"
           snapshot={snapshot}
           onCliPathChange={async (registryId, cliPath) => {
             setSnapshot(acpSnapshot(registryId as "grok", cliPath));
@@ -710,7 +717,7 @@ describe("AcpAgentsSettings", () => {
 
     expect(await screen.findByText("Grok")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
     });
     fireEvent.change(screen.getByLabelText("Grok manual path"), {
       target: { value: invalidPath },
@@ -760,6 +767,7 @@ describe("AcpAgentsSettings", () => {
       return (
         <AcpAgentsSettings
           desktopApi={{ listAcpAgents } as DesktopApi}
+          only="grok"
           snapshot={snapshot}
           onCliPathChange={async (registryId, cliPath) => {
             setSnapshot(acpSnapshot(registryId as "grok", cliPath));
@@ -773,7 +781,7 @@ describe("AcpAgentsSettings", () => {
 
     expect(await screen.findByText("Grok")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
     });
     fireEvent.change(screen.getByLabelText("Grok manual path"), {
       target: { value: overridePath },
@@ -784,7 +792,7 @@ describe("AcpAgentsSettings", () => {
 
     expect(
       await screen.findByText(
-        "Path was saved, but PwrAgent couldn't verify it. Click Refresh to try again.",
+        "Path was saved, but PwrAgent couldn't verify it. Select Check again in Setup to try again.",
       ),
     ).toHaveAttribute("role", "alert");
     expect(screen.getByLabelText("Grok manual path")).toHaveValue(overridePath);
@@ -792,14 +800,14 @@ describe("AcpAgentsSettings", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     });
     expect(
       await screen.findByText("Active for new threads · v2.0.0."),
     ).toBeInTheDocument();
     expect(
       screen.queryByText(
-        "Path was saved, but PwrAgent couldn't verify it. Click Refresh to try again.",
+        "Path was saved, but PwrAgent couldn't verify it. Select Check again in Setup to try again.",
       ),
     ).not.toBeInTheDocument();
   });
@@ -820,20 +828,21 @@ describe("AcpAgentsSettings", () => {
     render(
       <AcpAgentsSettings
         desktopApi={{ listAcpAgents } as DesktopApi}
+        only="grok"
         snapshot={acpSnapshot("grok", overridePath, "config", false)}
         onCliPathChange={vi.fn(async () => true)}
       />,
     );
 
     expect(await screen.findByText("Grok")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
-    });
-    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    // Off: Setup says so and offers no check of an agent it may not run.
+    expect(await screen.findByText("Off", { selector: ".settings-card__chip" }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
     expect(screen.getByText("saved override")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Enable this provider, then click Refresh to verify the saved path before use.",
+        "Turn this agent on in Setup to verify the saved path before use.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText("active override")).not.toBeInTheDocument();
@@ -895,10 +904,12 @@ describe("AcpAgentsSettings", () => {
       })),
     } as unknown as DesktopApi;
 
-    render(<AcpAgentsSettings desktopApi={desktopApi} />);
+    render(<AcpAgentsSettings desktopApi={desktopApi} only="kimi" />);
 
     expect(await screen.findByText("Kimi Code")).toBeInTheDocument();
-    expect(screen.getByText("Not installed")).toBeInTheDocument();
+    expect(screen.getByText("Not installed", { selector: ".settings-card__chip" }))
+      .toBeInTheDocument();
+    expect(document.querySelector('[data-step="runtime"]')).toHaveTextContent("Not found");
     expect(screen.getByText("Not installed.")).toBeInTheDocument();
   });
 
@@ -919,7 +930,7 @@ describe("AcpAgentsSettings", () => {
     expect(screen.queryByText("Grok")).not.toBeInTheDocument();
     expect(listAcpAgents).toHaveBeenCalledExactlyOnceWith({ refresh: false });
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() => {
       expect(listAcpAgents).toHaveBeenLastCalledWith({
         discoveryIntent: "settings-user-action",
@@ -982,11 +993,12 @@ describe("AcpAgentsSettings", () => {
       })),
     } as unknown as DesktopApi;
 
-    render(<AcpAgentsSettings desktopApi={desktopApi} />);
+    render(<AcpAgentsSettings desktopApi={desktopApi} only="qwen" />);
 
     expect(await screen.findByText("Qwen Code")).toBeInTheDocument();
-    expect(screen.getByText("Detected · unavailable")).toBeInTheDocument();
-    expect(screen.getByText(rejectedPath)).toBeInTheDocument();
+    expect(screen.getAllByText("Found but unusable").length).toBeGreaterThan(0);
+    // Named by Setup's runtime step and by the detected-binaries list.
+    expect(screen.getAllByText(rejectedPath)).toHaveLength(2);
     expect(screen.getByText("ACP check failed")).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -1014,7 +1026,7 @@ describe("AcpAgentsSettings", () => {
             installStatus: "unavailable",
             authStatus: "not-required",
             verificationStatus: "not-applicable",
-            lastError: `${timedOutPath} was found, but its ACP verification timed out. Refresh to try again.`,
+            lastError: `${timedOutPath} was found, but its ACP verification timed out. Select Check again in Setup to try again.`,
             instances: [],
             rejectedInstances: [
               {
@@ -1029,15 +1041,15 @@ describe("AcpAgentsSettings", () => {
       })),
     } as unknown as DesktopApi;
 
-    render(<AcpAgentsSettings desktopApi={desktopApi} />);
+    render(<AcpAgentsSettings desktopApi={desktopApi} only="qwen" />);
 
     expect(await screen.findByText("Qwen Code")).toBeInTheDocument();
-    expect(screen.getByText("Detected · check timed out")).toBeInTheDocument();
-    expect(screen.getByText(timedOutPath)).toBeInTheDocument();
+    expect(screen.getAllByText("Check failed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(timedOutPath)).toHaveLength(2);
     expect(screen.getByText("ACP check timed out")).toBeInTheDocument();
     expect(
       screen.getByText(
-        `${timedOutPath} was found, but its ACP verification timed out. Refresh to try again.`,
+        `${timedOutPath} was found, but its ACP verification timed out. Select Check again in Setup to try again.`,
       ),
     ).toBeInTheDocument();
   });

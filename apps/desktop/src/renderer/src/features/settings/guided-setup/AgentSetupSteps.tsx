@@ -11,6 +11,11 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
 import type { ClaudeSignInControls } from "../../notifications/useClaudeSignIn";
 import { claudeProviderStatus } from "../claude-provider-status";
+import {
+  acpSetupStatus,
+  claudeSetupStatus,
+  codexSetupStatus,
+} from "../harness-setup-status";
 import { SettingsSwitch } from "../SettingsSwitch";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 import {
@@ -1007,19 +1012,24 @@ export function AgentReviewStep(props: {
   onSetUpAnother: () => void;
 }) {
   const snapshot = props.settings.snapshot;
+  // The same reading Settings shows for each provider, so the review never
+  // calls a provider Ready that its own screen says needs a sign-in.
   const rows = AGENT_TABS.map((id) => {
-    const found = agentInstalled(
+    const status = id === "codex"
+      ? snapshot
+        ? codexSetupStatus({ codex: snapshot.models.codex })
+        : undefined
+      : id === "claude"
+        ? claudeSetupStatus(props.discovery.claude)
+        : acpSetupStatus(acpEntryFor(props.discovery.acpEntries, id), {
+            enabled: agentEnabled(id, snapshot),
+          });
+    return {
       id,
-      snapshot,
-      props.discovery.acpEntries,
-      props.discovery.claude,
-    );
-    const on = agentEnabled(id, snapshot);
-    const actionRequired = id !== "codex" && id !== "claude"
-      && Boolean(acpEntryFor(props.discovery.acpEntries, id)?.unavailableReason);
-    const ready = found && on && !actionRequired;
-    const label = !found ? "Not installed" : !on ? "Turned off" : actionRequired ? "Action required" : "Ready";
-    return { id, name: agentTabName(id), ready, label };
+      name: agentTabName(id),
+      ready: status?.ready === true,
+      label: status?.reviewLabel ?? "Not checked",
+    };
   });
   const ready = rows.filter((row) => row.ready);
   return (

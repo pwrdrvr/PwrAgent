@@ -59,7 +59,6 @@ import {
   SettingsPathRow,
   type SettingsPathRowChip,
 } from "./SettingsPathRow";
-import { SettingsTestBlock } from "./SettingsTestBlock";
 import { sourceBadge } from "./settings-fields";
 import {
   checkForManagedCodexUpdates,
@@ -72,6 +71,13 @@ import {
 import { ClaudeSettings } from "./ClaudeSettings";
 import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";
 import { claudeProviderStatus } from "./claude-provider-status";
+import { acpSetupStatus, codexSetupStatus } from "./harness-setup-status";
+import {
+  ClaudeSetupChecklist,
+  CODEX_AUTH_PROFILE_FIELD_ID,
+  CODEX_PATH_FIELD_ID,
+  CodexSetupChecklist,
+} from "./HarnessSetupPanels";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
 import { TaskMonitorModelSettings } from "./TaskMonitorModelSettings";
@@ -90,7 +96,6 @@ import {
 } from "./ProviderCatalogRefresh";
 import {
   acpRelativeTime,
-  acpStatusLabel,
   MANAGED_BUILD_TRACK_SUB,
   managedBuildTrackOptions,
 } from "./acp-agent-copy";
@@ -245,6 +250,10 @@ export function ModelsSettings(props: {
   );
   const claude = backends.find((backend) => backend.kind === "claude");
   const claudeStatus = claudeProviderStatus(claude?.claude);
+  const codexStatus = codexSetupStatus({
+    codex: props.snapshot.models.codex,
+    backend: backends.find((backend) => backend.kind === "codex"),
+  });
   const decision = resolveDecisionModelSettings(
     props.snapshot.models.decisionModels,
   );
@@ -341,10 +350,21 @@ export function ModelsSettings(props: {
   // reads the catalog cache, or refreshes Codex alone from its own screen.
   const refreshCatalog = async (
     refreshModels: "codex" | false = false,
-  ): Promise<boolean> => {
+  ): Promise<boolean> => (await readCatalog(refreshModels)) === undefined;
+
+  /** Re-read the provider catalog; the failure's message when it fails.
+   *  A caller that shows the failure itself passes `reportsFailure`, so the
+   *  models strip does not say it a second time. */
+  const readCatalog = async (
+    refreshModels: "codex" | false,
+    options: { reportsFailure?: boolean } = {},
+  ): Promise<string | undefined> => {
+    const fail = (message: string): string => {
+      setCatalogError(options.reportsFailure ? undefined : message);
+      return message;
+    };
     if (!props.desktopApi?.listBackends) {
-      setCatalogError("Provider model discovery is unavailable in this build.");
-      return false;
+      return fail("Provider model discovery is unavailable in this build.");
     }
     setRefreshingCatalog(true);
     try {
@@ -370,10 +390,9 @@ export function ModelsSettings(props: {
       if (refreshModels) {
         await props.onRefresh();
       }
-      return true;
+      return undefined;
     } catch (error) {
-      setCatalogError(error instanceof Error ? error.message : String(error));
-      return false;
+      return fail(error instanceof Error ? error.message : String(error));
     } finally {
       setRefreshingCatalog(false);
     }
@@ -434,6 +453,15 @@ export function ModelsSettings(props: {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
+
+  // A Claude check or sign-in re-inspected Claude in main; read back the
+  // summary it left so this list, the nav, and the composer agree with it.
+  const readClaudeSummary = async (): Promise<void> => {
+    if (!props.desktopApi?.listBackends) return;
+    const result = await props.desktopApi.listBackends({ includeUnavailable: true });
+    setBackends(result.backends);
+    window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+  };
 
   const saveCodexPath = (path: string): void => {
     // Skip a no-op write. Without this, blur alone flips `saving` true
@@ -538,6 +566,7 @@ export function ModelsSettings(props: {
           ) : null}
           <SettingsField
             label="Codex path"
+            fieldId={CODEX_PATH_FIELD_ID}
             sub="Absolute path to the Codex binary. Leave blank to use auto discovery."
             source={codexSource}
             control={
@@ -635,24 +664,12 @@ export function ModelsSettings(props: {
                     ))
                   )}
                 </div>
-                <div
-                  className="settings-inline-actions"
-                  data-codex-path-actions
-                >
-                  <button
-                    className="button button--secondary"
-                    disabled={catalogBusy || props.saving}
-                    type="button"
-                    onClick={() => void refreshCatalog("codex")}
-                  >
-                    {catalogBusy ? "Refreshing…" : "Refresh Codex"}
-                  </button>
-                </div>
               </>
             }
           />
           <SettingsField
             label="Auth profile"
+            fieldId={CODEX_AUTH_PROFILE_FIELD_ID}
             sub="Select the Codex home used for auth, config, sessions, skills, and state on the next app launch."
             source={codexProfileSource}
             error={codex.profiles.error}
@@ -682,25 +699,6 @@ export function ModelsSettings(props: {
                   />
                 ))}
               </div>
-            }
-          />
-          <SettingsField
-            label="Connection test"
-            sub="Spawns the selected Codex binary with --version and validates the version banner."
-            control={
-              <SettingsTestBlock
-                kind="codex"
-                desktopApi={props.desktopApi}
-                icon={<span aria-hidden="true">C</span>}
-                defaultName={
-                  formatFilesystemPath(codex.discovery.selectedCommand ?? "codex --version")
-                }
-                defaultSub={
-                  codex.discovery.selectedCommand
-                    ? "spawn --version"
-                    : "no executable Codex selected"
-                }
-              />
             }
           />
         </div>
@@ -780,11 +778,12 @@ export function ModelsSettings(props: {
           eyebrow="AI Providers"
           title="Claude"
           help="PwrAgent runs Claude Code with your CLI sign-in."
-          action={
-            <GuidedSetupButton request={{ flow: "agents", agent: "claude" }}>
-              Set up step by step
-            </GuidedSetupButton>
-          }
+        />
+        <ClaudeSetupChecklist
+          backend={claude}
+          desktopApi={props.desktopApi}
+          claudeSignIn={props.claudeSignIn}
+          onChecked={readClaudeSummary}
         />
         <ProviderDefaultsStrip
           backendKind="claude"
@@ -819,14 +818,7 @@ export function ModelsSettings(props: {
           backend={claude}
           desktopApi={props.desktopApi}
           {...props.claudeSignIn}
-          onChecked={async () => {
-            // The test re-inspected Claude in main; read back the summary it
-            // left so this list, the nav, and the composer agree with it.
-            if (!props.desktopApi?.listBackends) return;
-            const result = await props.desktopApi.listBackends({ includeUnavailable: true });
-            setBackends(result.backends);
-            window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
-          }}
+          onChecked={readClaudeSummary}
         />
       </SettingsSectionStack>
     );
@@ -842,12 +834,20 @@ export function ModelsSettings(props: {
         <SettingsPanelHead
           eyebrow="AI Providers"
           title="Codex"
-          help="Binary path, auth profile, and connection checks for the Codex CLI behind OpenAI threads."
-          action={
-            <GuidedSetupButton request={{ flow: "agents", agent: "codex" }}>
-              Set up step by step
-            </GuidedSetupButton>
-          }
+          help="Setup and sign-in, the Codex binary, auth profiles, and models for OpenAI threads."
+        />
+        <CodexSetupChecklist
+          codex={codex}
+          backend={backends.find((backend) => backend.kind === "codex")}
+          desktopApi={props.desktopApi}
+          managedProgress={managedCodexProgress}
+          busy={props.saving === true || catalogBusy}
+          onRefreshCodex={() => readCatalog("codex", { reportsFailure: true })}
+          onUseAutoDiscovery={envForced ? undefined : () => {
+            setCodexPath("");
+            saveCodexPath("");
+          }}
+          onSignedIn={props.onRefresh}
         />
         <ProviderDefaultsStrip
           backendKind="codex"
@@ -922,45 +922,8 @@ export function ModelsSettings(props: {
         <SettingsPanelHead
           eyebrow="AI Providers"
           title={focusedAcpEntry?.name ?? "Provider"}
-          help="Install status, detected binaries, and discovery for this agent."
+          help="Setup and sign-in, detected binaries, and models for this agent."
         />
-        <ProviderDefaultsStrip
-          backendKind={focusedAcpEntry?.backendId}
-          backends={backends}
-          defaults={props.snapshot.models.providerDefaults ?? {}}
-          error={catalogError}
-          onEditDefaults={editDefaults}
-        />
-        {focusedAcpEntry && props.onSaveTaskMonitorModels ? (
-          <TaskMonitorModelSettings
-            backendId={focusedAcpEntry.backendId}
-            providerLabel={focusedAcpEntry.name}
-            backends={backends}
-            helperModels={props.snapshot.models.helperModels ?? { helpers: {} }}
-            choices={props.snapshot.models.taskMonitorModels ?? {}}
-            catalogReading={refreshingCatalog}
-            saving={props.saving}
-            onSave={props.onSaveTaskMonitorModels}
-          />
-        ) : null}
-        {focusedAcpEntry && props.onSaveAutoCompaction ? (
-          <AutoCompactionSettings
-            backendId={focusedAcpEntry.backendId}
-            providerLabel={focusedAcpEntry.name}
-            backends={backends}
-            saved={props.snapshot.models.autoCompaction ?? []}
-            saving={props.saving}
-            onSave={props.onSaveAutoCompaction}
-          />
-        ) : null}
-        {focusedAcpEntry && props.onSaveUsageAccountGroups ? (
-          <UsageAccountSettings
-            backend={focusedAcpEntry.backendId}
-            groups={props.snapshot.models.usageAccountGroups ?? {}}
-            saving={props.saving}
-            onSave={props.onSaveUsageAccountGroups}
-          />
-        ) : null}
         <AcpAgentsSettings
           catalogRefreshing={catalogBusy}
           desktopApi={props.desktopApi}
@@ -973,7 +936,45 @@ export function ModelsSettings(props: {
           onManagedGrokBuildChannelChange={
             props.onManagedGrokBuildChannelChange
           }
-        />
+        >
+          <ProviderDefaultsStrip
+            backendKind={focusedAcpEntry?.backendId}
+            backends={backends}
+            defaults={props.snapshot.models.providerDefaults ?? {}}
+            error={catalogError}
+            onEditDefaults={editDefaults}
+          />
+          {focusedAcpEntry && props.onSaveTaskMonitorModels ? (
+            <TaskMonitorModelSettings
+              backendId={focusedAcpEntry.backendId}
+              providerLabel={focusedAcpEntry.name}
+              backends={backends}
+              helperModels={props.snapshot.models.helperModels ?? { helpers: {} }}
+              choices={props.snapshot.models.taskMonitorModels ?? {}}
+              catalogReading={refreshingCatalog}
+              saving={props.saving}
+              onSave={props.onSaveTaskMonitorModels}
+            />
+          ) : null}
+          {focusedAcpEntry && props.onSaveAutoCompaction ? (
+            <AutoCompactionSettings
+              backendId={focusedAcpEntry.backendId}
+              providerLabel={focusedAcpEntry.name}
+              backends={backends}
+              saved={props.snapshot.models.autoCompaction ?? []}
+              saving={props.saving}
+              onSave={props.onSaveAutoCompaction}
+            />
+          ) : null}
+          {focusedAcpEntry && props.onSaveUsageAccountGroups ? (
+            <UsageAccountSettings
+              backend={focusedAcpEntry.backendId}
+              groups={props.snapshot.models.usageAccountGroups ?? {}}
+              saving={props.saving}
+              onSave={props.onSaveUsageAccountGroups}
+            />
+          ) : null}
+        </AcpAgentsSettings>
       </SettingsSectionStack>
     );
   }
@@ -1033,8 +1034,8 @@ export function ModelsSettings(props: {
             <SettingsIndexRow
               name="Codex"
               meta={codex.discovery.selectedCommand ?? "No executable selected"}
-              chip={codex.discovery.selectedCommand ? "Discovered" : "Not found"}
-              chipKind={codex.discovery.selectedCommand ? "ok" : "muted"}
+              chip={codexStatus.label}
+              chipKind={codexStatus.tone}
               onOpen={() => props.onFocusChange?.("codex")}
             />
             <SettingsIndexRow
@@ -1050,26 +1051,14 @@ export function ModelsSettings(props: {
                 props.snapshot,
                 entry.registryId,
               );
-              // Only a legacy CLI on disk: the operator must act, and the
-              // remediation card lives on the focused screen — the hub
-              // chip is their only hint anything is wrong.
-              const legacyOnly =
-                !entry.installed && Boolean(entry.incompatibleInstances?.length);
+              const status = acpSetupStatus(entry, { enabled });
               return (
                 <SettingsIndexRow
                   key={entry.registryId}
                   name={entry.name}
                   meta={entry.version ? `v${entry.version}` : undefined}
-                  chip={enabled ? acpStatusLabel(entry) : "Disabled"}
-                  chipKind={
-                    enabled
-                      ? entry.installed
-                        ? (entry.unavailableReason ? "warn" : "ok")
-                        : legacyOnly
-                          ? "warn"
-                          : "muted"
-                      : "muted"
-                  }
+                  chip={status.label}
+                  chipKind={status.tone}
                   off={!enabled}
                   onOpen={() => props.onFocusChange?.(entry.registryId)}
                 />

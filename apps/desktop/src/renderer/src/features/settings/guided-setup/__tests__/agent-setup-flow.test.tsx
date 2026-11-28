@@ -29,6 +29,7 @@ function snapshot(): DesktopSettingsSnapshot {
   return {
     models: {
       codex: {
+        path: { value: "", source: "default" },
         discovery: { candidates: [] },
         profiles: { profiles: [] },
       },
@@ -114,6 +115,7 @@ describe("guided agent setup", () => {
       entry("gemini", {
         installed: true,
         installStatus: "installed",
+        lastDiscoveredAt: 1_000,
         ...(blocked ? { unavailableReason: "Google ended Gemini CLI access for consumer Google accounts." } : {}),
       }),
     ]);
@@ -123,6 +125,20 @@ describe("guided agent setup", () => {
     next();
     expect(within(dialog).getByText(blocked ? "No agents ready yet" : "1 agent ready")).toBeVisible();
     if (blocked) expect(within(dialog).getByText("Action required")).toBeVisible();
+  });
+
+  // Found on disk is not the same as able to start a thread: an agent that
+  // has never answered a check is reported as such, not as Ready.
+  it("does not count an installed agent that has never answered as ready", async () => {
+    const dialog = await renderFlow(fakeApi(), [
+      entry("gemini", { installed: true, installStatus: "installed" }),
+    ]);
+    fireEvent.click(within(dialog).getByRole("tab", { name: /^Gemini CLI/ }));
+    const next = () => fireEvent.click(within(dialog).getByRole("button", { name: /Continue/ }));
+    next();
+    next();
+    expect(within(dialog).getByText("No agents ready yet")).toBeVisible();
+    expect(within(dialog).getAllByText("Not checked").length).toBeGreaterThan(0);
   });
 
   it("has a tab for every ACP agent, with that agent's own install copy and notice", async () => {
