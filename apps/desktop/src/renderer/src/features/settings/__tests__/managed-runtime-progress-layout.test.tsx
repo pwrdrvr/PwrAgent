@@ -192,6 +192,20 @@ describe("useManagedRuntimeProgress", () => {
     },
   );
 
+  it("shows checking from another window when the runtime only checks to install", async () => {
+    // PwrDrvr Git reports `checking` only as the first step of an install, so
+    // a window that did not start it still shows it, and its buttons lock.
+    const host = api();
+    function GitProbe() {
+      const current = useManagedRuntimeProgress(host.value, "git", { checkingStartsInstall: true });
+      return <p data-testid="phase">{current?.phase ?? "none"}</p>;
+    }
+    const { getByTestId } = render(<GitProbe />);
+    await act(async () => undefined);
+    act(() => host.emit({ runtime: "git", phase: "checking", updatedAt: Date.now() }));
+    expect(getByTestId("phase")).toHaveTextContent("checking");
+  });
+
   it("hands back one starting object per install, so a memo on it holds", async () => {
     // A fresh object per render made AntigravityUpdateNotice rebuild its
     // notice every render, and the host's state update looped forever.

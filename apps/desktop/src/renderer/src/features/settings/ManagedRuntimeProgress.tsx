@@ -29,7 +29,12 @@ export function useManagedRuntimeProgress(
     "onManagedRuntimeProgress" | "readManagedRuntimeProgress"
   > | undefined,
   runtime: ManagedRuntimeId,
-  options?: { installing?: boolean },
+  options?: {
+    installing?: boolean;
+    /** The runtime reports `checking` only as the first step of an install
+     *  (PwrDrvr Git), never for a check that may find nothing, so it shows. */
+    checkingStartsInstall?: boolean;
+  },
 ): ManagedRuntimeProgress | undefined {
   const [progress, setProgress] = useState<ManagedRuntimeProgress>();
   // Visibility depends on the clock, so a render is forced when the ready
@@ -85,7 +90,10 @@ export function useManagedRuntimeProgress(
       && progress.updatedAt < install.at;
     if (progress === undefined || settledEarlier) return starting;
   }
-  if (!progress || (progress.phase === "checking" && !installing)) return undefined;
+  if (!progress) return undefined;
+  if (progress.phase === "checking" && !installing && options?.checkingStartsInstall !== true) {
+    return undefined;
+  }
   return isManagedRuntimeProgressVisible(progress, Date.now()) ? progress : undefined;
 }
 

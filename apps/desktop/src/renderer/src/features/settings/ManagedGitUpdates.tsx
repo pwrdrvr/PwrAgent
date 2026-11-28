@@ -34,7 +34,12 @@ export function ManagedGitUpdates(props: {
 }) {
   const { desktopApi, managed } = props;
   const [pending, setPending] = useState<ManagedGitActionRequest["action"]>();
-  const progress = useManagedRuntimeProgress(desktopApi, "git", { installing: pending === "install" });
+  // Git's `checking` opens an install (main locks the root and re-reads the
+  // release), so it shows even when another window started the install.
+  const progress = useManagedRuntimeProgress(desktopApi, "git", {
+    installing: pending === "install",
+    checkingStartsInstall: true,
+  });
   const installingHereRef = useRef(false);
   const [error, setError] = useState<string>();
   const onRefreshRef = useRef(props.onRefresh);
