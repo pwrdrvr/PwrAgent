@@ -47578,10 +47578,15 @@ button.details-row {
   overflow: hidden;
 }
 
+/* Pinned to the top, as every terminal is. The fit addon rounds the row
+   count down, so up to one row of height is always left over; anchored to
+   the bottom, that remainder opened a 1-16px gap between the pane's top
+   edge and the first line, which read as a reserved band. At the top it
+   falls below the last row, against the pane's bottom edge. */
 .integrated-terminal .xterm {
   position: absolute;
+  top: 0;
   right: 0;
-  bottom: 0;
   left: 0;
   background: var(--terminal-bg);
   padding: 0;
@@ -61599,6 +61604,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
    strip's rail flies out over the shell with names, so the shell never gives
    up more than the strip and never reflows when the names show. */
 .thread-terminal-panel {
+  position: relative;
   height: var(--integrated-terminal-height, 260px);
   min-height: 140px;
   flex: 0 0 auto;
@@ -61606,7 +61612,20 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   background: var(--terminal-bg);
 }
 .thread-terminal-panel[hidden], .thread-terminal-panel [hidden] { display: none; }
-.thread-terminal-panel__body { display: flex; height: calc(100% - 10px); min-height: 0; }
+/* The resize grip lies over the panel's top border instead of taking a 10px
+   band of its own above the shell. Its hit area covers only the shell's top
+   padding, never a row of text, and stops short of the session strip so the
+   New terminal button keeps its full target. */
+.thread-terminal-panel > .integrated-terminal__resize-handle {
+  position: absolute;
+  z-index: 2;
+  top: -1px;
+  right: 40px;
+  left: 0;
+  height: 8px;
+  min-height: 0;
+}
+.thread-terminal-panel__body { display: flex; height: 100%; min-height: 0; }
 .thread-terminal-panel__screens { flex: 1; min-width: 0; }
 .thread-terminal-panel__screens > [role="tabpanel"] { height: 100%; display: flex; flex-direction: column; }
 .thread-terminal-panel__screens > [role="tabpanel"][hidden] { display: none; }
