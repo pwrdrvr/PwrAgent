@@ -1,3 +1,4 @@
+import type { BoundedDurableTurnStart, DurableTurnPayload } from "@pwragent/shared/contracts/durable-turn-requests";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { isAgentMemoryRead } from "@pwragent/shared/contracts/agent-memory";
 import { registerNavigationBackendHandlers, type NavigationBackendOperations } from "./federation-navigation-handlers";
@@ -392,6 +393,9 @@ export type FederationReadTurnAssistantReplyResponse = {
 };
 
 export type FederationStartTurnRequest = StartTurnRequest & {
+  /** Used only by the validated durable inbox path. */
+  boundedStart?: BoundedDurableTurnStart;
+  factoryBuilderIsolation?: DurableTurnPayload["factoryBuilderIsolation"];
   messageOrigin?: AppServerThreadMessageOrigin;
   delivery?: "new_turn";
 };
@@ -1672,7 +1676,8 @@ export function registerFederationBackendHandlers(params: {
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.startTurn,
     async (envelope) => {
-      const { turnInputSource: _claimedSource, ...request } = envelope.params as Omit<
+      const { turnInputSource: _claimedSource, boundedStart: _unvalidatedBoundedStart,
+        factoryBuilderIsolation: _unvalidatedFactoryIsolation, ...request } = envelope.params as Omit<
         FederationStartTurnRequest,
         "input"
       > & { input: FederationWireTurnInputItem[]; turnInputSource?: unknown };

@@ -1,4 +1,5 @@
 import type { ForgeCli } from "../forge-product";
+import type { FACTORY_BUILDER_ISOLATION } from "./durable-turn-requests";
 import type { CodexThreadSkillProfile } from "./codex-skill-profiles";
 import type { ProjectForgeAutomation } from "../project-forge-automation";
 import type { AppServerTurnInputItem } from "./normalized-app-server";
@@ -411,6 +412,8 @@ export type ThreadQueuedTurnSummary = {
  * must not populate it by building a navigation-wide snapshot.
  */
 export type ThreadAdmissionState = {
+  /** Fresh receiving-owner proof that this worker is eligible for restricted Factory admission. */
+  factoryBuilderIsolation?: typeof FACTORY_BUILDER_ISOLATION;
   activeTurn?: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
