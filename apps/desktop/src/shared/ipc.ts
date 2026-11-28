@@ -165,6 +165,9 @@ export const MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL =
   "managed-runtime:progress-event";
 export const MANAGED_RUNTIME_PROGRESS_READ_CHANNEL =
   "managed-runtime:progress-read";
+export const CODEX_USER_UPDATE_READ_CHANNEL = "codex-user-update:read";
+export const CODEX_USER_UPDATE_START_CHANNEL = "codex-user-update:start";
+export const CODEX_USER_UPDATE_EVENT_CHANNEL = "codex-user-update:state-event";
 export const GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL =
   "app-server:github-pr-authentication-failure";
 export const GITHUB_PR_AUTHENTICATION_FAILURE_ACK_CHANNEL =

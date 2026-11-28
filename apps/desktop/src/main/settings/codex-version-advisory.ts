@@ -14,14 +14,49 @@ export type CodexInstallerClassification = {
   installer: DesktopCodexInstaller;
   /** Shell command that updates this install, when the installer is one we can name. */
   upgradeCommand?: string;
+  /**
+   * The directory that owns the install, read from the same path that named
+   * the installer: the Homebrew prefix, the npm prefix, `PNPM_HOME`, the bun
+   * home (`~/.bun`), or the standalone `CODEX_HOME`. An update runs against
+   * this root so it changes the Codex PwrAgent launches and not another one.
+   * Absent when the path does not say.
+   */
+  installRoot?: string;
 };
+
+export const CODEX_STANDALONE_INSTALL_SH_URL = "https://chatgpt.com/codex/install.sh";
+export const CODEX_STANDALONE_INSTALL_PS1_URL = "https://chatgpt.com/codex/install.ps1";
+
+/** The command OpenAI documents for installing, and so updating, a standalone Codex. */
+export function codexStandaloneUpgradeCommand(platform: NodeJS.Platform): string {
+  return platform === "win32"
+    ? `irm ${CODEX_STANDALONE_INSTALL_PS1_URL} | iex`
+    : `curl -fsSL ${CODEX_STANDALONE_INSTALL_SH_URL} | sh`;
+}
+
+/**
+ * The text before `marker` in `original`, in its own spelling. Matching runs
+ * on a forward-slash copy, which has the same length, so the index carries
+ * over and a Windows root keeps its backslashes.
+ */
+function rootBefore(
+  original: string | undefined,
+  marker: RegExp,
+): string | undefined {
+  if (!original) return undefined;
+  const match = marker.exec(original.replaceAll("\\", "/"));
+  if (!match || match.index === 0) return undefined;
+  return original.slice(0, match.index);
+}
 
 /**
  * Who installed this Codex, from where its executable really lives. Homebrew and
  * the JavaScript package managers all leave a symlink or shim on PATH that
  * points somewhere recognizable, so the resolved path names the installer even
  * when the command the operator typed (`/opt/homebrew/bin/codex`, `~/.bun/bin/codex`)
- * does not.
+ * does not. OpenAI's standalone installer keeps every release under
+ * `$CODEX_HOME/packages/standalone/releases/` behind a `~/.local/bin/codex`
+ * link, or on Windows behind `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`.
  *
  * Only an install this recognizes gets a command. Anything else gets none: a
  * wrong `brew upgrade` for a binary Homebrew never installed would fail
@@ -36,30 +71,77 @@ export function classifyCodexInstaller(params: {
   managedByPwrAgent?: boolean;
   /** Whether the command is OpenAI's Codex that PwrAgent installed and updates. */
   openAiInstalledByPwrAgent?: boolean;
+  /** Picks the standalone installer's script. Defaults to this machine's. */
+  platform?: NodeJS.Platform;
 }): CodexInstallerClassification {
   if (params.openAiInstalledByPwrAgent) return { installer: "pwragent-openai" };
   if (params.managedByPwrAgent) return { installer: "pwragent" };
-  const paths = [params.resolvedPath, params.command]
-    .filter((entry): entry is string => Boolean(entry))
-    .map((entry) => entry.replaceAll("\\", "/"));
+  const originals = [params.resolvedPath, params.command]
+    .filter((entry): entry is string => Boolean(entry));
+  const paths = originals.map((entry) => entry.replaceAll("\\", "/"));
   const has = (pattern: RegExp): boolean =>
     paths.some((entry) => pattern.test(entry));
+  const root = (pattern: RegExp): string | undefined => {
+    for (const original of originals) {
+      const found = rootBefore(original, pattern);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  const withRoot = (
+    classification: CodexInstallerClassification,
+    installRoot: string | undefined,
+  ): CodexInstallerClassification =>
+    installRoot ? { ...classification, installRoot } : classification;
   if (has(/\/Caskroom\/codex\//u)) {
-    return { installer: "homebrew", upgradeCommand: "brew upgrade --cask codex" };
+    return withRoot(
+      { installer: "homebrew", upgradeCommand: "brew upgrade --cask codex" },
+      root(/\/Caskroom\/codex\//u),
+    );
   }
   if (has(/\/Cellar\/codex\//u)) {
-    return { installer: "homebrew", upgradeCommand: "brew upgrade codex" };
+    return withRoot(
+      { installer: "homebrew", upgradeCommand: "brew upgrade codex" },
+      root(/\/Cellar\/codex\//u),
+    );
+  }
+  // Before the package managers: a standalone release can carry its own
+  // `node_modules/@openai/codex` (the installer's legacy npm-tarball layout).
+  const standaloneRoot = /\/packages\/standalone\//u;
+  const standaloneBin = /\/Programs\/OpenAI\/Codex\/bin\//iu;
+  if (has(standaloneRoot) || has(standaloneBin)) {
+    return withRoot(
+      {
+        installer: "standalone",
+        upgradeCommand: codexStandaloneUpgradeCommand(params.platform ?? process.platform),
+      },
+      root(standaloneRoot),
+    );
   }
   // Order matters: bun and pnpm both keep an `@openai/codex` under a
   // `node_modules`, so their own roots have to be tested before the generic one.
+  const bunRoot = /\/install\/global\/node_modules\/@openai\/codex\b/u;
   if (has(/\/\.bun\/install\/global\/node_modules\/@openai\/codex\b/u)) {
-    return { installer: "bun", upgradeCommand: "bun add -g @openai/codex@latest" };
+    return withRoot(
+      { installer: "bun", upgradeCommand: "bun add -g @openai/codex@latest" },
+      root(bunRoot),
+    );
   }
+  const pnpmRoot = /\/global\/[^/]+\/node_modules\/@openai\/codex\b/u;
   if (has(/\/pnpm\/global\/[^/]+\/node_modules\/@openai\/codex\b/u)) {
-    return { installer: "pnpm", upgradeCommand: "pnpm add -g @openai/codex@latest" };
+    return withRoot(
+      { installer: "pnpm", upgradeCommand: "pnpm add -g @openai/codex@latest" },
+      root(pnpmRoot),
+    );
   }
   if (has(/\/node_modules\/@openai\/codex\b/u)) {
-    return { installer: "npm", upgradeCommand: "npm install -g @openai/codex@latest" };
+    // POSIX npm puts globals in `<prefix>/lib/node_modules`; Windows in
+    // `<prefix>\node_modules`.
+    return withRoot(
+      { installer: "npm", upgradeCommand: "npm install -g @openai/codex@latest" },
+      root(/\/lib\/node_modules\/@openai\/codex\b/u)
+        ?? root(/\/node_modules\/@openai\/codex\b/u),
+    );
   }
   if (params.source === "application") return { installer: "application" };
   return { installer: "unknown" };
@@ -101,7 +183,10 @@ export async function buildCodexVersionAdvisory(params: {
     version: (parseCodexVersionCore(version) ?? []).join("."),
     minimumVersion: CODEX_MINIMUM_RECOMMENDED_VERSION,
     command,
-    ...classification,
+    installer: classification.installer,
+    ...(classification.upgradeCommand
+      ? { upgradeCommand: classification.upgradeCommand }
+      : {}),
   };
 }
 

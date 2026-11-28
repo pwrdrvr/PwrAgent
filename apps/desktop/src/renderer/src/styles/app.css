@@ -5793,6 +5793,122 @@ textarea,
   border-bottom: 0;
 }
 
+/* Codex update status at the rail's foot (`CodexUpdatePill`). A neutral
+   strip: the tone lives on the dot, not on the surface. */
+.codex-update-pill {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 6px var(--sidebar-masthead-pull) 10px;
+  padding: 6px 6px 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-overlay-soft);
+  color: var(--text-primary);
+}
+
+.codex-update-pill__mark {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+}
+
+.codex-update-pill__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.codex-update-pill--success .codex-update-pill__dot {
+  background: var(--status-ok);
+}
+
+.codex-update-pill--warning .codex-update-pill__dot {
+  background: var(--status-warning);
+}
+
+.codex-update-pill--error .codex-update-pill__dot {
+  background: var(--status-error);
+}
+
+.codex-update-pill__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.codex-update-pill__title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-update-pill__description {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 15px;
+  overflow-wrap: anywhere;
+}
+
+.codex-update-pill__action {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.codex-update-pill__action:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.codex-update-pill__action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.codex-update-pill__dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.codex-update-pill__dismiss:hover {
+  background: var(--surface-overlay-hover);
+  color: var(--text-primary);
+}
+
+.codex-update-pill__action:focus-visible,
+.codex-update-pill__dismiss:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .sidebar__scroll-region {
   display: flex;
   flex: 1;

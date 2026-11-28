@@ -43,11 +43,19 @@ describe("Codex installer classification", () => {
     expect(classifyCodexInstaller({
       command: "/opt/homebrew/bin/codex",
       resolvedPath: "/opt/homebrew/Cellar/codex/0.152.0/bin/codex",
-    })).toEqual({ installer: "homebrew", upgradeCommand: "brew upgrade codex" });
+    })).toEqual({
+      installer: "homebrew",
+      upgradeCommand: "brew upgrade codex",
+      installRoot: "/opt/homebrew",
+    });
     expect(classifyCodexInstaller({
       command: "/opt/homebrew/bin/codex",
       resolvedPath: "/opt/homebrew/Caskroom/codex/0.152.0/codex-aarch64-apple-darwin",
-    })).toEqual({ installer: "homebrew", upgradeCommand: "brew upgrade --cask codex" });
+    })).toEqual({
+      installer: "homebrew",
+      upgradeCommand: "brew upgrade --cask codex",
+      installRoot: "/opt/homebrew",
+    });
   });
 
   it("names each JavaScript package manager, most specific root first", () => {
@@ -65,6 +73,7 @@ describe("Codex installer classification", () => {
     })).toEqual({
       installer: "npm",
       upgradeCommand: "npm install -g @openai/codex@latest",
+      installRoot: "/Users/x/.nvm/versions/node/v24",
     });
   });
 

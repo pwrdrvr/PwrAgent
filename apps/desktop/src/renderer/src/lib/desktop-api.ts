@@ -171,6 +171,7 @@ import type {
 import type { HotCpuFinalCaptureFailedEvent, HotCpuPostCapEvent, HotCpuProfileCapturedEvent, HotCpuRearmableCapture, RearmHotCpuProfileRequest } from "../../../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../../../shared/managed-grok-signature";
 import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
+import type { CodexUserUpdateState } from "../../../shared/codex-user-update";
 import type {
   PwrSuiteAppId,
   PwrSuiteInstallerActionResult,
@@ -2261,6 +2262,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => () => void;
   /** The current progress of each running managed download, for a window that opened mid-download. */
   readManagedRuntimeProgress?: () => Promise<ManagedRuntimeProgress[]>;
+  /** Whether a newer stock Codex is out, and any update this machine is running. */
+  readCodexUserUpdate?: () => Promise<CodexUserUpdateState>;
+  /** Run the offered Codex update; progress arrives through `onCodexUserUpdate`. */
+  startCodexUserUpdate?: () => Promise<CodexUserUpdateState>;
+  onCodexUserUpdate?: (
+    callback: (state: CodexUserUpdateState) => void,
+  ) => () => void;
   /**
    * Subscription for main → renderer appearance broadcasts. Fired
    * whenever the user changes theme or density in Settings → the

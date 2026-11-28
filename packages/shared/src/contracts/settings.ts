@@ -1148,6 +1148,8 @@ export type DesktopCodexInstaller =
   | "npm"
   | "pnpm"
   | "bun"
+  /** OpenAI's own installer (`install.sh` / `install.ps1`). */
+  | "standalone"
   | "application"
   | "pwragent"
   /** OpenAI's Codex, installed and kept current by PwrAgent. */

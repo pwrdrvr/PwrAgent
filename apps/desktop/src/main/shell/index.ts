@@ -1,5 +1,6 @@
 import { startOwnerServices, disposeOwnerServices, disposeOwnerServicesSync, prepareOwnerShutdown, releaseOwnerFederationLeaseSync } from "../owner-services";
 
+import { disposeCodexUserUpdateIpc, registerCodexUserUpdateIpc } from "./ipc/codex-user-update";
 import { createDesktopOwnerHostServices } from "./owner-host-services";
 import { nativeVoiceBusy, nativeVoiceMediaRules, registerNativeVoiceIpcHandlers } from "./ipc/native-voice";
 import { registerAudioTranscriptionIpc } from "./ipc/audio-transcription";
@@ -186,7 +187,7 @@ import { recordStartupProfileEvent } from "../diagnostics/startup-profile-events
 
 
 
-import { getDesktopConfigStore } from "../settings/desktop-settings-singleton";
+import { getDesktopConfigStore, getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { E2E_ACP_DISCOVERY_ROOT_ENV } from "../settings/desktop-settings-env";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
 import { disposeAppState, recordBootDecision } from "../storage/desktop-state-lifecycle";
@@ -512,6 +513,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeRestartGateIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
+  disposeCodexUserUpdateIpc();
   disposeKeybindingsIpcHandlers();
   disposeAppIconDragIpcHandlers();
   disposeWindowPointerIpcHandlers();
@@ -1481,6 +1483,16 @@ export function bootstrapApp(): void {
     registerQuitBlockerIpcHandlers();
     registerRestartGateIpcHandlers();
     registerAppIconDragIpcHandlers();
+    registerCodexUserUpdateIpc({
+      // Called only after the operator presses Update and the installer
+      // succeeds: the same consent as Settings' own rediscovery, and the only
+      // way to learn the new version.
+      rediscoverCodex: async () => {
+        await getDesktopSettingsService().refreshCodexDiscovery(
+          issueProviderDiscoveryPermit("settings-user-action"),
+        );
+      },
+    });
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch, previousProviderDefaults) => {
         await ownerServices.onConfigPatchWritten(patch, previousProviderDefaults);

@@ -354,6 +354,7 @@ import {
 import { buildLocalThreadDiagnosticsInfo } from "../../shared/local-diagnostics-info";
 import { PROFILES_SETTINGS_CREATE_SUBSECTION } from "../../shared/settings-routes";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
+import { CodexUpdatePill } from "./features/update/CodexUpdatePill";
 import { isNativeVoiceApi, useNativeVoiceNotices } from "./features/native-voice/NativeVoice";
 import {
   DirectorVoiceButton,
@@ -442,6 +443,14 @@ export function resolveNormalAppEnabled(params: {
     return params.bootstrapLoaded && params.bootstrapCompleted !== false;
   }
   return false;
+}
+
+/** Changes when the launched Codex does, so the update pill reads its offer again. */
+function codexUpdateIdentity(snapshot: DesktopSettingsSnapshot | undefined): string | undefined {
+  const discovery = snapshot?.models?.codex?.discovery;
+  if (!discovery?.selectedCommand) return undefined;
+  const version = discovery.candidates.find((candidate) => candidate.selected)?.version ?? "";
+  return `${discovery.selectedCommand}\0${version}`;
 }
 
 export function App() {
@@ -4686,6 +4695,12 @@ function DesktopAppShell(props: {
           <Sidebar
             mastheadVoiceControl={directorVoiceControl}
             mastheadNotificationsControl={agentNotices.control}
+            footerStatus={(
+              <CodexUpdatePill
+                desktopApi={desktopApi}
+                codexIdentity={codexUpdateIdentity(settings.snapshot)}
+              />
+            )}
             inert={layerView !== undefined}
             directoryDisclosure={navigation.directoryDisclosure}
             pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
