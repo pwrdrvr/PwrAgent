@@ -38,7 +38,7 @@ export function AntigravitySetup(props: {
   const [expiresAt, setExpiresAt] = useState(0);
   const [seconds, setSeconds] = useState(0);
   const attempt = useRef<string | undefined>(undefined);
-  const progress = useManagedRuntimeProgress(desktopApi, "antigravity");
+  const progress = useManagedRuntimeProgress(desktopApi, "antigravity", { installing });
 
   async function send(action: AntigravitySetupRequest): Promise<AntigravitySetupResult> {
     return await request?.(action).catch(() => ({

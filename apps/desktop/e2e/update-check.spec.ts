@@ -129,10 +129,13 @@ test("a menu check reports itself live and ends on an actionable offer", async (
     ).toHaveCount(0);
 
     await expect(card).toContainText("Downloading update", { timeout: 15_000 });
-    await expect(card).toContainText(`PwrAgent v${FAKE_VERSION}`);
-    await expect(card.locator(".app-update-banner__meter")).toContainText(
-      "MB of",
+    await expect(card.locator(".progress-strip__tag")).toHaveText(
+      `v${FAKE_VERSION}`,
     );
+    // The visible meter, not the invisible reserve that holds its line.
+    await expect(
+      card.locator(".progress-strip__meter:not(.progress-strip__reserve)"),
+    ).toContainText("MB of");
     await expect(card.locator("[role='progressbar']")).toHaveAttribute(
       "aria-valuenow",
       /\d+/,
@@ -143,7 +146,7 @@ test("a menu check reports itself live and ends on an actionable offer", async (
     // both the bar and the message.
     const cancel = await box(card.getByRole("button", { name: "Cancel" }));
     const track = await box(card.locator("[role='progressbar']"));
-    const message = await box(card.locator(".app-update-banner__message"));
+    const message = await box(card.locator(".progress-strip__status"));
     expect(track.width, "the bar has width to cover").toBeGreaterThan(0);
     expect(cancel.y, "Cancel starts below the bar").toBeGreaterThanOrEqual(
       track.y + track.height,

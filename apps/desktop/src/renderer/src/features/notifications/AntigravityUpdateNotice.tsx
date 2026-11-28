@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { compareAntigravityVersions } from "../../../../shared/antigravity-setup";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
@@ -40,7 +41,7 @@ export function AntigravityUpdateNotice(props: {
   // Held in memory, as the Codex notice is: closing it quiets this version for
   // the session, and a still-old install asks again at the next launch.
   const [dismissedVersion, setDismissedVersion] = useState<string>();
-  const progress = useManagedRuntimeProgress(desktopApi, "antigravity");
+  const progress = useManagedRuntimeProgress(desktopApi, "antigravity", { installing });
 
   // Evaluations overlap (launch, discovery refreshes, a finished install), and
   // a release check can wait on Google. Only the newest one may set the view,
@@ -115,7 +116,13 @@ export function AntigravityUpdateNotice(props: {
   const latestVersion = antigravityUpdateNoticeVersion(view, dismissedVersion);
   const currentVersion = view.kind === "installed" ? view.version : undefined;
   const notice = useMemo(() => {
-    if (installedVersion && !latestVersion) {
+    // The install's own reply names the new version before the re-read that
+    // clears the offer. Without the second test, the offer card came back
+    // with its buttons for that moment, then the success notice replaced it.
+    if (
+      installedVersion
+      && (!latestVersion || compareAntigravityVersions(latestVersion, installedVersion) <= 0)
+    ) {
       return {
         id: `antigravity-update:installed:${installedVersion}`,
         autoDismiss: true,

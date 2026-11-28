@@ -43,9 +43,10 @@ export function CodexVersionNotice(props: {
     stableAdvisory.current = { key: advisoryKey, value: latestAdvisory };
   }
   const advisory = stableAdvisory.current.value;
-  const progress = useManagedRuntimeProgress(props.desktopApi, "codex");
   const [operationAdvisory, setOperationAdvisory] = useState<DesktopCodexVersionAdvisory>();
   const [pendingNext, setPendingNext] = useState<boolean>();
+  // Turning the build on installs it; the strip shows from the click.
+  const progress = useManagedRuntimeProgress(props.desktopApi, "codex", { installing: pendingNext === true });
   const [operationError, setOperationError] = useState<string>();
   const [failedOperation, setFailedOperation] = useState<{ next: boolean; check: boolean }>();
   const inFlight = useRef(false);

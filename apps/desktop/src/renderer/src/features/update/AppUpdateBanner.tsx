@@ -28,8 +28,10 @@ import type {
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
+import { ProgressStrip } from "../../components/ProgressStrip";
 import { openReleaseNotes, ReleaseNotesLink } from "./ReleaseNotesLink";
 import {
+  UPDATE_PROGRESS_STATUS_LINES,
   isUpdateCheckInProgress,
   updateCheckOutcomeCopy,
   updateProgressCopy,
@@ -285,48 +287,27 @@ export function AppUpdateBanner(props: {
           role="status"
           aria-live="polite"
         >
-          <div className="app-update-banner__content">
-            <p className="app-update-banner__eyebrow">{progress.eyebrow}</p>
-            {/* `role="status"` above makes this card a polite live region, so
-                the eyebrow announces each phase - which is what a screen
-                reader user wants to hear. The percent, the bar and the byte
-                meter change about once a second, and announcing every tick
-                would bury the phase changes under "42%... 44%... 47%". They
-                opt out; the progressbar keeps its value for anyone who asks
-                for it. */}
-            <p className="app-update-banner__message" aria-live="off">
-              {progress.message}
-            </p>
-            <span
-              className={
-                progress.percent === undefined
-                  ? "app-update-banner__track app-update-banner__track--indeterminate"
-                  : "app-update-banner__track"
-              }
-              role="progressbar"
-              aria-live="off"
-              aria-label={progress.eyebrow}
-              aria-valuemin={progress.percent === undefined ? undefined : 0}
-              aria-valuemax={progress.percent === undefined ? undefined : 100}
-              aria-valuenow={progress.percent}
-            >
-              <i
-                style={
-                  progress.percent === undefined
-                    ? undefined
-                    : { width: `${progress.percent}%` }
-                }
-              />
-            </span>
-            {progress.meter ? (
-              <p className="app-update-banner__meter" aria-live="off">
-                {progress.meter}
-              </p>
-            ) : null}
-          </div>
+          {/* The same strip as the managed builds' downloads, so the app has
+              one progress card. `role="status"` above makes this card a
+              polite live region: the eyebrow announces each phase, which is
+              what a screen reader user wants to hear. The strip opts its
+              status line and bar out, so "42%... 44%... 47%" cannot bury the
+              phase changes; the progressbar keeps its value for anyone who
+              asks for it. */}
+          <ProgressStrip
+            eyebrow={progress.eyebrow}
+            flat
+            line={progress.message ?? progress.meter}
+            lineIsMeter={progress.message === undefined}
+            reservedLines={UPDATE_PROGRESS_STATUS_LINES}
+            steps={progress.steps}
+            tag={progress.tag}
+            tone="busy"
+            track={{ percent: progress.percent, label: progress.eyebrow }}
+          />
           {/* `updateProgressCopy` gives every cancelable phase a version and
-              the one phase without a version (`checking`) no Cancel, so the
-              row is present exactly when Cancel is.
+              the one phase without a version (`checking`) no Cancel. That
+              phase holds the row's space with a hidden copy instead.
 
               The row sits UNDER the track, never beside it, and is laid out
               the same way as the offer card's below: the link leads, the
@@ -356,7 +337,26 @@ export function AppUpdateBanner(props: {
                 </button>
               </div>
             </div>
-          ) : null}
+          ) : (
+            // `checking` has nothing to cancel yet. The row's space is held
+            // anyway, so Cancel arriving with the version does not lift the
+            // card a row.
+            <div
+              aria-hidden="true"
+              className="app-update-banner__actions app-update-banner__actions--reserved"
+            >
+              <div className="app-update-banner__buttons">
+                <button
+                  className="button button--ghost app-update-banner__cancel"
+                  disabled
+                  tabIndex={-1}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </aside>
       ) : null}
       {offered ? (

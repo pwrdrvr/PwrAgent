@@ -10,7 +10,7 @@ import {
   type ManagedRuntimeInstallPhase,
   type ManagedRuntimeProgress,
 } from "../../../../shared/managed-runtime-progress";
-import { formatByteCount } from "../../lib/format-bytes";
+import { formatDownloadMeter } from "../../lib/download-meter";
 
 /** How long the finished strip stays up before it hands back to the status line. */
 export const MANAGED_RUNTIME_READY_LINGER_MS = 6_000;
@@ -107,27 +107,31 @@ export function managedRuntimeSteps(
 export function managedRuntimeDownloadMeter(
   progress: ManagedRuntimeProgress,
 ): string | undefined {
-  const received = progress.receivedBytes;
-  if (received === undefined) return undefined;
-  const total = progress.totalBytes;
-  const parts = [
-    total !== undefined && total > 0
-      ? `${formatByteCount(received)} of ${formatByteCount(total)}`
-      : formatByteCount(received),
-  ];
-  const rate = progress.bytesPerSecond;
-  if (rate !== undefined && rate > 0) {
-    parts.push(`${formatByteCount(Math.round(rate))}/s`);
-    if (total !== undefined && total > received) {
-      parts.push(`about ${formatEta((total - received) / rate)} left`);
-    }
-  }
-  return parts.join(" · ");
+  // Nothing to meter until the archive stream reports its first count.
+  if (progress.receivedBytes === undefined) return undefined;
+  return formatDownloadMeter(progress);
 }
 
-function formatEta(seconds: number): string {
-  if (seconds < 90) return `${Math.max(1, Math.round(seconds))} s`;
-  return `${Math.round(seconds / 60)} min`;
+/**
+ * Every line the strip's status slot can show between the first busy phase and
+ * the ready strip, for one runtime. The strip stacks them invisibly in the
+ * slot so it is as tall as its longest line from the start: a phase change
+ * swaps text, never the height of the card around it. Both ready lines are
+ * held, because whether a new Codex build waits for idle turns is only known
+ * once it is installed.
+ */
+export function managedRuntimeStatusLines(runtime: ManagedRuntimeId): string[] {
+  const lines: string[] = [];
+  for (const waitingForIdle of [false, true]) {
+    for (const phase of ["checking", "verifying", "unpacking", "activating", "ready"] as const) {
+      const message = managedRuntimeProgressCopy(
+        { runtime, phase, tag: "", updatedAt: 0 },
+        waitingForIdle,
+      ).message;
+      if (message && !lines.includes(message)) lines.push(message);
+    }
+  }
+  return lines;
 }
 
 export function managedRuntimeProgressCopy(
@@ -208,6 +212,7 @@ export function managedRuntimeProgressCopy(
           tone: "ok",
           eyebrow: "Downloaded",
           message: "Verified. Not in use until you choose it.",
+          full: true,
         };
       }
       return waitingForIdle
@@ -224,6 +229,7 @@ export function managedRuntimeProgressCopy(
             tone: "ok",
             eyebrow: "Installed",
             message: "Verified and ready.",
+            full: true,
           };
     case "failed":
       return progress.fallbackTag

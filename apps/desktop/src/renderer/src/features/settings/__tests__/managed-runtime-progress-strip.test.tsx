@@ -40,10 +40,11 @@ describe("ManagedRuntimeProgressStrip", () => {
     );
   });
 
-  it("gives a sweep no progressbar role when nothing is measurable", () => {
+  it("gives a sweep an indeterminate progressbar, named for the phase, with no value", () => {
     render(<ManagedRuntimeProgressStrip progress={progress({ phase: "unpacking", tag: "v1" })} />);
 
-    expect(screen.queryByRole("progressbar")).toBeNull();
+    const bar = screen.getByRole("progressbar", { name: "Unpacking" });
+    expect(bar).not.toHaveAttribute("aria-valuenow");
     expect(screen.getByRole("listitem", { name: "Verify, done" })).toBeInTheDocument();
     expect(screen.getByRole("listitem", { name: "Unpack, in progress" })).toBeInTheDocument();
   });
