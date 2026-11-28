@@ -8,44 +8,20 @@ import {
   type ForgeAgentToolPolicy,
 } from "@pwragent/shared/contracts/forge-agent-tools";
 import { permissionForDynamicTool } from "@pwragent/shared/contracts/rbac";
-import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { ForgeReadError, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { GithubPrToolClient, type GhRunner } from "../pr-status/github-pr-tool-client";
-import { validateForgeAttachments, type ForgePrToolContext } from "../pr-status/forge-pr-tool-shared";
+import type { GhRunner } from "../pr-status/github-pr-tool-client";
+import { validateForgeAttachments } from "../pr-status/forge-pr-tool-shared";
 import { FORGE_PR_WRITE_OPERATIONS, forgePrToolGroup, validateForgePrToolArgs } from "../pr-status/forge-pr-tool-contract";
 import { ForgePrToolService } from "../pr-status/forge-pr-tool-service";
 import * as gitExecutable from "../app-server/git-executable";
 import { buildForgeToolDefinitions, buildForgePrToolDefinitions } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { searchPwrAgentTools } from "../agent-tools/pwragent-tool-search";
+import { ctx, harness, json, pull, repo } from "./github-pr-tool-test-fixture";
 
-const repo: ForgeRepository = { provider: "github", host: "github.com", owner: "fixture", repo: "project" };
-const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
-const pull = (number: number, extra: Record<string, unknown> = {}) => ({
-  number, node_id: `PR_${number}`, title: "Fixture change", state: "open", draft: false, body: "Body text", user: { login: "octo" },
-  head: { ref: "topic", sha: "a".repeat(40), repo: { full_name: "fixture/project" } }, base: { ref: "main", sha: "b".repeat(40) },
-  labels: [{ name: "bug" }], requested_reviewers: [], assignees: [], html_url: `https://github.com/fixture/project/pull/${number}`, ...extra,
-});
 const stackHistory = (baseRefName: string) => json({ data: { repository: { pullRequest: {
   headRefOid: "a".repeat(40), baseRefName, timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
 } } } });
-
-type Call = { url: string; method: string; body?: unknown; accept?: string };
-function harness(routes: (call: Call) => Response | Promise<Response>, runGh?: GhRunner) {
-  const calls: Call[] = [];
-  const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const headers = (init?.headers ?? {}) as Record<string, string>;
-    const call: Call = { url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined, accept: headers.Accept };
-    calls.push(call);
-    return await routes(call);
-  }) as unknown as typeof fetch;
-  const ci = new ForgeCiClient({ fetch: fetcher, githubToken: async () => "fixture-secret", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true });
-  const client = new GithubPrToolClient({ ci, runGh, tempRoots: [os.tmpdir()] });
-  return { calls, client };
-}
-const ctx = (extra: Partial<ForgePrToolContext> = {}): ForgePrToolContext => ({
-  repository: repo, branch: "topic", directories: [], attached: [], privateRoots: [], defaultMergeMethod: () => "squash", ...extra,
-});
 
 describe("GitHub tool contract", () => {
   it("rejects unknown fields, missing requirements and cross-repository search", () => {
@@ -127,6 +103,30 @@ describe("GitHub tool catalog", () => {
     const definition = buildForgePrToolDefinitions(handler).find((d) => d.name === "merge_pull_request")!;
     const result = await definition.dispatch({ number: 3, expectedHeadSha: "short" }, { backend: "codex", threadId: "t", transport: "codex_dynamic_tool" });
     expect(result).toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("offers a GitHub registration tool when creating a native stack from existing PRs", () => {
+    const dynamic = resolveAgentToolCatalogs({}).flatMap((catalog) => catalog.dynamicTools);
+    const found = searchPwrAgentTools(dynamic, "register an existing GitHub PR chain as a native stack");
+    expect(found[0]?.name).toBe("create_pull_request_stack");
+    const create = searchPwrAgentTools(dynamic, "create_pull_request")[0];
+    expect(create).toMatchObject({ name: "create_pull_request", description: expect.stringContaining("create_pull_request_stack") });
+  });
+
+  it("uses the Stack publishing write policy for registration", () => {
+    expect(forgePrToolGroup("create_pull_request_stack", {})).toBe("stack_publish");
+    expect(DEFAULT_FORGE_AGENT_TOOL_POLICY.access.stack_publish).toBe("ask");
+    const policy: ForgeAgentToolPolicy = { enabled: true, access: { ...DEFAULT_FORGE_AGENT_TOOL_POLICY.access, stack_publish: "off" } };
+    const offered = buildForgeToolDefinitions({ policy }).map((definition) => definition.name);
+    expect(offered).not.toContain("create_pull_request_stack");
+    expect(offered).toContain("create_pull_request");
+  });
+
+  it.each([{}, { pullRequests: [1] }, { pullRequests: [1, 1] }, { pullRequests: [1, "2"] }, { pullRequests: [1, 0] }, { pullRequests: [1, Number.MAX_SAFE_INTEGER + 1] }])("refuses invalid stack registration arguments %j", async (args) => {
+    const handler = vi.fn();
+    const definition = buildForgePrToolDefinitions(handler).find((tool) => tool.name === "create_pull_request_stack")!;
+    expect(await definition.dispatch(args, { backend: "codex", threadId: "t", transport: "codex_dynamic_tool" })).toMatchObject({ ok: false, code: "invalid_arguments" });
     expect(handler).not.toHaveBeenCalled();
   });
 });
@@ -396,6 +396,15 @@ describe("GitHub attachments", () => {
 describe("forge tool service", () => {
   const remotes = { github: { host: "github.com", owner: "fixture", repo: "project" }, gitlab: { host: "gitlab.com", owner: "group/sub", repo: "project" } };
   const scope = (list: Array<{ host: string; owner: string; repo: string }>) => ({ remotes: list, attached: [], directories: [], privateRoots: [] });
+  it("rejects GitLab stack registration before requesting approval", async () => {
+    const execute = vi.fn();
+    const service = new ForgePrToolService({
+      enabled: () => true, clients: { github: { execute }, gitlab: { execute } }, defaultMergeMethod: () => "squash",
+    });
+    await expect(service.prepare("create_pull_request_stack", { pullRequests: [1, 2] }, scope([remotes.gitlab])))
+      .rejects.toMatchObject({ code: "unsupported_provider" });
+    expect(execute).not.toHaveBeenCalled();
+  });
   it("blocks a merge on unavailable checkout evidence but accepts a confirmed absent catalog", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "pwragent-forge-stack-merge-evidence-"));
     const execute = vi.fn(async () => ({ merged: true }));

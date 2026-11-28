@@ -70,6 +70,9 @@ export class ForgePrToolService {
     preferences?: { rememberedMergeMethod?: ThreadTodoMergeMethod },
   ): Promise<ForgePrToolPreparedCall> {
     const repository = this.resolveRepository(args, scope);
+    if (operation === "create_pull_request_stack" && repository.provider !== "github") {
+      throw new ForgeReadError("unsupported_provider", "Native pull request stack registration requires GitHub.");
+    }
     if (operation === "merge_pull_request") {
       // A queue merges with its own method, so the approval asks to add the
       // PR to the queue and offers no method. Unknown reads as no queue: the

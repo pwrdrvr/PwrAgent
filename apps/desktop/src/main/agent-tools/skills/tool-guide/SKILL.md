@@ -58,7 +58,10 @@ Treat readOnlyHint as metadata. It does not grant permission.
 
 Use `list_stacks` in a thread linked to a Git checkout. Catalog and inferred
 stacks list their branches bottom first, with known PRs, owning threads and
-layer health. Merge a stacked PR only after its lower layers have merged and
+layer health. To create a native GitHub stack from existing open PRs, use
+`create_pull_request_stack` with the PR numbers in bottom-first order. A
+chain detected from PR bases is registered when GitHub returns a stack number.
+Merge a stacked PR only after its lower layers have merged and
 its base is trunk. Follow the thread's `prAutomation.guidance` for its position
 and merge prerequisites.
 

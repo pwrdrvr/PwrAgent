@@ -36,6 +36,7 @@ export type ForgePrToolArgs = StackToolArgs & {
   repository?: ForgeRepository;
   runId?: number;
   number?: number;
+  pullRequests?: number[];
   url?: string;
   branch?: string;
   state?: "open" | "closed" | "all";
@@ -74,6 +75,7 @@ export type ForgePrToolArgs = StackToolArgs & {
 
 export const FORGE_BODY_MAX_CHARS = 65_000;
 export const FORGE_ATTACHMENTS_MAX = 10;
+export const FORGE_STACK_MAX_PULL_REQUESTS = 100;
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const LABEL_MAX = 50;
 
@@ -82,6 +84,7 @@ const FIELDS: Record<ForgePrToolOperation, string[]> = {
   plan_stack_operation: ["operation", "stack", "branch", "from", "stopBefore", "mode", "branches", "name", "newThread", "carryChanges", "askToSettle"],
   apply_stack_operation: ["planId", "operation", "stack", "branch", "from", "stopBefore", "mode", "branches", "name", "newThread", "carryChanges", "askToSettle"],
   publish_stack_layer: ["number", "expectedHeadSha"],
+  create_pull_request_stack: ["pullRequests"],
   manage_stack_operation: ["opId", "action", "threadId", "stack"],
   get_pull_request: ["number", "url", "branch"],
   list_pull_requests: ["state", "head", "base", "page", "perPage"],
@@ -106,6 +109,7 @@ const FIELDS: Record<ForgePrToolOperation, string[]> = {
 const REQUIRED: Partial<Record<ForgePrToolOperation, string[]>> = {
   plan_stack_operation: ["operation"],
   publish_stack_layer: ["number"],
+  create_pull_request_stack: ["pullRequests"],
   manage_stack_operation: ["action"],
   list_pull_request_files: ["number"],
   get_pull_request_diff: ["number"],
@@ -178,6 +182,14 @@ export function validateForgePrToolArgs(operation: string, value: unknown): asse
   const unknown = Object.keys(args).find((key) => !allowed.includes(key));
   if (unknown) fail(`Unknown argument for ${operation}: ${unknown}.`);
   for (const key of forgePrToolRequiredFields(operation)) if (args[key] === undefined) fail(`${operation} requires ${key}.`);
+  if (operation === "create_pull_request_stack") {
+    const numbers = args.pullRequests;
+    if (!Array.isArray(numbers) || numbers.length < 2 || numbers.length > FORGE_STACK_MAX_PULL_REQUESTS
+      || numbers.some((number) => !Number.isSafeInteger(number) || number < 1)
+      || new Set(numbers).size !== numbers.length) {
+      fail(`Use two to ${FORGE_STACK_MAX_PULL_REQUESTS} distinct positive pull request numbers in bottom-first order.`);
+    }
+  }
   if (operation.endsWith("_stack_operation")) {
     oneOf(args, "operation", ["restack", "adopt", "add_branch", "remove", "sync"]);
     oneOf(args, "action", ["status", "abort", "undo", "continue", "release_thread", "interrupt", "route_conflict", "set_lead"]);

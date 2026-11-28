@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { parseGithubForgeStack } from "../stacks/github-forge-stacks";
 import { assertStackMergeBaseUnchanged, checkGithubStackMerge, githubStackLayersAboveNote, type GithubNativeStack } from "../stacks/stack-merge-guard";
 import { GITHUB_ASYNC_MERGE_REQUIRED, runGithubAsyncMerge } from "./github-async-merge";
 import { redactForgeLog, type ForgeCiClient } from "./forge-ci-client";
@@ -113,6 +114,18 @@ function queuedNote(baseRef: string | undefined, autoMerge: boolean): string {
 
 const QUEUE_NEXT_STEP = "Nothing has merged yet. watch_thread_pull_request with notifyOn [\"merged\"] wakes this thread when the queue lands the PR, or if the queue removes it.";
 
+function confirmedGithubStack(repository: ForgeRepository, value: unknown, requested: readonly number[]) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { open, number: rawNumber } = value as Payload;
+  const number = num(rawNumber);
+  if (open !== true || number === undefined || !Number.isSafeInteger(number) || number < 1) return undefined;
+  const stack = parseGithubForgeStack(repository, number, value);
+  if (!stack || stack.layers.length !== requested.length) return undefined;
+  const pullRequests = stack.layers.map((layer) => layer.number);
+  if (pullRequests.some((pr, index) => pr !== requested[index])) return undefined;
+  return { number, base: stack.trunk, pullRequests };
+}
+
 export class GithubPrToolClient {
   constructor(private readonly options: {
     ci: Pick<ForgeCiClient, "requestGithub" | "withGithubAdmission">;
@@ -171,6 +184,42 @@ export class GithubPrToolClient {
     const paging = new URLSearchParams({ page: String(page), per_page: String(perPage) });
     const done = <T extends Record<string, unknown>>(result: T) => ({ repository: r, source: "provider", fetchedAt: Date.now(), providerRequests, ...result });
     const pageInfo = (rows: unknown[]) => ({ page, perPage, nextPage: rows.length >= perPage ? page + 1 : null });
+
+    if (operation === "create_pull_request_stack") {
+      const requested = args.pullRequests!;
+      const pullUrl = `${repositoryUrl(r)}/pull/${requested[0]}`;
+      const verifyBeforeRetry = `GitHub did not confirm the requested stack membership. Check the PR on GitHub for the native stack before retrying. ${pullUrl}`;
+      let failure: ForgeReadError | undefined;
+      let created: boolean | null = true;
+      try {
+        const response = await call("POST", "/stacks", { pull_requests: requested });
+        const stack = confirmedGithubStack(r, response, requested);
+        if (stack) return done({ created: true, stack });
+      } catch (error) {
+        if (!(error instanceof ForgeReadError)) throw error;
+        if (error.code === "forbidden" || error.code === "unauthenticated") {
+          throw new ForgeReadError(error.code, `${error.message} GitHub stack registration requires Pull requests write access.`);
+        }
+        if (error.code === "rejected" || error.code === "conflict") {
+          created = false;
+          failure = error;
+        } else if (["invalid_response", "response_too_large", "provider_error"].includes(error.code)) {
+          created = null;
+          failure = new ForgeReadError(error.code, `${error.message} ${verifyBeforeRetry}`);
+        } else {
+          throw error;
+        }
+      }
+      // A replay or an incomplete receipt can leave the requested stack on GitHub.
+      const existing = await call("GET", `/stacks?pull_request=${requested[0]}`)
+        .then(items).catch(() => []);
+      ctx.signal?.throwIfAborted();
+      for (const candidate of existing) {
+        const stack = confirmedGithubStack(r, candidate, requested);
+        if (stack) return done({ created, stack });
+      }
+      throw failure ?? new ForgeReadError("invalid_response", verifyBeforeRetry);
+    }
 
     if (operation === "rerun_failed_ci_jobs") {
       await call("POST", `/actions/runs/${args.runId}/rerun-failed-jobs`);
