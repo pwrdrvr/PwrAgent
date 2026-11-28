@@ -8,6 +8,7 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendScope } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationLaunchpadDraft, NavigationQueryRequest, NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { NAVIGATION_LIVE_INDEX_RECONCILED_METHOD } from "@pwragent/shared/navigation-query-events";
 import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import { findPeerCounterpartDirectory } from "@pwragent/shared/federation-project-match";
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
@@ -188,6 +189,137 @@ it("verifies a registered directory even when the seed contains no provider rows
     await vi.waitFor(() => expect(probe).toHaveBeenCalled());
     expect(source.listThreads).toHaveBeenCalledTimes(1);
   } finally { joined.mockImplementation(original); probe.mockRestore(); }
+});
+
+it.each(["unchanged", "saved", "directory", "overlay", "claim write", "snooze expiry", "missing provider row", "concurrent discovery"] as const)(
+  "reconciles a cold sidebar through checkout verification with %s inputs", async (change) => {
+    const db = StateDb.open(":memory:");
+    const overlay = new SqliteOverlayStore(db);
+    const source = createSource();
+    const root = path.resolve(os.tmpdir(), "synthetic-sidebar");
+    const nested = path.join(root, "nested");
+    const directory = (cwd: string) => ({ id: cwd, path: cwd, label: path.basename(cwd), kind: "local" as const });
+    const thread: NavigationThreadSummary = { id: "thread", source: "codex", title: "Fixture", titleSource: "explicit",
+      projectKey: nested, updatedAt: 1, linkedDirectories: [directory(nested)], inbox: { inInbox: false } };
+    if (change === "saved" || change === "missing provider row") {
+      source.registry.readSavedNavigationThreads = async () => [thread];
+    }
+    source.listThreads.mockResolvedValue(change === "missing provider row" ? [] : [structuredClone(thread)]);
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const published = Promise.withResolvers<void>();
+    const joins = vi.spyOn(overlay, "readNavigationQueryIndex");
+    const checkout = vi.spyOn(checkoutStore, "readNavigationCheckouts").mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+      return change === "directory" ? [{ directories: [directory(root)] }] : [];
+    }).mockResolvedValue([]);
+    const projects = vi.spyOn(worktreeProjects, "resolveNavigationWorktreeProjects").mockImplementation(async (directories) => ({ directories }));
+    const notify = vi.fn<DesktopBackendRegistry["publishLocalEvent"]>(async () => published.resolve());
+    source.registry.publishLocalEvent = notify;
+    mocks.profileStore = overlay;
+    const store = new NavigationQueryStore();
+    const loadIndex = () => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "cold-sidebar" });
+    const read = () => store.readPage({ scopeKey: "cold-sidebar", incremental: true, loadIndex,
+      request: { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" } } });
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      if (change === "claim write" || change === "snooze expiry") {
+        db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run(`codex:${thread.id}`, JSON.stringify({
+          backend: "codex", threadId: thread.id, lastSeenUpdatedAt: 0,
+          ...(change === "snooze expiry" ? { snoozedUntil: now + 1 } : {}),
+        }));
+      }
+      const first = await read();
+      expect(first.coverage.state).toBe("checking");
+      expect(first.entries.map(({ row }) => row.id)).toEqual([thread.id]);
+      expect((await loadIndex()).directories.map(({ path }) => path)).toEqual([canonicalizeNavigationPath(nested)]);
+      await started.promise;
+      expect(await read()).toMatchObject({ coverage: first.coverage, entries: first.entries });
+      expect(joins).toHaveBeenCalledTimes(1);
+      if (change === "overlay") await overlay.setThreadPin({ backend: "codex", threadId: thread.id, pinnedRank: "fixture" });
+      if (change === "claim write") db.raw.prepare(`INSERT INTO pr_auto_dispatch_claims
+        (backend, thread_id, pr_key, fingerprint, status, scheduled_at, created_at, updated_at, payload)
+        VALUES ('codex', ?, 'fixture-pr', 'fixture-incident', 'dispatching', 1, 1, 1, '{}')`).run(thread.id);
+      if (change === "snooze expiry") {
+        expect(first.entries[0]?.row.inbox.inInbox).toBe(false);
+        clock.mockReturnValue(now + 1);
+      }
+      if (change === "concurrent discovery") source.emit("navigation/providerThreads/refreshed");
+      release.resolve();
+      await published.promise;
+      expect(notify.mock.calls[0]?.[0].notification).toEqual({ method: "navigation/invalidated",
+        params: { sourceMethod: NAVIGATION_LIVE_INDEX_RECONCILED_METHOD } });
+      const verified = await read();
+      expect(verified.coverage.state).toBe("complete");
+      expect(verified.entries.map(({ row }) => row.id)).toEqual(change === "missing provider row" ? [] : [thread.id]);
+      expect((await loadIndex()).directories.map(({ path }) => path)).toEqual(change === "missing provider row"
+        ? [] : [canonicalizeNavigationPath(change === "directory" ? root : nested)]);
+      expect(verified.entries[0]?.row.pinnedRank).toBe(change === "overlay" ? "fixture" : undefined);
+      if (change === "claim write") expect(verified.entries[0]?.row.prAutoDispatchActive).toBe(true);
+      if (change === "snooze expiry") expect(verified.entries[0]?.row.inbox.inInbox).toBe(true);
+      expect(joins).toHaveBeenCalledTimes(change === "unchanged" || change === "saved" ? 1 : 2);
+
+      if (change === "unchanged") {
+        await loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "remove-navigation-directory", requireVerifiedDirectories: true });
+        expect(source.listThreads).toHaveBeenCalledTimes(2);
+        expect(checkout).toHaveBeenLastCalledWith([nested], expect.objectContaining({ fresh: true, verified: true }));
+        expect(joins).toHaveBeenCalledTimes(2);
+      }
+      if (change === "concurrent discovery") await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
+    } finally {
+      release.resolve();
+      clock.mockRestore();
+      checkout.mockRestore();
+      projects.mockRestore();
+      mocks.profileStore = undefined;
+      db.close();
+    }
+  },
+);
+
+it("rejoins legacy worktree attachments when only checkout aliases change", async () => {
+  const db = StateDb.open(":memory:");
+  const overlay = new SqliteOverlayStore(db);
+  const source = createSource();
+  const root = path.resolve(os.tmpdir(), "synthetic-separate-git");
+  const primary = path.join(root, "primary");
+  const common = path.join(root, "admin");
+  const linked = path.join(root, "linked");
+  const repository = { path: primary, id: primary, label: "Primary", kind: "local" as const };
+  const worktree = { ...repository, worktreePath: linked, kind: "worktree" as const };
+  const row = (id: string, projectKey: string, directory: typeof repository | typeof worktree): NavigationThreadSummary => ({
+    id, projectKey, source: "codex", title: id, titleSource: "explicit", linkedDirectories: [directory], inbox: { inInbox: false },
+  });
+  source.listThreads.mockResolvedValue([row("primary", primary, repository), row("linked", linked, worktree)]);
+  const published = Promise.withResolvers<void>();
+  source.registry.publishLocalEvent = async () => published.resolve();
+  const checkout = vi.spyOn(checkoutStore, "readNavigationCheckouts").mockResolvedValue([
+    { separateGit: { commonDirectory: common, checkoutRoot: primary, primary: repository } },
+    { separateGit: { commonDirectory: common, checkoutRoot: linked } },
+  ]);
+  const projects = vi.spyOn(worktreeProjects, "resolveNavigationWorktreeProjects").mockImplementation(async (directories) => ({ directories }));
+  const joins = vi.spyOn(overlay, "readNavigationQueryIndex");
+  const read = () => loadSidebarNavigationQueryIndex({ registry: source.registry, callerReason: "cold-sidebar" });
+  mocks.profileStore = overlay;
+  try {
+    db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run("codex:linked", JSON.stringify({
+      backend: "codex", threadId: "linked", extraLinkedDirectories: [{ ...worktree, path: common }],
+    }));
+    expect((await read()).threads.find(({ id }) => id === "linked")?.linkedDirectories[0]?.path).toBe(common);
+    await published.promise;
+    expect((await read()).threads.find(({ id }) => id === "linked")?.linkedDirectories[0]?.path).toBe(primary);
+    expect(joins).toHaveBeenCalledTimes(2);
+    expect(joins.mock.calls[0]![0].threads).toStrictEqual(joins.mock.calls[1]![0].threads);
+    expect(joins.mock.calls[0]![0].worktreeRepositoryAliases).toBeUndefined();
+    expect(joins.mock.calls[1]![0].worktreeRepositoryAliases?.size).toBe(1);
+  } finally {
+    checkout.mockRestore();
+    projects.mockRestore();
+    mocks.profileStore = undefined;
+    db.close();
+  }
 });
 
 it("evicts an older live backend scope when several individually admissible inventories exceed the shared byte budget", async () => {
