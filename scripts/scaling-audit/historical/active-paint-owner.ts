@@ -111,7 +111,7 @@ export function installActivePaintAudit({ registry, service }: OwnerServices) {
   const readThread = registry.readThread.bind(registry);
   registry.readThread = (request) => timeAuditQuery("thread:" + request.threadId, () => readThread(request));
   const resolveThread = registry.resolveThread.bind(registry);
-  registry.resolveThread = (request) => timeAuditQuery("resolve-thread", () => resolveThread(request));
+  registry.resolveThread = (...args) => timeAuditQuery("resolve-thread", () => resolveThread(...args));
   const environments = registry as unknown as {
     withThreadEnvironmentOptions(rows: unknown[]): Promise<unknown[]>;
   };

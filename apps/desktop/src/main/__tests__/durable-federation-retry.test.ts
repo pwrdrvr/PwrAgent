@@ -17,7 +17,7 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-w
 import { StateDb } from "../state/state-db";
 import * as federationStorage from "../storage/desktop-federation-storage";
 import { SqliteDurableTurnRequestStore } from "../storage/durable-turn-request-store";
-import { createThreadReadRegistry } from "./fixtures/thread-read-harness";
+import { codexThread, createThreadReadRegistry, publishNotification } from "./fixtures/thread-read-harness";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 const grants: FederationCapability[] = ["turn_control", "durable_turn_requests_v1"];
@@ -142,6 +142,73 @@ it("duplicate bursts reuse the fresh owner inventory and inspect no peer labels 
   const refresh = vi.spyOn(registry, "listThreads").mockResolvedValue([]);
   await expect(viewer.submitDurableTurnRequest("device", request, target)).rejects.toMatchObject({ code: "request_destination_unavailable" });
   expect(refresh).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ backend: ref.backend, forceRefresh: true }));
+  expect(submitTurn).toHaveBeenCalledTimes(1);
+});
+
+it("rechecks ownership after status invalidation without discovering workspace environments", async () => {
+  const { dbPath, tempDir } = createTempStateDb("durable-cold-retry-");
+  const db = StateDb.open(dbPath);
+  const queue = new ThreadTurnQueue({ startTurn: async () => { throw new Error("Fixture queue is held"); } });
+  const { client, registry } = createThreadReadRegistry([codexThread({ id: ref.threadId })]);
+  onTestFinished(async () => {
+    await registry.close();
+    queue.close();
+    db.close();
+    removeTempStateDbDir(tempDir);
+    vi.restoreAllMocks();
+  });
+  Object.assign(registry, { threadTurnQueue: queue });
+  const submitTurn = vi.spyOn(registry, "submitTurn").mockImplementation(async (request) => {
+    const [entry] = queue.restoreQueued([{
+      ...ref, id: request.queueEntryId!, createdAt: Date.now(), origin: "manual", input: request.input,
+    }]);
+    return { status: "queued", entry, position: 1 };
+  });
+  const environmentBatches: number[] = [];
+  vi.spyOn(registry as unknown as {
+    withThreadEnvironmentOptions(rows: AppServerThreadSummary[]): Promise<AppServerThreadSummary[]>;
+  }, "withThreadEnvironmentOptions").mockImplementation(async (rows) => {
+    environmentBatches.push(rows.length);
+    return rows;
+  });
+  vi.spyOn(registryModule, "getDesktopBackendRegistry").mockReturnValue(registry);
+  vi.spyOn(federationStorage, "createDurableTurnRequestStorage").mockReturnValue(new SqliteDurableTurnRequestStore(db));
+  const owner = new DesktopFederationRuntime();
+  Object.assign(owner, { localInstanceId: "owner" });
+  const request: SubmitDurableTurnRequest = {
+    clientRequest: { version: 1, id: randomUUID(), createdAt: Date.now(), payloadHash: "" },
+    request: { ...ref, input: [{ type: "text", text: "Durable retry fixture" }] },
+  };
+  request.clientRequest.payloadHash = createHash("sha256").update(canonicalDurableTurnRequest("owner", request)).digest("hex");
+  const deliver = () => owner.submitDurableTurnRequest("device", request);
+  const original = await deliver();
+  expect(original.result?.queueStatus).toBe("queued");
+  environmentBatches.length = 0;
+  let status: "active" | "idle" = "active";
+  const update = async () => {
+    await publishNotification(registry, {
+      method: "thread/status/changed", params: { threadId: "neighbor-0", status: { type: status } },
+    });
+    status = status === "active" ? "idle" : "active";
+  };
+  for (const [neighbors, duplicates] of [[8, 2], [32, 8], [128, 4]]) {
+    client.setThreads([codexThread({ id: ref.threadId }),
+      ...Array.from({ length: neighbors }, (_, index) => codexThread({ id: `neighbor-${index}` }))]);
+    await update();
+    client.resetCounts();
+    const receipts = await Promise.all(Array.from({ length: duplicates }, (_, index) =>
+      index % 2 ? owner.getDurableTurnRequest("device", { ...ref, id: original.id }) : deliver()));
+    // A new provider observation authorizes each burst without scanning any
+    // checkout's display-only environment catalog.
+    expect(receipts).toEqual(Array(duplicates).fill(original));
+    expect(client.listCalls).toHaveLength(1);
+    expect(environmentBatches).toEqual([]);
+  }
+  await registry.listThreads({ backend: "codex" });
+  expect(environmentBatches).toEqual([129]);
+  client.setThreads([]);
+  await update();
+  await expect(deliver()).rejects.toMatchObject({ code: "request_destination_unavailable" });
   expect(submitTurn).toHaveBeenCalledTimes(1);
 });
 
