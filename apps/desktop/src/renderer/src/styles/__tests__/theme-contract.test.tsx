@@ -3659,6 +3659,21 @@ describe("color theme contract", () => {
     }
   });
 
+  it("keeps each accent ramp step visible", () => {
+    // Hover and pressed states swap --accent for --accent-strong (the
+    // incident explorer's token bars). Retuning --accent alone in Latte left
+    // the pair 1.007:1 apart, so the swap drew nothing. The tightest designed
+    // step is Phosphor's 1.030:1.
+    const RAMP_STEP_FLOOR = 1.025;
+    for (const [name, theme] of Object.entries(themes)) {
+      const color = (token: string): string => paint(theme, theme[token], "#000000");
+      expect(contrastRatio(color("accent"), color("accent-strong")), `${name}: accent to strong`)
+        .toBeGreaterThanOrEqual(RAMP_STEP_FLOOR);
+      expect(contrastRatio(color("accent-strong"), color("accent-bright")), `${name}: strong to bright`)
+        .toBeGreaterThanOrEqual(RAMP_STEP_FLOOR);
+    }
+  });
+
   it("keeps borrowed palettes on their upstream colors unless AA moves them", () => {
     // Each token starts from Catppuccin's own color. One that clears its
     // floor there keeps it; one that fails moves by lightness only, so it
@@ -3775,13 +3790,30 @@ describe("color theme contract", () => {
     // Thread rows hover in the sidebar and the panel, and secondary buttons
     // and cards sit raised on the panel. A hover or raised token equal to
     // the surface under it draws nothing, which is how both Solarized
-    // themes first shipped.
-    for (const [name, theme] of Object.entries(themes)) {
+    // themes first shipped. A hover one step off the surface draws nothing
+    // either: Catppuccin Latte's thread rows hovered at 1.02:1 in the
+    // sidebar, and Tangerine light's at 1.036:1. Every other theme's hover
+    // steps at least 1.048:1.
+    const HOVER_STEP_FLOOR = 1.04;
+    const root = extractRootTokens(css);
+    const hovered = {
+      "tangerine-dark": root,
+      "tangerine-light": {
+        ...root,
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+      },
+      ...themes,
+    };
+    for (const [name, theme] of Object.entries(hovered)) {
       const surface = (token: string): string => paint(theme, theme[token], "#000000");
-      expect(surface("bg-panel-hover"), `${name}: hover on the panel`)
-        .not.toBe(surface("bg-panel"));
-      expect(surface("bg-panel-hover"), `${name}: hover in the sidebar`)
-        .not.toBe(surface("bg-sidebar"));
+      expect(
+        contrastRatio(surface("bg-panel-hover"), surface("bg-panel")),
+        `${name}: hover on the panel`,
+      ).toBeGreaterThanOrEqual(HOVER_STEP_FLOOR);
+      expect(
+        contrastRatio(surface("bg-panel-hover"), surface("bg-sidebar")),
+        `${name}: hover in the sidebar`,
+      ).toBeGreaterThanOrEqual(HOVER_STEP_FLOOR);
       expect(surface("bg-panel-elevated"), `${name}: raised on the panel`)
         .not.toBe(surface("bg-panel"));
     }

@@ -104,7 +104,7 @@ the base is enough to flip every derived alpha.
 | `--bg-sidebar` | `#050505` | `#f7f4ef` |
 | `--bg-panel` | `#0a0a0a` | `#fdfcfa` |
 | `--bg-panel-elevated` | `#101010` | `#ffffff` |
-| `--bg-panel-hover` | `#14110d` | `#f4f0e8` |
+| `--bg-panel-hover` | `#14110d` | `#f2eee6` |
 | `--bg-row-active` | `#120800` | `#fff5e9` |
 | `--bg-input` | `#080808` | `#ffffff` |
 
@@ -121,8 +121,8 @@ the base is enough to flip every derived alpha.
 |---|---|---|
 | `--text-primary` | `#f7f3eb` | `#1a1612` |
 | `--text-secondary` | `#b8b0a5` | `#524a40` |
-| `--text-muted` | `#8c857a` | `#736c64` |
-| `--text-subtle` | `rgba(247, 243, 235, 0.42)` | `rgba(26, 22, 18, 0.42)` |
+| `--text-muted` | `#8c857a` | `#716a62` |
+| `--text-subtle` | `rgba(247, 243, 235, 0.42)` | `rgba(26, 22, 18, 0.43)` |
 
 #### Integrated Terminal
 
@@ -183,36 +183,38 @@ returns. A machine with no Nerd Font keeps `--font-mono` unchanged.
 
 | Token | Dark | Light |
 |---|---|---|
-| `--accent` | `#ff8a1f` | `#b74c00` |
-| `--accent-strong` | `#ffa33d` | `#b34a00` |
-| `--accent-bright` | `#ffb35c` | `#994c00` |
+| `--accent` | `#ff8a1f` | `#b54a00` |
+| `--accent-strong` | `#ffa33d` | `#b14900` |
+| `--accent-bright` | `#ffb35c` | `#984b00` |
 | `--accent-soft` | derived (12% of `--accent`) | derived |
 | `--accent-border` | derived (42% of `--accent`) | derived |
 | `--accent-shadow` | derived (34% of `--accent`) | derived |
 | `--focus-ring` | `var(--accent)` | `var(--accent)` |
 | `--button-text` | `#120800` | `#ffffff` |
 
-The light-theme accent is darker (`#b74c00`) for WCAG-readable contrast on light surfaces. Button text on accent flips white in light theme.
+The light-theme accent is darker (`#b54a00`) for WCAG-readable contrast on light surfaces. Button text on accent flips white in light theme.
 
 **The ramp travels in opposite directions per theme.** `--accent` → `--accent-strong` → `--accent-bright` means increasing emphasis in both themes, but emphasis reads as *lighter* on a dark surface and *darker* on a light one:
 
 | | `--accent` | `--accent-strong` | `--accent-bright` |
 |---|---|---|---|
 | Dark (emphasis = lightness) | `#ff8a1f` | `#ffa33d` | `#ffb35c` |
-| Light (emphasis = depth) | `#b74c00` | `#b34a00` | `#994c00` |
+| Light (emphasis = depth) | `#b54a00` | `#b14900` | `#984b00` |
 
-Hue and saturation are held constant per token across the flip — only lightness moves — so both themes render the same tangerine. The brand mark reads `--accent` in every window (see the [chrome token contract](desktop-chrome-tokens.md)), and its light-theme hue is unchanged by this retune: `#c45200` → `#b74c00` holds Lab hue at 54.2° and moves ΔE2000 3.3.
+Hue and saturation are held constant per token across the flip — only lightness moves — so both themes render the same tangerine. The brand mark reads `--accent` in every window (see the [chrome token contract](desktop-chrome-tokens.md)), and its light-theme hue is unchanged by this retune: `#c45200` → `#b74c00` holds Lab hue at 54.2° and moves ΔE2000 3.3. The hover-step retune below then moved it to `#b54a00`, by OKLCH lightness only.
 
 **Pick contrast against the darkest background a token can land on, not against `--bg-app`.** Measuring against white alone is what let `--accent` ship at 4.61:1 on `--bg-app` but 4.20:1 on the sidebar wordmark, and `--text-muted` at 4.34:1 on white but 3.82:1 on a hovered row.
 
-"Darkest background" is **not** always a flat `--bg-*` token. 34 rules pair `background: var(--accent-soft)` (12% accent) with `color: var(--accent-bright)`, and that composite is darker than `--bg-panel-hover` — so `--accent-bright` is floored against the tint (4.64:1) rather than the flat surface (5.45:1). Retuned tokens and their worst case:
+"Darkest background" is **not** always a flat `--bg-*` token. 34 rules pair `background: var(--accent-soft)` (12% accent) with `color: var(--accent-bright)`, and that composite is darker than `--bg-panel-hover` — so `--accent-bright` is floored against the tint (4.61:1) rather than the flat surface (5.43:1). Retuned tokens and their worst case:
 
 | Token | Worst-case | Measured against |
 |---|---|---|
-| `--accent` | 4.57:1 | `--bg-panel-hover` |
-| `--accent-strong` | 4.74:1 | `--bg-panel-hover` |
-| `--accent-bright` | 4.64:1 | `--accent-soft` over `--bg-panel-hover` |
-| `--text-muted` | 4.55:1 | `--bg-panel-hover` |
+| `--accent` | 4.60:1 | `--bg-panel-hover` |
+| `--accent-strong` | 4.75:1 | `--bg-panel-hover` |
+| `--accent-bright` | 4.61:1 | `--accent-soft` over `--bg-panel-hover` |
+| `--text-muted` | 4.61:1 | `--bg-panel-hover` |
+
+The light hover, `#f2eee6`, sits 1.055:1 off the sidebar. The first, `#f4f0e8`, sat 1.036:1 there and a hovered thread row barely showed. Moving it darker moved every token measured on it, each by the least OKLCH lightness that kept its worst case (or 4.55:1 for text), so none of the figures here or below got worse.
 
 ### Known light-theme contrast debt (not fixed)
 
@@ -220,11 +222,11 @@ The light block is **not** uniformly AA-clean. These predate the accent retune a
 
 | Token / pair | Worst-case | Rules |
 |---|---|---|
-| `--accent` on `--accent-soft` | 3.88–4.39 | 7 (6 onboarding wizard + `.launchpad-pending__status`) — should move to `--accent-bright` |
-| `--status-warning` `#a86b00` | 3.87:1 | 0 `color:` rules — text reads `--status-warning-text`, and `theme-contract.test.tsx` fails on a `color:` that reads `--status-warning` |
-| `--info-teal` `#0e9b95` | 3.01:1 | 1 |
-| `--text-subtle` `rgba(26,22,18,.42)` | 2.38:1 | 3 |
-| `--status-ok` `#2e7d3c` | 4.49:1 | 2 (marginal) |
+| `--accent` on `--accent-soft` | 3.91–4.4 | 7 (6 onboarding wizard + `.launchpad-pending__status`) — should move to `--accent-bright` |
+| `--status-warning` `#a66900` | 3.91:1 | 0 `color:` rules — text reads `--status-warning-text`, and `theme-contract.test.tsx` fails on a `color:` that reads `--status-warning` |
+| `--info-teal` `#089993` | 3.03:1 | 1 |
+| `--text-subtle` `rgba(26,22,18,.43)` | 2.71:1 | 3 |
+| `--status-ok` `#2c7b3b` | 4.53:1 | 2 (marginal) |
 
 `apps/desktop/e2e/a11y.spec.ts` gates both themes, but only across the surfaces it drives — the onboarding wizard is not one of them. **A green gate is not a claim about the whole app.**
 
@@ -247,11 +249,11 @@ The light block is **not** uniformly AA-clean. These predate the accent retune a
 
 | Token | Dark | Light |
 |---|---|---|
-| `--status-ok` | `#5fa969` | `#2e7d3c` |
-| `--status-warning` | `#d99a3d` | `#a86b00` |
-| `--status-warning-text` | `var(--status-warning)` | `#945c00` |
+| `--status-ok` | `#5fa969` | `#2c7b3b` |
+| `--status-warning` | `#d99a3d` | `#a66900` |
+| `--status-warning-text` | `var(--status-warning)` | `#925a00` |
 | `--status-suspended` | `#6b6660` | `#6b6660` |
-| `--status-error` | `#c45a3a` | `#a8472a` |
+| `--status-error` | `#c45a3a` | `#a64528` |
 
 `--status-warning` is for dots, strokes, and meters. Use `--status-warning-text`
 when the warning is something read: a figure, a sentence, or a chip label. Its
@@ -274,7 +276,7 @@ unfiltered cost, rounded to 0.1) on this scale:
 | `great` | 10% to < 30% | `--savings-great` | `var(--success-text)` | `var(--success-text)` |
 | `good` | 5% to < 10% | `--savings-good` | `var(--status-ok)` | `var(--status-ok)` |
 | `even` | between −5% and 5% | `--savings-even` | `var(--text-secondary)` | `var(--text-secondary)` |
-| `over` | ≤ −5% | `--savings-over` | `var(--status-warning)` | `#945c00` |
+| `over` | ≤ −5% | `--savings-over` | `var(--status-warning)` | `#925a00` |
 
 - Only `--savings-over` has a light override. `--status-warning` measures
   4.0:1 on a light panel. The theme contract measures all four inks in both
@@ -292,7 +294,7 @@ unfiltered cost, rounded to 0.1) on this scale:
 
 | Token | Dark | Light |
 |---|---|---|
-| `--info-teal` | `#2dd6d0` | `#0e9b95` |
+| `--info-teal` | `#2dd6d0` | `#089993` |
 | `--brand-purple` | `#8a6dc4` | `#6a4ba8` |
 | `--danger-text-light` | `#ffba8a` | `#b03517` |
 
@@ -403,9 +405,13 @@ Per theme:
   floor. Its terminal is Catppuccin's port mapping.
 - **Catppuccin Latte** text, accent, and semantic colors move, because
   Catppuccin tunes Latte below AA. Muted text has to move to about
-  `#53566b`, which leaves no room under Catppuccin's text, so primary
+  `#515363`, which leaves no room under Catppuccin's text, so primary
   darkens to keep the ladder. Peach is 2.6:1 as text, so text and marks use
   a darker orange, and `--accent-fill` keeps peach under dark ink (6.3:1).
+  Hover sits between mantle and crust, 1.06:1 off the sidebar; the first
+  hover sat 1.02:1 there and a hovered thread row drew nothing. Every text
+  and mark token is floored against the accent tints over that hover, so a
+  darker hover moves them all.
 - **Solarized** keeps the published surfaces (`base03`/`base02`,
   `base3`/`base2`), terminal canvas, foreground, and 16-color ANSI mapping.
   Its stock text does not clear AA on `base02`: `base0` is 4.1:1 and
@@ -573,7 +579,7 @@ A row under the pointer must never look like the row Enter takes, the current pa
 - **Hover rules exclude the chosen state** (`:hover:not(.is-active)`, `:not([aria-selected="true"])`, `:not(:focus-visible)`). Otherwise a hover selector with higher specificity takes the accent off the chosen row while the pointer is on it.
 - **The accent and the ring belong to the chosen row.** Menus follow the same rule: the pointer does not move focus, so a hovered item takes the wash and the focused item takes the accent and the inset ring (`.terminal-menu__item`, `.todo-split__item`). An older menu that shares one tint between hover and focus is still told apart by the ring, so never set `outline: none` on a `:focus-visible` that shares its paint with `:hover`.
 
-`styles/__tests__/hover-cursor-paint-contract.test.ts` checks this for every rule in `app.css`. A state that marks the chosen row (`.is-active`, `.is-cursor`, `.is-selected`, `[aria-selected]`, `[aria-pressed]`, `[aria-current]`, a `--active` modifier, or `:focus-visible` with the app-wide ring) must paint at least one thing that `:hover` does not paint on the same element.
+`styles/__tests__/hover-cursor-paint-contract.test.ts` checks this for every rule in `app.css`. A state that marks the chosen row (`.is-active`, `.is-cursor`, `.is-selected`, `[aria-selected]`, `[aria-pressed]`, `[aria-current]`, `[data-current]`, `[data-selected]`, a `--active` modifier, or `:focus-visible` with the app-wide ring) must paint at least one thing that `:hover` does not paint on the same element. A row hovered through its hit area (`.row:has(.row__open:hover)`) counts as hovering the row.
 
 ## Typography
 

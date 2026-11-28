@@ -30,11 +30,19 @@ const CHOSEN_STATES: ReadonlyArray<readonly [string, RegExp]> = [
   ["cursor/selected class", /\.is-(?:active|cursor|selected|highlighted|current|checked)(?![\w-])/],
   ["aria state", /\[aria-(?:selected|pressed|checked)(?:="?true"?)?\]/],
   ["aria-current", /\[aria-current(?:=[^\]]*)?\]/],
+  // The PR stack popover marks the open thread's PR with `[data-current]`
+  // and painted a hovered layer with the same rule, so two rows wore one
+  // tint and only the pointer said which was "this PR".
+  ["data state", /\[data-(?:current|selected)(?:="?true"?)?\]/],
   ["BEM modifier", /--(?:active|selected|current)(?![\w-])/],
   ["keyboard focus", /:focus-visible(?![\w-])/],
 ];
 
+/** `.row:has(.row__open:hover)`: the row is hovered through its hit area. */
+const HAS_HOVER = /:has\((?:[^()]|\([^()]*\))*:hover(?:[^()]|\([^()]*\))*\)/g;
+
 const STATE_NOISE = [
+  HAS_HOVER,
   /:not\((?:[^()]|\([^()]*\))*\)/g,
   /:hover/g,
   /:focus-visible/g,
