@@ -55122,19 +55122,28 @@ button.stepped-bar__tick:focus-visible {
   color: var(--text-primary);
 }
 
+/* The panel stands in for the input inside `.composer__box`, so the box's
+   rim is its rim. A border of its own drew a second, inset rim, and the
+   legend pulled that border down half a line, leaving the box's rim showing
+   above the panel as a stray outline. The fill stays, inside the box's
+   inner corners, to set the panel off from the control row below. */
 .composer__review-config {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin: 0;
   padding: 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 7px 7px 0 0;
   background: var(--bg-panel);
 }
 
+/* With no border to sit on, the legend is the panel's first row: a floated
+   legend is not the fieldset's rendered legend, so it lays out as a flex item
+   inside the panel's padding instead of hugging the box's top edge. */
 .composer__review-config legend {
-  padding: 0 4px;
+  float: left;
+  padding: 0 2px;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
@@ -55142,9 +55151,10 @@ button.stepped-bar__tick:focus-visible {
   text-transform: uppercase;
 }
 
-/* A panel a to-do card opened carries the accent edge for as long as it
-   belongs to that card, so it reads as the task the card is waiting on. */
-.composer__review-config--from-todo {
+/* A panel a to-do card opened puts the accent edge on the composer box for
+   as long as it belongs to that card, so it reads as the task the card is
+   waiting on. */
+.composer__box--review-from-todo {
   border-color: var(--accent-border);
   box-shadow: 0 0 0 1px var(--accent-border);
 }
@@ -55182,13 +55192,13 @@ button.stepped-bar__tick:focus-visible {
 @media (prefers-reduced-motion: no-preference) {
   /* Each arrival alternates between two names for one animation, so a
      second Show restarts it. */
-  .composer__review-config--from-todo.is-arriving-odd {
+  .composer__box--review-from-todo.is-arriving-odd {
     animation:
       composer-review-arrive-odd 220ms ease-out,
       composer-review-glow-odd 900ms ease-out;
   }
 
-  .composer__review-config--from-todo.is-arriving-even {
+  .composer__box--review-from-todo.is-arriving-even {
     animation:
       composer-review-arrive-even 220ms ease-out,
       composer-review-glow-even 900ms ease-out;
