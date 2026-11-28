@@ -18,6 +18,8 @@ export function AgentSetupPane(props: {
   settings: DesktopSettingsState;
   desktopApi?: DesktopApi;
   claudeSignIn?: ClaudeSignInControls;
+  /** Why no provider can start a thread, as startup discovery reported it. */
+  unavailableDetail?: string;
   onOpenProviderSettings: () => void;
 }) {
   const agents = useGetStartedAgents({
@@ -25,6 +27,11 @@ export function AgentSetupPane(props: {
     desktopApi: props.desktopApi,
     separateLogin: false,
     codexAuthProfile: profileCodexLogin(props.settings.snapshot),
+    // This pane can stay up indefinitely (a profile that only views another
+    // computer's threads has no agent here), and each check starts every
+    // agent's CLI. Coming back to the window rechecks only after the user
+    // started an install or a sign-in from it.
+    recheckOnFocus: "after-setup-step",
   });
 
   // An in-app Claude Code sign-in ends when its CLI exits, which can come
@@ -37,20 +44,31 @@ export function AgentSetupPane(props: {
     wasClaudeSigningIn.current = claudeSigningIn;
   }, [claudeSigningIn, refreshAgents]);
 
+  // A row reads ready from discovery and sign-in alone. Startup still found
+  // no agent that can start a thread, so with a reason the agent is set up
+  // but failed to start, and the reason is the next step.
   const ready = agents.rows.some((row) => row.state.kind === "ready");
+  const failedToStart = ready && Boolean(props.unavailableDetail);
 
   return (
     <div className="agent-setup-pane" data-testid="agent-setup-pane">
       <div className="agent-setup-pane__content">
         <header className="get-started__head">
           <h2 className="get-started__title">
-            {ready ? "Your agent is ready." : "Set up an agent to start."}
+            {failedToStart
+              ? "Your agent didn't start."
+              : ready
+                ? "Your agent is ready."
+                : "Set up an agent to start."}
           </h2>
           <p className="get-started__sub">
             PwrAgent runs coding agents on this computer. Install one and sign
             in with the account you already have; each provider bills you for
             its own usage.
           </p>
+          {failedToStart ? (
+            <p className="get-started__error" role="status">{props.unavailableDetail}</p>
+          ) : null}
         </header>
         <AgentList
           agents={agents}

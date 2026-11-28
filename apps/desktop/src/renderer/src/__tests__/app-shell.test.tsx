@@ -5034,14 +5034,17 @@ describe("App", () => {
       }),
     });
 
+    // The pane is lazy, and its first import compiles Get started's module.
+    // Load it before rendering so the wait below doesn't race that compile on
+    // a slow lane.
+    await import("../features/onboarding/AgentSetupPane");
     await renderApp();
 
     // A fresh install that skipped Get started without an agent. The wizard
     // stays closed (first run is done), but the window must still carry the
     // next step: with no thread to show, the main pane is the agent setup,
     // offering Codex's one-click install, and no warning toast repeats it.
-    // The pane is lazy, and its first import compiles Get started's module.
-    const pane = await screen.findByTestId("agent-setup-pane", {}, { timeout: 4_000 });
+    const pane = await screen.findByTestId("agent-setup-pane", {}, { timeout: 3_000 });
     expect(
       within(pane).getByRole("heading", { name: "Set up an agent to start." }),
     ).toBeInTheDocument();

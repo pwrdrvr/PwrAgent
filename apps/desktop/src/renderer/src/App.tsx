@@ -277,7 +277,10 @@ import { useNoAgentLanding } from "./features/onboarding/useNoAgentLanding";
 import { buildModelVerificationNotice } from "./features/notifications/model-verification-notice";
 import {
   buildNoStartupBackendNotice,
+  landWithoutBackend,
+  noStartupBackendDetail,
   NO_STARTUP_BACKEND_NOTICE_ID,
+  type StartupLandingState,
 } from "./features/notifications/provider-startup-notice";
 import { QuitBlockerQueueToast } from "./features/notifications/QuitBlockerQueueToast";
 import { isStreamNoticeEvent } from "./features/notifications/codex-stream-notice";
@@ -590,9 +593,7 @@ function DesktopAppShell(props: {
     "auto" | "replay" | null
   >(null);
   const [autoOpenSeen, setAutoOpenSeen] = useState(false);
-  const startupLandingStateRef = useRef<
-    "pending" | "notice-shown" | "complete"
-  >("pending");
+  const startupLandingStateRef = useRef<StartupLandingState>("pending");
   // Boot info is fetched once on mount and is stable across the
   // renderer's lifetime (the main process recorded it before this
   // window opened — see `recordBootDecision` in app-state.ts). The
@@ -3076,13 +3077,18 @@ function DesktopAppShell(props: {
       ) {
         return;
       }
-      if (startupLandingStateRef.current === "pending") {
-        startupLandingStateRef.current = "notice-shown";
-        setNoAgentLanding(true);
-        // With nothing selected, the main pane is the agent setup, which says
-        // everything this notice would. A restored thread covers that pane,
-        // so the notice still points at the problem.
-        if (!navigation.selectedThreadKey) return;
+      // The empty main pane is the agent setup from here until a provider
+      // answers. It carries the reason, which matters when an agent is set up
+      // but failed to start.
+      setNoAgentLanding({ detail: noStartupBackendDetail(backendSummaries.backends) });
+      const landing = landWithoutBackend(
+        startupLandingStateRef.current,
+        Boolean(navigation.selectedThreadKey),
+      );
+      startupLandingStateRef.current = landing.state;
+      // With nothing selected, the pane says everything this notice would.
+      // A selected thread covers the pane, so the notice points at it.
+      if (landing.showNotice) {
         showAppNotice(
           buildNoStartupBackendNotice({
             backends: backendSummaries.backends,
@@ -3114,7 +3120,7 @@ function DesktopAppShell(props: {
 
     // A provider that showed up late clears the notice it caused.
     dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
-    setNoAgentLanding(false);
+    setNoAgentLanding(null);
     startupLandingStateRef.current = "complete";
     // Landing is for a window that is still sitting on the startup view. The
     // notice sends operators into Settings to fix exactly this, so a provider

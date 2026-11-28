@@ -653,6 +653,12 @@ export function useGetStartedAgents(params: {
    * to the one it runs Codex with.
    */
   codexAuthProfile?: string;
+  /**
+   * When coming back to the window rechecks every agent. Get started does
+   * while no agent is ready yet; a page that can stay up indefinitely only
+   * after the user opened an install or sign-in step from it.
+   */
+  recheckOnFocus?: "while-not-ready" | "after-setup-step";
 }): AgentsModel {
   const { settings, desktopApi, separateLogin } = params;
   const codexAuthProfile = params.codexAuthProfile ?? "";
@@ -851,7 +857,7 @@ export function useGetStartedAgents(params: {
   }), [acpEntries, backends, codexDiscovering, codexSignIn, optimisticEnabled, separateLogin, snapshot]);
 
   recheckOnFocusRef.current = codexSignIn.kind === "waiting"
-    || !canStartWithAgents(rows.map((row) => row.state));
+    || (params.recheckOnFocus !== "after-setup-step" && !canStartWithAgents(rows.map((row) => row.state)));
 
   return {
     rows,
