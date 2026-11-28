@@ -266,7 +266,6 @@ export function createReplayClientsFromEnv():
       return client.getInterruptTurnCalls?.() ?? [];
     },
     respondToPendingRequest: async (params) => {
-      await setImmediate();
       const client = getReplayClient(clients, {
         backend: params.backend,
       });

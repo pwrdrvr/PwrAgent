@@ -1,5 +1,4 @@
 import { setImmediate } from "node:timers/promises";
-import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { ReplayClient } from "../shell/testing/replay-client";
 
@@ -79,10 +78,14 @@ it("does not let a late listener settle a newer step with the same request ID", 
   await replay({ reuseRequestId: true, finishFirstBeforeSecond: false, rejectFirst: false });
 });
 
-it("keeps each listener's completion tied to its own replay step", async () => {
-  await fc.assert(fc.asyncProperty(fc.record({
-    reuseRequestId: fc.boolean(),
-    finishFirstBeforeSecond: fc.boolean(),
-    rejectFirst: fc.boolean(),
-  }), replay), { numRuns: Number(process.env.MBT_RUNS ?? 8) });
-});
+const flags = [false, true];
+const scenarios = flags.flatMap((reuseRequestId) =>
+  flags.flatMap((finishFirstBeforeSecond) =>
+    flags.map((rejectFirst) => ({ reuseRequestId, finishFirstBeforeSecond, rejectFirst })),
+  ),
+);
+
+it.each(scenarios)(
+  "keeps completion tied to its step (reuse: $reuseRequestId, finish first early: $finishFirstBeforeSecond, reject: $rejectFirst)",
+  replay,
+);

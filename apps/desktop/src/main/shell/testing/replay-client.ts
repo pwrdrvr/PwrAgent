@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import type {
   AppServerBackendKind,
   AppServerListSkillsResponse,
@@ -373,7 +374,9 @@ export class ReplayClient {
   }
 
   async respondToPendingRequest(requestId: string): Promise<void> {
-    this.controller.resolvePendingRequest(requestId);
+    const step = this.controller.requirePendingRequest(requestId);
+    await setImmediate();
+    this.controller.completeRequestStep(step);
   }
 
   private async ensureInitialized(): Promise<InitializeResult> {

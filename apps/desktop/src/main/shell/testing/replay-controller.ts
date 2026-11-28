@@ -164,12 +164,17 @@ export class ReplayController {
   }
 
   resolvePendingRequest(requestId: string): ReplayRequestStep {
+    const current = this.requirePendingRequest(requestId);
+    this.completeRequestStep(current);
+    return current;
+  }
+
+  requirePendingRequest(requestId: string): ReplayRequestStep {
     const current = this.pendingRequests.get(requestId);
     if (!current) {
       throw new Error(`Replay has no pending request ${requestId}`);
     }
 
-    this.pendingRequests.delete(requestId);
     return current;
   }
 

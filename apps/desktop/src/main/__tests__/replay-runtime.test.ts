@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -61,6 +62,7 @@ describe("replay-runtime", () => {
 
       // Model an inspector interrupt by entering the same driver while SQLite
       // has control of the connection and is calling back into JavaScript.
+      const handledBeforeNextTask = setImmediate().then(() => [...handled]);
       let secondAdvance: Promise<void> | undefined;
       db.function("advance_replay", () => {
         secondAdvance = driver.advance({ stepId: "notify-2" });
@@ -68,15 +70,42 @@ describe("replay-runtime", () => {
       });
       db.prepare("SELECT advance_replay()").get();
 
-      await Promise.resolve();
-      const handledBeforeNextTask = [...handled];
       await expect(secondAdvance).resolves.toBeUndefined();
-      expect(handledBeforeNextTask).toEqual(["notify-1"]);
+      await expect(handledBeforeNextTask).resolves.toEqual(["notify-1"]);
       expect(handled).toEqual(requestIds);
       expect(driver.getPendingRequest()).toBeUndefined();
     } finally {
       db.close();
     }
+  });
+
+  it.each([false, true])("binds a deferred response to the original step (ID reused: %s)", async (reuseId) => {
+    vi.stubEnv(REPLAY_FIXTURE_PATH_ENV, writeFixture({
+      metadata: { backend: "codex", scenario: "deferred-response" },
+      steps: (reuseId ? ["step-1", "step-2"] : ["step-1"]).map((id) => ({
+        id,
+        kind: "request",
+        request: {
+          method: "turn/requestApproval",
+          params: { requestId: "approval-1", threadId: id },
+        },
+      })),
+    }));
+    const { codexClient } = createReplayClientsFromEnv()!;
+    const driver = globalThis.__PWRAGENT_REPLAY_DRIVER__!;
+    const first = Promise.withResolvers<void>();
+    const unsubscribe = codexClient.onRequest(() => first.promise);
+    await driver.advance({ stepId: "step-1" });
+    unsubscribe();
+
+    // The first listener finishes before the queued tasks. If there is a
+    // second step, its advance runs before the explicit response resumes.
+    first.resolve();
+    const advance = reuseId ? driver.advance({ stepId: "step-2" }) : undefined;
+    const response = driver.respondToPendingRequest({ requestId: "approval-1" });
+
+    await Promise.all([advance, response]);
+    expect(driver.getPendingRequest()?.params.threadId).toBe(reuseId ? "step-2" : undefined);
   });
 
   it.each([
