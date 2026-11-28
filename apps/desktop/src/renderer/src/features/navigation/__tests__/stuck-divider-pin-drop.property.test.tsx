@@ -199,6 +199,11 @@ function topmostAt(x: number, y: number, hitTest: boolean): HTMLElement {
 }
 
 const BANDS = ".directory-row__header, .directory-row__thread-divider";
+const SOURCES: Record<Release["holds"], string> = {
+  pin: '.thread-row-shell[data-thread-pin-state="pinned"]',
+  unpinned: '.thread-row-shell[data-thread-pin-state="unpinned"]:not([data-nested-depth])',
+  subthread: ".thread-row-shell[data-nested-depth]",
+};
 
 beforeAll(() => {
   style = document.createElement("style");
@@ -256,8 +261,8 @@ function mount(): void {
 }
 
 type Release = {
-  /** What is held: a root pin, or a sub-thread out of its tray. */
-  holds: "pin" | "subthread";
+  /** What is held: a root pin, an unpinned root, or a sub-thread out of its tray. */
+  holds: "pin" | "unpinned" | "subthread";
   /** Project top at pointer down, in px from the lane's top. */
   startTop: number;
   /** Which visible row of that kind is held. */
@@ -288,9 +293,7 @@ const frame = () => act(async () => {
 async function holdAndRelease(release: Release): Promise<boolean> {
   for (const handler of [onReorderThreadPins, onSetThreadPin, onNestThread, onUpdateSubthreadOrder]) handler.mockClear();
   projectTop = release.startTop;
-  const sources = [...lane.querySelectorAll<HTMLElement>(release.holds === "pin"
-    ? '.thread-row-shell[data-thread-pin-state="pinned"]'
-    : ".thread-row-shell[data-nested-depth]")]
+  const sources = [...lane.querySelectorAll<HTMLElement>(SOURCES[release.holds])]
     .filter((row) => {
       const box = boxOf(row)!;
       return topmostAt(WIDTH / 2, (box.top + box.bottom) / 2, false).closest(".thread-row-shell") === row;
@@ -344,22 +347,28 @@ async function holdAndRelease(release: Release): Promise<boolean> {
   });
   if (release.aim !== "aboveLane" && (point.y < 0 || point.y > LANE_HEIGHT)) return false;
 
-  const dropped = [onReorderThreadPins, onSetThreadPin, onNestThread, onUpdateSubthreadOrder]
+  // An unpinned card pins wherever it is released (pin, then place after
+  // the last pin): the append slot is its target from anywhere, so only the
+  // drops a point picks are checked.
+  const pins = release.holds === "unpinned" && target?.matches(".directory-row__pin-drop-slot");
+  const dropped = [onNestThread, onUpdateSubthreadOrder, ...pins ? [] : [onSetThreadPin, onReorderThreadPins]]
     .flatMap((handler) => handler.mock.calls).length;
   // The bands paint over every row and slot that scrolls under them.
   expect(drawnOverBands).toEqual([]);
   // Where the lane's rows are not what is painted, nothing takes the drop.
   if (painted === document.body || painted.closest(BANDS)) {
-    expect({ painted: painted.className || painted.tagName, target: target?.className, dropped })
+    expect({ painted: painted.className || painted.tagName, target: pins ? undefined : target?.className, dropped })
       .toEqual({ painted: painted.className || painted.tagName, target: undefined, dropped: 0 });
   }
-  if (target) expect(target.contains(painted), `${target.className} is hidden under ${painted.className}`).toBe(true);
+  if (target && !pins) {
+    expect(target.contains(painted), `${target.className} is hidden under ${painted.className}`).toBe(true);
+  }
   return true;
 }
 
 const fraction = fc.integer({ min: 0, max: 1000 }).map((value) => value / 1000);
 const release: fc.Arbitrary<Release> = fc.record({
-  holds: fc.constantFrom("pin" as const, "subthread" as const),
+  holds: fc.constantFrom("pin" as const, "unpinned" as const, "subthread" as const),
   startTop: fc.integer({ min: -400, max: 200 }),
   source: fc.nat({ max: PINS }),
   scroll: fc.constantFrom("bottom" as const, "top" as const, "free" as const),
@@ -378,6 +387,10 @@ it.each<[string, Release]>([
   // sub-thread" on the row hidden behind it.
   ["a pin over the divider stuck under the header",
     { holds: "pin", startTop: 0, source: 1, scroll: "top", depth: 0.5, aim: "divider", along: 0.5 }],
+  // The same release with an unpinned card: it nested under the hidden row
+  // where it should only pin.
+  ["an unpinned card over the divider stuck under the header",
+    { holds: "unpinned", startTop: -400, source: 0, scroll: "top", depth: 0.5, aim: "divider", along: 0.5 }],
   // The Keep at top slot scrolled up past the lane's edge still answered
   // its box: "Keep at top" from the lens bar above the lane.
   ["a pin above the lane, over a Keep at top slot scrolled out of view",

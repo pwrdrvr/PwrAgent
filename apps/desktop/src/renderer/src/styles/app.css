@@ -7956,7 +7956,10 @@ button.stack-display__thread,
   position: absolute;
   right: 8px;
   left: 8px;
-  z-index: 6;
+  /* Under the sticky bands rows scroll beneath (the Unpinned divider, z 5,
+     and the project header, z 6), as `.directory-row__pin-drop-boundary`
+     is: a target row partly behind one keeps its line there. */
+  z-index: 4;
   height: 3px;
   border-radius: 999px;
   background: var(--accent);
@@ -7980,7 +7983,8 @@ button.stack-display__thread,
   content: "";
   position: absolute;
   inset: 0;
-  z-index: 6;
+  /* Under the sticky bands, as the insertion line is. */
+  z-index: 4;
   border: 2px solid var(--accent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -12041,11 +12045,13 @@ button.stack-display__thread,
    the lane's bottom edge, so a transparent divider let a release over it
    land on the row hidden behind it: a pin moved beside a pin the operator
    could not see, with its insertion line drawn under the band. It stays
-   hit-testable, and the divider is no drop target, so a release over it
-   does nothing, as it does where the divider rests in place. It does not
-   light on hover while a card is held, so it never reads as a target. */
+   hit-testable and takes no drop of its own, stuck or in place: a pin
+   released over it stays put, and an unpinned card pins, as it does
+   anywhere. It neither lights nor shows its pointer while a card is held,
+   so it never reads as a target. */
 :root[data-native-drag-active] .sidebar .directory-row__thread-divider {
   pointer-events: auto !important;
+  cursor: default;
 }
 
 /* Inside its box, as `.directory-row__summary` does: the band now reaches
