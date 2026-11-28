@@ -2122,6 +2122,7 @@ export type ThreadTokenMiserCodeModeAccounting = {
 
 export type ThreadTokenMiserInterceptionAccounting = {
   objectId: string;
+  boundedCapture?: true;
   /** Owner-process snapshot; retained until the next turn, eviction, archive or restart. */
   originalOutputAvailable?: boolean;
   /** Legacy peers may still report a fixed expiry deadline. */

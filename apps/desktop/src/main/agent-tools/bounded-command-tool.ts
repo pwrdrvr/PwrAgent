@@ -20,7 +20,7 @@ export function boundedCommandTools(capture?: BoundedCommandCapture, store?: Tok
     dispatch: async (args, context) => {
       try {
         if (typeof args.command === "string" && Object.keys(args).length === 1) {
-          return agentToolSuccess(await capture.prepare(context, args.command));
+          return agentToolSuccess(await capture.prepare(context, args.command, context.signal));
         }
         if (typeof args.objectId === "string") {
           const keys = Object.keys(args);

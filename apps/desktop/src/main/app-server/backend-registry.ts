@@ -1976,12 +1976,13 @@ export class DesktopBackendRegistry {
       await this.resolveTokenMiserThreadOverride(caller.backend, caller.threadId),
     );
     return enabled && !this.closed && this.isLiveDynamicToolCall(caller.backend, caller);
-  }, async (caller, command, helper) => {
+  }, async (caller, command, helper, signal) => {
     if (caller.backend === "codex") {
       const supported = await this.withCodexThreadClient(caller.threadId, async (client) =>
         !!client.terminateBackgroundTerminal && (await client.listBackgroundTerminals?.(caller.threadId))?.supported === true);
       if (!supported) throw new Error("This Codex runtime cannot stop an individual captured terminal.");
     }
+    if (signal.aborted || !this.isLiveDynamicToolCall(caller.backend, caller)) return false;
     const response = await this.handleServerRequest(caller.backend, {
       method: "mcpServer/elicitation/request",
       params: {
@@ -1991,9 +1992,22 @@ export class DesktopBackendRegistry {
         message: `Allow Token Miser to retain output from one native shell invocation of ${command}? The command uses the shell's working directory and permissions. Its full output will be available to this turn for up to five minutes.${helper ? ` The command, bounded output, and recent assistant message may be sent to ${helper}.` : ""}`,
         _meta: null,
       },
-    });
+    }, signal);
     return readRecord(response)?.action === "accept";
-  }, (caller) => this.resolveBoundedCommandHelper(caller));
+  }, (caller) => this.resolveBoundedCommandHelper(caller), (delivery) => {
+    try {
+      if (!this.tokenMiserStore) return false;
+      this.tokenMiserStore.recordBoundedCommandDelivery(delivery);
+    } catch (error) {
+      backendRegistryLog.warn("Could not record bounded command delivery", { error: String(error) });
+      return false;
+    }
+    const { backend, threadId } = delivery.caller;
+    void this.emit({ backend, notification: {
+      method: "thread/pricing/updated", params: { threadId, displayInvalidated: true, pricing: { lines: [], summaries: [] } },
+    } }).catch((error) => backendRegistryLog.warn("Could not publish bounded command accounting", { error: String(error) }));
+    return true;
+  });
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserDiagnostics?: TokenMiserDiagnostics;
   private readonly tokenMiserService?: TokenMiserService;
@@ -8261,7 +8275,7 @@ export class DesktopBackendRegistry {
     )) {
       await this.threadUsageLedger.repairTokenMiserHistory(request.threadId);
     }
-    const pricingOverlay = resource === "pricing" && backend === "codex" ? this.threadUsageLedger.pricingPageOverlay(request.threadId) : undefined;
+    const pricingOverlay = resource === "pricing" ? this.threadUsageLedger.pricingPageOverlay(request.threadId, backend) : undefined;
     const pricingHistoryPage = resource === "pricing" && (backend !== "codex" || pricingOverlay)
       ? await this.overlayStore.readThreadPricingPage?.({
           backend, threadId: request.threadId, ...threadDisplayRange(request.display),
@@ -21273,6 +21287,7 @@ export class DesktopBackendRegistry {
       return await tokenMiserRouter.handleDynamicToolCall({
         backend,
         call: hostToolCall,
+        signal,
       });
     }
     const managedReviewLedgerRouter = buildManagedReviewLedgerToolRouter(
@@ -21538,14 +21553,29 @@ export class DesktopBackendRegistry {
       requestId: routedRequest.params.requestId,
     });
 
-    if (signal?.aborted) return { decision: "cancel" };
+    const cancellation = { action: "cancel" as const, content: null, _meta: null };
+    if (signal?.aborted) return request.method === "mcpServer/elicitation/request"
+      ? cancellation : { decision: "cancel" };
+    let cancelElicitation: (() => void) | undefined;
     const response = await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
-      this.pendingServerRequests.set(key, {
+      const pending: PendingServerRequest = {
         backend: routedBackend,
         notification: routedRequest,
         resolve,
         reject,
-      });
+      };
+      this.pendingServerRequests.set(key, pending);
+      if (signal && request.method === "mcpServer/elicitation/request") {
+        cancelElicitation = () => {
+          if (this.pendingServerRequests.get(key) !== pending) return;
+          void this.submitServerRequest({
+            backend: routedBackend, threadId: routedRequest.params.threadId,
+            turnId: routedRequest.params.turnId ?? undefined, requestId: routedRequest.params.requestId,
+            response: cancellation,
+          }).catch((error) => backendRegistryLog.warn("Could not withdraw elicitation", { error: String(error) }));
+        };
+        signal.addEventListener("abort", cancelElicitation, { once: true });
+      }
 
       void this.emit({
         backend: routedBackend,
@@ -21562,6 +21592,8 @@ export class DesktopBackendRegistry {
           },
         );
       });
+    }).finally(() => {
+      if (cancelElicitation) signal?.removeEventListener("abort", cancelElicitation);
     });
     if (request.method !== "mcpServer/elicitation/request") return response;
     return await this.threadMcpConnections.settleMcpProjectToolApprovalChoice(response, projectOffer);

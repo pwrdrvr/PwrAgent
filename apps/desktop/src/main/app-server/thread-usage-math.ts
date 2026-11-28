@@ -1228,6 +1228,18 @@ export function tokenMiserMonitorId(entry: TokenMiserObjectMetadata): string {
   return `system:token-miser:${entry.objectId}`;
 }
 
+export function priceBoundedCommandDelivery(entry: TokenMiserObjectMetadata, parent?: ThreadUsageLineRecord) {
+  if (!parent?.model) return undefined;
+  const { model, serviceTier, fastMode } = parent;
+  const cost = (uncachedInputTokens: number) => estimateTokenUsageCost({
+    at: entry.createdAt, model, serviceTier, fastMode,
+    uncachedInputTokens, cachedInputTokens: 0, outputTokens: 0,
+  })?.uncachedInputCostMicros;
+  const baseline = cost(entry.baselineParentTokens);
+  const delivered = cost(estimateTokenCount(entry.replacementCharacters));
+  return baseline === undefined || delivered === undefined ? undefined : { baseline, delivered };
+}
+
 /**
  * One gate's dollar accounting and the lines it was priced from. The rail
  * card and the thread savings total both call this, so they cannot drift.
@@ -1306,7 +1318,7 @@ export function withLegacyTokenMiserReplayAccounting(
     return accounting;
   }
   const interceptions = accounting.interceptions.map((entry) => {
-    if (entry.replayTrackingVersion === 2) {
+    if (entry.boundedCapture || entry.replayTrackingVersion === 2) {
       return entry;
     }
     const cachedReplayCount = replays.countAfterInvocation({

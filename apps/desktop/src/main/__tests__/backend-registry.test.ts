@@ -1712,6 +1712,51 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32").each(["approval deadline", "turn completion"] as const)("withdraws a pending Codex capture approval at %s", async (boundary) => {
+    const codexClient = Object.assign(new MockBackendClient({ threads: [] }), {
+      listBackgroundTerminals: async () => ({ supported: true, terminals: [] }),
+      terminateBackgroundTerminal: async () => true,
+    });
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+      resolveTokenMiserBoundedCommands: () => true });
+    onTestFinished(() => registry.close());
+    const target = { backend: "codex" as const, threadId: "fixture", turnId: "turn" };
+    await registry.setThreadTokenMiser({ ...target, enabled: true });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const deadline = new AbortController();
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
+      ms === 30_000 ? deadline.signal : nativeTimeout(ms));
+    try {
+      registryModules(registry).turnState.registerTurn("codex:fixture:turn");
+      const result = codexClient.emitRequest({ method: "item/tool/call", params: {
+        ...target, callId: "capture", requestId: "capture", namespace: "pwragent",
+        tool: "capture_token_miser_command", arguments: { command: "git diff" },
+      } });
+      const request = await vi.waitFor(() => {
+        const pending = registry.getPendingRequestForThread(target);
+        expect(pending?.method).toBe("mcpServer/elicitation/request");
+        return pending!;
+      });
+      if (boundary === "approval deadline") deadline.abort();
+      else await emitCompletedTurn(registry, target.backend, target.threadId, target.turnId);
+      await vi.waitFor(() => {
+        expect(registry.getPendingRequestForThread(target)).toBeUndefined();
+        expect(events.some(({ notification }) => notification.method === "serverRequest/resolved"
+          && notification.params.requestId === request.params.requestId)).toBe(true);
+      });
+      await expect(result).resolves.toMatchObject({ success: false, contentItems: [expect.objectContaining({
+        text: expect.stringContaining(boundary === "approval deadline" ? "Approval timed out" : "cancelled"),
+      })] });
+      await expect(registry.submitServerRequest({ ...target, requestId: request.params.requestId,
+        response: { action: "accept", content: null, _meta: null } })).rejects.toThrow("No pending server request");
+      expect(timeout.mock.calls.some(([ms]) => ms <= 35_000)).toBe(true);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   it("publishes owner Token Miser settings and persists overrides through the registry", async () => {
     const overlayStore = createOverlayStoreMock();
     let enabled = true;

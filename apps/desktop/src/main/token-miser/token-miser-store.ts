@@ -5,6 +5,7 @@ import type {
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { BoundedCommandDelivery } from "./bounded-command";
 import { mapTokenMiserFiles, withTokenMiserFileOperation } from "./token-miser-file-io";
 import { TokenMiserOutputCache } from "./token-miser-output-cache";
 import type { OrderedTokenMiserMetadata, TokenMiserObjectRecord, TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
@@ -888,6 +889,18 @@ export class TokenMiserStore {
       mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
   }
 
+  recordBoundedCommandDelivery({ caller, objectId, itemId, originalBytes, deliveredBytes }: BoundedCommandDelivery): void {
+    if (!caller.turnId) return;
+    // The file and the summary stay with the live capture. Only byte counts persist.
+    this.storage.writeMetadata({
+      version: 1, objectId, threadId: caller.threadId, turnId: caller.turnId, toolUseId: itemId,
+      toolName: "capture_token_miser_command", captureBackend: caller.backend, createdAt: Date.now(),
+      originalCharacters: originalBytes, baselineParentTokens: estimateTokenCount(originalBytes),
+      replacementCharacters: deliveredBytes, retrievedCharacters: 0,
+      summary: { summary: "Bounded command output delivered.", usefulDetails: [] },
+    });
+  }
+
   *listOpenReplayPages(limit: number, threadId: string): Iterable<TokenMiserObjectRecord[]> {
     let afterId: string | undefined;
     for (;;) {
@@ -974,7 +987,7 @@ export class TokenMiserStore {
     const archived = await this.isArchived(threadId);
     const observations = await this.listCodeModeObservations(threadId);
     const metadataByToolUseId = new Map(
-      metadata.map((entry) => [entry.toolUseId, entry]),
+      metadata.filter((entry) => !entry.captureBackend).map((entry) => [entry.toolUseId, entry]),
     );
     const codeModeObservations = observations.map((observation) => {
       const disposition = observation.retrieval
@@ -1028,6 +1041,7 @@ export class TokenMiserStore {
           estimatedCachedReplayTokensSaved:
             (entry.cachedBaselineTokens ?? 0)
             - (entry.cachedRevealedTokens ?? 0),
+          ...(entry.captureBackend ? { boundedCapture: true as const } : {}),
           ...(entry.replayTrackingVersion
             ? { replayTrackingVersion: entry.replayTrackingVersion }
             : {}),

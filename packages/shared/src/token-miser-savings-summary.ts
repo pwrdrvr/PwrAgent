@@ -245,6 +245,11 @@ type SavingsAccounting = Pick<ThreadTokenMiserAccounting, "interceptionCount" | 
   savings?: TokenMiserSavingsTerms & { pricedGateCount: number };
 };
 
+export function isTokenMiserAuxiliaryHelper(sourceItemId?: string): boolean {
+  return sourceItemId?.startsWith("system:token-miser-focused:") === true
+    || sourceItemId?.startsWith("system:token-miser-capture:") === true;
+}
+
 export function buildTokenMiserSavingsSummary(params: {
   accounting?: SavingsAccounting | ThreadTokenMiserAccounting;
   gateAccountings?: readonly (TokenMiserSubAgentAccounting | undefined)[];

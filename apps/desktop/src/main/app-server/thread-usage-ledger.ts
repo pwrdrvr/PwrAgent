@@ -12,6 +12,7 @@ import {
 } from "./token-miser-ledger-index";
 import {
   addTokenMiserGateAccountingTotals,
+  isTokenMiserAuxiliaryHelper,
   totalTokenMiserGateAccountings,
 } from "@pwragent/shared/token-miser-savings-summary";
 import { isTokenMiserSubAgent } from "@pwragent/shared/subagent-kind";
@@ -148,6 +149,7 @@ import {
   foldObservedContextReplay,
   formatTaskMonitorNumber,
   mergeThreadPricingLines,
+  priceBoundedCommandDelivery,
   readTaskMonitorTokenUsageRecords,
   readThreadCompactionBoundary,
   readUsageBoolean,
@@ -998,7 +1000,19 @@ export class ThreadUsageLedger {
     return changedPricing ? mergeThreadPricingLines(merged, lines) : { ...merged, lines };
   }
 
-  pricingPageOverlay(threadId: string) {
+  pricingPageOverlay(threadId: string, backend: AppServerBackendKind = "codex") {
+    const store = this.host().tokenMiserStore;
+    const accounting = {
+      accountingOwner: store,
+      openAccounting: () => store && TokenMiserPricingPage.open(store, threadId, backend),
+      accountingFailed: (error: unknown) => backendRegistryLog.warn("failed to read indexed Token Miser accounting", {
+        threadId, error: error instanceof Error ? error.message : String(error),
+      }),
+    };
+    if (backend !== "codex") {
+      if (!store || (backend !== "claude" && backend !== "acp:antigravity")) return undefined;
+      return { ...accounting, decorationKey: "", decorate: (line: ThreadUsageLineRecord) => line, isLocal: () => false };
+    }
     // Worker usage can replace arbitrary turns and is reconciled by the full reader.
     if (!this.workerPricingCollections(threadId).next().done
       || this.subAgentMonitorService.liveCodexNativeSubAgentUsageRecords.get(threadId)?.size) return undefined;
@@ -1007,13 +1021,8 @@ export class ThreadUsageLedger {
     if ((lines && !lines.watchChanges) || (cards && !cards.watchChanges)) return undefined;
     const local = new Set(this.host().resolveCodexLocalModelIdsFn());
     const labels = new Map(this.host().codexBackendSummary?.launchpadOptions?.models?.map((model) => [model.id, model.label]));
-    const store = this.host().tokenMiserStore;
     return {
-      accountingOwner: store,
-      openAccounting: () => store && TokenMiserPricingPage.open(store, threadId),
-      accountingFailed: (error: unknown) => backendRegistryLog.warn("failed to read indexed Token Miser accounting", {
-        threadId, error: error instanceof Error ? error.message : String(error),
-      }),
+      ...accounting,
       liveGate: (id: string) => lines?.forSource(id),
       lines, cards, decorationKey: JSON.stringify([[...local], [...labels]]),
       decorate(line: ThreadUsageLineRecord) {
@@ -1217,12 +1226,14 @@ export class ThreadUsageLedger {
     threadId: string;
   }): Promise<ThreadToolAccounting> {
     const host = this.host();
-    if (params.backend !== "codex" || !host.tokenMiserStore) {
+    if (!host.tokenMiserStore || !["codex", "claude", "acp:antigravity"].includes(params.backend)) {
       return params.accounting;
     }
     try {
       await this.prepareTokenMiserStorage();
-      const metadata = await host.tokenMiserStore.listMetadata(params.threadId);
+      const metadata = (await host.tokenMiserStore.listMetadata(params.threadId))
+        .filter((entry) => (entry.captureBackend ?? "codex") === params.backend);
+      if (params.backend !== "codex" && !metadata.length) return params.accounting;
       const tokenMiser = await host.tokenMiserStore.summarizeThreadUsage(
         params.threadId,
         metadata,
@@ -3705,7 +3716,7 @@ export class ThreadUsageLedger {
       return undefined;
     }
     const entries = params.entries;
-    if (entries.length === 0) {
+    if (!entries.some((entry) => !entry.captureBackend)) {
       return undefined;
     }
     const pricing = typeof this.context.stores.usage.readThreadPricing === "function"
@@ -3727,6 +3738,7 @@ export class ThreadUsageLedger {
     let policyPassThroughCount = 0;
     let helperDecisionCount = 0;
     let pricedGateCount = 0;
+    let gateCount = 0;
     let withoutGateCostMicros = 0;
     let gateCostMicros = 0;
     let revealedCostMicros = 0;
@@ -3737,6 +3749,16 @@ export class ThreadUsageLedger {
     let parentModel: string | undefined;
 
     for (const entry of entries) {
+      if (entry.captureBackend) {
+        const cost = priceBoundedCommandDelivery(entry, indexes.pricing.parentUsageLine(entry.threadId, entry.turnId));
+        if (cost) {
+          withoutGateCostMicros += cost.baseline;
+          revealedCostMicros += cost.delivered;
+          savingsMicros += cost.baseline - cost.delivered;
+        }
+        continue;
+      }
+      gateCount += 1;
       if (entry.helperUsage) {
         helperDecisionCount += 1;
       }
@@ -3784,10 +3806,10 @@ export class ThreadUsageLedger {
       parentModel ??= accounting.originalModel;
     }
 
-    // Focused helper work is billed once per inference, independently of
-    // whether its answer was emitted. It creates no additional source gate.
+    // Both kinds of helper work are billed once per inference, even if the
+    // parent never reads its answer.
     for (const line of pricing.lines) {
-      if (line.sourceItemId?.startsWith("system:token-miser-focused:")) {
+      if (isTokenMiserAuxiliaryHelper(line.sourceItemId)) {
         if (line.priceStatus !== "priced") return undefined;
         const cost = line.totalCostMicros;
         gateCostMicros += cost;
@@ -3803,7 +3825,7 @@ export class ThreadUsageLedger {
       currency: "USD",
       directlyObservedReplayCount,
       gateCostMicros,
-      gateCount: entries.length,
+      gateCount,
       passThroughCount,
       policyPassThroughCount,
       helperPassThroughCount: passThroughCount - policyPassThroughCount,
@@ -4140,6 +4162,7 @@ export class ThreadUsageLedger {
     if (!options.historical) await this.flushLiveThreadUsageLines();
     const byThread = new Map<string, TokenMiserObjectMetadata[]>();
     for (const entry of metadata) {
+      if (entry.captureBackend) continue;
       if (options.historical && this.pendingTokenMiserInterceptions.has(entry.objectId)) continue;
       if (options.chargesOnly && !entry.helperUsage?.tokenUsage) continue;
       const entries = byThread.get(entry.threadId) ?? [];
