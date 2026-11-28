@@ -1,62 +1,81 @@
 import { ipcMain } from "electron";
-import type {
-  ManageAgentNotificationsRequest,
-  ManageAgentNotificationsResponse,
-} from "@pwragent/shared/contracts/scheduled-thread-actions";
-import { AGENT_NOTIFICATIONS_MANAGE_CHANNEL } from "../../../shared/ipc";
+import type { ManageAgentNotificationsRequest } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
-  getAgentNotificationCenter,
-  getScheduledThreadActionService,
-} from "../../scheduled-actions/scheduled-thread-action-service";
-import { isFederationWindowWebContents } from "../window";
+  AGENT_NOTIFICATIONS_CHANGED_EVENT_CHANNEL,
+  AGENT_NOTIFICATIONS_MANAGE_CHANNEL,
+} from "../../../shared/ipc";
+import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
+import { getMainLogger } from "../../log";
+import { ownerNotifications, requestShowThread } from "../../owner-host";
+import { manageLocalAgentNotifications } from "../../scheduled-actions/agent-notification-operations";
+import { FederatedAgentNotifications } from "../../scheduled-actions/federated-agent-notifications";
+import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
+import { federationTargetForChannelSubscriber, subscribersForChannel } from "../window-channels";
 
-const EMPTY_SNAPSHOT = { unread: [], scheduled: [], earlier: [] };
+const AGENT_NOTIFICATIONS_EVENT_CONSUMER_ID = "agent-notifications-watch";
+const log = getMainLogger("pwragent:agent-notifications");
 
-/**
- * A window's view of its owner's agent notices. A window showing a peer
- * gets none: the peer's own windows show its notices.
- */
-export function registerAgentNotificationIpcHandlers(): void {
-  ipcMain.removeHandler(AGENT_NOTIFICATIONS_MANAGE_CHANNEL);
-  ipcMain.handle(AGENT_NOTIFICATIONS_MANAGE_CHANNEL, async (event, request: ManageAgentNotificationsRequest) => {
-    if (isFederationWindowWebContents(event.sender)) {
-      return { ok: true, snapshot: EMPTY_SNAPSHOT } satisfies ManageAgentNotificationsResponse;
-    }
-    return await manageAgentNotifications(request);
-  });
+let unsubscribe: (() => void) | undefined;
+
+function broadcastChanged(): void {
+  for (const webContents of subscribersForChannel(AGENT_NOTIFICATIONS_CHANGED_EVENT_CHANNEL)) {
+    if (!webContents.isDestroyed()) webContents.send(AGENT_NOTIFICATIONS_CHANGED_EVENT_CHANNEL);
+  }
 }
 
-export async function manageAgentNotifications(
-  request: ManageAgentNotificationsRequest,
-): Promise<ManageAgentNotificationsResponse> {
-  const center = getAgentNotificationCenter();
-  if (!center) {
-    return { ok: false, error: { code: "unavailable", message: "Notices are not available yet." } };
-  }
-  if (!request || typeof request !== "object") {
-    return { ok: false, error: { code: "invalid_request", message: "Unknown request." } };
-  }
-  switch (request.action) {
-    case "snapshot":
-      break;
-    case "dismiss":
-      await center.dismiss(String(request.id));
-      break;
-    case "dismiss_all":
-      await center.dismissAll();
-      break;
-    case "cancel": {
-      const service = getScheduledThreadActionService();
-      const action = service.get(String(request.id));
-      if (!action || action.kind !== "notification") {
-        return { ok: false, error: { code: "not_found", message: "That notice is no longer scheduled." } };
+/**
+ * The notices each window shows: a main window this machine's and its
+ * connected peers', a peer's window that peer's. See
+ * `FederatedAgentNotifications`.
+ */
+export function registerAgentNotificationIpcHandlers(): void {
+  const runtime = getDesktopFederationRuntime();
+  const notices = new FederatedAgentNotifications({
+    local: (request) => manageLocalAgentNotifications(request),
+    remote: (target, request) => runtime.requestAgentNotifications(target, request),
+    peers: () => {
+      try {
+        return runtime.connectedPeerTargets()
+          .filter((peer) => peer.capabilities.includes("agent_notifications"))
+          .map((peer) => ({ target: peer.target, label: peer.shortLabel ?? peer.label }));
+      } catch {
+        // Federation state is not readable yet; the first peer status change syncs again.
+        return [];
       }
-      // The operator may cancel any waiting notice; the agent only its own.
-      await service.cancel({ id: action.id });
-      break;
-    }
-    default:
-      return { ok: false, error: { code: "invalid_request", message: "Unknown request." } };
-  }
-  return { ok: true, snapshot: center.snapshot() };
+    },
+    watch: (instanceIds) => {
+      runtime.setEventSubscriptions(AGENT_NOTIFICATIONS_EVENT_CONSUMER_ID, instanceIds.map((sourceInstanceId) => ({
+        sourceInstanceId,
+        eventClasses: ["agent_notifications" as const],
+        // The class is threadless (`eventMatchesThreadSelection`). An empty
+        // selection leaves the merged selection the other consumers made.
+        threadSelection: { kind: "threads" as const, threads: [] },
+      })));
+    },
+    nativeNotificationsEnabled: () => {
+      try {
+        return getDesktopSettingsService().resolveNotificationsEnabled();
+      } catch {
+        return false;
+      }
+    },
+    notifyNative: (params) => ownerNotifications().notifyAttention(params),
+    clearNative: (key) => ownerNotifications().clearAttentionKey(key),
+    showThread: (request) => requestShowThread(request),
+    changed: broadcastChanged,
+    warn: (message, fields) => log.warn(message, fields),
+  });
+  unsubscribe?.();
+  const offEvents = runtime.onRemoteBackendEvent((event) => notices.onRemoteEvent(event));
+  const offPeers = runtime.onPeerStatusChanged(() => notices.syncPeers());
+  unsubscribe = () => {
+    offEvents();
+    offPeers();
+    runtime.setEventSubscriptions(AGENT_NOTIFICATIONS_EVENT_CONSUMER_ID, []);
+  };
+  notices.syncPeers();
+
+  ipcMain.removeHandler(AGENT_NOTIFICATIONS_MANAGE_CHANNEL);
+  ipcMain.handle(AGENT_NOTIFICATIONS_MANAGE_CHANNEL, async (event, request: ManageAgentNotificationsRequest) =>
+    await notices.manage(request, federationTargetForChannelSubscriber(event.sender)));
 }

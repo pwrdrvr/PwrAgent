@@ -1567,6 +1567,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   manageAgentNotifications?: (
     request: import("@pwragent/shared/contracts/scheduled-thread-actions").ManageAgentNotificationsRequest,
   ) => Promise<import("@pwragent/shared/contracts/scheduled-thread-actions").ManageAgentNotificationsResponse>;
+  /** A peer's agent notices changed; read the window's notices again. */
+  onAgentNotificationsChanged?: (callback: () => void) => () => void;
   sendScheduledThreadActionNow?: (
     request: ScheduledThreadActionIdRequest,
   ) => Promise<ScheduledThreadActionMutationResponse>;

@@ -14,7 +14,18 @@ const EMPTY: AgentNotificationsSnapshot = { unread: [], scheduled: [], earlier: 
 export const AGENT_NOTICE_PREFIX = "agent-notice:";
 const AGENT_NOTICE_GROUP = "agent-notices";
 
-export type AgentNotificationsApi = Pick<DesktopApi, "manageAgentNotifications" | "onAgentEvent" | "openMarkdownFileViewer">;
+export type AgentNotificationsApi = Pick<
+  DesktopApi,
+  "manageAgentNotifications" | "onAgentEvent" | "onAgentNotificationsChanged" | "openMarkdownFileViewer"
+>;
+
+/** Opens a notice's thread, on a peer when the notice is a peer's. */
+export type AgentNoticeShowThread = (thread: {
+  backend: AppServerBackendKind;
+  threadId: string;
+  instanceId?: string;
+  instanceLabel?: string;
+}) => void;
 
 export type AgentNotificationsController = {
   snapshot: AgentNotificationsSnapshot;
@@ -22,20 +33,29 @@ export type AgentNotificationsController = {
   notices: AppNoticeToastNotice[];
   open: (item: AgentNotificationItem) => void;
   openThread: (item: AgentNotificationItem) => void;
-  dismiss: (id: string) => void;
+  dismiss: (item: AgentNotificationItem) => void;
   dismissAll: () => void;
-  cancel: (id: string) => void;
+  cancel: (item: AgentNotificationItem) => void;
+  /** The thread a notice came from, named for this window. */
+  threadTitle: (item: AgentNotificationItem) => string;
 };
 
+/** A peer's notice ids are the peer's own, so the key names the peer too. */
+export function agentNoticeKey(item: AgentNotificationItem): string {
+  return item.federationTarget ? `${item.federationTarget.instanceId}:${item.id}` : item.id;
+}
+
 /**
- * The owner's agent notices for this window. The owner keeps read state;
- * a window only asks for the snapshot again when the owner says it changed.
+ * The agent notices this window shows: a main window this machine's and its
+ * connected peers', a peer's window that peer's. Each owner keeps read
+ * state; a window asks for the snapshot again when an owner says it changed.
  */
 export function useAgentNotifications(
   api: AgentNotificationsApi | undefined,
   options: {
+    /** A title for one of this window's own threads. */
     threadTitle: (backend: AppServerBackendKind, threadId: string) => string;
-    showThread: (thread: { backend: AppServerBackendKind; threadId: string }) => void;
+    showThread: AgentNoticeShowThread;
     showNotice: (notice: AppNoticeToastNotice) => void;
   },
 ): AgentNotificationsController {
@@ -43,6 +63,7 @@ export function useAgentNotifications(
   const reads = useRef({ revision: 0 });
   const manage = api?.manageAgentNotifications;
   const subscribe = api?.onAgentEvent;
+  const subscribePeers = api?.onAgentNotificationsChanged;
   const openFile = api?.openMarkdownFileViewer;
   const { threadTitle, showThread, showNotice } = options;
 
@@ -68,8 +89,10 @@ export function useAgentNotifications(
   useEffect(() => {
     const requests = reads.current;
     const reload = () => { void run({ action: "snapshot" }); };
+    // This machine's main process follows its peers' notices and says when
+    // they change; a peer's own events are not read here.
+    const unsubscribePeers = subscribePeers?.(reload);
     const unsubscribe = subscribe?.((event) => {
-      // A peer's notices belong to the peer's own windows.
       if (event.federationTarget?.scope === "remote") return;
       const method = event.notification.method;
       if (method === "agentNotifications/updated"
@@ -82,25 +105,44 @@ export function useAgentNotifications(
     return () => {
       requests.revision++;
       unsubscribe?.();
+      unsubscribePeers?.();
     };
-  }, [run, subscribe]);
+  }, [run, subscribe, subscribePeers]);
 
-  const dismiss = useCallback((id: string) => { void run({ action: "dismiss", id }); }, [run]);
+  const dismiss = useCallback((item: AgentNotificationItem) => {
+    void run({ action: "dismiss", id: item.id, ...owner(item) });
+  }, [run]);
   const dismissAll = useCallback(() => { void run({ action: "dismiss_all" }); }, [run]);
-  const cancel = useCallback((id: string) => { void run({ action: "cancel", id }); }, [run]);
+  const cancel = useCallback((item: AgentNotificationItem) => {
+    void run({ action: "cancel", id: item.id, ...owner(item) });
+  }, [run]);
+  const noticeThreadTitle = useCallback((item: AgentNotificationItem) => item.federationTarget
+    ? `${item.threadTitle ?? "Untitled thread"} on ${item.ownerLabel ?? "another machine"}`
+    : threadTitle(item.backend, item.threadId), [threadTitle]);
+  const show = useCallback((item: AgentNotificationItem) => {
+    showThread({
+      backend: item.backend,
+      threadId: item.threadId,
+      ...(item.federationTarget
+        ? { instanceId: item.federationTarget.instanceId, ...(item.ownerLabel ? { instanceLabel: item.ownerLabel } : {}) }
+        : {}),
+    });
+  }, [showThread]);
   const openThread = useCallback((item: AgentNotificationItem) => {
-    showThread({ backend: item.backend, threadId: item.threadId });
-    dismiss(item.id);
-  }, [dismiss, showThread]);
+    show(item);
+    dismiss(item);
+  }, [dismiss, show]);
   const open = useCallback((item: AgentNotificationItem) => {
     const link = item.link;
     if (link?.kind === "url") {
       openExternalUrl(link.url);
     } else if (link?.kind === "file" && openFile) {
-      const title = threadTitle(item.backend, item.threadId);
+      const title = noticeThreadTitle(item);
       void openFile({
         context: {
-          key: `${AGENT_NOTICE_PREFIX}${buildThreadIdentityKey(item.backend, item.threadId)}`,
+          // A peer's file is read from the peer.
+          ...(item.federationTarget ? { federationTarget: item.federationTarget } : {}),
+          key: `${AGENT_NOTICE_PREFIX}${item.federationTarget ? `${item.federationTarget.instanceId}:` : ""}${buildThreadIdentityKey(item.backend, item.threadId)}`,
           thread: { backend: item.backend, threadId: item.threadId },
           title,
           threadTitle: title,
@@ -110,20 +152,24 @@ export function useAgentNotifications(
         showNotice({ id: `${AGENT_NOTICE_PREFIX}error`, title: "Could not open the file", message: String(error), tone: "error" });
       });
     } else {
-      showThread({ backend: item.backend, threadId: item.threadId });
+      show(item);
     }
-    dismiss(item.id);
-  }, [dismiss, openFile, showNotice, showThread, threadTitle]);
+    dismiss(item);
+  }, [dismiss, noticeThreadTitle, openFile, show, showNotice]);
 
   const notices = useMemo(() => snapshot.unread.map((item) => buildAgentNotice(item, {
-    threadTitle: threadTitle(item.backend, item.threadId),
+    threadTitle: noticeThreadTitle(item),
     onOpen: () => open(item),
     onOpenThread: () => openThread(item),
-    onDismiss: () => dismiss(item.id),
+    onDismiss: () => dismiss(item),
     onDismissAll: dismissAll,
-  })), [dismiss, dismissAll, open, openThread, snapshot.unread, threadTitle]);
+  })), [dismiss, dismissAll, noticeThreadTitle, open, openThread, snapshot.unread]);
 
-  return { snapshot, notices, open, openThread, dismiss, dismissAll, cancel };
+  return { snapshot, notices, open, openThread, dismiss, dismissAll, cancel, threadTitle: noticeThreadTitle };
+}
+
+function owner(item: AgentNotificationItem): { federationTarget?: AgentNotificationItem["federationTarget"] } {
+  return item.federationTarget ? { federationTarget: item.federationTarget } : {};
 }
 
 /** One unread notice as a durable card in the notice stack. */
@@ -142,12 +188,19 @@ export function buildAgentNotice(
   if (item.link?.kind === "url") facts.push({ label: "Link", value: item.link.url });
   if (item.link?.kind === "file") facts.push({ label: "File", value: item.link.path });
   return {
-    id: `${AGENT_NOTICE_PREFIX}${item.id}`,
+    id: `${AGENT_NOTICE_PREFIX}${agentNoticeKey(item)}`,
     title: item.title,
     message: item.body,
     tone: item.urgency === "high" ? "warning" : "neutral",
     autoDismiss: false,
-    threadLink: { backend: item.backend, threadId: item.threadId, title: handlers.threadTitle },
+    threadLink: {
+      backend: item.backend,
+      threadId: item.threadId,
+      title: handlers.threadTitle,
+      ...(item.federationTarget
+        ? { instanceId: item.federationTarget.instanceId, ...(item.ownerLabel ? { instanceLabel: item.ownerLabel } : {}) }
+        : {}),
+    },
     ...(facts.length > 0 ? { facts } : {}),
     dismissLabel: "Dismiss notification",
     onDismiss: handlers.onDismiss,

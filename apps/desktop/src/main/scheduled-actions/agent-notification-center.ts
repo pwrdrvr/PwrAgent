@@ -91,6 +91,32 @@ export class AgentNotificationCenter {
     return items.length;
   }
 
+  /**
+   * The snapshot with each thread's title, for a peer's windows, which do
+   * not list this owner's threads. One lookup per thread.
+   */
+  async titledSnapshot(): Promise<AgentNotificationsSnapshot> {
+    const snapshot = this.snapshot();
+    const titles = new Map<string, Promise<string | undefined>>();
+    const title = (item: AgentNotificationItem) => {
+      const key = `${item.backend}\0${item.threadId}`;
+      let pending = titles.get(key);
+      if (!pending) {
+        pending = this.deps.threadLabel(item.backend, item.threadId).catch(() => undefined);
+        titles.set(key, pending);
+      }
+      return pending;
+    };
+    const titled = (items: AgentNotificationItem[]) => Promise.all(items.map(async (item) => {
+      const threadTitle = await title(item);
+      return threadTitle ? { ...item, threadTitle } : item;
+    }));
+    const [unread, scheduled, earlier] = await Promise.all([
+      titled(snapshot.unread), titled(snapshot.scheduled), titled(snapshot.earlier),
+    ]);
+    return { unread, scheduled, earlier };
+  }
+
   snapshot(): AgentNotificationsSnapshot {
     const now = this.now();
     const scheduled: AgentNotificationItem[] = [];

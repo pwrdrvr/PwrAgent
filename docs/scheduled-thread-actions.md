@@ -281,11 +281,45 @@ and resend cannot spend more.
   restart). Dismissing writes nothing; a restart clears read state.
 - **Native.** `DesktopNotificationService.notifyAttention` with key
   `agent-notification:<id>`: only when Desktop notifications are on and no
-  window is focused, deduplicated by key, cleared on dismiss.
+  window is focused, deduplicated by key, cleared on dismiss. Each machine
+  shows its own, so a notice can appear on every machine that is not in
+  use.
 - **Messaging.** The backend event router posts a delivered notice once to
   each conversation bound to the thread.
-- **Federation.** The owner stores, times and shows a notice. The update
-  event is not relayed, and a window showing a peer gets an empty snapshot.
+- **Federation.** Every window that can see a machine's threads shows its
+  notices: a main window shows this machine's and every connected peer's,
+  and a peer's window shows that peer's. The owner keeps each notice, its
+  schedule, bounds and read state; dismissing one anywhere dismisses it on
+  the owner, so it leaves every window.
+
+### Notices across Federation
+
+An owner that advertises `agent_notifications` answers two RPC methods and
+sends one event. A contained Outpost is an owner like any other: viewers
+read from it, and it never calls them.
+
+| RPC method | Required capability | Behavior on the owner |
+| --- | --- | --- |
+| `agentNotifications.snapshot` | `thread_detail` | Unread, scheduled and earlier notices, with each thread's title |
+| `agentNotifications.manage` | `turn_control` | Dismiss, dismiss all, or cancel a waiting notice |
+
+`agentNotifications/updated` travels in its own threadless
+`agent_notifications` event class, so a viewer follows an owner's notices
+without following its threads. The owner sends it when a notice is
+delivered, dismissed, scheduled, cancelled or fails.
+
+The viewer's main process (`FederatedAgentNotifications`) keeps the last
+snapshot of each connected peer that advertises the capability, reads it
+again on each event and on a stream restart, and keeps it through a failed
+read. It tags each notice with its owner, and dismiss and cancel go to that
+owner. A peer's window acts only on its own peer's notices. The viewer
+raises its own native notification, key
+`agent-notification:<instance>:<id>`, for each notice that arrives while it
+is connected, under the same eligibility as its own notices. Notices unread
+when a peer connects are listed, not announced. A peer that disconnects
+leaves the windows and withdraws its banners. Behind a gateway that
+predates the event class, a viewer reads a peer's notices when it connects
+but not live. None of this writes to SQLite.
 
 ### Budgets
 
@@ -293,7 +327,8 @@ and resend cannot spend more.
 (create; claim; delivered), two for create and cancel. About 62 KB of WAL
 per notice: 3.7 MB/day at the default profile bound of 60, about 0.3 MB/day
 at five. `agent-notification.property.test.ts` holds the delivery model and
-the bound oracle.
+the bound oracle; `federated-agent-notifications.property.test.ts` holds the
+viewer model.
 
 ## Surface contract
 

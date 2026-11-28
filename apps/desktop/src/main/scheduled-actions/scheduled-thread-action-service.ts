@@ -980,6 +980,14 @@ export class ScheduledThreadActionService {
         params: { action },
       },
     });
+    // A peer's windows follow notices on their own event, not on scheduled
+    // actions. Delivery announces itself through the notification center.
+    if (action.kind === "notification" && action.status !== "dispatching" && action.status !== "started") {
+      await this.options.registry.publishLocalEvent({
+        backend: action.backend,
+        notification: { method: "agentNotifications/updated", params: { threadId: action.threadId } },
+      });
+    }
   }
 
   /** Waiting for redraws when a claim trips a thread's loop guard. */

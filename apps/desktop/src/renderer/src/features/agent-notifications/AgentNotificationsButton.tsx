@@ -1,21 +1,19 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { createPortal } from "react-dom";
 import type { AgentNotificationItem } from "@pwragent/shared/contracts/scheduled-thread-actions";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { BellIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
-import type { AgentNotificationsController } from "./useAgentNotifications";
+import { agentNoticeKey, type AgentNotificationsController } from "./useAgentNotifications";
 
 /**
- * The window-level bell for agents' notices. It shows only while a notice
- * is unread or scheduled, so a profile that never uses `notify_operator`
- * sees no new control. Every placement (sidebar masthead, title strip,
- * thread header) renders this one.
+ * The window-level bell for agents' notices, this machine's and its
+ * connected peers'. It shows only while a notice is unread or scheduled, so
+ * a profile that never uses `notify_operator` sees no new control. Every
+ * placement (sidebar masthead, title strip, thread header) renders this one.
  */
 export function AgentNotificationsButton(props: {
   controller?: AgentNotificationsController;
-  threadTitle: (backend: AppServerBackendKind, threadId: string) => string;
   /** Placement classes added to `sidebar__icon-button`. */
   className?: string;
   now?: () => number;
@@ -78,7 +76,7 @@ export function AgentNotificationsButton(props: {
     open ? "is-active" : undefined,
   ].filter(Boolean).join(" ");
   const row = (item: AgentNotificationItem, kind: "unread" | "scheduled" | "earlier") => (
-    <li key={item.id} className="agent-notifications__row">
+    <li key={agentNoticeKey(item)} className="agent-notifications__row">
       <span
         aria-hidden="true"
         className={`agent-notifications__dot${kind === "earlier" ? " is-read" : item.urgency === "high" ? " is-high" : ""}`}
@@ -86,7 +84,7 @@ export function AgentNotificationsButton(props: {
       <div className="agent-notifications__text">
         <p className="agent-notifications__title">{item.title}</p>
         <p className="agent-notifications__meta">
-          {props.threadTitle(item.backend, item.threadId)} · {describeTime(kind === "scheduled" ? item.scheduledFor : item.deliveredAt ?? item.scheduledFor, now, kind === "scheduled")}
+          {controller.threadTitle(item)} · {describeTime(kind === "scheduled" ? item.scheduledFor : item.deliveredAt ?? item.scheduledFor, now, kind === "scheduled")}
         </p>
       </div>
       <div className="agent-notifications__acts">
@@ -95,7 +93,7 @@ export function AgentNotificationsButton(props: {
             type="button"
             aria-label={`Cancel ${item.title}`}
             className="button button--ghost agent-notifications__act"
-            onClick={() => controller.cancel(item.id)}
+            onClick={() => controller.cancel(item)}
           >
             Cancel
           </button>
@@ -117,7 +115,7 @@ export function AgentNotificationsButton(props: {
             type="button"
             aria-label={`Dismiss ${item.title}`}
             className="button button--ghost agent-notifications__act"
-            onClick={() => controller.dismiss(item.id)}
+            onClick={() => controller.dismiss(item)}
           >
             Dismiss
           </button>

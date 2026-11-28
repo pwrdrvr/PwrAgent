@@ -181,6 +181,13 @@ export const FEDERATION_CAPABILITIES = [
    * and keeps all Harness secrets local.
    */
   "thread_research",
+  /**
+   * The owner answers `agentNotifications.snapshot` and
+   * `agentNotifications.manage`, and sends `agentNotifications/updated` to
+   * `agent_notifications` subscribers, so a viewer shows the owner's agent
+   * notices. The owner keeps them, their schedule, bounds and read state.
+   */
+  "agent_notifications",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";
@@ -234,6 +241,13 @@ export const FEDERATION_EVENT_CLASSES = [
    * every hop relays `thread/todos/delta`.
    */
   "todo_feed",
+  /**
+   * Threadless; carries only `agentNotifications/updated`. A notice is the
+   * owner's, not one thread's, so a viewer follows every owner it connects
+   * to without following its threads. A relay that predates the class drops
+   * it, and the viewer then reads the owner's notices when it connects.
+   */
+  "agent_notifications",
 ] as const;
 
 export type FederationEventClass =

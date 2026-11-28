@@ -12,7 +12,7 @@ import type {
   ReviewAfterAction,
   ReviewRunMode,
 } from "./agent";
-import type { FederationTarget } from "./federation";
+import type { FederationRemoteTarget, FederationTarget } from "./federation";
 import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
@@ -191,6 +191,15 @@ export type AgentNotificationItem = {
   scheduledFor: number;
   /** When it was delivered; absent while it waits. */
   deliveredAt?: number;
+  /** The thread's title on its owner, when the owner sent it. */
+  threadTitle?: string;
+  /**
+   * The peer that owns it. The viewer adds this to a peer's notices; an
+   * owner never sends it.
+   */
+  federationTarget?: FederationRemoteTarget;
+  /** The owner's name, for a peer's notices. */
+  ownerLabel?: string;
 };
 
 /**
@@ -204,12 +213,15 @@ export type AgentNotificationsSnapshot = {
   earlier: AgentNotificationItem[];
 };
 
-/** What a window asks of its owner's notices. */
+/**
+ * What a window asks of the notices it shows. A dismiss or cancel names the
+ * peer that owns the notice; without one it is this machine's.
+ */
 export type ManageAgentNotificationsRequest =
   | { action: "snapshot" }
-  | { action: "dismiss"; id: string }
+  | { action: "dismiss"; id: string; federationTarget?: FederationRemoteTarget }
   | { action: "dismiss_all" }
-  | { action: "cancel"; id: string };
+  | { action: "cancel"; id: string; federationTarget?: FederationRemoteTarget };
 
 export type ManageAgentNotificationsResponse =
   | { ok: true; snapshot: AgentNotificationsSnapshot }

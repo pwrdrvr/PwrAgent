@@ -28,6 +28,12 @@ import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION
   type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { localResearchOperations } from "../research/research-operations";
+import { manageLocalAgentNotifications } from "../scheduled-actions/agent-notification-operations";
+import {
+  FEDERATION_AGENT_NOTIFICATION_CAPABILITIES,
+  FEDERATION_AGENT_NOTIFICATION_METHODS,
+  registerFederationAgentNotificationHandlers,
+} from "./federation-agent-notifications";
 import { desktopThreadPullRequestMergeDeps } from "../pr-status/desktop-thread-pull-request-merge";
 import {
   mergeThreadPullRequest,
@@ -244,6 +250,8 @@ import type {
   CreateScheduledThreadActionRequest,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
+  ManageAgentNotificationsRequest,
+  ManageAgentNotificationsResponse,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
   SteerFallbackInputSource,
@@ -817,6 +825,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_dependencies_v1",
   "thread_dependency_provenance_v1",
   "thread_research",
+  "agent_notifications",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -996,6 +1005,9 @@ export function federationEventClassForMethod(
   }
   if (method === THREAD_TODO_FEED_ACKNOWLEDGED_METHOD) {
     return "todo_feed";
+  }
+  if (method === "agentNotifications/updated") {
+    return "agent_notifications";
   }
   // Fail closed: newly introduced notification methods do not reach
   // navigation-only or Star Map subscribers until explicitly classified.
@@ -1227,8 +1239,9 @@ export function eventMatchesThreadSelection(
   selection: FederationThreadSelection,
 ): boolean {
   if (selection.kind === "all") return true;
-  // A directory set and a To-do feed belong to the owner, never to one thread.
-  if (eventClass === "directory_set" || eventClass === "todo_feed") return true;
+  // A directory set, a To-do feed and agent notices belong to the owner,
+  // never to one thread.
+  if (eventClass === "directory_set" || eventClass === "todo_feed" || eventClass === "agent_notifications") return true;
   // Private execution threads do not appear in navigation. Notice events
   // name their visible owner separately, so its sparse subscribers receive
   // both the incident and model-progress recovery before the terminal event.
@@ -1291,6 +1304,10 @@ function eventClassAllowedByCapabilities(
       return capabilities.includes("thread_navigation");
     case "todo_feed":
       return capabilities.includes("thread_navigation") && capabilities.includes("thread_todo_feed");
+    case "agent_notifications":
+      // It names only a thread; the notices themselves are read with
+      // thread_detail.
+      return capabilities.includes("thread_navigation");
   }
 }
 
@@ -2960,6 +2977,30 @@ export class DesktopFederationRuntime {
     });
   }
 
+  /**
+   * A peer's agent notices: its snapshot, or a dismiss or cancel there. A
+   * peer without `agent_notifications` has none to show.
+   */
+  async requestAgentNotifications(
+    target: FederationRemoteTarget,
+    request: ManageAgentNotificationsRequest,
+  ): Promise<ManageAgentNotificationsResponse> {
+    const unavailable = this.todoQueueUnavailableInstance(target, "agent_notifications");
+    if (unavailable) {
+      if (request.action === "snapshot") return { ok: true, snapshot: { unread: [], scheduled: [], earlier: [] } };
+      return { ok: false, error: { code: "unavailable", message: unavailable.reason === "disconnected"
+        ? `${unavailable.label} is disconnected.`
+        : `${unavailable.label} does not share agent notices. Update that PwrAgent instance.` } };
+    }
+    const { federationTarget: _target, ...owned } = request as ManageAgentNotificationsRequest & { federationTarget?: unknown };
+    return await this.rpcFor(target).request({
+      method: request.action === "snapshot"
+        ? FEDERATION_AGENT_NOTIFICATION_METHODS.snapshot
+        : FEDERATION_AGENT_NOTIFICATION_METHODS.manage,
+      params: owned,
+    });
+  }
+
   async requestResearchOperation<K extends ResearchOperation>(
     target: FederationRemoteTarget,
     operation: K,
@@ -4500,6 +4541,7 @@ export class DesktopFederationRuntime {
         ...FEDERATION_THREAD_TODO_CAPABILITIES,
         ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
         ...FEDERATION_RESEARCH_CAPABILITIES,
+        ...FEDERATION_AGENT_NOTIFICATION_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
         ...SERVICE_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
@@ -4567,6 +4609,7 @@ export class DesktopFederationRuntime {
     registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
     registerFederationOperatorQuestionHandlers(router);
     registerFederationResearchHandlers(router, localResearchOperations);
+    registerFederationAgentNotificationHandlers(router, manageLocalAgentNotifications);
     router.registerHandler(CHECKOUT_FEDERATION_METHOD, (envelope) => {
       if (!this.resourceCheckoutHandler || this.peerRole(envelope.sourceInstanceId) !== "full") {
         throw new Error("This Federation owner does not provide checkout access to the peer.");
