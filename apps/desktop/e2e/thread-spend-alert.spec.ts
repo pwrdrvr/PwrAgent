@@ -17,7 +17,7 @@ async function openSpendSettings(window: Page) {
   return window.getByRole("switch", { name: "Total thread spend", exact: true });
 }
 
-test("only delivers a legacy pending thread spend warning after opt-in survives reopening", async () => {
+test("delivers a legacy pending spend warning when opt-in is saved and preserves the setting on reopen", async () => {
   const first = await launchElectronApp({
     fixturePath,
     preLaunchHook: async (homeRoot) => {
@@ -60,11 +60,11 @@ test("only delivers a legacy pending thread spend warning after opt-in survives 
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", "true");
     await expect(threshold).toBeEnabled();
+    await expect(first.window.getByText("Thread spend threshold reached", { exact: true })).toBeVisible();
+    await expect(first.window.getByText(/\$31\.00 in estimated list-price spend/)).toBeVisible();
     await first.closeApplication();
 
     reopened = await launchElectronApp({ fixturePath, homeRoot: first.homeRoot });
-    await expect(reopened.window.getByText("Thread spend threshold reached", { exact: true })).toBeVisible();
-    await expect(reopened.window.getByText(/\$31\.00 in estimated list-price spend/)).toBeVisible();
     await expect(await openSpendSettings(reopened.window)).toHaveAttribute("aria-checked", "true");
     await expect(reopened.window.getByRole("spinbutton", { name: "Total thread spend threshold" })).toHaveValue("30");
   } finally {
