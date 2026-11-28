@@ -37,6 +37,64 @@ describe("useBackendSummaries", () => {
     }
   });
 
+  it("uses one on-demand response per remote owner and ignores a late response from a former owner", async () => {
+    const ownerA = { scope: "remote", instanceId: "owner-a" } as const;
+    const ownerB = { scope: "remote", instanceId: "owner-b" } as const;
+    type List = NonNullable<DesktopApi["listBackends"]>;
+    type Result = Awaited<ReturnType<List>>;
+    const waitingA = Promise.withResolvers<Result>();
+    const waitingB = Promise.withResolvers<Result>();
+    const usage = (usedPercent: number): Result["backends"] => [{
+      kind: "acp:antigravity",
+      label: "Antigravity",
+      available: true,
+      methods: [],
+      executionModes: [],
+      capabilities: {
+        listThreads: true, createThread: true, resumeThread: true, renameThread: true,
+        readThread: true, startTurn: true, interruptTurn: true, steerTurn: false,
+        transcriptPagination: false, toolUse: true, approvalRequests: true, multiDirectoryThreads: true,
+      },
+      rateLimits: [{ name: "Weekly Gemini", usedPercent }],
+    }];
+    const listBackends = vi.fn<List>(async (request) => {
+      if (!request?.refreshAntigravityQuota) return { fetchedAt: 1, backends: [] };
+      const target = request.federationTarget;
+      return await (target?.scope === "remote" && target.instanceId === ownerA.instanceId ? waitingA : waitingB).promise;
+    });
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const { result, rerender, unmount } = renderHook(
+      ({ owner }) => useBackendSummaries({ listBackends }, { federationTarget: owner }),
+      { initialProps: { owner: ownerA as typeof ownerA | typeof ownerB } },
+    );
+    try {
+      const requestsFor = (instanceId: string) => listBackends.mock.calls.filter(([request]) => {
+        const target = request?.federationTarget;
+        return request?.refreshAntigravityQuota && target?.scope === "remote" && target.instanceId === instanceId;
+      });
+      await act(async () => {});
+      for (const burst of [4, 8, 16]) {
+        await act(async () => {
+          for (let i = 0; i < burst; i++) result.current.requestAntigravityQuota();
+        });
+        expect(requestsFor(ownerA.instanceId)).toHaveLength(1);
+      }
+      const backends = usage(31);
+      rerender({ owner: ownerB });
+      await act(async () => { result.current.requestAntigravityQuota(); });
+      expect(requestsFor(ownerB.instanceId)).toHaveLength(1);
+      await act(async () => { waitingB.resolve({ fetchedAt: 2, backends }); });
+      expect(result.current.backends).toEqual(backends);
+      await act(async () => { waitingA.resolve({ fetchedAt: 3, backends: usage(89) }); });
+      expect(result.current.backends).toEqual(backends);
+    } finally {
+      unmount();
+      focus.mockRestore();
+      visibility.mockRestore();
+    }
+  });
+
   it("requests fresh quotas and account metadata when the provider tab opens", async () => {
     const listBackends = vi.fn().mockResolvedValue({ fetchedAt: 1, backends: [] });
     const desktopApi = { listBackends };

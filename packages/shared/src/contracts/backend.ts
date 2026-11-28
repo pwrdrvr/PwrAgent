@@ -418,7 +418,7 @@ export type BackendSummary = {
 export type ListBackendsRequest = {
   /** Refresh quotas that support background reads. */
   refreshRateLimits?: boolean;
-  /** A visible, focused viewer requested Antigravity usage. */
+  /** A visible, focused viewer requested Antigravity usage and awaits the result. */
   refreshAntigravityQuota?: true;
   includeUnavailable?: boolean;
   /**

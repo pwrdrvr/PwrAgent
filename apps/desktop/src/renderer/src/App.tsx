@@ -528,6 +528,7 @@ function DesktopAppShell(props: {
     threadJump,
     closeThreadJump,
     toggleSidebar,
+    toggleContextRail,
     setSidebarHiddenPersisted,
     setContextRailPinnedPersisted,
     setProjectIndexHiddenPersisted,
@@ -538,7 +539,12 @@ function DesktopAppShell(props: {
     setLaunchpadConnectionsDockPersisted,
     resizeSidebar,
     startSidebarResize,
-  } = useShellLayout(props.settings, () => windowBackendSummaries.requestAntigravityQuota());
+  } = useShellLayout(props.settings, {
+    onSidebarOpened: () => windowBackendSummaries.requestAntigravityQuota(),
+    onProvidersOpened: () => {
+      if (mainView === "thread") backendSummaries.requestAntigravityQuota();
+    },
+  });
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
   // The open thread whose title strip holds a rename field.
@@ -1996,26 +2002,9 @@ function DesktopAppShell(props: {
           .repeatedLargeOutputMinimumPercent,
     );
   }, [settings.snapshot?.general.toolOutputAlerts]);
-  // The sidebar belongs to the window's navigation owner even when its
-  // selected transcript belongs to a peer. A peer's provider catalog must
-  // not remove management actions from this window's local thread rows.
-  const windowFederationTarget = useMemo(() => readRendererFederationTarget(), []);
-  const windowBackendSummaries = useBackendSummaries(desktopApi, {
-    enabled: normalAppEnabled,
-    federationTarget: windowFederationTarget,
-    suspended: Boolean(windowFederationTarget && remoteReadsSuspended),
-    pollRateLimits: !sidebarHidden,
-  });
-  const selectedPeerCatalog = !federationTargetsEqual(activeFederationTarget, windowFederationTarget);
-  const selectedPeerBackendSummaries = useBackendSummaries(desktopApi, {
-    enabled: normalAppEnabled && selectedPeerCatalog,
-    federationTarget: activeFederationTarget,
-    suspended: remoteReadsSuspended,
-    pollRateLimits: !sidebarHidden,
-  });
-  const backendSummaries = selectedPeerCatalog
-    ? selectedPeerBackendSummaries
-    : windowBackendSummaries;
+  const { windowFederationTarget, windowBackendSummaries, backendSummaries } = useShellBackendSummaries(
+    desktopApi, normalAppEnabled, activeFederationTarget, remoteReadsSuspended, !sidebarHidden,
+  );
   const remoteSidebarBackends = useSidebarOwnerBackends(desktopApi, navigation.threads, {
     enabled: normalAppEnabled,
     windowInstanceId: windowFederationTarget?.instanceId,
@@ -4417,6 +4406,7 @@ function DesktopAppShell(props: {
           },
         },
         contextRailPinned,
+        onToggleContextRail: toggleContextRail,
         onContextRailPinnedChange: setContextRailPinnedPersisted,
         activeContextTab,
         onActiveContextTabChange: setActiveContextTabPersisted,
@@ -4656,7 +4646,7 @@ function DesktopAppShell(props: {
             sidebarOpen: !sidebarHidden,
             railOpen: contextRailPinned,
             onToggleSidebar: toggleSidebar,
-            onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+            onToggleRail: toggleContextRail,
           }}
           starMap={starMapControls}
           actions={mastheadActions}
@@ -4998,7 +4988,7 @@ function DesktopAppShell(props: {
                   sidebarOpen: !sidebarHidden,
                   railOpen: contextRailPinned,
                   onToggleSidebar: toggleSidebar,
-                  onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                  onToggleRail: toggleContextRail,
                 }}
                 masthead={mastheadActions}
                 history={historyNav}
@@ -5087,7 +5077,7 @@ function DesktopAppShell(props: {
                     sidebarOpen: !sidebarHidden,
                     railOpen: contextRailPinned,
                     onToggleSidebar: toggleSidebar,
-                    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                    onToggleRail: toggleContextRail,
                   }}
                   masthead={mastheadActions}
                   history={historyNav}
@@ -5401,8 +5391,41 @@ function isSettingsSection(
   );
 }
 
+function useShellBackendSummaries(
+  desktopApi: DesktopApi | undefined,
+  enabled: boolean,
+  activeFederationTarget: FederationTarget | undefined,
+  remoteReadsSuspended: boolean,
+  pollRateLimits: boolean,
+) {
+  // The sidebar belongs to the window's navigation owner even when its
+  // selected transcript belongs to a peer.
+  const windowFederationTarget = useMemo(() => readRendererFederationTarget(), []);
+  const windowBackendSummaries = useBackendSummaries(desktopApi, {
+    enabled,
+    federationTarget: windowFederationTarget,
+    suspended: Boolean(windowFederationTarget && remoteReadsSuspended),
+    pollRateLimits,
+  });
+  const selectedPeerCatalog = !federationTargetsEqual(activeFederationTarget, windowFederationTarget);
+  const selectedPeerBackendSummaries = useBackendSummaries(desktopApi, {
+    enabled: enabled && selectedPeerCatalog,
+    federationTarget: activeFederationTarget,
+    suspended: remoteReadsSuspended,
+    pollRateLimits,
+  });
+  return {
+    windowFederationTarget,
+    windowBackendSummaries,
+    backendSummaries: selectedPeerCatalog ? selectedPeerBackendSummaries : windowBackendSummaries,
+  };
+}
+
 // Own window layout, including live drag width and startup preference adoption.
-function useShellLayout(settings: DesktopSettingsState, onSidebarOpened: () => void) {
+function useShellLayout(settings: DesktopSettingsState, actions: {
+  onSidebarOpened: () => void;
+  onProvidersOpened: () => void;
+}) {
   const [sidebarWidth, setSidebarWidth] = useState(408);
   // Live mirror of `sidebarWidth`. A pointer drag updates this ref (and the
   // DOM) on every move WITHOUT calling setState, so the `.app-shell` rerender
@@ -5498,13 +5521,17 @@ function useShellLayout(settings: DesktopSettingsState, onSidebarOpened: () => v
     [writeConfig],
   );
   const toggleSidebar = useEventCallback(() => {
-    if (sidebarHidden) onSidebarOpened();
+    if (sidebarHidden) actions.onSidebarOpened();
     setSidebarHiddenPersisted(!sidebarHidden);
+  });
+  const toggleContextRail = useEventCallback(() => {
+    if (!contextRailPinned && activeContextTab === "providers") actions.onProvidersOpened();
+    setContextRailPinnedPersisted(!contextRailPinned);
   });
   // Bind once per window so each layout chord runs exactly one action.
   useLayoutChordHotkeys({
     onToggleSidebar: toggleSidebar,
-    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+    onToggleRail: toggleContextRail,
     onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
   });
   // Called once per drag and once per arrow-key run, on release.
@@ -5696,6 +5723,7 @@ function useShellLayout(settings: DesktopSettingsState, onSidebarOpened: () => v
     threadJump,
     closeThreadJump,
     toggleSidebar,
+    toggleContextRail,
     setSidebarHiddenPersisted,
     setContextRailPinnedPersisted,
     setProjectIndexHiddenPersisted,

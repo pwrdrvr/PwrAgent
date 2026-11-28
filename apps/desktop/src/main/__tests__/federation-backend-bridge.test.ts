@@ -782,6 +782,22 @@ describe("federation backend bridge", () => {
     expect(request.mock.calls).toHaveLength(2);
   });
 
+  it("returns completed Antigravity quota through the original owner RPC", async () => {
+    const reply = Promise.withResolvers<{ backends: unknown[]; fetchedAt: number }>();
+    const request = vi.fn(() => reply.promise);
+    const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);
+    const response = client.listBackends({ refreshAntigravityQuota: true });
+    expect(request).toHaveBeenCalledExactlyOnceWith({
+      method: FEDERATION_BACKEND_METHODS.listBackends,
+      params: { refreshAntigravityQuota: true },
+      timeoutMs: 45_000,
+    });
+    const snapshot = { backends: [{ kind: "acp:antigravity", rateLimits: [{ usedPercent: 31 }] }], fetchedAt: 2 };
+    reply.resolve(snapshot);
+    await expect(response).resolves.toEqual(snapshot);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("gates explicit review modes before sending them to an old Federation owner", async () => {
     const request = vi.fn(async (_args: { method: string }) => ({ backends: [{ kind: "codex", capabilities: {} }] }));
     const client = new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint);

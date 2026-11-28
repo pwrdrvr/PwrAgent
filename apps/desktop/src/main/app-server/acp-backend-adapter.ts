@@ -1551,20 +1551,26 @@ export class AcpBackendAdapter {
     if (!enabledAgents.some((agent) => agent.registryId === "antigravity")) {
       this.invalidateAntigravityQuota();
     }
-    return enabledAgents.map((agent) => {
+    const summaries: BackendSummary[] = [];
+    for (const agent of enabledAgents) {
       const summary = describeInstalledAcpBackend(agent);
       if (agent.registryId === "antigravity") {
-        this.updateAntigravityQuotaSelection(agent, summary.available, refreshAntigravityQuota);
+        const refresh = this.updateAntigravityQuotaSelection(agent, summary.available, refreshAntigravityQuota);
+        if (refresh) {
+          const selection = this.antigravityUsageSelection;
+          await refresh;
+          if (this.closed) return [];
+          if (selection !== this.antigravityUsageSelection) return await this.describeInstalledBackends();
+        }
       } else if (agent.registryId === "grok" && summary.available) {
         this.refreshGrokProviderStatusInBackground(agent.backendId);
       } else {
-        return summary;
+        summaries.push(summary);
+        continue;
       }
-      // Backend discovery is also used by launchpad and messaging flows.
-      // Merge only cached decoration here; provider quota reads must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
       const reading = providerStatus && this.planLimits.snapshot(agent.backendId);
-      return providerStatus
+      summaries.push(providerStatus
         ? {
             ...summary,
             account: providerStatus.account,
@@ -1572,8 +1578,9 @@ export class AcpBackendAdapter {
             rateLimitsObservedAt: reading?.observedAt,
             rateLimitsAccountKey: reading?.account,
           }
-        : summary;
-    });
+        : summary);
+    }
+    return summaries;
   }
 
   private refreshGrokUpdateStatusInBackground(
@@ -1673,7 +1680,7 @@ export class AcpBackendAdapter {
     agent: AcpInstalledAgentRecord,
     available: boolean,
     refresh: boolean,
-  ): void {
+  ): Promise<void> | undefined {
     if (this.closed) return;
     const selected = recoverLegacyAntigravitySelection(agent);
     const launch = selected.launchDescriptor;
@@ -1691,11 +1698,15 @@ export class AcpBackendAdapter {
       this.invalidateAntigravityQuota();
       this.antigravityUsageSelection = { identity, cancellation: new AbortController() };
     }
-    if (!refresh || this.providerStatusRefreshes.has(agent.backendId)) return;
+    if (!refresh) return;
+    const pending = this.providerStatusRefreshes.get(agent.backendId);
+    if (pending) return pending;
     const { signal } = this.antigravityUsageSelection.cancellation;
-    this.trackProviderStatusRefresh(agent.backendId, this.refreshProviderStatus(
+    const started = this.refreshProviderStatus(
       agent.backendId, () => this.probeAntigravityQuota(launch, signal), () => !signal.aborted,
-    ));
+    );
+    this.trackProviderStatusRefresh(agent.backendId, started);
+    return started;
   }
 
   private invalidateAntigravityQuota(): void {
@@ -1710,11 +1721,13 @@ export class AcpBackendAdapter {
     launch: AcpLaunchDescriptor,
     signal: AbortSignal,
   ): Promise<AcpProviderStatus | undefined> {
-    const probe = withAntigravityUsageCooldown(() => {
-      if (signal.aborted) return Promise.resolve(undefined);
+    const probe = withAntigravityUsageCooldown((onStarted) => (
+      (this.options.readAntigravityUsage ?? readAntigravityUsage)(launch, signal, { onStarted })
+    ), this.options.antigravityUsageRoot, Date.now, () => {
+      if (signal.aborted) return false;
       this.options.assertOwnerAdmission?.();
-      return (this.options.readAntigravityUsage ?? readAntigravityUsage)(launch, signal);
-    }, this.options.antigravityUsageRoot);
+      return !signal.aborted;
+    });
     this.antigravityUsageProbes.add(probe);
     try {
       return await probe;

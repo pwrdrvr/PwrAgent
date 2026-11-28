@@ -37,8 +37,9 @@ export function useBackendSummaries(
   });
   const stateRef = useRef(state);
   stateRef.current = state;
-  const suspendedRef = useRef(suspended);
-  suspendedRef.current = suspended;
+  const requestContext = useRef({ enabled, suspended, federationTarget });
+  requestContext.current = { enabled, suspended, federationTarget };
+  const quotaRequestRef = useRef<{ source?: FederationTarget } | undefined>(undefined);
   const acpRefreshPromiseRef =
     useRef<Promise<BackendSummary[]> | undefined>(undefined);
   // Reads overlap: an event refresh and a slower rate-limit refresh can
@@ -74,6 +75,11 @@ export function useBackendSummaries(
       return [];
     }
 
+    const requestIsCurrent = () => {
+      const current = requestContext.current;
+      return current.enabled && !current.suspended
+        && federationTargetsEqual(current.federationTarget, federationTarget);
+    };
     try {
       const response = await desktopApi.listBackends({
         includeUnavailable: true,
@@ -81,6 +87,7 @@ export function useBackendSummaries(
         ...(refreshAntigravityQuota ? { refreshAntigravityQuota: true } : {}),
         ...(federationTarget ? { federationTarget } : {}),
       });
+      if (!requestIsCurrent()) return stateRef.current.backends;
       const applied = appliedRef.current;
       const sameSource = applied !== undefined
         && federationTargetsEqual(applied.source, federationTarget);
@@ -117,7 +124,7 @@ export function useBackendSummaries(
       // A peer-status event can suspend this hook while an earlier remote
       // read is still in flight. Keep the last usable summaries in that race;
       // reconnecting changes `suspended` and immediately refreshes them.
-      if (suspendedRef.current) {
+      if (!requestIsCurrent()) {
         return stateRef.current.backends;
       }
       setState({
@@ -136,8 +143,14 @@ export function useBackendSummaries(
   );
   const requestAntigravityQuota = useCallback((): void => {
     if (!enabled || suspended || document.visibilityState !== "visible" || !document.hasFocus()) return;
-    void readSummaries(false, true);
-  }, [enabled, readSummaries, suspended]);
+    const pending = quotaRequestRef.current;
+    if (pending && federationTargetsEqual(pending.source, federationTarget)) return;
+    const request = { source: federationTarget };
+    quotaRequestRef.current = request;
+    void readSummaries(false, true).finally(() => {
+      if (quotaRequestRef.current === request) quotaRequestRef.current = undefined;
+    });
+  }, [enabled, federationTarget, readSummaries, suspended]);
 
   useEffect(() => {
     if (!enabled || suspended || !options.pollRateLimits) return;

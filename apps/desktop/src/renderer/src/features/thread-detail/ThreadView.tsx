@@ -929,6 +929,7 @@ export type ThreadViewProps = {
    * window chrome; App always supplies them.
    */
   contextRailPinned?: boolean;
+  onToggleContextRail?: () => void;
   onContextRailPinnedChange?: (pinned: boolean) => void;
   activeContextTab?: ContextTabId;
   onActiveContextTabChange?: (tab: ContextTabId) => void;
@@ -4265,7 +4266,7 @@ function renderThreadViewHeader({
       sidebarOpen: !sidebarHidden,
       railOpen: contextRailPinned,
       onToggleSidebar,
-      onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+      onToggleRail: props.onToggleContextRail ?? (() => onContextRailPinnedChange(!contextRailPinned)),
     },
     masthead: props.mastheadActions,
     history: props.historyNav,
