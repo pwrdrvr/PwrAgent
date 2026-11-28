@@ -847,6 +847,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
             });
           });
         },
+        onBoundedCommandAccountingUpdated: ({ backend, threadId }) => {
+          void ports.publishLocalEvent({ backend, notification: {
+            method: "thread/pricing/updated", params: { threadId, displayInvalidated: true, pricing: { lines: [], summaries: [] } },
+          } }).catch((error) => backendRegistryLog.warn("Could not publish bounded command accounting", { error: String(error) }));
+        },
       },
     );
     const tokenMiserService = new TokenMiserService({

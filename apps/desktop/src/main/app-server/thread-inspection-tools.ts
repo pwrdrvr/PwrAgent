@@ -1903,6 +1903,7 @@ export class ThreadInspectionTools {
           backend: args.backend,
           threadId,
           includeTurns: true,
+          ...(args.backend === "claude" && args.includeEvaluation ? { includeAccounting: true } : {}),
           ...(before ? { before } : {}),
           limit,
         });

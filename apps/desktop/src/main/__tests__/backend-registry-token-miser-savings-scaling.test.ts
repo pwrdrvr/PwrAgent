@@ -332,6 +332,38 @@ describe("Token Miser savings scaling", () => {
     expect(initial.decisionCount).toBe(1);
   });
 
+  it("folds a new capture into an open Pricing page with one metadata read and keeps its gate group intact", async () => {
+    const thread = { backend: "codex", threadId: THREAD_ID } as const;
+    const gate = buildWorkload(1).entries[0]!;
+    const turn = { ...thread, turnId: gate.turnId };
+    const request = { ...thread, includeTurns: false, viewOnly: true, display: { resource: "pricing" } } as const;
+    const metadataReads = countPricingRows(tokenMiserStore.stateDb);
+    new SqliteTokenMiserStorage(tokenMiserStore.stateDb).writeMetadata(gate);
+    await store.upsertThreadUsageLine({ line: { ...parentLine({ id: "capture", turnId: gate.turnId, model: PARENT_MODELS[0] }),
+      priceStatus: "priced",
+    } });
+    await internals.persistTokenMiserLedgerEntries([gate]);
+    const read = async () => (await readThreadForPeer(registry, request)).display!.pricingPage!;
+    const before = await read();
+    metadataReads.reset();
+    tokenMiserStore.recordBoundedCommandDelivery({
+      caller: turn, objectId: "o1", itemId: "native-capture", originalBytes: 400, deliveredBytes: 40,
+    });
+    const after = await read();
+    expect(metadataReads.count()).toBe(1);
+    expect(after.tokenMiserSummary!.avoidedParentTokens).toBe(before.tokenMiserSummary!.avoidedParentTokens! + 90);
+    expect(after.rows.find((row) => row.line.turnId === gate.turnId)?.gates).toHaveLength(1);
+    metadataReads.reset();
+    expect(await read()).toEqual(after);
+    expect(metadataReads.count()).toBe(0);
+    const indexed = vi.spyOn(store, "readThreadPricingPage").mockResolvedValue(undefined);
+    try {
+      expect((await registry.readThread(request)).display!.pricingPage).toEqual(after);
+    } finally {
+      indexed.mockRestore();
+    }
+  });
+
   async function readSavings(
     work: Workload,
     counter: ReadCounter = new ReadCounter(),

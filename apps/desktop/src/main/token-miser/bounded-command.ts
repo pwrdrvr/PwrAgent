@@ -12,6 +12,16 @@ import { BoundedCommandLines } from "./bounded-command-lines";
 import type { BoundedCommandHelper } from "./bounded-command-helper";
 
 export type BoundedCommandCaller = Pick<AgentToolCallContext, "backend" | "threadId" | "turnId">;
+export type BoundedCommandDelivery = {
+  caller: BoundedCommandCaller;
+  objectId: string;
+  itemId: string;
+  originalBytes: number;
+  deliveredBytes: number;
+  kind?: "excerpt";
+  maxVisibleBytes?: number;
+};
+export type BoundedCommandReceipt = Omit<BoundedCommandDelivery, "deliveredBytes" | "maxVisibleBytes">;
 type Ticket = {
   handle: string;
   receipt: string;
@@ -25,7 +35,7 @@ type Ticket = {
   itemId?: string;
   processId?: string;
   status?: number;
-  summary?: Promise<string>;
+  summary?: Promise<{ text: string; bytes: number }>;
   helperIdentity?: string;
   intent?: string;
   lifetime: AbortController;
@@ -39,12 +49,21 @@ const isCommand = (value: string) =>
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const scope = ({ backend, threadId, turnId }: BoundedCommandCaller) => JSON.stringify([backend, threadId, turnId]);
 
+// Claude Bash has no cwd argument. Strip only a literal shell word followed by &&.
+// Escaped characters and concatenated quotes cover paths with spaces and apostrophes.
+const CLAUDE_CD_PREFIX = /^cd[ \t]+(?:[A-Za-z0-9_./-]|'[^'\r\n]*'|"[^"\\$\x60\r\n]*"|\\[^\r\n])+[ \t]+&&[ \t]+/u;
+const CODEX_APPROVAL_WAIT_MS = 30_000;
+
+function assertRetained(ticket: Ticket): void {
+  if (ticket.lifetime.signal.aborted) throw new Error("Output expired or unavailable for this turn.");
+}
+
 function endsWithHighSurrogate(text: string) {
   const unit = text.charCodeAt(text.length - 1);
   return unit >= 0xd800 && unit <= 0xdbff;
 }
 
-async function commandSummary(ticket: Ticket, resolveHelper: (caller: BoundedCommandCaller) => BoundedCommandHelper | undefined,
+async function commandSummary(ticket: Ticket, bytes: number, resolveHelper: (caller: BoundedCommandCaller) => BoundedCommandHelper | undefined,
   eligible: (caller: BoundedCommandCaller) => Promise<boolean>) {
   const sections: Array<{ heading: string; lines: string[]; removed: number; added: number }> = [];
   const isDiff = ticket.command.startsWith("git diff");
@@ -115,7 +134,7 @@ async function commandSummary(ticket: Ticket, resolveHelper: (caller: BoundedCom
   const sample = [takeUtf8Prefix([...diagnostics].join("\n"), 180), takeUtf8Prefix(head.join("\n"), 150),
     takeUtf8Prefix(tail.slice(-3).join("\n"), 180)].filter(Boolean).join("\n");
   const note = await helper.enrich({
-    command: ticket.command, exitCode: ticket.status!, lines, bytes: (await ticket.file.stat()).size,
+    command: ticket.command, exitCode: ticket.status!, lines, bytes,
     repeatedLines: repeats, zeroTests, intent: ticket.intent, sample, detail,
   }, ticket.lifetime.signal, () => eligible(ticket.caller)).catch(() => undefined);
   return note ? digest + "\n" + note : digest;
@@ -127,18 +146,23 @@ export class BoundedCommandCapture {
   private readonly idsByHandle = new Map<string, string>();
   // Live assistant text is transient and scoped to the exact originating turn.
   private readonly intents = new Map<string, { itemId: string; text: string; bytes: number; full: boolean }>();
-  private preparing = 0;
+  private readonly preparations = new Map<AbortController, string>();
   private closed = false;
   private nextSweepAt = 0;
   private sweep?: Promise<void>;
   constructor(
     private readonly issueHandle: () => string,
     private readonly eligible: (caller: BoundedCommandCaller) => Promise<boolean>,
-    private readonly approve: (caller: BoundedCommandCaller, command: string, helper?: string) => Promise<boolean>,
+    private readonly approve: (caller: BoundedCommandCaller, command: string, helper: string | undefined, signal: AbortSignal) => Promise<boolean>,
     private readonly resolveHelper: (caller: BoundedCommandCaller) => BoundedCommandHelper | undefined = () => undefined,
+    private readonly recordDelivery?: (delivery: BoundedCommandDelivery) => void,
   ) {}
 
-  get pending() { return this.tickets.size > 0; }
+  get pending() { return this.tickets.size > 0 || this.preparations.size > 0; }
+
+  confirmDelivery(delivery: BoundedCommandDelivery): void {
+    this.recordDelivery?.(delivery);
+  }
 
   observeIntent({ backend, federationTarget, notification }: AgentEvent, captureEnabled: () => boolean) {
     if (federationTarget || (backend !== "codex" && backend !== "claude" && backend !== "acp:antigravity")) return;
@@ -195,16 +219,26 @@ export class BoundedCommandCapture {
     if (this.intents.size) this.intents.delete(scope(caller));
   }
 
-  async prepare(caller: BoundedCommandCaller, command: string) {
-    const intent = this.intents.get(scope(caller))?.text.trim() || undefined;
+  async prepare(caller: BoundedCommandCaller, command: string, requestSignal?: AbortSignal) {
+    const callerScope = scope(caller);
+    const intent = this.intents.get(callerScope)?.text.trim() || undefined;
     if (!caller.turnId || process.platform === "win32" || !isCommand(command)
       || !["acp:antigravity", "claude", "codex"].includes(caller.backend)
       || !await this.eligible(caller)) throw new Error("Bounded command unavailable for this turn or command.");
-    if (this.closed || this.tickets.size + this.preparing >= 24) throw new Error("Capture unavailable or busy.");
-    this.preparing++;
+    if (this.closed || this.tickets.size + this.preparations.size >= 24) throw new Error("Capture unavailable or busy.");
+    const lifetime = new AbortController();
+    this.preparations.set(lifetime, callerScope);
+    // Leave headroom for Codex to receive the result before its dynamic-tool timeout.
+    const deadline = caller.backend === "codex" ? AbortSignal.timeout(CODEX_APPROVAL_WAIT_MS) : undefined;
+    const signal = AbortSignal.any([lifetime.signal, requestSignal, deadline].filter((value) => value !== undefined));
+    const cancelled = Promise.withResolvers<boolean>();
+    const abort = () => cancelled.resolve(false);
+    signal.addEventListener("abort", abort, { once: true });
     try {
       const helper = this.resolveHelper(caller);
-      if (!await this.approve(caller, command, helper?.label) || this.closed || !await this.eligible(caller)) {
+      const approved = !signal.aborted && await Promise.race([this.approve(caller, command, helper?.label, signal), cancelled.promise]);
+      if (deadline?.aborted) throw new Error("Approval timed out while awaiting permission to capture output. Use an ordinary bounded command or request capture again.");
+      if (!approved || signal.aborted || this.closed || !await this.eligible(caller)) {
         throw new Error("Command capture was declined, cancelled, or the turn ended.");
       }
       if (!this.sweep && Date.now() >= this.nextSweepAt) {
@@ -213,6 +247,7 @@ export class BoundedCommandCapture {
         }).catch(() => {}).finally(() => { this.sweep = undefined; });
       }
       await this.sweep;
+      signal.throwIfAborted();
       const id = randomUUID();
       const handle = this.issueHandle();
       const receipt = randomUUID();
@@ -226,14 +261,15 @@ export class BoundedCommandCapture {
       this.tickets.set(id, { handle, receipt, caller: { backend: caller.backend, threadId: caller.threadId, turnId: caller.turnId }, command, shell, filename, file, lines: new BoundedCommandLines(file), timer, intent, helperIdentity: helper?.identity, lifetime: new AbortController() });
       this.idsByHandle.set(handle, id);
       try {
-        if (this.closed || !await this.eligible(caller) || !this.tickets.has(id)) throw new Error("Capture closed.");
+        if (this.closed || !await this.eligible(caller) || signal.aborted || !this.tickets.has(id)) throw new Error("Capture closed.");
       } catch (error) {
         await this.remove(id);
         throw error;
       }
       return { objectId: handle, command: shell };
     } finally {
-      this.preparing--;
+      signal.removeEventListener("abort", abort);
+      this.preparations.delete(lifetime);
     }
   }
 
@@ -242,13 +278,15 @@ export class BoundedCommandCapture {
   }
 
   observe(caller: BoundedCommandCaller, item: { id: string; processId?: string; command?: string; completed: boolean; rejected?: boolean; output?: string }) {
-    if (!this.pending) return;
+    if (!this.tickets.size) return;
     const callerScope = scope(caller);
-    let parsedShell: string | undefined;
+    const command = item.command;
+    const directShell = caller.backend === "claude" ? command?.replace(CLAUDE_CD_PREFIX, "") : command;
+    let loginShell: string | undefined;
     for (const [id, ticket] of this.tickets) {
       if (callerScope !== scope(ticket.caller) || ticket.status !== undefined) continue;
-      const command = item.command;
-      if (!ticket.itemId && command && (command === ticket.shell || (parsedShell ??= loginShellCommand(command)) === ticket.shell)) {
+      if (!ticket.itemId && directShell
+        && (directShell === ticket.shell || (loginShell ??= loginShellCommand(directShell)) === ticket.shell)) {
         ticket.itemId = item.id;
         ticket.processId = item.processId;
         clearTimeout(ticket.timer);
@@ -258,7 +296,9 @@ export class BoundedCommandCapture {
       if (!item.rejected && receipt && Number(receipt[1]) <= 255) {
         ticket.status = Number(receipt[1]);
         // Start once at native completion, even when the parent never asks to inspect.
-        ticket.summary = commandSummary(ticket, this.resolveHelper, this.eligible);
+        ticket.summary = ticket.file.stat().then(async ({ size }) => ({
+          text: await commandSummary(ticket, size, this.resolveHelper, this.eligible), bytes: size,
+        }));
         // A turn can end and close the descriptor before any reader joins this promise.
         void ticket.summary.catch(() => {});
         ticket.timer = this.expireAfterRetention(id);
@@ -273,7 +313,11 @@ export class BoundedCommandCapture {
 
   async endTurn(caller: BoundedCommandCaller, stop?: (matches: (terminal: { itemId: string; processId: string; command: string }) => boolean) => Promise<void>) {
     this.forgetIntent(caller);
-    const owned = [...this.tickets].filter(([, ticket]) => scope(caller) === scope(ticket.caller));
+    const callerScope = scope(caller);
+    for (const [controller, owner] of this.preparations) {
+      if (owner === callerScope) controller.abort();
+    }
+    const owned = [...this.tickets].filter(([, ticket]) => callerScope === scope(ticket.caller));
     const running = owned.map(([, ticket]) => ticket).filter((ticket) => ticket.status === undefined && ticket.itemId && ticket.processId);
     const cleanup = owned.map(([id]) => this.remove(id));
     if (stop && running.length) {
@@ -291,23 +335,29 @@ export class BoundedCommandCapture {
     if (!ticket || scope(caller) !== scope(ticket.caller) || !await this.eligible(caller)) {
       throw new Error("Output expired or unavailable for this turn.");
     }
+    assertRetained(ticket);
     if (ticket.status === undefined) throw new Error("No native completion receipt for this command.");
     return ticket;
   }
 
-  async readBytes(caller: BoundedCommandCaller, id: string, offset: number) {
+  async readBytes(caller: BoundedCommandCaller, id: string, offset: number, receipt?: (value: BoundedCommandReceipt) => void) {
     const ticket = await this.retained(caller, id);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid byte offset.");
     const totalBytes = (await ticket.file.stat()).size;
     const { buffer, bytesRead } = await ticket.file.read(Buffer.alloc(1024), 0, 1024, offset);
+    assertRetained(ticket);
+    receipt?.({ caller: ticket.caller, objectId: ticket.handle, itemId: ticket.itemId!, originalBytes: totalBytes, kind: "excerpt" });
     return { totalBytes, offset, base64: buffer.subarray(0, bytesRead).toString("base64") };
   }
 
-  async inspect(caller: BoundedCommandCaller, id: string, range?: { start: number; end?: number; query?: string }) {
+  async inspect(caller: BoundedCommandCaller, id: string, range?: { start: number; end?: number; query?: string },
+    receipt?: (value: BoundedCommandReceipt) => void) {
     const ticket = await this.retained(caller, id);
     if (!range) {
-      const text = await ticket.summary!;
+      const { text, bytes } = await ticket.summary!;
       if (ticket.lifetime.signal.aborted || !await this.eligible(caller)) throw new Error("Output expired or unavailable for this turn.");
+      assertRetained(ticket);
+      receipt?.({ caller: ticket.caller, objectId: ticket.handle, itemId: ticket.itemId!, originalBytes: bytes });
       return text;
     }
     const { start, end, query } = range;
@@ -322,6 +372,8 @@ export class BoundedCommandCapture {
       if (query === undefined || line.includes(query)) selected.push(query ? `${number}: ${line}` : line);
       if (number === end || (end === undefined && selected.length >= 20)) break;
     }
+    assertRetained(ticket);
+    receipt?.({ caller: ticket.caller, objectId: ticket.handle, itemId: ticket.itemId!, originalBytes: 0, kind: "excerpt" });
     return takeUtf8Prefix(selected.join("\n"), 1450);
   }
 
@@ -349,6 +401,7 @@ export class BoundedCommandCapture {
 
   async close() {
     this.closed = true;
+    for (const controller of this.preparations.keys()) controller.abort();
     this.intents.clear();
     await Promise.all([...this.tickets.keys()].map((id) => this.remove(id)));
   }

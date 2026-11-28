@@ -3887,7 +3887,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           const prices = page.prices;
           try {
             page.accounting.project(history, tokenMiserGateTotals, {
-              gate: (id) => prices.gate(id) ?? overlay?.liveGate?.(id), parent: prices.parent, focusedCost: prices.focusedCost,
+              gate: (id) => prices.gate(id) ?? overlay?.liveGate?.(id), parent: prices.parent, auxiliaryHelperCost: prices.auxiliaryHelperCost,
               invocations: () => (prepareSqliteRead(db, `SELECT * FROM thread_tool_invocations WHERE backend = ? AND thread_id = ?
                 ORDER BY observed_at DESC, invocation_id DESC LIMIT 200`).all(backend, threadId) as ThreadToolInvocationRow[]).map(threadToolInvocationFromRow),
             }, params.deferGates);

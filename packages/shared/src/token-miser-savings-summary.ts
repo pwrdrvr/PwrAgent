@@ -14,6 +14,7 @@ import type {
  * than a rail that says nothing.
  */
 export type TokenMiserSavingsSummary = {
+  boundedCaptureCount?: number;
   /** Reducer decisions, priced or not. */
   decisionCount: number;
   /** Decisions whose dollar terms are complete. */
@@ -240,10 +241,17 @@ export function addTokenMiserGateAccountingTotals(
  * the fallback — the same records the per-turn folds already sum. Pass them as
  * `gateAccountings`, or already reduced as `gateTotals`.
  */
-type SavingsAccounting = Pick<ThreadTokenMiserAccounting, "interceptionCount" | "helperDecisionCount" | "passThroughCount" | "estimatedParentTokensSaved"> & {
+type SavingsAccounting = Pick<ThreadTokenMiserAccounting, "interceptionCount" | "boundedCaptureCount" | "suppressSavings"
+  | "helperDecisionCount" | "passThroughCount" | "estimatedParentTokensSaved"> & {
   codeMode?: { callCount: number };
   savings?: TokenMiserSavingsTerms & { pricedGateCount: number };
 };
+
+export function isTokenMiserAuxiliaryHelper(sourceItemId?: string): boolean {
+  return sourceItemId?.startsWith("system:token-miser-focused:") === true
+    || sourceItemId?.startsWith("system:token-miser-capture:") === true
+    || sourceItemId?.startsWith("system-token-miser-capture:1:") === true;
+}
 
 export function buildTokenMiserSavingsSummary(params: {
   accounting?: SavingsAccounting | ThreadTokenMiserAccounting;
@@ -253,10 +261,12 @@ export function buildTokenMiserSavingsSummary(params: {
   const savings = params.accounting?.savings;
   const gates = params.gateTotals
     ?? totalTokenMiserGateAccountings(params.gateAccountings ?? []);
-  const decisionCount =
-    params.accounting?.interceptionCount ?? gates.gateCount;
+  const captureCount = params.accounting?.boundedCaptureCount ?? 0;
+  const decisionCount = params.accounting
+    ? Math.max(0, params.accounting.interceptionCount - captureCount)
+    : gates.gateCount;
   const codeModeCallCount = params.accounting?.codeMode?.callCount;
-  if (decisionCount === 0 && !codeModeCallCount) return undefined;
+  if (decisionCount === 0 && !captureCount && !codeModeCallCount) return undefined;
 
   const passThroughCount =
     params.accounting?.passThroughCount
@@ -273,7 +283,7 @@ export function buildTokenMiserSavingsSummary(params: {
     params.accounting?.helperDecisionCount
     ?? countGates(gates.decisionSourceCount, gates.helperCount);
   const avoidedParentTokens = readAvoidedParentTokens(params.accounting, gates);
-  const terms = savings
+  const terms = params.accounting?.suppressSavings ? undefined : savings
     ? {
         withoutGateCostMicros: savings.withoutGateCostMicros,
         gateCostMicros: savings.gateCostMicros,
@@ -286,7 +296,8 @@ export function buildTokenMiserSavingsSummary(params: {
 
   return {
     decisionCount,
-    pricedDecisionCount: savings?.pricedGateCount ?? gates.pricedCount,
+    pricedDecisionCount: params.accounting?.suppressSavings ? 0 : savings?.pricedGateCount ?? gates.pricedCount,
+    ...(captureCount ? { boundedCaptureCount: captureCount } : {}),
     ...(codeModeCallCount ? { codeModeCallCount } : {}),
     ...(helperDecisionCount === undefined ? {} : { helperDecisionCount }),
     ...(passThroughCount === undefined ? {} : { passThroughCount }),

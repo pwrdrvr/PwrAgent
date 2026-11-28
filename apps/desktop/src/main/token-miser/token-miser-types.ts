@@ -1,3 +1,5 @@
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+
 export const TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS = 2_000;
 // Keep this aligned with codex_utils_string::APPROX_BYTES_PER_TOKEN. Codex
 // budgets model-visible tool output in UTF-8 bytes, not JavaScript UTF-16 code
@@ -124,6 +126,8 @@ export type TokenMiserObjectMetadata = {
   turnId: string;
   toolUseId: string;
   toolName: string;
+  /** Native bounded capture metadata. These records have no reducer gate or cached replay. */
+  captureBackend?: AppServerBackendKind;
   createdAt: number;
   /** Legacy field name; new records store UTF-8 bytes for Codex token estimates. */
   originalCharacters: number;

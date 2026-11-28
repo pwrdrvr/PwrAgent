@@ -34,6 +34,7 @@ export function TokenMiserSummaryCard(props: {
   rounded?: RoundedPricingSummary;
 }) {
   const summary = props.summary;
+  const captureCount = summary.boundedCaptureCount ?? 0;
   const terms = summary.terms;
   const headline = describeHeadline(summary, props.observedCostMicros, props.rounded?.savingsMicros);
   // Only the dollar headline has a percentage to compare against; a thread
@@ -60,8 +61,9 @@ export function TokenMiserSummaryCard(props: {
       <div className="rail-summary-card__header">
         <span className="rail-summary-card__eyebrow">Token Miser</span>
         <span className="rail-summary-card__meta">
-          {summary.decisionCount.toLocaleString()} decision
-          {summary.decisionCount === 1 ? "" : "s"}
+          {!summary.decisionCount && captureCount
+            ? `${captureCount.toLocaleString()} capture${captureCount === 1 ? "" : "s"}`
+            : `${summary.decisionCount.toLocaleString()} decision${summary.decisionCount === 1 ? "" : "s"}`}
         </span>
       </div>
       <div className="rail-summary-card__headline">
@@ -101,6 +103,7 @@ export function TokenMiserSummaryCard(props: {
       >
         {describeCaption({
           decisionCount: summary.decisionCount,
+          captureCount,
           observedCostMicros: props.observedCostMicros,
           savingsMicros,
           roundedUnfilteredCostMicros: props.rounded?.unfilteredCostMicros,
@@ -232,7 +235,7 @@ function describeHeadline(
         };
   }
   const avoided =
-    summary.decisionCount > 0 ? summary.avoidedParentTokens : undefined;
+    summary.decisionCount > 0 || summary.boundedCaptureCount ? summary.avoidedParentTokens : undefined;
   if (avoided !== undefined) {
     // Summaries that ran longer than the payloads they replaced put more in
     // the parent's context than passing the output through would have.
@@ -256,11 +259,12 @@ function describeHeadline(
 
 function describeCaption(params: {
   decisionCount: number;
+  captureCount: number;
   observedCostMicros?: number;
   savingsMicros?: number;
   roundedUnfilteredCostMicros?: number;
 }): string {
-  if (params.decisionCount === 0) return "No reducer decision was recorded.";
+  if (params.decisionCount === 0) return params.captureCount ? "Estimated from captured output." : "No reducer decision was recorded.";
   if (params.savingsMicros === undefined) {
     return TOKEN_MISER_PENDING_PRICING_CAPTION;
   }

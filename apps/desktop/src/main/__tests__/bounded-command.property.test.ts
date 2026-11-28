@@ -2,7 +2,7 @@ import type { CaptureEvidence } from "../token-miser/bounded-command-helper";
 import * as mcpConnections from "@pwragent/shared/contracts/mcp-connections";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -14,6 +14,35 @@ import { TestTokenMiserStore } from "./token-miser-test-store";
 
 const caller = { backend: "acp:antigravity", threadId: "thread", turnId: "turn" } as const;
 const shell = "/bin/sh";
+
+it.skipIf(process.platform === "win32")("links a Claude Bash receipt after a literal directory change", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "Claude's Bash $dir-"));
+  const owner = { ...caller, backend: "claude" as const };
+  const capture = new BoundedCommandCapture(() => "o1", async () => true, async () => true);
+  try {
+    await writeFile(path.join(dir, "fixture.test.cjs"), 'console.log("fixture in " + process.cwd());');
+    const issued = await capture.prepare(owner, "node --test fixture.test.cjs");
+    const prefix = `cd '${dir.replaceAll("'", "'\\''")}' && `;
+    const command = prefix + issued.command;
+    const native = spawnSync(shell, ["-c", command], { encoding: "utf8" });
+    expect(native.status).toBe(0);
+    for (const unexpected of [
+      `cd "$(pwd)" && ${issued.command}`, `cd one two && ${issued.command}`,
+      `cd dir; true && ${issued.command}`, `cd dir || ${issued.command}`, command + " ; true",
+    ]) {
+      capture.observe(owner, { id: "unexpected", command: unexpected, completed: true, output: native.stdout });
+      await expect(capture.inspect(owner, issued.objectId)).rejects.toThrow("completion receipt");
+    }
+    capture.observe(owner, { id: "native", command, completed: false });
+    capture.observe(owner, { id: "different-item", command, completed: true, output: native.stdout });
+    await expect(capture.inspect(owner, issued.objectId)).rejects.toThrow("completion receipt");
+    capture.observe(owner, { id: "native", completed: true, output: native.stdout });
+    expect(await capture.inspect(owner, issued.objectId)).toContain(`fixture in ${await realpath(dir)}`);
+  } finally {
+    await capture.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 it("recognizes only the configured nonstandard POSIX shell and its exact payload", () => {
   vi.stubEnv("SHELL", "/opt/homebrew/bin/zsh");
@@ -214,7 +243,7 @@ it.skipIf(process.platform === "win32")("summarizes a completed diff once within
       return issued.objectId;
     };
     const id = await captureDiff();
-    expect(approve).toHaveBeenCalledWith(caller, "git diff", "fixture");
+    expect(approve).toHaveBeenCalledWith(caller, "git diff", "fixture", expect.any(AbortSignal));
     const summaries = await Promise.all([capture.inspect(caller, id), capture.inspect(caller, id)]);
     expect(summaries[0]).toBe(summaries[1]);
     expect(summaries[0]).toContain("Summary: multiple files changed");

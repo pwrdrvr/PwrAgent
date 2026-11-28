@@ -2062,7 +2062,9 @@ export type ThreadTokenMiserSavings = {
 
 export type ThreadTokenMiserAccounting = {
   savings?: ThreadTokenMiserSavings;
+  suppressSavings?: true;
   interceptionCount: number;
+  boundedCaptureCount?: number;
   passThroughCount?: number;
   policyPassThroughCount?: number;
   helperPassThroughCount?: number;
@@ -2126,6 +2128,7 @@ export type ThreadTokenMiserCodeModeAccounting = {
 
 export type ThreadTokenMiserInterceptionAccounting = {
   objectId: string;
+  boundedCapture?: true;
   /** Owner-process snapshot; retained until the next turn, eviction, archive or restart. */
   originalOutputAvailable?: boolean;
   /** Legacy peers may still report a fixed expiry deadline. */

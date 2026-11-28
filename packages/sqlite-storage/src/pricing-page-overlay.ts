@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
 import {
-  addTokenMiserGateAccountingTotals, emptyTokenMiserGateAccountingTotals, totalTokenMiserGateAccountings,
+  addTokenMiserGateAccountingTotals, emptyTokenMiserGateAccountingTotals, isTokenMiserAuxiliaryHelper, totalTokenMiserGateAccountings,
 } from "@pwragent/shared/token-miser-savings-summary";
 import type { PricingHistoryPage } from "@pwragent/shared/thread-pricing-display";
 import type { ThreadToolInvocationRecord } from "@pwragent/shared/contracts/normalized-app-server";
@@ -18,7 +18,7 @@ interface WatchedRows<T> extends ReadonlyMap<string, T> {
 export type PricingAccountingReader = {
   gate(source: string): ThreadUsageLineRecord | undefined;
   parent(turn: string): ThreadUsageLineRecord | undefined;
-  focusedCost(): number | undefined;
+  auxiliaryHelperCost(): number | undefined;
   invocations(): ThreadToolInvocationRecord[];
 };
 
@@ -172,7 +172,7 @@ export class PricingPagePrices {
     if (line.scope !== "monitor" && line.model && line.threadId === this.threadId) {
       for (const turn of new Set([line.turnId, line.usageTurnId])) if (turn) bucket(this.parents, turn);
     }
-    if (line.sourceItemId?.startsWith("system:token-miser-focused:")) {
+    if (isTokenMiserAuxiliaryHelper(line.sourceItemId)) {
       if (line.priceStatus === "priced") this.cost += (add ? 1 : -1) * line.totalCostMicros;
       else this.unpriced += add ? 1 : -1;
     }
@@ -181,5 +181,5 @@ export class PricingPagePrices {
 
   gate = (source: string) => this.gates.get(source)?.newest();
   parent = (turn: string) => this.parents.get(turn)?.newest();
-  focusedCost = () => this.unpriced ? undefined : this.cost;
+  auxiliaryHelperCost = () => this.unpriced ? undefined : this.cost;
 }

@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { ThreadSubAgentSummary } from "../contracts/navigation";
+import type { ThreadTokenMiserInterceptionAccounting } from "../contracts/normalized-app-server";
+import { buildTokenMiserSavingsSummary, emptyTokenMiserGateAccountingTotals,
+  isTokenMiserAuxiliaryHelper } from "../token-miser-savings-summary";
 import type { ThreadUsageLineRecord } from "../token-usage-pricing";
 import { buildPricingRunningTotals, buildThreadPricingDisplay, buildThreadPricingSnapshotEstimate } from "../thread-pricing-display";
 
@@ -129,4 +133,76 @@ describe("unobserved thread pricing", () => {
       expect(estimate.tokens).toEqual(counts);
     }
   });
+});
+
+function projectMixedGateGroups(captures: number, groups: number) {
+  const lines: ThreadUsageLineRecord[] = [];
+  const subAgents: ThreadSubAgentSummary[] = [];
+  const interceptions: ThreadTokenMiserInterceptionAccounting[] = [];
+  let captureTurnReads = 0;
+  let captureRowsChecked = 0;
+  let gateTurnReads = 0;
+  const record = (id: string, turnId: string, capture: boolean): ThreadTokenMiserInterceptionAccounting => ({
+    objectId: id, toolUseId: id, toolName: "commandExecution", createdAt: 1,
+    originalCharacters: 400, baselineParentTokens: 100, replacementTokens: 10,
+    retrievedTokens: 0, estimatedParentTokensSaved: 90,
+    get turnId() {
+      if (capture) captureTurnReads++;
+      else gateTurnReads++;
+      return turnId;
+    },
+    get boundedCapture() {
+      if (!capture) return undefined;
+      captureRowsChecked++;
+      return true as const;
+    },
+    ...(capture ? {} : { disposition: "passed_through", decisionSource: "policy" }),
+  });
+  for (let index = 0; index < groups; index++) {
+    const turnId = "turn-" + index;
+    const monitorId = "system:token-miser:gate-" + index;
+    lines.push({ ...line(turnId, index + 1, { totalCostMicros: 5000 }), turnId });
+    lines.push({ ...line(monitorId, index + 1, { totalCostMicros: 100 }), scope: "monitor", source: "monitor", sourceItemId: monitorId });
+    subAgents.push({ monitorId, parentTurnId: turnId, task: "Fixture gate", status: "success", createdAt: 1, updatedAt: 1 });
+    interceptions.push(record(monitorId, turnId, false));
+  }
+  for (let index = 0; index < captures; index++) interceptions.push(record("capture-" + index, "turn-0", true));
+  const result = buildThreadPricingDisplay({
+    pricing: { lines, summaries: [] }, subAgents, tokenMiserAccounting: {
+      interceptions, interceptionCount: groups + captures, originalCharacters: 400 * interceptions.length,
+      baselineParentTokens: 100 * interceptions.length, replacementTokens: 10 * interceptions.length, retrievedTokens: 0,
+      estimatedParentTokensSaved: 90 * interceptions.length,
+    },
+  });
+  return { groups: result.rows.map((row) => row.decisions?.map((decision) => decision.disposition) ?? []),
+    captureTurnReads, captureRowsChecked, gateTurnReads };
+}
+
+it("indexes fallback Pricing gate decisions once and excludes capture records from every group", () => {
+  expect(projectMixedGateGroups(2, 3)).toEqual({
+    groups: [["passed_through"], ["passed_through"], ["passed_through"]], captureTurnReads: 0, captureRowsChecked: 2, gateTurnReads: 3,
+  });
+});
+
+it("keeps captures in the token total and counts only reducer gates as decisions", () => {
+  const accounting = { interceptionCount: 3, boundedCaptureCount: 2, estimatedParentTokensSaved: 240, passThroughCount: 0 };
+  expect(buildTokenMiserSavingsSummary({ accounting })).toMatchObject({
+    decisionCount: 1, boundedCaptureCount: 2, summarizedCount: 1, avoidedParentTokens: 240,
+  });
+  expect(buildTokenMiserSavingsSummary({ accounting: { ...accounting, interceptionCount: 2 } })).toMatchObject({
+    decisionCount: 0, summarizedCount: 0, avoidedParentTokens: 240,
+  });
+});
+
+it("does not fall back to priced gate cards when a capture charge is unknown", () => {
+  const accounting = { interceptionCount: 1, estimatedParentTokensSaved: 240, suppressSavings: true as const };
+  const gateTotals = { ...emptyTokenMiserGateAccountingTotals(), gateCount: 1, pricedCount: 1 };
+  expect(buildTokenMiserSavingsSummary({ accounting, gateTotals })?.terms).toBeUndefined();
+});
+
+it("classifies billed capture Decisions and summarizers as auxiliary Token Miser work", () => {
+  for (const id of ["system-token-miser-capture:1:attempt", "system:token-miser-capture:summary", "system:token-miser-focused:focus"]) {
+    expect(isTokenMiserAuxiliaryHelper(id), id).toBe(true);
+  }
+  expect(isTokenMiserAuxiliaryHelper("ordinary-decision:1:attempt")).toBe(false);
 });

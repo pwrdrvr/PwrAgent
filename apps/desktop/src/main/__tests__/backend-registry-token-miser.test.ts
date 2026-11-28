@@ -1,5 +1,7 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { boundedCommandHelper } from "../token-miser/bounded-command-helper";
+import { boundedCommandTools } from "../agent-tools/bounded-command-tool";
+import { buildOpenAIDecisionsUsageLine } from "../openai-decisions/openai-decisions-service";
 import type { TokenMiserServiceOptions } from "../token-miser/token-miser-service";
 import { buildTokenMiserSavingsSummary } from "@pwragent/shared/token-miser-savings-summary";
 import { estimateTokenUsageCost } from "@pwragent/shared/token-usage-pricing";
@@ -10,13 +12,14 @@ import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-
 import { ClaudeBackend } from "../claude/claude-backend";
 import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
 import type { BoundedCommandHelper } from "../token-miser/bounded-command-helper";
-import type { BoundedCommandCaller } from "../token-miser/bounded-command";
+import type { BoundedCommandCaller, BoundedCommandCapture } from "../token-miser/bounded-command";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import * as settingsOwner from "../settings/desktop-settings-singleton";
 import * as ownerHost from "../owner-host";
 import { resolveActiveProfileName } from "../profile";
 import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -265,6 +268,214 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(await fs.readFile(file, "utf8")).toContain("late original");
   });
 
+  it.skipIf(process.platform === "win32")("accounts for delivered captures once and nets their Helper charges when a gate is priced", async () => {
+    const outputs = new TokenMiserStore(directory);
+    Object.assign(registry, { tokenMiserStore: outputs });
+    const { boundedCommandCapture: capture } = registry as unknown as { boundedCommandCapture: BoundedCommandCapture };
+    Object.assign(capture, { approve: async () => true, eligible: async () => true, resolveHelper: () => ({
+      identity: "fixture", label: "Fixture Helper", enrich: async () => "The fixture printed repeated warnings.",
+    }) });
+    const ledger = registryModules(registry).threadUsageLedger;
+    const threadId = "thread-parent";
+    const turnId = "turn-parent";
+    const model = "gpt-6-astra";
+    const read = async (backend: "codex" | "claude") => (await ledger.withTokenMiserAccounting({ backend, threadId,
+      accounting: await store.readThreadToolAccounting({ backend, threadId }),
+    })).tokenMiser;
+    const original = "warning: fixture 💡\n".repeat(850);
+    await fs.writeFile(path.join(directory, "fixture.test.cjs"), `process.stdout.write(${JSON.stringify(original)});`);
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: outputs.stateDb.raw, dbPath: outputs.stateDb.raw.name });
+    const readPage = async (backend: "codex" | "claude") => (await store.readThreadPricingPage({
+      backend, threadId, offset: 0, limit: 10, overlay: ledger.pricingPageOverlay(threadId, backend),
+    }))?.savings?.summary;
+    for (const backend of ["codex", "claude"] as const) {
+      const owner = { backend, threadId, turnId };
+      const issued = await capture.prepare(owner, "node --test fixture.test.cjs");
+      const receipt = execFileSync("/bin/sh", ["-c", issued.command], { cwd: directory, encoding: "utf8" });
+      capture.observe(owner, { id: "native", command: issued.command, completed: true, output: receipt });
+      const { totalBytes } = await capture.readBytes(owner, issued.objectId, 0);
+      expect((await read(backend))?.interceptions ?? []).toEqual([]);
+      const [tool] = boundedCommandTools(capture, backend === "codex" ? outputs : undefined);
+      const { result: digest, writes } = await measureSqliteWrites(async () => {
+        const result = await tool!.dispatch({ objectId: issued.objectId }, {
+          ...owner, transport: backend === "codex" ? "codex_dynamic_tool" : "mcp",
+        });
+        if (!result.ok) throw new Error(result.message);
+        if (backend === "codex") {
+          const item = result.contentItems?.[0];
+          if (item?.type !== "inputText") throw new Error("Missing capture receipt.");
+          await outputs.confirmModelVisibleRetrievals({ threadId, output: item.text });
+        }
+        return result.data;
+      });
+      expectSqliteWriteBudget({ scenario: "bounded-command-delivery", writes,
+        note: "The first digest delivery stores one capture's byte counts and native item identity." });
+      expect(digest).toContain("The fixture printed repeated warnings.");
+      const repeat = await measureSqliteWrites(() => capture.inspect(owner, issued.objectId));
+      expect(repeat.result).toBe(digest);
+      expect(repeat.writes.commits).toBe(0);
+      expect(await read(backend)).toMatchObject({
+        originalCharacters: totalBytes,
+        estimatedParentTokensSaved: Math.ceil(totalBytes / 4) - Math.ceil(Buffer.byteLength(String(digest)) / 4),
+        interceptions: [expect.objectContaining({ objectId: issued.objectId, originalCharacters: totalBytes,
+          replacementCharacters: Buffer.byteLength(String(digest)) })],
+      });
+      expect((await read(backend))?.savings).toBeUndefined();
+      const page = await readPage(backend);
+      expect(page?.avoidedParentTokens).toBe((await read(backend))?.estimatedParentTokensSaved);
+      expect(page?.terms).toBeUndefined();
+    }
+
+    const gate = { ...metadata("gate-1", "gate-helper"), parentModel: model };
+    const metadataStorage = new SqliteTokenMiserStorage(outputs.stateDb);
+    metadataStorage.writeMetadata(gate);
+    const before = (await read("codex"))!.savings!;
+    await store.upsertThreadUsageLine({ line: {
+      backend: "codex", threadId, turnId, model, source: "live", scope: "turn", status: "finalized",
+      usageLineId: "parent-turn", createdAt: Date.now(), provider: "openai", priceStatus: "unpriced", currency: "USD",
+      inputTokens: 10_000, uncachedInputTokens: 10_000, cachedInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 0,
+      totalTokens: 10_100, uncachedInputCostMicros: 0, cachedInputCostMicros: 0, outputCostMicros: 0, totalCostMicros: 0,
+    } });
+    await ledger.recordTokenMiserHelperInference({ threadId, turnId, inferenceId: "capture-helper", usage: {
+      status: "ok", object: {}, model: "gpt-6-luna", tokenUsage: { inputTokens: 4600, outputTokens: 100, totalTokens: 4700 },
+    } }, "codex");
+    const decision = buildOpenAIDecisionsUsageLine({
+      caller: { backend: "codex", threadId }, decisionId: "system-token-miser-capture", version: 1,
+      attempt: { requestId: "fixture", usage: { input_tokens: 3840, cached_tokens: 0, output_tokens: 64 } },
+      accountKey: "fixture", now: Date.now(), fallbackId: "fallback",
+    });
+    expect(decision.priceStatus).toBe("priced");
+    await store.upsertThreadUsageLine({ line: decision });
+    const pricing = await store.readThreadPricing({ backend: "codex", threadId });
+    const charge = pricing.lines.find((line) => line.sourceItemId === "system:token-miser-capture:capture-helper")!.totalCostMicros
+      + decision.totalCostMicros;
+    expect(charge).toBeGreaterThan(0);
+    const after = (await read("codex"))!;
+    const captureRow = after.interceptions!.find((row) => row.boundedCapture)!;
+    const price = (uncachedInputTokens: number) => estimateTokenUsageCost({
+      at: captureRow.createdAt, model, uncachedInputTokens, cachedInputTokens: 0, outputTokens: 0,
+    })!.uncachedInputCostMicros;
+    const baseline = price(captureRow.baselineParentTokens);
+    const delivery = price(captureRow.replacementTokens);
+    const terms = { withoutGateCostMicros: before.withoutGateCostMicros + baseline,
+      revealedCostMicros: before.revealedCostMicros + delivery, gateCostMicros: before.gateCostMicros + charge,
+      savingsMicros: before.savingsMicros + baseline - delivery - charge };
+    expect(after.savings).toMatchObject({ gateCount: 1, pricedGateCount: 1, ...terms });
+    expect(await readPage("codex")).toMatchObject({ decisionCount: 1, boundedCaptureCount: 1, terms });
+    outputs.recordBoundedCommandDelivery({ caller: { backend: "codex", threadId, turnId }, objectId: captureRow.objectId,
+      itemId: captureRow.toolUseId, originalBytes: captureRow.originalCharacters, deliveredBytes: 800, kind: "excerpt" });
+    const retrievedCost = price(captureRow.replacementTokens + 200) - delivery;
+    const withRead = { ...terms, revealedCostMicros: terms.revealedCostMicros + retrievedCost,
+      savingsMicros: terms.savingsMicros - retrievedCost };
+    expect((await read("codex"))?.savings).toMatchObject(withRead);
+    expect((await readPage("codex"))?.terms).toEqual(withRead);
+
+    await ledger.recordTokenMiserHelperInference({ threadId, turnId, inferenceId: "unpriced", usage: {
+      status: "ok", object: {}, model: "unknown-fixture-model",
+      tokenUsage: { inputTokens: 1000, outputTokens: 100, totalTokens: 1100 },
+    } }, "codex");
+    const unpriced = await read("codex");
+    expect(unpriced).toMatchObject({ suppressSavings: true });
+    expect((await readPage("codex"))?.terms).toBeUndefined();
+    expect(buildTokenMiserSavingsSummary({ accounting: unpriced, gateTotals: {
+      gateCount: 1, pricedCount: 1, decisionSourceCount: 1, helperCount: 1, dispositionCount: 1,
+      passedThroughCount: 0, summarizedCount: 1, avoidedParentTokens: 5_000, terms,
+    } })?.terms).toBeUndefined();
+    metadataStorage.removeMetadata(gate.objectId);
+    expect((await read("codex"))?.savings).toBeUndefined();
+    expect((await readPage("codex"))?.terms).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32").each(["emitted", "discarded", "truncated"] as const)(
+    "credits only the bytes of a Codex digest that survive when %s", async (outcome) => {
+      const outputs = new TokenMiserStore(directory);
+      Object.assign(registry, { tokenMiserStore: outputs });
+      const { boundedCommandCapture: capture } = registry as unknown as { boundedCommandCapture: BoundedCommandCapture };
+      Object.assign(capture, { approve: async () => true, eligible: async () => true });
+      const owner = { backend: "codex", threadId: "parent", turnId: "turn", transport: "codex_dynamic_tool" } as const;
+      const warning = "warning 💡\n";
+      const count = 5500;
+      await fs.writeFile(path.join(directory, "fixture.test.cjs"),
+        `process.stdout.write(${JSON.stringify(warning)}.repeat(${count}));`);
+      const issued = await capture.prepare(owner, "node --test fixture.test.cjs");
+      const receipt = execFileSync("/bin/sh", ["-c", issued.command], { cwd: directory, encoding: "utf8" });
+      capture.observe(owner, { id: "native", command: issued.command, completed: true, output: receipt });
+      const [tool] = boundedCommandTools(capture, outputs);
+      const result = await tool!.dispatch({ objectId: issued.objectId }, owner);
+      expect(result.ok).toBe(true);
+      expect(await outputs.listMetadata(owner.threadId)).toEqual([]);
+      const wrapped = result.contentItems![0]!;
+      if (wrapped.type !== "inputText") throw new Error("Expected the Code Mode receipt");
+      const padding = ".".repeat(512);
+      const output = outcome === "discarded" ? padding : outcome === "truncated" ? padding + wrapped.text + padding : wrapped.text;
+      await outputs.confirmModelVisibleRetrievals({ threadId: owner.threadId, output, maxVisibleBytes: 256 });
+      const rows = await outputs.listMetadata(owner.threadId);
+      if (outcome === "emitted") {
+        expect(rows).toEqual([expect.objectContaining({
+          originalCharacters: expect.any(Number), baselineParentTokens: 64, replacementCharacters: expect.any(Number),
+        })]);
+        expect(rows[0]!.originalCharacters).toBeGreaterThan(Buffer.byteLength(warning) * count);
+        expect(rows[0]!.replacementCharacters).toBeGreaterThan(0);
+        expect(rows[0]!.replacementCharacters).toBeLessThan(Buffer.byteLength(String(result.ok && result.data)));
+      } else {
+        expect(rows).toEqual([]);
+      }
+    },
+  );
+
+  it("returns Claude capture evidence and pricing for the Savings Explorer request", async () => {
+    const outputs = new TokenMiserStore(directory);
+    Object.assign(registry, { tokenMiserStore: outputs });
+    const target = { backend: "claude", threadId: "claude-parent" } as const;
+    const { claudeBackend } = registry as unknown as { claudeBackend: ClaudeBackend };
+    vi.spyOn(claudeBackend, "readThread").mockResolvedValue({
+      entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+    });
+    outputs.recordBoundedCommandDelivery({ caller: { ...target, turnId: "turn" }, objectId: "o1",
+      itemId: "native", originalBytes: 1600, deliveredBytes: 100 });
+    const explorer = await registry.readThread({ ...target, includeAllToolInvocations: true, viewOnly: true });
+    expect(explorer.toolAccounting?.tokenMiser).toMatchObject({ estimatedParentTokensSaved: 375 });
+    expect(explorer.pricing?.lines).toEqual([]);
+    const evaluation = await registry.readThread({ ...target, includeAccounting: true, viewOnly: true });
+    expect(evaluation.toolAccounting?.tokenMiser).toEqual(explorer.toolAccounting?.tokenMiser);
+  });
+
+  it("preserves raw capture size and caps the counterfactual Codex result", async () => {
+    const outputs = new TokenMiserStore(directory);
+    outputs.recordBoundedCommandDelivery({ caller: { backend: "codex", threadId: "parent", turnId: "turn" },
+      objectId: "o1", itemId: "native", originalBytes: 2_000_000, deliveredBytes: 400 });
+    expect((await outputs.listMetadata("parent"))[0]).toMatchObject({
+      originalCharacters: 2_000_000, baselineParentTokens: 10_000,
+    });
+    const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(outputs.stateDb);
+    storage.writeMetadata({ ...storage.readMetadata("o1")!, baselineParentTokens: 500_000 });
+    expect((await outputs.listMetadata("parent"))[0]).toMatchObject({
+      originalCharacters: 2_000_000, baselineParentTokens: 10_000,
+    });
+  });
+
+  it("deducts confirmed capture retrievals without committing each page", async () => {
+    const outputs = new TokenMiserStore(directory);
+    const caller = { backend: "claude", threadId: "parent", turnId: "turn" } as const;
+    const delivery = { caller, objectId: "o1", itemId: "native", originalBytes: 100_000, deliveredBytes: 400 };
+    outputs.recordBoundedCommandDelivery(delivery);
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: outputs.stateDb.raw, dbPath: outputs.stateDb.raw.name });
+    const { writes } = await measureSqliteWrites(async () => {
+      for (let index = 0; index < 8; index++) {
+        outputs.recordBoundedCommandDelivery({ ...delivery, kind: "excerpt", deliveredBytes: 160 });
+      }
+    });
+    expect((await outputs.listMetadata(caller.threadId))[0]).toMatchObject({
+      replacementCharacters: 400, retrievedCharacters: 1280,
+    });
+    expect(writes.commits).toBe(0);
+    const flushed = await measureSqliteWrites(async () => outputs.flushBoundedCommandReads(caller.threadId, caller));
+    expectSqliteWriteBudget({ scenario: "bounded-command-retrieval-batch", writes: flushed.writes,
+      note: "One turn-end transaction persists confirmed exact-output retrieval bytes from eight pages." });
+    expect((await new TokenMiserStore(directory).listMetadata(caller.threadId))[0]?.retrievedCharacters).toBe(1280);
+    expect((await measureSqliteWrites(async () => outputs.flushBoundedCommandReads(caller.threadId, caller))).writes.commits).toBe(0);
+  });
+
   it("attributes focused inference once to its requesting thread, including discarded answers, and subtracts it from savings", async () => {
     // This measured path needs a real WAL; the other ledger tests use RAM.
     // The usage ledger reads the store the registry was built with.
@@ -329,7 +540,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(capturePricing.lines[0]).toMatchObject({ accountKey: "fixture-account", model: "gpt-6-luna", inputTokens: 2000,
       backend: "claude", parentThreadId: "thread-parent", sourceItemId: "system:token-miser-capture:bounded" });
     await internals.recordTokenMiserHelperInference({ ...params, inferenceId: "unpriced-inference", usage: { ...params.usage, model: "unknown-fixture-model" } });
-    expect(await internals.buildTokenMiserThreadSavings(savingsParams)).toBeUndefined();
+    expect(await internals.buildTokenMiserThreadSavings(savingsParams)).toBeNull();
   });
 
   it.each(["claude", "acp:grok", "openai"] as const)("charges %s capture usage to the executing account on the calling thread", async (target) => {

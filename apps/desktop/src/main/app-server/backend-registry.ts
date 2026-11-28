@@ -1992,12 +1992,13 @@ export class DesktopBackendRegistry {
       await this.resolveTokenMiserThreadOverride(caller.backend, caller.threadId),
     );
     return enabled && !this.closed && this.isLiveDynamicToolCall(caller.backend, caller);
-  }, async (caller, command, helper) => {
+  }, async (caller, command, helper, signal) => {
     if (caller.backend === "codex") {
       const supported = await this.withCodexThreadClient(caller.threadId, async (client) =>
         !!client.terminateBackgroundTerminal && (await client.listBackgroundTerminals?.(caller.threadId))?.supported === true);
       if (!supported) throw new Error("This Codex runtime cannot stop an individual captured terminal.");
     }
+    if (signal.aborted || !this.isLiveDynamicToolCall(caller.backend, caller)) return false;
     const response = await this.handleServerRequest(caller.backend, {
       method: "mcpServer/elicitation/request",
       params: {
@@ -2007,9 +2008,15 @@ export class DesktopBackendRegistry {
         message: `Allow Token Miser to retain output from one native shell invocation of ${command}? The command uses the shell's working directory and permissions. Its full output will be available to this turn for up to five minutes.${helper ? ` The command, bounded output, and recent assistant message may be sent to ${helper}.` : ""}`,
         _meta: null,
       },
-    });
+    }, signal);
     return readRecord(response)?.action === "accept";
-  }, (caller) => this.resolveBoundedCommandHelper(caller));
+  }, (caller) => this.resolveBoundedCommandHelper(caller), (delivery) => {
+    try {
+      this.tokenMiserStore?.recordBoundedCommandDelivery(delivery);
+    } catch (error) {
+      backendRegistryLog.warn("Could not record bounded command delivery", { error: String(error) });
+    }
+  });
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserDiagnostics?: TokenMiserDiagnostics;
   private readonly tokenMiserService?: TokenMiserService;
@@ -8280,7 +8287,7 @@ export class DesktopBackendRegistry {
     )) {
       await this.threadUsageLedger.repairTokenMiserHistory(request.threadId);
     }
-    const pricingOverlay = resource === "pricing" && backend === "codex" ? this.threadUsageLedger.pricingPageOverlay(request.threadId) : undefined;
+    const pricingOverlay = resource === "pricing" ? this.threadUsageLedger.pricingPageOverlay(request.threadId, backend) : undefined;
     const pricingHistoryPage = resource === "pricing" && (backend !== "codex" || pricingOverlay)
       ? await this.overlayStore.readThreadPricingPage?.({
           backend, threadId: request.threadId, ...threadDisplayRange(request.display),
@@ -8454,7 +8461,17 @@ export class DesktopBackendRegistry {
         { backend, threadId: request.threadId }, withOrigins, undefined, [], request,
       );
       const pendingRequest = this.getPendingRequestForThread({ backend, threadId: request.threadId });
-      return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus };
+      const target = { backend, threadId: request.threadId };
+      const [pricing, toolAccounting] = request.includeAccounting !== false
+        && (request.includeAllToolInvocations || request.includeAccounting === true)
+        ? await Promise.all([
+          this.threadUsageLedger.readThreadPricingWithLiveTokenMiser(target),
+          this.overlayStore.readThreadToolAccounting({ ...target, includeAllInvocations: request.includeAllToolInvocations })
+            .then((accounting) => this.threadUsageLedger.withTokenMiserAccounting({ ...target, accounting })),
+        ])
+        : [];
+      return { ...target, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus,
+        ...(pricing ? { pricing } : {}), ...(toolAccounting ? { toolAccounting } : {}) };
     }
     if (isAcpBackendId(backend)) {
       const response = await this.readAcpThread(request, backend);
@@ -21415,6 +21432,7 @@ export class DesktopBackendRegistry {
       return await tokenMiserRouter.handleDynamicToolCall({
         backend,
         call: hostToolCall,
+        signal,
       });
     }
     const managedReviewLedgerRouter = buildManagedReviewLedgerToolRouter(
@@ -21680,14 +21698,29 @@ export class DesktopBackendRegistry {
       requestId: routedRequest.params.requestId,
     });
 
-    if (signal?.aborted) return { decision: "cancel" };
+    const cancellation = { action: "cancel" as const, content: null, _meta: null };
+    if (signal?.aborted) return request.method === "mcpServer/elicitation/request"
+      ? cancellation : { decision: "cancel" };
+    let cancelElicitation: (() => void) | undefined;
     const response = await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
-      this.pendingServerRequests.set(key, {
+      const pending: PendingServerRequest = {
         backend: routedBackend,
         notification: routedRequest,
         resolve,
         reject,
-      });
+      };
+      this.pendingServerRequests.set(key, pending);
+      if (signal && request.method === "mcpServer/elicitation/request") {
+        cancelElicitation = () => {
+          if (this.pendingServerRequests.get(key) !== pending) return;
+          void this.submitServerRequest({
+            backend: routedBackend, threadId: routedRequest.params.threadId,
+            turnId: routedRequest.params.turnId ?? undefined, requestId: routedRequest.params.requestId,
+            response: cancellation,
+          }).catch((error) => backendRegistryLog.warn("Could not withdraw elicitation", { error: String(error) }));
+        };
+        signal.addEventListener("abort", cancelElicitation, { once: true });
+      }
 
       void this.emit({
         backend: routedBackend,
@@ -21704,6 +21737,8 @@ export class DesktopBackendRegistry {
           },
         );
       });
+    }).finally(() => {
+      if (cancelElicitation) signal?.removeEventListener("abort", cancelElicitation);
     });
     if (request.method !== "mcpServer/elicitation/request") return response;
     return await this.threadMcpConnections.settleMcpProjectToolApprovalChoice(response, projectOffer);
@@ -23832,6 +23867,13 @@ export class DesktopBackendRegistry {
     if (isTerminal && !event.federationTarget) {
       const turnId = turnIdFromTerminalNotification(notification);
       if (turnId) {
+        try {
+          this.tokenMiserStore?.flushBoundedCommandReads(notification.params.threadId, {
+            backend: event.backend, threadId: notification.params.threadId, turnId,
+          });
+        } catch (error) {
+          backendRegistryLog.warn("Could not persist bounded command reads", { error: String(error) });
+        }
         this.boundedCommandCapture.forgetIntent({ backend: event.backend, threadId: notification.params.threadId, turnId });
         if (this.boundedCommandCapture.pending) {
           const threadId = notification.params.threadId;
