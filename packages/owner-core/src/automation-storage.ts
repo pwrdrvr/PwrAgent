@@ -214,6 +214,7 @@ export interface AutomationStorage {
     includeDeleted?: boolean;
   }): AutomationRecord[];
   listEnabledInboundAutomations(): AutomationRecord[];
+  hasNonDeletedThreadAutomation(identity: { backend: AppServerBackendKind; threadId: ThreadIdentifier }): boolean;
   listAutomationsForThread(params: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;

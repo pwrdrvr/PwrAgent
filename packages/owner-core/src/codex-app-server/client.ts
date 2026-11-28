@@ -1,4 +1,5 @@
 import { isAgentMemoryContext, stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
+import { DurableTurnRequestError } from "@pwragent/shared/contracts/durable-turn-requests";
 import type {
   CodexClientHost,
   CodexClientLogger,
@@ -167,6 +168,7 @@ import type {
   ThreadReadParams as CodexThreadReadParams,
   ThreadReadResponse as CodexThreadReadResponse,
   ThreadResumeParams as CodexThreadResumeParams,
+  ThreadUnsubscribeResponse as CodexThreadUnsubscribeResponse,
   ThreadSettingsUpdateParams as CodexThreadSettingsUpdateParams,
   ThreadStartParams as CodexThreadStartParams,
   ThreadTurnsListParams as CodexThreadTurnsListParams,
@@ -8158,6 +8160,11 @@ export class CodexAppServerClient {
   /** Requests from Codex (approvals, user input, tool calls) per thread. */
   private readonly pendingServerRequestsByThread = new Map<string, number>();
   private threadUnsubscribeUnsupported = false;
+  // A restricted resume can leave its config installed even if the turn is
+  // refused or its start result is lost. Only a proven ordinary reload clears it.
+  private readonly factoryConfiguredThreads = new Set<string>();
+  private readonly startingTurns = new Set<string>();
+  private readonly factorySessionReloads = new Map<string, { unloaded: boolean }>();
   private restartStatus: CodexAppServerRestartStatus = { stopped: false };
   private readonly restartStatusListeners = new Set<
     (status: CodexAppServerRestartStatus) => void
@@ -8316,11 +8323,24 @@ export class CodexAppServerClient {
       },
       onUnexpectedExit: (exit) => this.handleUnexpectedExit(exit),
     });
-    const observer = createCodexObserverWithConfigReadRedaction(options.connectionObserver);
+    const diagnosticsObserver = createCodexObserverWithConfigReadRedaction(options.connectionObserver);
+    const observer: JsonRpcObserver = {
+      onMessage: (event) => {
+        // Read the lifecycle evidence in wire order, before an async diagnostic
+        // observer can let the resume response overtake the unload notification.
+        if (this.factorySessionReloads.size && event.direction === "inbound"
+            && event.envelope.method === "thread/status/changed" && readThreadStatus(event.envelope.params) === "notLoaded") {
+          const threadId = extractRequestMetadata(event.envelope.params).threadId;
+          const reload = threadId && this.factorySessionReloads.get(threadId);
+          if (reload) reload.unloaded = true;
+        }
+        return diagnosticsObserver?.onMessage(event);
+      },
+    };
     this.rawConnection = new JsonRpcConnection(
       this.transport,
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      observer && (this.transport.wrapConnectionObserver?.(observer) ?? observer),
+      this.transport.wrapConnectionObserver?.(observer) ?? observer,
       { logContext: { backend: "codex" }, logger: host.rpcLogger },
     );
     // Every request, admitted or lifecycle, reaches Codex through this one
@@ -9235,6 +9255,7 @@ export class CodexAppServerClient {
     this.ownedRealtimeThreads.clear();
     this.threadsAwaitingFirstTurn.clear();
     this.pendingFirstTurnThreadResults.clear();
+    this.factoryConfiguredThreads.clear();
     this.pendingFirstTurnShellEnvironments.clear();
     this.recordedThreadNames.clear();
     this.pendingThreadNameEchoes.clear();
@@ -11766,8 +11787,153 @@ export class CodexAppServerClient {
     };
   }
 
+  /** Require a fresh provider session and an attested, workspace-only profile before sending input. */
+  async startFactoryBuilderTurn(params: {
+    threadId: string;
+    cwd: string;
+    input: AppServerTurnInputItem[];
+    permissionProfile: string;
+    onBeforeStart(): Promise<boolean>;
+  }): Promise<{ threadId: string; turnId: string }> {
+    const refuse = () => new DurableTurnRequestError("request_start_refused");
+    if (this.startingTurns.has(params.threadId)) throw refuse();
+    return await this.withTurnStart(params.threadId, () => this.startRestrictedTurn(params, refuse));
+  }
+
+  private async startRestrictedTurn(
+    params: Parameters<CodexAppServerClient["startFactoryBuilderTurn"]>[0],
+    refuse: () => DurableTurnRequestError,
+  ): Promise<{ threadId: string; turnId: string }> {
+    await this.ensureInitialized();
+    const generation = this.serverGeneration;
+    const timeout = Math.min(this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, 20_000);
+    const { threadId, cwd, permissionProfile } = params;
+    const compatibility = this.getProtocolCompatibility();
+    return await this.runAdmittedRequest(async () => {
+      const rpc = (method: string, payload: object) => {
+        if (this.serverGeneration !== generation || !this.initialized || this.pendingCloses) throw refuse();
+        return this.rawConnection.request(method, payload, timeout,
+          { callerReason: CODEX_CONNECTION_MCP_CONFIG_READ_REASON });
+      };
+      let input: CodexUserInput[];
+      try {
+        const capabilities = asRecord(await rpc("server/capabilities/read", {}).catch((error: unknown) => {
+          if (!isMethodUnavailableError(error, "server/capabilities/read")) throw error;
+          return undefined;
+        }));
+        const reducer = asRecord(capabilities?.codeModeOutputReducer);
+        if (!compatibility.supportsThreadSkillExclusions || reducer?.protocolVersion !== 1
+            || reducer.dynamicToolsResumeField !== "dynamicTools") {
+          this.host.logger.warn("Factory workers require Codex with dynamic tool replacement on resume.", { threadId });
+          throw refuse();
+        }
+        const servers = readConfiguredMcpServerNames(await rpc("config/read", { cwd, includeLayers: false }));
+        if (servers.length > 128) throw refuse();
+        const resume = asRecord(await this.reloadFactorySession(threadId, rpc, () => {
+          this.factoryConfiguredThreads.add(threadId);
+          return rpc("thread/resume", {
+            threadId, cwd, runtimeWorkspaceRoots: [cwd], modelProvider: "openai", excludeTurns: true,
+            approvalPolicy: "never", approvalsReviewer: "user", permissions: permissionProfile,
+            developerInstructions: "", dynamicTools: [],
+            config: buildCodexHelperConfig({
+              ...CODEX_THREAD_TITLE_CONFIG,
+              allow_login_shell: false,
+              features: { ...asRecord(CODEX_THREAD_TITLE_CONFIG.features), shell_snapshot: false },
+              shell_environment_policy: { inherit: "core", ignore_default_excludes: false },
+            }, servers),
+          } satisfies CodexThreadResumePayload);
+        }));
+        const roots = resume?.runtimeWorkspaceRoots;
+        const environments = asRecord(resume?.thread)?.environments;
+        if (extractThreadIdFromValue(resume) !== threadId || resume?.cwd !== cwd || resume.modelProvider !== "openai"
+            || resume.approvalPolicy !== "never" || asRecord(resume.activePermissionProfile)?.id !== permissionProfile
+            || !Array.isArray(roots) || roots.length !== 1 || roots[0] !== cwd
+            || !Array.isArray(environments) || environments.length !== 0) throw refuse();
+        const inventory = readMcpServerInventoryPage(await rpc("mcpServerStatus/list", { threadId, detail: "toolsAndAuthOnly", limit: 1 }));
+        if (inventory.names.length || inventory.nextCursor) throw refuse();
+        input = await prepareCodexUserInput({ input: params.input });
+        if (!await params.onBeforeStart() || !this.factoryConfiguredThreads.has(threadId)) throw refuse();
+      } catch {
+        // No model input has crossed the provider boundary. The caller may
+        // safely record a refused start, including config/inventory failures.
+        throw refuse();
+      }
+      const result = await rpc("turn/start", {
+        threadId, cwd, runtimeWorkspaceRoots: [cwd], input,
+        approvalPolicy: "never", approvalsReviewer: "user", permissions: permissionProfile,
+      } satisfies CodexTurnStartPayload);
+      const turnId = extractTurnIdFromValue(result);
+      const resultThreadId = extractThreadIdFromValue(result);
+      if (!turnId || (resultThreadId && resultThreadId !== threadId)) {
+        throw new Error("Factory builder turn identity is unknown.");
+      }
+      return { threadId, turnId };
+    });
+  }
+
+  private async reloadFactorySession(
+    threadId: string,
+    rpc: (method: string, payload: object) => Promise<unknown>,
+    resume: () => Promise<unknown>,
+  ): Promise<unknown> {
+    const generation = this.serverGeneration;
+    const current = await rpc("thread/read", { threadId, includeTurns: false });
+    const status = readThreadStatus(current);
+    if (extractThreadIdFromValue(current) !== threadId || (status !== "notLoaded" && status !== "idle")
+        || this.pendingServerRequestsByThread.has(threadId) || this.ownedRealtimeThreads.has(threadId)) {
+      throw new Error("Factory worker session is not idle.");
+    }
+    if (this.threadsAwaitingFirstTurn.has(threadId)) {
+      const thread = asRecord(asRecord(current)?.thread);
+      if (thread?.historyMode !== "paginated" || thread.ephemeral !== false) {
+        this.host.logger.warn("An unused Factory worker needs Codex paginated thread history.", { threadId });
+        throw new Error("Factory worker history could not be materialized.");
+      }
+      // Codex materializes an untouched paginated thread when asked for its
+      // turns. This bounded first-turn read preserves the identity without inference.
+      const saved = await rpc("thread/read", { threadId, includeTurns: true });
+      if (extractThreadIdFromValue(saved) !== threadId || readThreadStatus(saved) !== "idle") {
+        throw new Error("Codex did not materialize the idle Factory worker.");
+      }
+      this.threadsAwaitingFirstTurn.delete(threadId);
+    }
+    this.pendingFirstTurnThreadResults.delete(threadId);
+    this.pendingFirstTurnShellEnvironments.delete(threadId);
+    const release = asRecord(await rpc("thread/unsubscribe", { threadId }));
+    const releaseStatus = release?.status as CodexThreadUnsubscribeResponse["status"] | undefined;
+    if (releaseStatus !== "unsubscribed" && releaseStatus !== "notSubscribed" && releaseStatus !== "notLoaded") {
+      throw new Error("Codex did not acknowledge the Factory worker subscription release.");
+    }
+    this.noteThreadUnloaded(threadId);
+    // An override resume rebuilds an idle, unsubscribed session immediately.
+    // A successful rejoin can ignore those overrides. Require Codex's unload
+    // evidence for this thread before accepting the resume response.
+    const reload = { unloaded: releaseStatus === "notLoaded" };
+    this.factorySessionReloads.set(threadId, reload);
+    try {
+      const result = await resume();
+      if (generation !== this.serverGeneration || !reload.unloaded
+          || extractThreadIdFromValue(result) !== threadId || readThreadStatus(result) !== "idle") {
+        throw new Error("Codex did not confirm the Factory worker session replacement.");
+      }
+      return result;
+    } finally {
+      this.factorySessionReloads.delete(threadId);
+    }
+  }
+
+  private async withTurnStart<T>(threadId: string, start: () => Promise<T>): Promise<T> {
+    this.startingTurns.add(threadId);
+    try {
+      return await start();
+    } finally {
+      this.startingTurns.delete(threadId);
+    }
+  }
+
   async startTurn(params: {
     threadId: string;
+    onFactoryBuilderConfigReplaced?: () => void;
     /** Hosts with durable jobs can retain a terminal response before the call returns. */
     onTerminalResult?: (result: {
       threadId: string;
@@ -11799,9 +11965,27 @@ export class CodexAppServerClient {
     threadId: string;
     turnId: string;
   }> {
+    if (this.startingTurns.has(params.threadId)) throw new Error("This Codex thread already has a turn starting.");
+    return await this.withTurnStart(params.threadId, () => this.startOrdinaryTurn(params));
+  }
+
+  private async startOrdinaryTurn(params: Parameters<CodexAppServerClient["startTurn"]>[0]): Promise<{ threadId: string; turnId: string }> {
     params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
-    const connection = this.createThreadOperationConnection();
+    const restoreFactoryConfig = this.factoryConfiguredThreads.has(params.threadId);
+    if (restoreFactoryConfig && params.dynamicTools === undefined) {
+      throw new Error("The operator's Codex tool catalog is unavailable for Factory worker restoration.");
+    }
+    const timeout = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const connection = this.createThreadOperationConnection(restoreFactoryConfig
+      ? (method, submit) => {
+          if (method !== "thread/resume") return submit();
+          // The Outpost transport supplies the ordinary named permission
+          // profile. Codex treats it as an override even if the mode matches.
+          return this.reloadFactorySession(params.threadId,
+            (name, payload) => this.rawConnection.request(name, payload, timeout), submit);
+        }
+      : undefined);
 
     const pendingFirstTurnResult = this.pendingFirstTurnThreadResults.get(params.threadId);
     // thread/resume primes the per-thread permission profile in codex
@@ -11848,7 +12032,7 @@ export class CodexAppServerClient {
       reloadDeveloperInstructions =
         (await this.threadDeveloperInstructionsResolver?.(params.threadId))?.trim() ?? "";
       try {
-        await this.unsubscribeThreadForReload(params.threadId);
+        if (!restoreFactoryConfig) await this.unsubscribeThreadForReload(params.threadId);
       } catch (error) {
         this.staleDeveloperInstructionThreads.add(params.threadId);
         throw error;
@@ -11899,6 +12083,7 @@ export class CodexAppServerClient {
       // Environment overrides are applied by resume; continuing after a
       // failure would silently run the turn with the previous toolchain.
       resumeResult = params.requireThreadResume
+        || restoreFactoryConfig
         || params.dynamicTools !== undefined
         || params.codexEnvironmentRuntime?.shellEnvironment !== undefined
         || shellEnvironmentChanged
@@ -11926,6 +12111,8 @@ export class CodexAppServerClient {
       input: params.input,
       onInputTextPrepared: params.onInputTextPrepared,
     });
+    if (restoreFactoryConfig) this.factoryConfiguredThreads.delete(params.threadId);
+    params.onFactoryBuilderConfigReplaced?.();
     const result = await requestWithFallbacks({
       client: connection,
       methods: ["turn/start"],

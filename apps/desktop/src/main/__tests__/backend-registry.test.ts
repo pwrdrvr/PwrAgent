@@ -12962,6 +12962,21 @@ command = "pnpm dev"
     }
   });
 
+  it("refuses an unisolated bounded start before it reaches the normal provider or queue", async () => {
+    const client = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+    const registry = createDesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    try {
+      const worker = { backend: "codex" as const, threadId: "idle-target" };
+      await expect(registry.submitTurn({
+        ...worker, input: [{ type: "text", text: "Approved outcome" }],
+        boundedStart: { before: Date.now() + 60_000, worktreePath: "/factory/worktree", repository: "asterlabs/synthetic" },
+      })).rejects.toMatchObject({ code: "request_start_refused" });
+      expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey(worker.backend, worker.threadId)] ?? []).toEqual([]);
+      expect(client.lastStartTurnParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
   it("admits the next submission before a starting provider responds", async () => {
     const providerEntered = createDeferred<void>();
     const providerRelease = createDeferred<void>();

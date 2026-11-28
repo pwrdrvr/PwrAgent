@@ -1,3 +1,4 @@
+import type { FactoryAdmission } from "@pwragent/owner-core/factory-admission";
 import { NavigationWindowPageDeltas } from "../../app-server/navigation-window-page-deltas";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../../../shared/ipc";
@@ -366,8 +367,8 @@ const prPollingFocusCleanupSenderIds = new Set<number>();
 const transcriptPrCleanupSenderIds = new Set<number>();
 
 
-export function registerAppServerIpcHandlers(): void {
-  registerFactoryIpcHandlers(appServerService);
+export function registerAppServerIpcHandlers(factoryAdmission?: Pick<FactoryAdmission, "command">): void {
+  registerFactoryIpcHandlers(appServerService, factoryAdmission);
   ipcMain.removeHandler(AGENT_PRESETS_CHANNEL);
   ipcMain.handle(AGENT_PRESETS_CHANNEL, (event, request: ManageAgentPresetsRequest) => {
     if (isFederationWindowWebContents(event.sender)) {

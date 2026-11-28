@@ -26,6 +26,9 @@ import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json
 import contentFilterCapture from "./fixtures/codex-content-filter-block.json";
 import { nativeCodexMcpApprovalFixture } from "./fixtures/native-codex-mcp-approval";
 import { buildAutomationMcpConsent } from "../mcp-connections/mcp-approval-consent";
+import { getOwnerHostServices, installOwnerHostServices } from "../owner-host";
+import { createOutpostRuntimePolicy } from "../owner-runtime-policy";
+import { createCodexAppServerGenerationPool } from "../codex-app-server/app-server-generation-pool";
 import {
   buildLiveToolDetails,
   summarizeLiveActivity,
@@ -252,6 +255,7 @@ class MockTransport implements JsonRpcTransport {
   captureHistoryResponses = false;
   readonly historyResponses: Array<{ method: string; bytes: number }> = [];
   mcpServerStatusResponse?: () => void;
+  respond?: (method: string, params: Record<string, unknown>) => object | undefined;
   readonly options?: unknown;
   closeCount = 0;
   connectCount = 0;
@@ -310,6 +314,12 @@ class MockTransport implements JsonRpcTransport {
       method?: string;
       params?: Record<string, unknown>;
     };
+
+    const fixtureResponse = this.respond?.(payload.method ?? "", payload.params ?? {});
+    if (fixtureResponse) {
+      this.messageHandler(JSON.stringify({ id: payload.id, ...fixtureResponse }));
+      return;
+    }
 
     for (const notification of MockTransport.preResponseNotificationsByMethod.get(payload.method ?? "") ?? []) {
       this.messageHandler(JSON.stringify(notification));
@@ -1533,6 +1543,187 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  // An unsubscribed thread stays resident. A resume with overrides replaces it
+  // only when it has no subscribers and no live turn. Check the effective
+  // session at each accepted turn, including the initial untouched worker.
+  it.each([false, true])("reuses one Factory worker and restores ordinary tools (fresh: %s)", async (fresh) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const host = getOwnerHostServices();
+    const runtimePolicy = createOutpostRuntimePolicy({ PWRAGENT_OUTPOST_FEDERATION_ROLE: "full" });
+    installOwnerHostServices({ ...host, runtimePolicy });
+    const flushDiagnostics = Promise.withResolvers<void>();
+    const client = createCodexAppServerGenerationPool(() => new CodexAppServerClient({
+      connectionObserver: { onMessage: ({ envelope }) => envelope.method === "thread/status/changed" ? flushDiagnostics.promise : undefined },
+    }), {
+      isThreadBusy: () => false, isThreadPinned: () => false, checkIntervalMs: 0,
+    });
+    const threadId = "thread-3";
+    const cwd = path.join(os.tmpdir(), "pwragent-factory-fixture", "worktree");
+    const permissionProfile = "pwragent-outpost-workspace-write";
+    const input = [{ type: "text" as const, text: "Run local tests." }];
+    const tool = { type: "function" as const, name: "operator_tool", description: "Operator tool", inputSchema: {}, deferLoading: false };
+    const factory = { threadId, cwd, permissionProfile, input, onBeforeStart: async () => true };
+    const manual = { threadId, cwd, input, approvalPolicy: "on-request", sandbox: "read-only", dynamicTools: [tool] };
+    let saved = !fresh;
+    let subscribed = true;
+    let active: string | undefined;
+    let serial = 0;
+    let session: Record<string, unknown> = { permissions: "pwragent-outpost-read-only", dynamicTools: [tool] };
+    let otherSubscriber = false;
+    let malformedRelease = false;
+    let unknownStart = false;
+    let unrelatedTurn: string | undefined;
+    const snapshots: Array<Record<string, unknown>> = [];
+    const transport = MockTransport.instances.at(-1)!;
+    transport.respond = (method, params) => {
+      const metadata = { id: threadId, status: { type: active ? "active" : "idle" }, historyMode: "paginated", ephemeral: false };
+      if (method === "thread/start") return { result: { thread: metadata } };
+      if (method === "server/capabilities/read") return { result: { codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" } } };
+      if (method === "config/read") return { result: { config: { mcp_servers: { local: {} } } } };
+      if (params.threadId === "other-worker" && method === "turn/start") {
+        unrelatedTurn = "other-turn";
+        transport.notify("turn/started", { threadId: "other-worker", turn: { id: unrelatedTurn, status: "inProgress" } });
+        return { result: { turn: { id: unrelatedTurn } } };
+      }
+      if (params.threadId !== threadId) return;
+      if (method === "thread/read") {
+        if (params.includeTurns) saved = true;
+        return { result: { thread: { ...metadata, turns: [] } } };
+      }
+      if (method === "thread/unsubscribe") {
+        if (malformedRelease) return { result: {} };
+        const status = subscribed ? "unsubscribed" : "notSubscribed";
+        if (otherSubscriber) transport.notify("thread/status/changed", { threadId, status: { type: "notLoaded" } });
+        subscribed = false;
+        return { result: { status } };
+      }
+      if (method === "thread/resume") {
+        if (!saved) return { error: { code: -32600, message: "no rollout found" } };
+        if (!subscribed && !otherSubscriber && !active && (params.config || params.permissions)) {
+          transport.notify("thread/status/changed", { threadId, status: { type: "notLoaded" } });
+          session = params;
+        }
+        subscribed = true;
+        return { result: { ...session, thread: { ...metadata, environments: [] }, activePermissionProfile: { id: session.permissions } } };
+      }
+      if (method === "mcpServerStatus/list") return { result: { data: [], nextCursor: null } };
+      if (method === "turn/start") {
+        expect(active).toBeUndefined();
+        snapshots.push(session);
+        active = `worker-turn-${++serial}`;
+        transport.notify("turn/started", { threadId, turn: { id: active, status: "inProgress" } });
+        return { result: unknownStart ? { turn: {} } : { turn: { id: active } } };
+      }
+    };
+    const complete = async () => {
+      const finished = Promise.withResolvers<void>();
+      const stop = client.onNotification((event) => { if (event.method === "turn/completed") finished.resolve(); });
+      transport.notify("turn/completed", { threadId, turn: { id: active, status: "completed" } });
+      active = undefined;
+      await finished.promise;
+      stop();
+    };
+    try {
+      if (fresh) await client.startThread({ cwd, dynamicTools: [tool] });
+      const ready = Promise.withResolvers<void>();
+      const gate = Promise.withResolvers<boolean>();
+      const first = client.startFactoryBuilderTurn({ ...factory, onBeforeStart: () => {
+        ready.resolve();
+        return gate.promise;
+      } });
+      await Promise.race([ready.promise, first]);
+      try {
+        await expect(client.startTurn(manual)).rejects.toThrow("already has a turn starting");
+        await expect(client.startFactoryBuilderTurn(factory)).rejects.toThrow("request_start_refused");
+        await expect(client.startTurn({ ...manual, threadId: "other-worker" })).resolves.toMatchObject({ turnId: "other-turn" });
+      } finally {
+        gate.resolve(true);
+        await first;
+      }
+      await expect(client.startFactoryBuilderTurn(factory)).rejects.toThrow("request_start_refused");
+      await complete();
+      malformedRelease = true;
+      await expect(client.startFactoryBuilderTurn(factory)).rejects.toThrow("request_start_refused");
+      malformedRelease = false;
+      otherSubscriber = true;
+      await expect(client.startFactoryBuilderTurn(factory)).rejects.toThrow("request_start_refused");
+      await expect(client.startTurn(manual)).rejects.toThrow("did not confirm");
+      otherSubscriber = false;
+      expect(snapshots).toHaveLength(1);
+      await expect(client.startFactoryBuilderTurn(factory)).resolves.toMatchObject({ turnId: "worker-turn-2" });
+      await complete();
+      unknownStart = true;
+      await expect(client.startFactoryBuilderTurn(factory)).rejects.toThrow("turn identity is unknown");
+      await expect(client.startTurn(manual)).rejects.toThrow("is not idle");
+      await expect(client.startFactoryBuilderTurn(factory)).rejects.toThrow("request_start_refused");
+      await complete();
+      unknownStart = false;
+      await expect(client.startTurn(manual)).resolves.toMatchObject({ turnId: "worker-turn-4" });
+      expect(snapshots.slice(0, 3)).toEqual(Array.from({ length: 3 }, () => expect.objectContaining({
+        approvalPolicy: "never", permissions: permissionProfile, dynamicTools: [],
+        config: expect.objectContaining({ mcp_servers: { local: { enabled: false } } }),
+      })));
+      expect(snapshots[3]).toMatchObject({ approvalPolicy: "on-request", permissions: "pwragent-outpost-read-only", dynamicTools: [tool] });
+      expect(snapshots[3]?.config).toBeUndefined();
+      expect(client.threadDependsOnAppServer("other-worker")).toBe(true);
+      expect(unrelatedTurn).toBe("other-turn");
+      expect(transport.sentMessages.map((message) => JSON.parse(message))
+        .filter(({ method, params }) => method === "thread/read" && params.includeTurns)).toHaveLength(fresh ? 1 : 0);
+      expect(transport.closeCount).toBe(0);
+    } finally {
+      flushDiagnostics.resolve();
+      await client.close();
+      installOwnerHostServices(host);
+    }
+  });
+
+  it.each(["allowed", "MCP server", "wrong profile", "resident session", "remote environment", "revoked", "unsupported"])(
+    "requires workspace-only provider proof before sending Factory input (%s)", async (scenario) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+      const client = new CodexAppServerClient();
+      const threadId = "thread-2";
+      const cwd = "/fixture/worktree";
+      const permissionProfile = "pwragent-outpost-workspace-write";
+      const input = [{ type: "text" as const, text: "Run local tests." }];
+      MockTransport.configReadResult = { config: { mcp_servers: { "inherited-forge": {}, "pwragent_tools": {} } } };
+      MockTransport.serverCapabilitiesResult = scenario === "unsupported" ? {} : {
+        codeModeOutputReducer: { protocolVersion: 1, dynamicToolsResumeField: "dynamicTools" },
+      };
+      MockTransport.instances.at(-1)!.respond = (method) => method === "thread/unsubscribe"
+        ? { result: { status: scenario === "resident session" ? "unsubscribed" : "notLoaded" } } : undefined;
+      MockTransport.threadStatusByThreadId.set(threadId, { type: scenario === "resident session" ? "idle" : "notLoaded" });
+      MockTransport.threadResumeResult = {
+        thread: { id: threadId, status: { type: "idle" }, environments: scenario === "remote environment" ? [{ environmentId: "remote" }] : [] },
+        cwd, runtimeWorkspaceRoots: [cwd], modelProvider: "openai", approvalPolicy: "never",
+        activePermissionProfile: { id: scenario === "wrong profile" ? ":workspace" : permissionProfile },
+      };
+      MockTransport.threadMcpServerStatusResult = { data: scenario === "MCP server" ? [{ name: "inherited-forge", tools: {} }] : [], nextCursor: null };
+      const getRequests = () => MockTransport.instances.flatMap(({ sentMessages }) => sentMessages)
+        .map((message) => JSON.parse(message) as { method: string; params: object });
+      try {
+        const started = client.startFactoryBuilderTurn({ threadId, cwd, input, permissionProfile,
+          onBeforeStart: async () => scenario !== "revoked" });
+        if (scenario !== "allowed") {
+          await expect(started).rejects.toThrow("request_start_refused");
+          expect(getRequests().filter(({ method }) => method === "turn/start")).toHaveLength(0);
+          return;
+        }
+        await expect(started).resolves.toEqual({ threadId, turnId: "turn-1" });
+        const proof = getRequests();
+        expect(proof.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
+          cwd, runtimeWorkspaceRoots: [cwd], modelProvider: "openai", approvalsReviewer: "user", dynamicTools: [],
+          config: { web_search: "disabled", notify: [], features: { hooks: false, apps: false, plugins: false, multi_agent: false },
+            mcp_servers: { "inherited-forge": { enabled: false }, pwragent_tools: { enabled: false } } },
+        });
+        expect(proof.find(({ method }) => method === "turn/start")?.params).toMatchObject({
+          cwd, runtimeWorkspaceRoots: [cwd], approvalPolicy: "never", permissions: permissionProfile, input,
+        });
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
   it("keeps protocol browsing passive and admits every mutating request before dispatch", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     let allowed = false;

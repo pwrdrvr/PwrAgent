@@ -87,7 +87,10 @@ export async function serve({ directory, workspace, home, command, profile }) {
     // Record only once a lease can follow: a start that fails earlier must not
     // push a crashed lease holder out of the bounded holder list.
     lock.record(owner.processRuntimeInstanceId());
-    services = await owner.startHeadlessHost(undefined, { manageSignals: false, exitedRuntimeInstanceIds: lock.previousInstanceIds });
+    services = await owner.startHeadlessHost(undefined, {
+      manageSignals: false, exitedRuntimeInstanceIds: lock.previousInstanceIds,
+      factoryBuilderWorkspaceRoot: process.env.PWRAGENT_OUTPOST_FACTORY_BUILDER === "on" ? workspace : undefined,
+    });
     if (shutdown) { await owner.shutdownHeadlessHost("outpost-startup-cancelled"); return await done; }
     server = net.createServer((socket) => {
       if (sockets.size >= 64) { socket.destroy(); return; }

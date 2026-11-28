@@ -379,6 +379,7 @@ export type BackendClient = {
   readTurnRoot?(params: { threadId: string; turnId: string }): Promise<string | undefined>;
   startTurn(params: {
     threadId: string;
+    onFactoryBuilderConfigReplaced?: () => void;
     agentMemoryContext?: string;
     parentTurnId?: string;
     rootTurnId?: string;
@@ -403,6 +404,7 @@ export type BackendClient = {
     threadId: string;
     turnId: string;
   }>;
+  startFactoryBuilderTurn?: CodexAppServerClient["startFactoryBuilderTurn"];
   recoverInvalidPersistedResponseMessageIds?(params: {
     failureMessage: string;
     forkLineageThreadIds?: string[];

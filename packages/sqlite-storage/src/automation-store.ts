@@ -484,6 +484,17 @@ export class AutomationStore implements AutomationStorage {
       .filter((record): record is AutomationRecord => Boolean(record));
   }
 
+  hasNonDeletedThreadAutomation(identity: { backend: AppServerBackendKind; threadId: ThreadIdentifier }): boolean {
+    // Two index seeks skip deleted history and include statuses from newer owners.
+    const row = this.stateDb.raw.prepare(`
+      SELECT 1 FROM automations WHERE backend = ? AND thread_id = ? AND status < 'deleted'
+      UNION ALL
+      SELECT 1 FROM automations WHERE backend = ? AND thread_id = ? AND status > 'deleted'
+      LIMIT 1
+    `).get(identity.backend, identity.threadId, identity.backend, identity.threadId);
+    return row !== undefined;
+  }
+
   listAutomationsForThread(params: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;

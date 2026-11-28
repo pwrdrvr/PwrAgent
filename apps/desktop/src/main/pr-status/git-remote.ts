@@ -199,6 +199,21 @@ export async function resolveGitHubRepoForDirectory(
   return observation.value.find((remote) => remote.name === "origin")?.repo;
 }
 
+/** Read only the effective origin URL. Admission has no use for secondary remotes or cached inventory. */
+export async function readCurrentGitHubOrigin(cwd: string): Promise<GitHubRepoRef | undefined> {
+  const demand = { priority: () => PR_METADATA_PRIORITY.selected };
+  const response = await runPrMetadataGit(cwd, ["remote", "get-url", "--", "origin"], {
+    purpose: "pr-remotes", env: buildPwrAgentChildProcessEnv(process.env), timeout: GIT_REMOTE_TIMEOUT_MS, maxBuffer: 16 * 1024,
+  }, demand).catch(() => undefined);
+  if (!response) return;
+  const url = response.stdout.trim();
+  const repo = parseGitHubRemote(url);
+  if (!repo) return;
+  const sshHost = readSshHost(url);
+  const host = sshHost ? (await resolveSshHostInFlight(sshHost, defaultResolveSshHostname, demand))?.toLowerCase() : repo.host;
+  if (host === "github.com" || (sshHost && host === "ssh.github.com")) return { ...repo, host: "github.com" };
+}
+
 /** Resolve a GitHub.com action target from one current sample of the checkout. */
 export async function resolveGitHubRepoForCheckoutAction(cwd: string): Promise<GitHubRepoRef | undefined> {
   // Sample independently of discovery, which may already have read the old URLs.

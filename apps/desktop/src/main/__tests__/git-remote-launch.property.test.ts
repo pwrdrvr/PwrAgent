@@ -6,7 +6,7 @@ import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { clearGitHubRemoteCache, parseForgeRemote, readForgeRepositoryRemotes, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
+import { clearGitHubRemoteCache, parseForgeRemote, readCurrentGitHubOrigin, readForgeRepositoryRemotes, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { detectPullRequestsForThread, filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
 import { PR_METADATA_PRIORITY, runPrMetadataGit } from "../pr-status/pr-metadata-process";
 import { readProvenRemoteHeads } from "../pr-status/pr-remote-heads";
@@ -19,6 +19,28 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const { runGitCommand } = gitExecutable;
 const originConfig = ["local", "remote.origin.url\nhttps://github.com/fixture/project.git", ""].join("\0");
+
+it("samples only the current origin for admission even if secondary remotes match", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "factory-origin-"));
+  const restore = isolateProcessGitEnvironment(root);
+  const runner = vi.spyOn(gitExecutable, "runGitCommand");
+  onTestFinished(async () => {
+    runner.mockRestore();
+    restore();
+    await rm(root, { recursive: true, force: true });
+  });
+  await runGitCommand(root, ["init", "-b", "main"]);
+  const config = path.join(root, ".git", "config");
+  await fs.appendFile(config, '[remote "extra"]\n  url = https://github.com/fixture/target.git\n');
+  expect(await readCurrentGitHubOrigin(root)).toBeUndefined();
+  for (const size of [8, 16, 32]) {
+    const remotes = Array.from({ length: size }, (_, i) => `[remote "extra${i}"]\n  url = https://github.com/fixture/target.git`);
+    await writeFile(config, [`[remote "origin"]\n  url = https://github.com/team${size}/target.git`, ...remotes, ""].join("\n"));
+    runner.mockClear();
+    expect(await readCurrentGitHubOrigin(root)).toEqual({ host: "github.com", owner: `team${size}`, repo: "target" });
+    expect(runner.mock.calls.map(([, args]) => args)).toEqual([["remote", "get-url", "--", "origin"]]);
+  }
+});
 
 it("keeps a selected PR read moving when background paths cannot complete filesystem discovery", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-unresponsive-"));

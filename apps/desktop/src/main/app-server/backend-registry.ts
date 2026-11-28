@@ -1,3 +1,7 @@
+import { matchesFactoryOrigin } from "../factory/factory-repository";
+import { DurableTurnRequestError, FACTORY_BUILDER_ISOLATION, type BoundedDurableTurnStart } from "@pwragent/shared/contracts/durable-turn-requests";
+import { getAutomationStorage } from "../storage/desktop-automation-storage";
+import { canonicalOutpostPath, OUTPOST_PERMISSION_PROFILE_IDS } from "../headless/outpost-codex-sandbox";
 import { discoverAntigravitySkillCatalog } from "../acp/antigravity-skills";
 import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
@@ -142,6 +146,7 @@ import { joinConcurrent } from "../../shared/concurrent-work";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import {
   attributeCodexProviderUsageLine,
+  codexProviderIdOfModel,
   withCodexProviderSnapshotRates,
   parseCodexProviderModelId,
   type CodexModelProviderSettings,
@@ -1092,6 +1097,12 @@ type JoinedSubmissionResult =
   | Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>;
 
 export class DesktopBackendRegistry {
+  /** Immediate admissions only. This authority is never restored from a receipt. */
+  private readonly factoryBuilderStarts = new Map<string, {
+    entryId: string;
+    bounds: BoundedDurableTurnStart;
+    providerMayHaveStarted: boolean;
+  }>();
   readonly context: RegistryContext;
   private readonly jobMonitorCreationDeferredTurns = new Set<string>();
   /** The PR and forge domain: forge tools, PR bindings and PR attachment. Importers use the facade below. */
@@ -2259,7 +2270,8 @@ export class DesktopBackendRegistry {
       get messagingWorkingUpdatesHandler() { return current().messagingWorkingUpdatesHandler; },
       applyAcpRuntimeSelection: (...args: Parameters<typeof this.applyAcpRuntimeSelection>) => this.applyAcpRuntimeSelection(...args),
       applyQueuedMessageTitle: (...args: Parameters<typeof this.applyQueuedMessageTitle>) => this.applyQueuedMessageTitle(...args),
-      approveGatewayInvocation: (...args: Parameters<ThreadMcpConnections["approveGatewayInvocation"]>) => this.threadMcpConnections.approveGatewayInvocation(...args),
+      approveGatewayInvocation: (...args: Parameters<ThreadMcpConnections["approveGatewayInvocation"]>) =>
+        this.isFactoryBuilderCall(args[1].backend, args[1]) ? Promise.resolve(false) : this.threadMcpConnections.approveGatewayInvocation(...args),
       appendPermissionTransition: (...args: Parameters<typeof this.appendPermissionTransition>) => this.appendPermissionTransition(...args),
       archiveThread: (...args: Parameters<ThreadArchiveCoordinator["archiveThread"]>) => this.threadArchiveCoordinator.archiveThread(...args),
       assertNotBootstrap: (...args: Parameters<typeof this.assertNotBootstrap>) => this.assertNotBootstrap(...args),
@@ -2409,7 +2421,8 @@ export class DesktopBackendRegistry {
       readTurnCausalMessagingOrigin: (context: Parameters<typeof this.readTurnCausalMessagingOrigin>[0]) => this.readTurnCausalMessagingOrigin(context),
       readCodexDefaultModelsOnce: (...args: Parameters<typeof this.readCodexDefaultModelsOnce>) => this.readCodexDefaultModelsOnce(...args),
       readDelegatedTurnAncestry: (...args: Parameters<typeof this.readDelegatedTurnAncestry>) => this.readDelegatedTurnAncestry(...args),
-      readMcpGatewaySelection: (...args: Parameters<ThreadMcpConnections["readMcpGatewaySelection"]>) => this.threadMcpConnections.readMcpGatewaySelection(...args),
+      readMcpGatewaySelection: (context: AgentToolCallContext) => this.isFactoryBuilderCall(context.backend, context)
+        ? Promise.resolve([]) : this.threadMcpConnections.readMcpGatewaySelection(context),
       readThread: (...args: Parameters<typeof this.readThread>) => this.readThread(...args),
       readThreadInspectionSummaryForMutation: (...args: Parameters<ThreadInspectionTools["readThreadInspectionSummaryForMutation"]>) => this.threadInspectionTools.readThreadInspectionSummaryForMutation(...args),
       readThreadLock: (...args: Parameters<typeof this.readThreadLock>) => this.readThreadLock(...args),
@@ -4000,6 +4013,10 @@ export class DesktopBackendRegistry {
   private async emitTurnQueueLifecycle(
     event: ThreadTurnQueueLifecycleEvent,
   ): Promise<void> {
+    if (event.type === "terminal" && event.entry.backend === "codex"
+        && this.factoryBuilderStarts.get(event.entry.threadId)?.entryId === event.entry.id) {
+      this.factoryBuilderStarts.delete(event.entry.threadId);
+    }
     if (isGoalActivationEntry(event.entry.id)) {
       if (event.type === "blocked") {
         this.threadGoals.activationWaiting(event.entry.threadId, event.entry.id, event.error.message);
@@ -10588,6 +10605,8 @@ export class DesktopBackendRegistry {
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
+    boundedStart?: BoundedDurableTurnStart;
+    factoryBuilderIsolation?: typeof FACTORY_BUILDER_ISOLATION;
   }, turnInputSource?: TurnInputSource): Promise<ThreadTurnQueueSubmissionResult> {
     if (!params.messageOrigin?.reviewAutoFix) return await this.admitTurnSubmission(params, turnInputSource);
     // Claim the review handoff before any asynchronous validation. An idle
@@ -10612,8 +10631,16 @@ export class DesktopBackendRegistry {
     await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     // A hibernated checkout starts coming back now; the send queues behind it.
-    await this.threadArchiveCoordinator.wakeHibernatedCheckout(params);
-    const { origin = "manual", queueEntryId, delivery, ...entry } = params;
+    if (!params.boundedStart) await this.threadArchiveCoordinator.wakeHibernatedCheckout(params);
+    const { origin = "manual", queueEntryId, delivery, boundedStart, factoryBuilderIsolation, ...entry } = params;
+    if ((boundedStart !== undefined || factoryBuilderIsolation !== undefined)
+        && (!boundedStart || factoryBuilderIsolation !== FACTORY_BUILDER_ISOLATION || !queueEntryId
+          || origin !== "manual" || entry.executionMode !== "auto" || entry.approvalPolicy !== "never"
+          || entry.sandbox !== "workspace-write" || entry.messageOrigin || entry.model || entry.collaborationMode
+          || entry.reviewFix || entry.automationRunId
+          || entry.input.length !== 1 || entry.input[0]?.type !== "text")) {
+      throw new DurableTurnRequestError("request_start_refused");
+    }
     const hasTurnSettings = [
       entry.executionMode,
       entry.approvalPolicy,
@@ -10624,9 +10651,31 @@ export class DesktopBackendRegistry {
       entry.reasoningEffort,
       entry.fastMode,
     ].some((value) => value !== undefined);
-    return await this.admitThreadAttachments(entry, (input, onAdmission) => {
+    return await this.admitThreadAttachments(entry, async (input, onAdmission) => {
       if (entry.backend === "codex") this.threadGoals.assertActivationPending(entry.threadId, queueEntryId);
       const prepared = { ...entry, input, ...(queueEntryId ? { id: queueEntryId } : {}), origin, turnInputSource };
+      if (boundedStart !== undefined) {
+        if (!await this.matchesFactoryBuilderBounds(entry, boundedStart)) {
+          throw new DurableTurnRequestError("request_start_refused");
+        }
+        if (!queueEntryId || this.factoryBuilderStarts.has(entry.threadId) || !this.threadTurnQueue.canStartImmediately(entry)) {
+          throw new DurableTurnRequestError("request_start_refused");
+        }
+        const builder = { entryId: queueEntryId, bounds: boundedStart, providerMayHaveStarted: false };
+        this.factoryBuilderStarts.set(entry.threadId, builder);
+        try {
+          const started = await this.threadTurnQueue.submitIfIdle(prepared, { onAdmission });
+          if (started.status === "busy") throw new DurableTurnRequestError("request_start_refused");
+          return started;
+        } catch (error) {
+          // A transport failure can leave a live provider turn behind. Keep
+          // denying until that turn ends or the provider proves replacement.
+          if (!builder.providerMayHaveStarted && this.factoryBuilderStarts.get(entry.threadId) === builder) {
+            this.factoryBuilderStarts.delete(entry.threadId);
+          }
+          throw error;
+        }
+      }
       // Agent messages, monitor results and PwrAgent's own wakes join the
       // running turn, or start one when the thread is idle, and share that
       // delivery with whatever waits beside them. An operator's or a
@@ -10635,6 +10684,50 @@ export class DesktopBackendRegistry {
         ? this.threadTurnQueue.submitSteer(prepared, { onAdmission })
         : this.threadTurnQueue.submit(prepared, { onAdmission, queueIndex });
     });
+  }
+
+  private async matchesFactoryBuilderBounds(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    bounds: BoundedDurableTurnStart,
+  ): Promise<boolean> {
+    const initial = this.getCachedThreadSummary(identity);
+    if (initial?.linkedDirectories.length !== 1 || initial.linkedDirectories[0]?.worktreePath !== bounds.worktreePath
+        || !await this.isFactoryBuilderPrepared(identity, initial)
+        || !await matchesFactoryOrigin(bounds.worktreePath, bounds.repository)) return false;
+    const thread = this.getCachedThreadSummary(identity);
+    const worktree = thread?.linkedDirectories.length === 1 ? thread.linkedDirectories[0] : undefined;
+    return Date.now() < bounds.before && thread?.archivedAt === undefined && !thread?.workspaceMissing && !thread?.workspaceHibernated
+      && worktree?.kind === "worktree" && worktree.worktreeOwnership !== "external" && worktree.worktreePath === bounds.worktreePath
+      && !this.codexRuntimeSupervisor.backgroundTerminalRecords.has(identity.threadId)
+      && !this.codexRuntimeSupervisor.liveToolItemRecords.has(identity.threadId)
+      && this.liveSubAgentMonitorIds("codex", identity.threadId).length === 0;
+  }
+
+  async isFactoryBuilderPrepared(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    thread: Pick<NavigationThreadSummary, "source" | "id" | "linkedDirectories" | "prs" | "prAutoDispatchEnabled" | "prAutoDispatchActive" | "prAutoDispatchPending"> | undefined,
+  ): Promise<boolean> {
+    const policy = getOwnerHostServices().runtimePolicy;
+    if (identity.backend !== "codex" || !policy?.factoryBuilderWorkspaceRoot || policy.agentNetwork !== false
+        || policy.codexOpenAiProviderEnabled !== true || policy.sandboxByMode.auto !== "workspace-write"
+        || policy.executionModes.includes("full-access") || thread?.source !== "codex" || thread.id !== identity.threadId
+        || thread.prs?.length || thread.prAutoDispatchEnabled || thread.prAutoDispatchActive || thread.prAutoDispatchPending) return false;
+    const worktree = thread.linkedDirectories.length === 1 ? thread.linkedDirectories[0] : undefined;
+    if (worktree?.kind !== "worktree" || !worktree.worktreePath) return false;
+    const relative = path.relative(policy.factoryBuilderWorkspaceRoot, canonicalOutpostPath(worktree.worktreePath));
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+    const overlay = await this.overlayStore.getThreadOverlayState(identity);
+    return overlay?.mcpProviderServersEnabled === false && !overlay.mcpConnectionIds?.length
+      && !overlay.prs?.length && !overlay.prAutoDispatchEnabled && !overlay.prAutoDispatchPending && !overlay.codexEnvironmentRuntime
+      && !overlay.queuedAgentChange
+      && !codexProviderIdOfModel(overlay.model)
+      && !this.codexClient.modelProviderForThread?.(identity.threadId)
+      && !this.threadGoals.hasActiveWork(identity.threadId)
+      && !getAutomationStorage().hasNonDeletedThreadAutomation(identity);
+  }
+
+  private isFactoryBuilderCall(backend: AppServerBackendKind, call: { threadId: string }): boolean {
+    return backend === "codex" && this.factoryBuilderStarts.has(call.threadId);
   }
 
   /**
@@ -12649,6 +12742,7 @@ export class DesktopBackendRegistry {
       const notices =
         params.isCompactCommand !== true
         && !acpCompactTurn
+        && !this.isFactoryBuilderCall(params.backend, params)
         && this.tokenMiserServerCapabilitiesForTurn.getStore()
           ? this.correspondenceStore.pendingStackNotices(params)
           : [];
@@ -12923,6 +13017,8 @@ export class DesktopBackendRegistry {
     let activeTurnMode: ThreadExecutionMode | undefined;
     let codexThreadConfig: CodexThreadStartParams["config"] | undefined;
     let tokenMiserEnabledForThread = false;
+    const builderRun = params.backend === "codex" ? this.factoryBuilderStarts.get(params.threadId) : undefined;
+    const factoryBuilder = builderRun?.entryId === params.id ? builderRun : undefined;
     let codexStartObservation: { sequence: number; previous?: { sequence: number; status: AppServerThreadStatus } } | undefined;
     const { pendingTurnId: syntheticStartedTurnId, context: pendingMessageContextId } = await this.threadStarts.prepareCodex({
       threadId: params.threadId,
@@ -12946,6 +13042,17 @@ export class DesktopBackendRegistry {
           backend: params.backend,
           threadId: params.threadId,
         });
+        if (factoryBuilder) {
+          cwd = await this.resolveCodexTurnCwd(params.threadId, overlay);
+          if (cwd !== factoryBuilder.bounds.worktreePath
+              || !await this.isFactoryBuilderPrepared(params, this.getCachedThreadSummary(params))) {
+            throw new DurableTurnRequestError("request_start_refused");
+          }
+          turnParams = {};
+          input = params.input;
+          pdfAttachments = [];
+          return;
+        }
         if (params.backend === "codex") {
           tokenMiserEnabledForThread = this.resolveTokenMiserEnabledForOverride(
             overlay?.tokenMiserEnabled,
@@ -13029,7 +13136,7 @@ export class DesktopBackendRegistry {
           previous: this.context.turnState.statusObservation(params.threadId) };
         return this.emit(buildTurnStartEvent(params, pendingTurnId), codexStartObservation.sequence);
       },
-      rememberInput: () => this.threadTitles.rememberPendingInput(params, input),
+      rememberInput: () => { if (!factoryBuilder) this.threadTitles.rememberPendingInput(params, input); },
       registerContext: () => this.registerPendingThreadMessageContext({
         backend: params.backend,
         input,
@@ -13050,7 +13157,7 @@ export class DesktopBackendRegistry {
       retire: (pendingTurnId) => this.retireCodexTurnStart(params, pendingTurnId, startReservation, codexStartObservation),
     });
     const retryableCodexTurnStart: CodexRetryableTurnStart | undefined =
-      params.backend === "codex" && !params.invalidIdRecoveryAttempted
+      params.backend === "codex" && !params.invalidIdRecoveryAttempted && !factoryBuilder
         ? {
             kind: "turn",
             turnId: syntheticStartedTurnId,
@@ -13098,6 +13205,18 @@ export class DesktopBackendRegistry {
           if (this.closed) {
             throw new Error("Desktop backend registry closed before turn start");
           }
+          if (factoryBuilder) {
+            if (!client.startFactoryBuilderTurn || !cwd) throw new DurableTurnRequestError("request_start_refused");
+            await this.assertThreadNotLocked(params.backend, params.threadId);
+            activeTurnMode = "auto";
+            return await client.startFactoryBuilderTurn({
+              threadId: params.threadId, cwd, input, permissionProfile: OUTPOST_PERMISSION_PROFILE_IDS["workspace-write"],
+              onBeforeStart: async () => {
+                factoryBuilder.providerMayHaveStarted = await this.matchesFactoryBuilderBounds(params, factoryBuilder.bounds);
+                return factoryBuilder.providerMayHaveStarted;
+              },
+            });
+          }
           const effectiveMode = params.executionMode ?? mode;
           const modeSettings = executionModeSettings(effectiveMode);
           const tokenMiserConfig =
@@ -13125,6 +13244,9 @@ export class DesktopBackendRegistry {
           const agentMemoryContext = await this.readAgentMemoryContext(params);
           const start = () => listingDiagnostics.trace("workflow", { query: "provider-turn-start" }, () => client.startTurn({
             threadId: params.threadId,
+            ...(builderRun ? { onFactoryBuilderConfigReplaced: () => {
+              if (this.factoryBuilderStarts.get(params.threadId) === builderRun) this.factoryBuilderStarts.delete(params.threadId);
+            } } : {}),
             ...delegatedTurnAttribution(params.messageOrigin,
               params.agentMessages?.map((message) => message.origin) ?? params.agentMessageOrigins),
             input,
@@ -13200,7 +13322,7 @@ export class DesktopBackendRegistry {
       ? this.context.turnState.retryReceipt(retryableCodexTurnStart).terminalObserved ?? false : false;
     if (!retryTerminalObserved()) this.bindDeferredJobMonitorCreation(result.threadId, result.turnId);
     return await this.threadStarts.finalizeCodex({
-      identity: params, turn: result, settings: turnParams, executionMode: params.executionMode,
+      identity: params, turn: result, settings: turnParams, executionMode: factoryBuilder ? undefined : params.executionMode,
       bindOrigin: () => this.bindStartingTurnOrigin(startingOrigin, result, retryTerminalObserved()),
       bindRetry: () => { if (retryableCodexTurnStart) this.context.turnState.updateRetry(retryableCodexTurnStart, { turnId: result.turnId }); },
       bindPdf: () => this.pdfAttachmentStore.bindTurn(
@@ -13251,7 +13373,7 @@ export class DesktopBackendRegistry {
         backend: params.backend, threadId: result.threadId, turnId: result.turnId,
       }),
       forgetTitleInput: () => this.threadTitles.forgetPendingInput(params),
-      scheduleTitle: () => this.scheduleThreadTitleGeneration({ backend: params.backend, threadId: result.threadId, input }),
+      scheduleTitle: () => { if (!factoryBuilder) this.scheduleThreadTitleGeneration({ backend: params.backend, threadId: result.threadId, input }); },
       failed: (stage, error) => backendRegistryLog.warn("accepted_turn_finalization_failed", {
         backend: params.backend, threadId: result.threadId, turnId: result.turnId, stage,
         error: error instanceof Error ? error.message : String(error),
@@ -15067,6 +15189,9 @@ export class DesktopBackendRegistry {
     input: AppServerTurnInputItem[],
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<PreparedCodexSteer> {
+    if (this.isFactoryBuilderCall(params.backend, params)) {
+      throw new Error("A Factory builder accepts only its approved task. Stop it or wait for it to finish first.");
+    }
     // A contained Outpost must refuse an unavailable workspace before the
     // provider claims guidance; the queue can then hold and retry that input.
     if (getOwnerHostServices().runtimePolicy?.exclusiveProfileOwner) {
@@ -17523,6 +17648,7 @@ export class DesktopBackendRegistry {
     this.acceptedThreadControlRequests.clear();
     this.acceptedHandoffTaskRequests.clear();
     this.acceptedDynamicToolCalls.clear();
+    this.factoryBuilderStarts.clear();
     this.acceptedActiveTurnControlRequests.clear();
     // A background working-state round outlives the snapshot that scheduled
     // it. `closed` stops a new one, and draining the live ones here keeps the
@@ -21039,6 +21165,11 @@ export class DesktopBackendRegistry {
     request: AppServerPendingRequestNotification,
     signal?: AbortSignal,
   ): Promise<unknown> {
+    if (this.isFactoryBuilderCall(backend, request.params)) {
+      return request.method === "item/tool/call"
+        ? toDynamicToolResponse({ ok: false, code: "forbidden", message: "Factory builders cannot call owner tools." })
+        : buildHeadlessAutomationRequestCancelResponse(request);
+    }
     const callId = request.method === "item/tool/call"
       && typeof request.params.callId === "string"
         ? request.params.callId.trim()
@@ -21693,6 +21824,8 @@ export class DesktopBackendRegistry {
     if (!context.threadId) {
       return undefined;
     }
+    // The PDF-only bridge also uses this resolver, with its own tool authorizer.
+    if (this.isFactoryBuilderCall(context.backend, { threadId: context.threadId })) return undefined;
     const matchingTurns = [...this.context.turnState.registeredTurnKeys()]
       .map(parseActiveTurnKey)
       .filter(
@@ -21784,6 +21917,7 @@ export class DesktopBackendRegistry {
     turnId: string;
     arguments?: unknown;
   }): Promise<string | null> {
+    if (this.isFactoryBuilderCall(params.backend, params)) return "Factory builders cannot call owner tools";
     const refusal = localAgentToolRefusal(params.tool);
     if (refusal) return refusal;
     if (params.tool === GET_CURRENT_TURN_INPUT_SOURCE) return null;

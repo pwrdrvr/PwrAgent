@@ -1,3 +1,4 @@
+import type { BoundedDurableTurnStart, FACTORY_BUILDER_ISOLATION } from "@pwragent/shared/contracts/durable-turn-requests";
 import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
 import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import type {
@@ -306,6 +307,8 @@ export interface RegistryHostPorts {
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
+    boundedStart?: BoundedDurableTurnStart;
+    factoryBuilderIsolation?: typeof FACTORY_BUILDER_ISOLATION;
   }, turnInputSource?: TurnInputSource): Promise<ThreadTurnQueueSubmissionResult>;
   taskMonitorForThread(context: { backend: AppServerBackendKind; threadId: string }): TaskMonitorDelegationRecord | undefined;
   threadHasActiveTurn(

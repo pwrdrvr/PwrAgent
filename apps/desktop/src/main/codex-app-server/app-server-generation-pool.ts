@@ -118,7 +118,7 @@ type Method = keyof CodexAppServerClient;
 type Callback = (...args: unknown[]) => unknown;
 type Subscription = { method: Method; args: unknown[]; stops: Map<Generation, () => void> };
 
-const NEW_WORK = new Set<Method>(["startThread", "forkThread", "startTurn", "startReview", "compactThread"]);
+const NEW_WORK = new Set<Method>(["startThread", "forkThread", "startTurn", "startFactoryBuilderTurn", "startReview", "compactThread"]);
 const CURRENT_ONLY_ALL = new Set<Method>(["restartAppServer", "maybeRecycleIdleAppServer"]);
 const SYNC_ALL = new Set<Method>(["resetAppServerRestarts", "invalidateThreadListings"]);
 const TERMINAL_EVENTS = new Set([

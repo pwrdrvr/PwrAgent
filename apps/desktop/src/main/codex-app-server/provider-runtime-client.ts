@@ -96,6 +96,7 @@ export const CODEX_CLIENT_ROUTES: Record<keyof CodexAppServerClient, Route> = {
   startThread: "model",
   forkThread: "thread",
   startTurn: "thread",
+  startFactoryBuilderTurn: "thread",
   generateTitle: "model",
   generateStructuredObject: "model",
   runHelperToolTurn: "model",
