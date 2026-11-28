@@ -3,6 +3,7 @@ import type {
   AppServerThreadMessageOrigin,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ReviewAfterAction } from "@pwragent/shared/contracts/agent";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type {
   ReviewAutoFixRun,
   ReviewAutoFixStatus,
@@ -321,10 +322,18 @@ export type ReviewAutoFixTurnRequest = {
   messageOrigin: AppServerThreadMessageOrigin;
 };
 
+export type ReviewAutoFixStackUpdate =
+  | { prKeys: readonly string[]; pr?: Pick<PrSummary, "headRefName" | "baseRefName"> }
+  | { threadKey: string };
+
+export type ReviewAutoFixStackWakeFilter = (update: ReviewAutoFixStackUpdate) => boolean;
+
 export type ReviewAutoFixDispatcherDeps = {
   getReview: (id: string) => ThreadReview | undefined;
   isThreadArchived: (thread: ReviewAutoFixThread) => boolean;
-  readStackHold?: (review: ThreadReview) => Promise<string | undefined>;
+  readStackHold?: (
+    review: ThreadReview, setWakeFilter: (filter: ReviewAutoFixStackWakeFilter) => void,
+  ) => Promise<string | undefined>;
   threadHasActiveTurn?: (thread: ReviewAutoFixThread) => boolean;
   suspendDispatch?: (thread: ReviewAutoFixThread) => () => void;
   submitTurn: (request: ReviewAutoFixTurnRequest) => Promise<unknown>;
@@ -356,6 +365,7 @@ export class ReviewAutoFixDispatcher {
   private readonly heldReviews = new Map<string, string>();
   private readonly checkingReviews = new Set<string>();
   private readonly recheckReviews = new Set<string>();
+  private readonly stackWakeFilters = new Map<string, ReviewAutoFixStackWakeFilter>();
   private readonly handoffSuspensions = new Map<string, HandoffSuspension>();
   private readonly now: () => number;
 
@@ -382,16 +392,24 @@ export class ReviewAutoFixDispatcher {
   }
 
   wake(thread?: ReviewAutoFixThread): void {
-    const matches = (id: string): boolean => {
+    this.wakeMatching((id) => {
       if (!thread) return true;
       const review = this.deps.getReview(id);
       return !review || (review.backend === thread.backend && review.threadId === thread.threadId);
-    };
+    });
+  }
+
+  wakeForStackUpdate(update: ReviewAutoFixStackUpdate): void {
+    // Readers without scoped evidence still need every possible wakeup.
+    this.wakeMatching((id) => this.stackWakeFilters.get(id)?.(update) ?? true);
+  }
+
+  private wakeMatching(matches: (id: string) => boolean): void {
     for (const id of this.checkingReviews) {
       if (matches(id)) this.recheckReviews.add(id);
     }
     for (const id of [...this.heldReviews.keys()]) {
-      if (matches(id)) void this.dispatch(id);
+      if (!this.checkingReviews.has(id) && matches(id)) void this.dispatch(id);
     }
   }
 
@@ -425,6 +443,7 @@ export class ReviewAutoFixDispatcher {
       }
     }
     for (const id of cancelled) {
+      this.stackWakeFilters.delete(id);
       this.deps.recordRun(thread, id, { kind: "queue", status: "cancelled", at: this.now() });
     }
   }
@@ -435,6 +454,7 @@ export class ReviewAutoFixDispatcher {
     }
     this.heldReviews.clear();
     this.recheckReviews.clear();
+    this.stackWakeFilters.clear();
   }
 
   private cancelReview(id: string, thread: ReviewAutoFixThread): void {
@@ -470,6 +490,11 @@ export class ReviewAutoFixDispatcher {
     });
   }
 
+  private readStackHold(review: ThreadReview): Promise<string | undefined> | undefined {
+    this.stackWakeFilters.delete(review.id);
+    return this.deps.readStackHold?.(review, (filter) => this.stackWakeFilters.set(review.id, filter));
+  }
+
   async dispatch(id: string): Promise<void> {
     if (this.checkingReviews.has(id)) {
       this.recheckReviews.add(id);
@@ -493,7 +518,7 @@ export class ReviewAutoFixDispatcher {
         if (this.deps.readStackHold) {
           this.deps.recordRun(review, id, { kind: "queue", status: "held", at: this.now() });
         }
-        const hold = await this.deps.readStackHold?.(review);
+        const hold = await this.readStackHold(review);
         const current = this.deps.getReview(id);
         const latest = current && reviewAutoFixMessage(current);
         if (!current || !latest || this.deps.isThreadArchived(current)) {
@@ -526,7 +551,7 @@ export class ReviewAutoFixDispatcher {
           const result = await this.deps.submitTurnIfIdle({
             ...request,
             canAdmit: async () => {
-              admissionHold = await this.deps.readStackHold?.(current);
+              admissionHold = await this.readStackHold(current);
               return !admissionHold;
             },
             ...(hasHandoff ? { reviewAutoFixHandoff: true } : {}),
@@ -573,6 +598,7 @@ export class ReviewAutoFixDispatcher {
     } finally {
       this.checkingReviews.delete(id);
       this.recheckReviews.delete(id);
+      if (!this.heldReviews.has(id)) this.stackWakeFilters.delete(id);
     }
   }
 }

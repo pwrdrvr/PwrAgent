@@ -1,9 +1,12 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { buildPullRequestStatusKey, buildThreadIdentityKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
+import { createReviewStackWakeScope } from "../stacks/review-stack-wake-scope";
 import {
   ReviewAutoFixDispatcher,
   ReviewAutoFixRuns,
+  type ReviewAutoFixStackUpdate,
 } from "../thread-reviews/review-auto-fix";
 
 const THREAD = { backend: "codex" as const, threadId: "review-owner" };
@@ -32,6 +35,80 @@ function makeReview(id: string, open = true): ThreadReview {
   };
 }
 
+type StackStep = "ci-settled" | "operation-ended" | "unrelated-pr" | "unrelated-operation";
+type StackRelease = Extract<StackStep, "ci-settled" | "operation-ended">;
+
+async function replayStackWake(steps: readonly StackStep[], earlyRelease?: StackRelease) {
+  const review = makeReview("upper-review");
+  const lowerThreadKey = buildThreadIdentityKey("claude", "lower-owner");
+  const upper: PrSummary = {
+    provider: "github.com", org: "example", repo: "stack", number: 2,
+    url: "https://github.com/example/stack/pull/2", state: "passing",
+    headRefName: "upper", baseRefName: "lower",
+  };
+  const lower = { ...upper, number: 1, url: "https://github.com/example/stack/pull/1", headRefName: "lower", baseRefName: "main" };
+  const unrelated = { ...upper, number: 3, url: "https://github.com/example/stack/pull/3", headRefName: "other", baseRefName: "main" };
+  let ciPending = true;
+  let operationRunning = true;
+  let reads = 0;
+  let starts = 0;
+  const firstRead = earlyRelease ? Promise.withResolvers<void>() : undefined;
+  const dispatcher = new ReviewAutoFixDispatcher({
+    getReview: () => review,
+    isThreadArchived: () => false,
+    readStackHold: async (_review, setWakeFilter) => {
+      reads++;
+      const operationHeld = operationRunning;
+      const held = ciPending || operationHeld;
+      const scope = createReviewStackWakeScope(buildThreadIdentityKey(review.backend, review.threadId), [upper]);
+      setWakeFilter(scope.matches);
+      if (reads === 1 && firstRead) await firstRead.promise;
+      scope.observe(upper, [{
+        key: "stack", name: "lower", repository: "github.com:example/stack", trunk: "main", inferred: false,
+        layers: [
+          { branch: "lower", parent: "main", pullRequest: lower, health: operationHeld ? "held" : "in_sync",
+            role: "layer", thread: { key: lowerThreadKey, title: "Lower owner" } },
+          { branch: "upper", parent: "lower", pullRequest: upper, health: "in_sync", role: "holder" },
+        ],
+      }]);
+      scope.finish();
+      return held ? "Held by #1" : undefined;
+    },
+    submitTurn: async () => { throw new Error("Expected fresh admission"); },
+    submitTurnIfIdle: async ({ canAdmit }) => {
+      if (!await canAdmit()) return { status: "busy" };
+      starts++;
+      return { status: "started" };
+    },
+    recordRun: () => {},
+  });
+
+  const initialDispatch = dispatcher.dispatch(review.id);
+  if (!firstRead) await initialDispatch;
+  for (const step of earlyRelease ? [earlyRelease, ...steps] : steps) {
+    const before = reads;
+    const alreadyStarted = !ciPending && !operationRunning;
+    const affectsStack = step === "ci-settled" || step === "operation-ended";
+    let update: ReviewAutoFixStackUpdate;
+    if (step === "ci-settled" || step === "unrelated-pr") {
+      if (step === "ci-settled") ciPending = false;
+      const pr = step === "ci-settled" ? lower : unrelated;
+      update = { prKeys: [buildPullRequestStatusKey(pr)], pr };
+    } else {
+      if (step === "operation-ended") operationRunning = false;
+      update = { threadKey: step === "operation-ended" ? lowerThreadKey : buildThreadIdentityKey("codex", "lower-owner") };
+    }
+    dispatcher.wakeForStackUpdate(update);
+    firstRead?.resolve();
+    // Drain the dispatcher and its final admission check before the next observation.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const ready = !ciPending && !operationRunning;
+    expect(starts).toBe(ready ? 1 : 0);
+    expect(reads - before).toBe(alreadyStarted || !affectsStack ? 0 : ready ? 2 : 1);
+  }
+  dispatcher.dispose();
+}
+
 /**
  * Model: once a review lands with open findings on an unarchived thread and
  * every blocker (active review turn, stack hold, thread lock, blocking turns)
@@ -40,6 +117,21 @@ function makeReview(id: string, open = true): ThreadReview {
  * Dispatch suspensions always return to zero.
  */
 describe("review auto-fix dispatcher", () => {
+  it.each([
+    ["PR status", ["operation-ended", "unrelated-pr", "ci-settled"]],
+    ["stack hold", ["ci-settled", "unrelated-operation", "operation-ended"]],
+  ] as const)("resumes after the lower layer's %s update", (_signal, steps) => replayStackWake(steps));
+
+  it("agrees with the lower-layer hold model across update ordering and redelivery", async () => {
+    const step = fc.constantFrom<StackStep>("ci-settled", "operation-ended", "unrelated-pr", "unrelated-operation");
+    const earlyRelease = fc.option(fc.constantFrom<StackRelease>("ci-settled", "operation-ended"), { nil: undefined });
+    await fc.assert(fc.asyncProperty(fc.array(step, { maxLength: 12 }), fc.boolean(), earlyRelease,
+      async (steps, ciFirst, early) => {
+        const releaseOrder: StackStep[] = ciFirst ? ["ci-settled", "operation-ended"] : ["operation-ended", "ci-settled"];
+        await replayStackWake([...steps, ...releaseOrder], early);
+      }), { numRuns: 8 });
+  });
+
   it("never strands Auto-fix, leaks suspensions, or violates stack holds across async interleavings", async () => {
     let runCounter = 0;
 

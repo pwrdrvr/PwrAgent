@@ -47,6 +47,7 @@ import { GithubForgeStackDiscovery, githubForgeStackRepository, type GithubForge
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
+import { createReviewStackWakeScope } from "../stacks/review-stack-wake-scope";
 import { readStackPublishHead } from "../stacks/github-stack-publish";
 import type { StackLayer, StackSummary } from "@pwragent/shared/stacks/stack-status";
 import { describeStackAutomationBlock, nextStackAdvance, stackDispatchBlock } from "@pwragent/shared/stacks/stack-automation";
@@ -60,6 +61,7 @@ import {
 } from "../pr-status/pr-review-offer-owner";
 import { describePrReviewReadiness } from "../pr-status/pr-review-readiness";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
+import type { ReviewAutoFixStackWakeFilter } from "../thread-reviews/review-auto-fix";
 import { reviewContextPullRequests, type ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
@@ -3963,9 +3965,14 @@ class DesktopAppServerService {
     return scoped.stacks.filter(matches);
   }
 
-  private async prStackHoldEvidence(pr: PrSummary, readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>): Promise<{ reason: string; lowerKey?: string } | undefined> {
+  private async prStackHoldEvidence(
+    pr: PrSummary, readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>,
+    observeStacks?: (stacks: readonly StackSummary[] | undefined) => void,
+  ): Promise<{ reason: string; lowerKey?: string } | undefined> {
     try {
-      for (const stack of await this.readPrStacks(pr, readScope)) {
+      const stacks = await this.readPrStacks(pr, readScope);
+      observeStacks?.(stacks);
+      for (const stack of stacks) {
         const layer = stack.layers.find((entry) => entry.pullRequest?.number === pr.number);
         const block = layer && stackDispatchBlock(layer);
         if (block) return {
@@ -3976,22 +3983,29 @@ class DesktopAppServerService {
         };
       }
     } catch (error) {
+      observeStacks?.(undefined);
       appServerLog.debug("could not read stack automation gate", { pr: pr.url, error: String(error) });
       return { reason: "Held while stack settlement is unavailable" };
     }
   }
 
-  private async prStackHold(pr: PrSummary, readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>): Promise<string | undefined> {
-    return (await this.prStackHoldEvidence(pr, readScope))?.reason;
+  private async prStackHold(
+    pr: PrSummary, readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>,
+    observeStacks?: (stacks: readonly StackSummary[] | undefined) => void,
+  ): Promise<string | undefined> {
+    return (await this.prStackHoldEvidence(pr, readScope, observeStacks))?.reason;
   }
 
-  async automationStackHold(review: Pick<ThreadReview, "backend" | "threadId" | "context">): Promise<string | undefined> {
+  async automationStackHold(
+    review: Pick<ThreadReview, "backend" | "threadId" | "context">,
+    setWakeFilter?: (filter: ReviewAutoFixStackWakeFilter) => void,
+  ): Promise<string | undefined> {
     const reviewed = reviewContextPullRequests(review.context);
     const reviewedKeys = new Set(reviewed.map((pr) => this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(pr))));
     const observed = review.context ? undefined : getDesktopBackendRegistry().getCachedThreadSummary(review);
     const branch = review.context?.gitBranch ?? observed?.observedGitBranch ?? observed?.gitBranch;
-    if (!reviewedKeys.size && !branch) return;
-    const attachment = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(review.backend, review.threadId));
+    const threadKey = buildThreadIdentityKey(review.backend, review.threadId);
+    const attachment = this.attachedPrsByThreadKey.get(threadKey);
     const pathKey = (value: string) => navigationPathIdentity(value, process.platform === "win32");
     const workspacePaths = new Set<string>();
     if (!reviewedKeys.size && review.context) {
@@ -3999,20 +4013,27 @@ class DesktopAppServerService {
       if (review.context.repositoryPath) workspacePaths.add(pathKey(review.context.repositoryPath));
     }
     let threadPaths: string[] | undefined;
+    const candidates = reviewedKeys.size || branch ? this.canonicalizePrs(attachment?.prs ?? []).filter((pr) => {
+      if (isTerminalPullRequest(pr) || !this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey)) return false;
+      if (reviewedKeys.size ? !reviewedKeys.has(getPrStatusKey(pr)) : pr.headRefName !== branch) return false;
+      if (!workspacePaths.size) return true;
+      const paths = pr.linkedDirectoryPaths?.length ? pr.linkedDirectoryPaths
+        : threadPaths ??= resolveThreadPullRequestDirectoryPaths(attachment?.workspace
+          ?? getDesktopBackendRegistry().getCachedThreadSummary(review) ?? { linkedDirectories: [] });
+      return paths.some((value) => workspacePaths.has(pathKey(value)));
+    }) : [];
+    const wakeScope = setWakeFilter && createReviewStackWakeScope(threadKey, candidates);
+    if (wakeScope) setWakeFilter?.(wakeScope.matches);
     // Share one observation per checkout scope within this admission. The
     // final admission guard creates a fresh reader and rechecks live state.
     const readScope = this.createPrStackScopeReader();
-    for (const pr of this.canonicalizePrs(attachment?.prs ?? [])) {
-      if (isTerminalPullRequest(pr) || !this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey)) continue;
-      if (reviewedKeys.size ? !reviewedKeys.has(getPrStatusKey(pr)) : branch && pr.headRefName !== branch) continue;
-      if (workspacePaths.size) {
-        const paths = pr.linkedDirectoryPaths?.length ? pr.linkedDirectoryPaths
-          : threadPaths ??= resolveThreadPullRequestDirectoryPaths(attachment?.workspace
-            ?? getDesktopBackendRegistry().getCachedThreadSummary(review) ?? { linkedDirectories: [] });
-        if (!paths.some((value) => workspacePaths.has(pathKey(value)))) continue;
+    try {
+      for (const pr of candidates) {
+        const hold = await this.prStackHold(pr, readScope, wakeScope && ((stacks) => wakeScope.observe(pr, stacks)));
+        if (hold) return hold;
       }
-      const hold = await this.prStackHold(pr, readScope);
-      if (hold) return hold;
+    } finally {
+      wakeScope?.finish();
     }
   }
 

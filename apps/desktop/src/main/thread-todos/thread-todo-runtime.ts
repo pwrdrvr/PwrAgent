@@ -36,7 +36,7 @@ import {
   threadTodoPlacementParent,
   threadTodoProjectIsChoosable,
 } from "@pwragent/shared/contracts/thread-todos";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey, NAVIGATION_QUERY_MAX_PAGE_ROWS, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { defaultModelOption } from "@pwragent/shared/model-defaults";
 import { normalizePullRequestUrl } from "@pwragent/shared/pull-request-review";
 import { resolveThreadTodoStartAccess } from "@pwragent/shared/thread-todo-access";
@@ -93,6 +93,7 @@ import {
   ReviewAutoFixDispatcher,
   reviewAutoFixMessage,
   setReviewAutoFixListener,
+  type ReviewAutoFixDispatcherDeps,
 } from "../thread-reviews/review-auto-fix";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
@@ -311,8 +312,8 @@ export function installThreadTodoRuntime(params: {
   broadcast: (event: ThreadTodosChangedEvent) => void;
   /** The local Directories lens rows, for naming and filing projects. */
   listProjects: () => Promise<ThreadTodoProjectCandidate[]>;
+  readReviewStackHold?: ReviewAutoFixDispatcherDeps["readStackHold"];
   /** `[git] default_merge_method`. */
-  readReviewStackHold?: (review: ThreadReview) => Promise<string | undefined>;
   readDefaultMergeMethod: () => ThreadTodoMergeMethod;
   /** The federation agent tools, which start threads on peers. */
   federation?: PwrAgentFederationHandler;
@@ -455,9 +456,19 @@ export function installThreadTodoRuntime(params: {
     }
     const status = event.notification.method === "thread/status/changed" ? event.notification.params.status : undefined;
     const queueStatus = event.notification.method === "thread/turnQueue/updated" ? event.notification.params.status : undefined;
-    if (event.notification.method === "pullRequest/status/updated"
-      || event.notification.method === "thread/stackHold/updated") {
-      reviewAutoFixDispatcher.wake();
+    if (event.notification.method === "pullRequest/status/updated") {
+      const { prKey, pr } = event.notification.params as { prKey?: string; pr?: PrSummary };
+      if (prKey) reviewAutoFixDispatcher.wakeForStackUpdate({
+        prKeys: [prKey, ...event.navigationPullRequestKeyAliases ?? []], pr,
+      });
+      else reviewAutoFixDispatcher.wake();
+    } else if (event.notification.method === "thread/stackHold/updated") {
+      const { threadId } = event.notification.params;
+      if (threadId) reviewAutoFixDispatcher.wakeForStackUpdate({ threadKey: buildThreadIdentityKey(event.backend, threadId) });
+      else reviewAutoFixDispatcher.wake();
+    } else if (event.notification.method === "thread/pullRequests/updated") {
+      // A review's captured checkout can gain or lose a covered attachment.
+      reviewAutoFixDispatcher.wake({ backend: event.backend, threadId: event.notification.params.threadId });
     } else if (!handledTerminalTurn && (event.notification.method === "thread/lock/updated"
       || (status && typeof status === "object" && "type" in status && status.type === "idle")
       || queueStatus === "terminal" || queueStatus === "cancelled" || queueStatus === "failed")) {

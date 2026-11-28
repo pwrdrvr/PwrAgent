@@ -12544,7 +12544,15 @@ describe("app server ipc", () => {
     expect(project).toHaveBeenCalledTimes(1);
 
     attach([{ ...prs[0]!, state: "failing", checkState: "failing" }, prs[1]!]);
-    await expect(appServerService.automationStackHold(review)).resolves.toBe("Held by #1: CI failing");
+    // The upper PR is the only review target. Its real gate projection must
+    // still subscribe to the lower PR that supplies the hold.
+    const setWakeFilter = vi.fn<NonNullable<Parameters<typeof appServerService.automationStackHold>[1]>>();
+    const upperReview = { ...thread, context: { workspacePath: cwd, pullRequest: prs[1] } };
+    await expect(appServerService.automationStackHold(upperReview, setWakeFilter)).resolves.toBe("Held by #1: CI failing");
+    const matches = setWakeFilter.mock.calls[0]![0];
+    expect(matches({ prKeys: [buildPullRequestStatusKey(prs[0]!)], pr: prs[0]! })).toBe(true);
+    const unrelated = pr(3, "other", "main");
+    expect(matches({ prKeys: [buildPullRequestStatusKey(unrelated)], pr: unrelated })).toBe(false);
     expect(listing).toHaveBeenCalledTimes(2);
     expect(readNavigationPullRequests).toHaveBeenCalledTimes(2);
     expect(project).toHaveBeenCalledTimes(2);

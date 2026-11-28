@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { StateDb } from "../state/state-db";
@@ -15,6 +17,7 @@ import {
   getReviewAutoFixArming,
   readReviewAutoFixStatus,
   resetReviewAutoFixArmingForTests,
+  type ReviewAutoFixStackWakeFilter,
 } from "../thread-reviews/review-auto-fix";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -46,7 +49,7 @@ describe("review tracking runtime eligibility", () => {
   const submitTurn = vi.fn(async () => ({ status: "queued" }));
   const submitTurnIfIdle = vi.fn(async ({ canAdmit }: { canAdmit: () => Promise<boolean> }) =>
     await canAdmit() ? { status: "started", turnId: "fix-turn" } : { status: "busy" });
-  function install(readReviewStackHold?: () => Promise<string | undefined>) {
+  function install(readReviewStackHold?: Parameters<typeof installThreadTodoRuntime>[0]["readReviewStackHold"]) {
     submitTurn.mockClear();
     submitTurnIfIdle.mockClear();
     const registry = {
@@ -200,8 +203,8 @@ describe("review tracking runtime eligibility", () => {
    * turn, sends nothing.
    */
   describe("auto-fix", () => {
-    const findingsOutput = (turnId: string, id: string) => ({ backend: THREAD.backend, notification: {
-      method: "item/completed" as const, params: { threadId: THREAD.threadId, turnId, item: {
+    const findingsOutput = (turnId: string, id: string, thread = THREAD) => ({ backend: thread.backend, notification: {
+      method: "item/completed" as const, params: { threadId: thread.threadId, turnId, item: {
         id, type: "exitedReviewMode", review: "",
         data: { reviewOutput: claudeReviewOutput({ findings: [
           { file: "src/a.ts", line: 3, summary: "Minor naming.", failureScenario: "Confuses readers." },
@@ -209,6 +212,42 @@ describe("review tracking runtime eligibility", () => {
         ] }, "/repo") },
       } },
     } }) as AgentEvent;
+
+    it("rechecks only affected reviews when a lower layer reports PR status or a stack hold", async () => {
+      const lowerKey = buildPullRequestStatusKey(PR);
+      const lowerOwner = { backend: "claude" as const, threadId: "lower-owner" };
+      const unrelatedKey = buildPullRequestStatusKey({ ...PR, repo: "other", number: 1, url: undefined });
+      const readHold = vi.fn(async (review: ThreadReview, setWakeFilter?: (filter: ReviewAutoFixStackWakeFilter) => void) => {
+        const affected = review.threadId === THREAD.threadId;
+        setWakeFilter?.((update) => "prKeys" in update ? update.prKeys.includes(affected ? lowerKey : unrelatedKey)
+          : affected && update.threadKey === buildThreadIdentityKey(lowerOwner.backend, lowerOwner.threadId));
+        return "Held by a lower layer";
+      });
+      install(readHold);
+      for (const thread of [THREAD, { ...THREAD, threadId: "unrelated" }]) {
+        const turnId = `review-${thread.threadId}`;
+        getReviewAutoFixArming().starting(thread, "auto-fix").accepted(turnId);
+        onEvent(findingsOutput(turnId, turnId, thread));
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(readHold).toHaveBeenCalledTimes(2);
+      const events: AgentEvent[] = [
+        { backend: lowerOwner.backend, notification: {
+          method: "pullRequest/status/updated", params: { prKey: lowerKey, pr: { ...PR, state: "passing" } },
+        } },
+        { backend: lowerOwner.backend, notification: {
+          method: "thread/stackHold/updated", params: { threadId: lowerOwner.threadId, opId: "operation", held: false },
+        } },
+      ];
+      for (const event of events) {
+        readHold.mockClear();
+        onEvent(event);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        // A layer notification spends one stack read even with unrelated held reviews.
+        expect(readHold.mock.calls.map(([review]) => review.threadId)).toEqual([THREAD.threadId]);
+      }
+      expect(submitTurnIfIdle).not.toHaveBeenCalled();
+    });
 
     it("sends the thread's agent the open findings when an armed review lands", async () => {
       install();
