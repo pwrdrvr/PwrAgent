@@ -42,7 +42,7 @@ export type ManagedReviewCandidateTurnKey = {
 
 type ReviewChild = Pick<ManagedReviewCandidateTurnKey, "backend" | "threadId">;
 
-export type ManagedReviewWorkspace = { cwd?: string; worktreeRoot?: string };
+export type ManagedReviewWorkspace = { cwd?: string; worktreeRoot?: string; exactVerdict?: boolean };
 type ReviewWorkspace = ManagedReviewWorkspace;
 
 export type ManagedReviewCandidate = {
@@ -672,6 +672,9 @@ export class ManagedReviewCandidateLedger {
     );
     if (!correctness.ok) {
       return { ok: false, code: "invalid_arguments", message: correctness.message };
+    }
+    if (workspace?.exactVerdict && correctness.value !== "patch is correct" && correctness.value !== "patch is incorrect") {
+      return { ok: false, code: "invalid_arguments", message: "A pinned review requires an explicit correctness verdict." };
     }
     const verdict = normalizeOverallCorrectness(correctness.value, findings);
     const expectedVerdict = findings.length === 0 ? "patch is correct" : "patch is incorrect";

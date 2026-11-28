@@ -5,9 +5,9 @@ import { FACTORY_BUILDER_ISOLATION } from "@pwragent/shared/contracts/durable-tu
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { matchesFactoryOrigin } from "./factory-repository";
 import type { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
-import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { createFactoryAdmissionStorage } from "../storage/factory-admission-storage";
 import { createFactoryCheckout } from "./factory-checkout";
+import { localFactoryOwner, registeredFactoryProject } from "./factory-local-authority";
 
 const CALLER = "factory-admission-v1";
 
@@ -17,11 +17,7 @@ export function createOwnerFactoryAdmission(options: {
   leaseHeld(): boolean;
 }): FactoryAdmission {
   const { federation, checkouts } = options;
-  const owner = (): FactoryOwner | undefined => {
-    const instanceId = federation.knownLocalInstanceId();
-    const machineId = instanceId && federation.factoryExecutorHost(instanceId)?.machineId;
-    return instanceId && machineId && options.leaseHeld() ? { instanceId, machineId } : undefined;
-  };
+  const owner = () => localFactoryOwner(federation, () => options.leaseHeld());
   const targetFor = (instanceId: string): FederationRemoteTarget | undefined =>
     instanceId === federation.knownLocalInstanceId() ? undefined : { scope: "remote", instanceId };
   const backendFor = (target: FederationRemoteTarget | undefined) => target
@@ -37,9 +33,8 @@ export function createOwnerFactoryAdmission(options: {
     store: createFactoryAdmissionStorage(),
     owner,
     project: async (projectKey, repository) => {
-      const launchpad = await getDesktopOverlayStore().getDirectoryLaunchpad({ directoryKey: projectKey });
-      if (!launchpad?.registeredAt || !launchpad.directoryPath || launchpad.federationTarget?.scope === "remote") return false;
-      return matchesFactoryOrigin(launchpad.directoryPath, repository);
+      const directory = await registeredFactoryProject(projectKey);
+      return !!directory && matchesFactoryOrigin(directory, repository);
     },
     probe: async (row) => {
       const host = federation.factoryExecutorHost(row.target.instanceId);

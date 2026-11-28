@@ -1,4 +1,6 @@
+import { createOwnerFactoryBranchReview } from "./factory/factory-branch-review-runtime";
 import { createOwnerFactoryAdmission } from "./factory/factory-admission-runtime";
+import type { createOwnerFactoryScaling } from "./factory/factory-scaling-runtime";
 import path from "node:path";
 import type { ApprovedLabCheckout } from "./resource-checkouts/pwrsuitelab-checkout-adapter";
 import { createResourceCheckoutToolHandler } from "./agent-tools/pwragent-resource-checkout-agent-tools";
@@ -491,11 +493,20 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       },
     )
     : undefined;
-  const factoryAdmission = resourceCheckouts && createOwnerFactoryAdmission({
+  const factoryOwner = {
     federation: federationRuntime,
-    checkouts: resourceCheckouts,
     leaseHeld: () => federationLease.snapshot().leaseHeld,
+  };
+  const factoryAdmission = resourceCheckouts && createOwnerFactoryAdmission({ ...factoryOwner, checkouts: resourceCheckouts });
+  let scalingCommand: ReturnType<typeof createOwnerFactoryScaling> | undefined;
+  const factoryScaling = resourceCheckouts && (async (params: unknown) => {
+    const runtime = await import("./factory/factory-scaling-runtime");
+    scalingCommand ??= runtime.createOwnerFactoryScaling(factoryOwner);
+    return scalingCommand(params);
   });
+  const factoryBranchReview = bootMode === "active-profile" && createOwnerFactoryBranchReview(
+    registry, federationRuntime, () => federationLease.snapshot().leaseHeld,
+  );
   if (resourceCheckouts) registry.setResourceCheckoutHandler(
     createResourceCheckoutToolHandler(
       resourceCheckouts,
@@ -964,7 +975,7 @@ wireOwnerRendererEvents();
   return {
     registry, service, config, settings, federationRuntime, messagingRuntime,
     mcpGateway, scheduledActions, automations, leaseManager, federationLease, messagingLease,
-    queues, resourceCheckouts, factoryAdmission,
+    queues, resourceCheckouts, factoryAdmission, factoryBranchReview, factoryScaling,
     prewarm: prewarmInitialThreadList,
     onConfigPatchWritten: async (patch: DesktopSettingsConfigPatch, previousProviderDefaults?: Record<string, DesktopProviderModelDefaults>) => {
       if (previousProviderDefaults) {

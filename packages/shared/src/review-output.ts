@@ -105,6 +105,7 @@ export function normalizeReviewConfidenceScore(
 
 export function parseReviewOutputText(
   text: string | undefined,
+  options?: { exactVerdict?: boolean },
 ): AppServerReviewOutput | undefined {
   if (!text?.trim()) {
     return undefined;
@@ -163,6 +164,10 @@ export function parseReviewOutputText(
       }];
     },
   );
+
+  if (options?.exactVerdict && ((record.overall_correctness !== "patch is correct"
+    && record.overall_correctness !== "patch is incorrect") || !record.overall_explanation.trim()
+    || findings.length !== record.findings.length)) return undefined;
 
   return {
     findings,

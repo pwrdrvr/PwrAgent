@@ -59,6 +59,8 @@ same parameter object as the desktop owner contracts:
 | `start-thread` | `backend`, `cwd`, optional `executionMode` and model settings |
 | `register-directory` | `path`: adds an existing folder as a project, as the desktop's Add Project Directory does |
 | `factory-admission` | `action`, `projectKey`, `workItem`, and the action fields below |
+| `factory-review` | `action`, `projectKey`, `workItem`, `branch`, `baseRef`, `baseOid`, `headOid` |
+| `factory-scaling` | `action`, `projectKey`, `repository`, `approvalId`, `candidate`, and the record fields below |
 | `factory-board` | `projectKey` from `register-directory`, `repository` matching the registered GitHub origin, optional `limit`, `candidate` and `selection` |
 | `show` | `backend`, `threadId` |
 | `submit` | `SubmitDurableTurnRequest`: immutable client request ID, creation time, payload hash and request |
@@ -432,3 +434,133 @@ be inspected, paused, reconciled or cancelled using that identifier.
 
 The desktop local main frame reaches the same owner command through
 `window.pwragent.factoryAdmission(request)`.
+
+### Review a Factory branch before opening a pull request
+
+Use `pwragent factory-review --params-file /request.json` on the Outpost owner
+profile after `factory-admission reconcile` reports a completed implementation
+turn. This pilot supports an implementation on the same owner and machine as
+the registered project. Commit the changes on the approved implementation
+thread's active, clean worktree and leave the thread idle. Select the target ref
+explicitly. For example, use `refs/remotes/origin/main` with its current locally
+stored commit. The command reads local Git state without fetching.
+
+```json
+{
+  "action": "start",
+  "projectKey": "directory:/projects/PwrAgent",
+  "workItem": {"provider": "github", "kind": "issue", "repositoryId": "R_fixture", "number": 42},
+  "branch": "factory/review-example",
+  "baseRef": "refs/remotes/origin/main",
+  "baseOid": "0123456789abcdef0123456789abcdef01234567",
+  "headOid": "89abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+The owner checks the registered origin, approval, thread and checkout, then
+starts the existing managed Codex reviewer in a separate read-only session.
+The reviewer reads the committed diff between the recorded merge base and head.
+The findings appear on the implementation thread for ordinary triage. Auto-fix
+is unarmed. Repairs, pushes, and publication stay with the publisher.
+
+Use the same request with `action: "status"` after a disconnect or restart.
+The response includes the approval and implementation turn, the reviewed range,
+and the reviewer and turn IDs when known. A completed reviewer result includes
+a link to its artifact. Repeating `start` for the same range returns the existing attempt.
+An ambiguous start stays fenced, including if the branch moves to a different
+head. If the owner recovers the exact durable review artifact, it records that
+verdict without starting another review.
+
+A `clear` result means the independent reviewer explicitly reported correctness
+on the current committed range with no findings. `findings` and
+`inconclusive` require operator attention. Moving the head or target ref
+makes the old review `stale`. A preserved branch whose approved worktree is
+no longer active appears as `parked`, with the existing review evidence visible
+and publication unobserved. The command reports human visual acceptance and
+scaling proof as unverified. It gives no landing authority.
+
+### Factory prepublication scaling evidence
+
+Use `pwragent factory-scaling --params-file /request.json` on the approval's
+active owner profile. Get `approvalId` from `factory-admission status` (`row.id`).
+Use the same project key, GitHub `owner/repository` and immutable tracker
+reference. Put `workItem` in `candidate`. A legacy Linear UUID in `issueId`
+is also accepted. Select a checked-out branch and a full integration ref, as in
+`factory-board`. The approval supplies the worktree path. This pilot supports
+an approved linked worktree on the same owner instance and machine.
+
+Start with `action: "status"` and these fields:
+
+```json
+{
+  "action": "status",
+  "projectKey": "directory:/projects/PwrAgent",
+  "repository": "pwrdrvr/PwrAgent",
+  "approvalId": "24617983-8584-4b8c-bca0-d3ee242e70ea",
+  "candidate": {
+    "issueId": "521ed3a0-6f45-45fd-b8ec-fa070a530661",
+    "branch": "factory/pilot",
+    "baseRef": "refs/remotes/origin/main"
+  }
+}
+```
+
+Run the [scaling audit](../../.agents/skills/pwragent-scaling-audit/SKILL.md)
+separately against the revision pair returned in `candidate`. Keep the raw
+probe results and reduced counterexamples where the operator can inspect them.
+Change the action to `record` and add these fields, using the audit's actual
+Git OIDs, measurements and proof URLs:
+
+```json
+{
+  "expected": {
+    "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "previousReceiptId": null,
+  "report": {
+    "exitCode": 0,
+    "workloads": [{
+      "name": "Cold candidate read",
+      "proof": "file:///tmp/scaling-audit/candidate.json",
+      "samples": [
+        {"sizes": {"refs": 16}, "counters": {"gitStarts": {"measured": 16, "bound": 16}}},
+        {"sizes": {"refs": 32}, "counters": {"gitStarts": {"measured": 16, "bound": 16}}},
+        {"sizes": {"refs": 64}, "counters": {"gitStarts": {"measured": 16, "bound": 16}}}
+      ]
+    }],
+    "counterexamples": []
+  }
+}
+```
+
+`previousReceiptId` is `null` for the first submission. Use the last
+`receipt.receiptId` for a new submission. Replaying the latest identical
+request reuses its receipt. A delayed replacement based on an older receipt
+is refused. Each approval has one latest receipt under its profile's
+`artifacts/factory/scaling` directory. Its JSON is capped at 32 KiB. Each
+workload has 2–6 distinct sizes, comparable counters, and an HTTPS or local
+file proof URL. Record each outstanding counterexample for this revision with a
+description and proof URL. An outstanding counterexample yields a failed audit,
+even when all sampled counters are within budget.
+
+The owner observes the Git head, integration tip and tracked and non-ignored
+worktree status locally. It checks both repositories' origins and samples refs
+on either side of the clean check. Remote-tracking refs are the local values
+already on disk. `missing` means there is no recorded audit. `stale` means the
+prior audit's checkout, refs or commits could no longer be verified as matching.
+`failed` means a matching audit reported a nonzero exit code or exceeded a
+counter bound. `current` means a matching audit reported completion within
+its bounds. Each report is explicitly `operator_attested`. Proof URLs are
+references for the operator. The command makes zero provider requests. The
+existing Profile scaling audit workflow requires a PR, so it supplies no
+independent prepublication receipt in this pilot.
+
+The [Outpost command tests](../../apps/desktop/src/main/__tests__/factory-scaling.test.ts)
+exercise real linked worktrees and the SQLite admission store. Six clean reads
+at 16–128 tracked fixture files and 16–128 unrelated refs each made 16 Git
+calls, including one status and one index inspection. Recording, inspection,
+replay and replacement made zero SQLite commits. Each accepted new report
+replaces one bounded artifact. The tests also cover a missing integration ref
+with a same-named tag, a hidden index edit, a different owner, and a failed
+receipt replayed after replacement.

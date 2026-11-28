@@ -13787,6 +13787,15 @@ export class DesktopBackendRegistry {
       .then(() => this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution, antigravityAccess));
   }
 
+  async startPinnedManagedBranchReview(
+    threadId: string, pin: Parameters<ManagedReviewService["startPinnedManagedBranchReview"]>[1],
+  ): Promise<StartReviewResponse> {
+    if (!this.codexOpenAiProviderEnabled) {
+      await this.assertThreadCodexInferenceAvailable({ backend: "codex", threadId });
+    }
+    return this.managedReviewService.startPinnedManagedBranchReview(threadId, pin);
+  }
+
   submitReview(
     params: StartReviewRequest & {
       idempotencyKey?: string;

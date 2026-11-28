@@ -54,6 +54,7 @@ import {
   type AppServerThreadActivityEntry,
   type AppServerThreadActivityDetail,
   type AppServerReviewContext,
+  type PinnedBranchReviewVerdict,
   type AppServerReviewOutput,
   type AppServerThreadImagePart,
   type AppServerThreadMessageOrigin,
@@ -839,6 +840,17 @@ export type TaskMonitorDelegationRecord = {
   task: string;
 };
 
+/** Local-owner-only review of a verified, committed branch range. */
+export type PinnedManagedBranchReview = {
+  id: string;
+  context: AppServerReviewContext & { baseCommit: string; headCommit: string; baseBranch: string };
+  beforeTurn(): Promise<void>;
+  observe(
+    reviewerThreadId: string, turnId: string,
+    result?: PinnedBranchReviewVerdict | "failed" | "cancelled",
+  ): void;
+};
+
 export type ReviewSubAgentRecord = {
   /** Backend running the review child. */
   backend: AppServerBackendKind;
@@ -851,6 +863,7 @@ export type ReviewSubAgentRecord = {
    * thread that may have moved on.
    */
   context?: AppServerReviewContext;
+  pinnedBranchReview?: PinnedManagedBranchReview;
   createdAt: number;
   displayText: string;
   fastMode?: boolean;
