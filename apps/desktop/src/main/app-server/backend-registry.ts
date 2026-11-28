@@ -12271,6 +12271,53 @@ export class DesktopBackendRegistry {
     return this.threadHasActiveTurn(params.threadId, params.backend);
   }
 
+  /**
+   * Why Settle must wait, by this owner's own records: a live turn (where an
+   * approval or question also waits) or a queued send. Settle never stops
+   * or cancels either.
+   */
+  threadSettleBusy(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): "running" | "queued" | undefined {
+    if (this.threadHasActiveTurn(params.threadId, params.backend)) return "running";
+    if (this.threadTurnQueue.getQueuedEntries(params).length > 0) return "queued";
+    return undefined;
+  }
+
+  /**
+   * Settle releases the thread's live session at once rather than at the
+   * idle sweep. It never archives at the harness; the next turn resumes the
+   * session. Only Codex keeps a per-thread subscription to release.
+   */
+  async releaseSettledThreadSession(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    if (params.backend !== "codex") return;
+    await this.codexRuntimeSupervisor.releaseCodexThreadNow(params.threadId);
+  }
+
+  /**
+   * Any turn start returns a settled thread to its project's Unpinned
+   * section, whoever starts it. One commit, and only when it was settled.
+   */
+  private async unsettleThreadOnTurnStart(backend: AppServerBackendKind, threadId: string): Promise<void> {
+    try {
+      const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
+      if (overlay?.settledAt === undefined) return;
+      const changed = this.overlayStore.setThreadsSettled({
+        threads: [{ backend, threadId }], settled: false, at: Date.now(),
+      });
+      if (!changed.length) return;
+      await this.publishLocalEvent({ backend, notification: { method: "thread/settled/updated", params: { threadId } } });
+    } catch (error) {
+      backendRegistryLog.warn("unsettling a thread at turn start failed", {
+        backend, threadId, error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private getPendingTurnForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -24169,6 +24216,7 @@ export class DesktopBackendRegistry {
         { backend: event.backend, threadId: notification.params.threadId, turnId: turnId },
         codexStartDelivery,
       );
+      if (commitCodexStart) void this.unsettleThreadOnTurnStart(event.backend, notification.params.threadId);
       if (isAcpBackendId(event.backend)) {
         backendRegistryLog.info("ACP active turn registered", {
           backend: event.backend,

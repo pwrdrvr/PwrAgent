@@ -481,6 +481,10 @@ export const NAVIGATION_ACKNOWLEDGE_THREAD_ENVIRONMENT_FAILURE_CHANNEL =
   "navigation:acknowledge-thread-environment-failure";
 export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
+export const NAVIGATION_SET_THREAD_SETTLED_CHANNEL =
+  "navigation:set-thread-settled";
+export const NAVIGATION_SETTLE_DIRECTORY_UNPINNED_CHANNEL =
+  "navigation:settle-directory-unpinned";
 export const AGENT_MEMORY_CHANNEL = "agent-memory:access";
 export const AGENT_PRESETS_CHANNEL = "agent-presets:manage";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =

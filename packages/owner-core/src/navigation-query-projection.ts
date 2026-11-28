@@ -567,6 +567,26 @@ function directoryMemberThreads(
     .filter((thread): thread is NavigationThreadSummary => Boolean(thread)) ?? [];
 }
 
+/**
+ * The roots a project's Unpinned section lists: its directory roots that are
+ * neither pinned nor settled, by the same membership and parent rules the
+ * section's pages use. This owner's own threads only; a mounted peer's row
+ * belongs to its owner. Most recently created first, as the section sorts.
+ */
+export function listNavigationDirectoryUnpinnedRoots(
+  index: NavigationQueryIndex,
+  directoryKey: string,
+): NavigationThreadSummary[] {
+  const directory = findDirectory(index, directoryKey);
+  if (!directory) return [];
+  const members = directoryMemberThreads(directory, buildThreadsByLegacyKey(index));
+  const parentOf = directoryParentResolver(members, buildParentCandidates(index));
+  return members
+    .filter((thread) => !thread.federation && isOrdinaryThread(thread) && !parentOf(thread)
+      && thread.pinnedRank === undefined && thread.settledAt === undefined)
+    .sort(compareDirectoryMembers);
+}
+
 function matchesDirectoryKey(index: NavigationQueryIndex, directory: NavigationDirectorySummary, key: string): boolean {
   return directory.key === key || index.directoryCaseAliases?.[directory.key]?.includes(key) === true;
 }
@@ -963,6 +983,14 @@ export function navigationDirectoryGitRevisions(status: NavigationDirectoryGitSt
   return { version: 1, repository, descriptor: hashValue(["descriptor", repository, descriptor]) };
 }
 
+/**
+ * A root filed in its project's Settled section. A pin wins if both are ever
+ * stored, so a thread is never in two sections.
+ */
+export function isSettledDirectoryRoot(thread: Pick<NavigationThreadSummary, "pinnedRank" | "settledAt">): boolean {
+  return thread.pinnedRank === undefined && thread.settledAt !== undefined;
+}
+
 function buildDirectoryRows(params: {
   snapshot: NavigationQueryIndex;
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
@@ -987,18 +1015,25 @@ function buildDirectoryRows(params: {
     }
     const pinnedRootCount = rootThreads.filter((thread) => thread.pinnedRank).length;
     // Count the complete unpinned forest once, without loading child pages.
-    // A child's own pin does not move it out of its root's section.
-    const pending = rootThreads.filter((thread) => !thread.pinnedRank);
+    // A child's own pin does not move it out of its root's section, and a
+    // settled root's subtree is filed with it.
+    const pending = rootThreads.filter((thread) => !thread.pinnedRank)
+      .map((thread) => ({ thread, settled: isSettledDirectoryRoot(thread) }));
     const visited = new Set<string>();
     let unpinnedThreadCount = 0;
+    let settledThreadCount = 0;
     while (pending.length) {
-      const thread = pending.pop()!;
+      const { thread, settled } = pending.pop()!;
       const key = threadKey(thread);
       if (visited.has(key)) continue;
       visited.add(key);
-      if (isOrdinaryThread(thread)) unpinnedThreadCount += 1;
-      for (const child of children.get(key) ?? []) pending.push(child);
+      if (isOrdinaryThread(thread)) {
+        unpinnedThreadCount += 1;
+        if (settled) settledThreadCount += 1;
+      }
+      for (const child of children.get(key) ?? []) pending.push({ thread: child, settled });
     }
+    const settledRootCount = rootThreads.filter(isSettledDirectoryRoot).length;
     const gitStatus = projectDirectoryGitStatus(directory.gitStatus);
     // A checkout reads its own remotes; a placeholder carries the peer's.
     const repositoryKey = directory.gitStatus?.originRepository ?? directory.repositoryKey;
@@ -1022,12 +1057,16 @@ function buildDirectoryRows(params: {
       pinnedRootCount,
       unpinnedRootCount: rootThreads.length - pinnedRootCount,
       unpinnedThreadCount,
+      ...(settledRootCount ? { settledRootCount, settledThreadCount } : {}),
       ...(directory.latestUpdatedAt !== undefined
         ? { latestUpdatedAt: directory.latestUpdatedAt }
         : {}),
       ...(directory.pinnedRank ? { pinnedRank: directory.pinnedRank } : {}),
       ...(directory.directoryThreadsCollapsed !== undefined
         ? { directoryThreadsCollapsed: directory.directoryThreadsCollapsed }
+        : {}),
+      ...(directory.settledCollapsed !== undefined
+        ? { settledCollapsed: directory.settledCollapsed }
         : {}),
       // A placeholder row stands for a peer's project. It shows that
       // project's setting only when its threads name one project on one peer.
@@ -1419,6 +1458,8 @@ function selectQueryThreads(params: {
       .filter((thread) => {
         const parent = parentOf(thread);
         if (parent) return disclosedParents.has(buildThreadIdentityKey(parent.backend, parent.threadId));
+        if (query.settled !== undefined
+          && isSettledDirectoryRoot(thread) !== (query.settled === "only")) return false;
         return query.roots === "pinned" ? thread.pinnedRank !== undefined
           : query.roots === "unpinned" ? thread.pinnedRank === undefined : true;
       })
@@ -1644,6 +1685,8 @@ export type NavigationAnchorMissingReason =
   | "child"
   | "pinned"
   | "unpinned"
+  | "settled"
+  | "unsettled"
   | "filtered"
   | "ref-mismatch";
 
@@ -1684,6 +1727,8 @@ export function explainMissingNavigationAnchor(params: {
   }
   if (query.roots === "unpinned" && thread.pinnedRank !== undefined) return "pinned";
   if (query.roots === "pinned" && thread.pinnedRank === undefined) return "unpinned";
+  if (query.settled === "exclude" && isSettledDirectoryRoot(thread)) return "settled";
+  if (query.settled === "only" && !isSettledDirectoryRoot(thread)) return "unsettled";
   return "ref-mismatch";
 }
 

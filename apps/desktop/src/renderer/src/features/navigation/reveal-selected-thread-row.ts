@@ -114,12 +114,13 @@ function measure(row: HTMLElement): Placement | undefined {
     visibleTop = Math.max(visibleTop, headerBox.bottom);
     stuckTop = view.top + headerBox.height;
   }
-  // One subtree search finds the project's divider; the row sits on one
-  // side of it.
-  const projectDivider = dividerOf(row);
-  const dividerFollows = projectDivider !== undefined
-    && (projectDivider.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-  const divider = dividerFollows ? projectDivider : undefined;
+  // One subtree search finds the project's section dividers (Unpinned, then
+  // Settled). The last one above the row is the one that sticks under the
+  // header over it; every one below it stacks at the bottom of the list.
+  const dividers = dividersOf(row);
+  const above = dividers.filter((candidate) =>
+    (candidate.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+  const divider = above.at(-1);
   if (divider) {
     const dividerBox = divider.getBoundingClientRect();
     visibleTop = Math.max(visibleTop, dividerBox.bottom);
@@ -127,8 +128,7 @@ function measure(row: HTMLElement): Placement | undefined {
   }
   let visibleBottom = view.bottom;
   let stuckBottom = view.bottom;
-  const below = dividerFollows ? undefined : projectDivider;
-  if (below) {
+  for (const below of dividers.slice(above.length)) {
     const belowBox = below.getBoundingClientRect();
     visibleBottom = Math.min(visibleBottom, belowBox.top);
     stuckBottom -= belowBox.height;
@@ -139,9 +139,9 @@ function measure(row: HTMLElement): Placement | undefined {
 // A project's unpinned rows follow its Unpinned divider, which sticks under
 // the header and covers them too. Pinned rows sit above it, and it sticks to
 // the bottom of the list over them while they run past.
-function dividerOf(row: HTMLElement): HTMLElement | undefined {
-  return row.closest(".directory-row__threads")
-    ?.querySelector<HTMLElement>(STICKY_DIVIDER) ?? undefined;
+function dividersOf(row: HTMLElement): HTMLElement[] {
+  const list = row.closest(".directory-row__threads");
+  return list ? [...list.querySelectorAll<HTMLElement>(STICKY_DIVIDER)] : [];
 }
 
 // The region clips the lens; the lane inside it (`.sidebar-list--dense`,

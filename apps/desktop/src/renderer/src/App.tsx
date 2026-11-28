@@ -1,3 +1,4 @@
+import { ownerTakesSettle } from "@pwragent/shared/contracts/thread-settle";
 import { TodoDispatchProvider } from "./features/thread-todos/TodoDispatchProvider";
 import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { type AddRemoteThreadPinResponse } from "@pwragent/shared/contracts/navigation";
@@ -722,6 +723,15 @@ function DesktopAppShell(props: {
       : liveFederationHealth?.peers.find((peer) => peer.id === ownerId)?.capabilities;
     return capabilities?.includes("project_forge_automation") === true
       && capabilities.includes("turn_control");
+  }, [liveFederationHealth]);
+  // A peer window offers Settle only when the peer holds it and lets this
+  // machine change its sidebar.
+  const federationOwnerSettle = useMemo(() => {
+    const ownerId = readRendererFederationTarget()?.instanceId;
+    const capabilities = ownerId === undefined
+      ? undefined
+      : liveFederationHealth?.peers.find((peer) => peer.id === ownerId)?.capabilities;
+    return ownerTakesSettle(capabilities);
   }, [liveFederationHealth]);
   // This instance's windows offer the same items on a placeholder row
   // standing for a connected peer's project, under the same rule.
@@ -4956,6 +4966,10 @@ function DesktopAppShell(props: {
             onSetDirectoryThreadsCollapsed={
               navigation.setDirectoryThreadsCollapsed
             }
+            onSetDirectorySettledCollapsed={navigation.setDirectorySettledCollapsed}
+            onSetThreadSettled={desktopApi?.setThreadSettled ? navigation.setThreadSettled : undefined}
+            onSettleDirectoryUnpinned={desktopApi?.settleDirectoryUnpinned ? navigation.settleDirectoryUnpinned : undefined}
+            federationOwnerSettle={federationOwnerSettle}
             onSetProjectForgeAutomation={
               desktopApi?.setProjectForgeAutomation
                 ? navigation.setProjectForgeAutomation

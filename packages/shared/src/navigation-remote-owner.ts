@@ -47,10 +47,13 @@ export function expandNavigationRemoteOwner(page: NavigationQueryPage): Navigati
   if (!page.remoteOwner || page.remoteOwner.ownerContentBytes !== undefined) return page;
   const owner = { ...page.remoteOwner, ownerContentBytes: page.windowPagePatch?.ownerContentBytes ?? navigationQueryPageBudgetBytes(page) };
   const collapsed = owner.directoryThreadsCollapsed;
-  const disclose = <T extends { key: string; directoryThreadsCollapsed?: boolean }>(directory: T): T =>
-    collapsed && Object.hasOwn(collapsed, directory.key)
-      ? { ...directory, directoryThreadsCollapsed: collapsed[directory.key] }
-      : directory;
+  const settledCollapsed = owner.settledCollapsed;
+  const disclose = <T extends { key: string; directoryThreadsCollapsed?: boolean; settledCollapsed?: boolean }>(directory: T): T => {
+    let next = directory;
+    if (collapsed && Object.hasOwn(collapsed, directory.key)) next = { ...next, directoryThreadsCollapsed: collapsed[directory.key] };
+    if (settledCollapsed && Object.hasOwn(settledCollapsed, directory.key)) next = { ...next, settledCollapsed: settledCollapsed[directory.key] };
+    return next;
+  };
   return {
     ...page,
     remoteOwner: owner,

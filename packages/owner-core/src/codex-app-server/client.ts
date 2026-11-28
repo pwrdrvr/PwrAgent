@@ -8704,9 +8704,13 @@ export class CodexAppServerClient {
     isThreadBusy: (threadId: string) => boolean;
     /** Most threads to release in one pass; the barrier holds RPCs meanwhile. */
     limit?: number;
+    /** Consider only these threads, as Settle does for the one it files away. */
+    threadIds?: readonly string[];
   }): Promise<string[]> {
     if (!this.initialized || this.pendingCloses > 0 || this.threadUnsubscribeUnsupported) return [];
+    const only = params.threadIds ? new Set(params.threadIds) : undefined;
     const isIdle = (threadId: string): boolean => {
+      if (only && !only.has(threadId)) return false;
       const lastActiveAt = this.subscribedThreads.get(threadId);
       return lastActiveAt !== undefined
         && !this.keptSubAgentThreads.has(threadId)

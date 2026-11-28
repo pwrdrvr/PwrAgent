@@ -1,3 +1,8 @@
+import type {
+  SetThreadSettledResponse,
+  SettleDirectoryUnpinnedCandidate,
+  SettleDirectoryUnpinnedResponse,
+} from "@pwragent/shared/contracts/thread-settle";
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
 import { newThreadModelSettingsRecent } from "./model-settings-recents";
 import { useLockedArchiveWorktreeNotice } from "./useLockedArchiveWorktreeNotice";
@@ -3612,6 +3617,25 @@ export function useThreadNavigation(
     directory: NavigationDirectorySummary,
     collapsed: boolean,
   ) => Promise<void>;
+  /** Fold or open a project's Settled section; absent means folded. */
+  setDirectorySettledCollapsed?: (
+    directory: NavigationDirectorySummary,
+    collapsed: boolean,
+  ) => Promise<void>;
+  /**
+   * Settle or Unsettle a root on its owner. Settling a peer thread from the
+   * main window also drops this viewer's pin of it. Resolves the owner's
+   * refusal, if any.
+   */
+  setThreadSettled?: (
+    thread: NavigationThreadSummary,
+    settled: boolean,
+  ) => Promise<SetThreadSettledResponse | undefined>;
+  /** Settle Unpinned…: without `threads`, the owner's candidates; with them, settles exactly those. */
+  settleDirectoryUnpinned?: (
+    directory: Pick<NavigationDirectorySummary, "key">,
+    threads?: SettleDirectoryUnpinnedCandidate[],
+  ) => Promise<SettleDirectoryUnpinnedResponse>;
   /**
    * The owner's Forge Automation for a local project, applied on the
    * response. Rejects with the owner's message; a failure is also raised as
@@ -3657,7 +3681,7 @@ export function useThreadNavigation(
       return next;
     });
   }, [setLoadedRowsByQuery]);
-  const { setUnpinnedExpandedByKey } = directoryDisclosure;
+  const { setUnpinnedExpandedByKey, setSettledExpandedByKey } = directoryDisclosure;
   const markThreadSeen = desktopApi?.markThreadSeen;
   const forkThreadRequest = desktopApi?.forkThread;
   const archiveThreadRequest = desktopApi?.archiveThread;
@@ -4146,6 +4170,7 @@ export function useThreadNavigation(
     attentionScope: browseMode === "attention" ? attentionScope : undefined,
     pinnedThreadsOnTop,
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
+    settledExpandedByKey: directoryDisclosure.settledExpandedByKey,
     selectedRef: selectedIdentity, selectedDirectoryKeys, removedDirectoryKeys, disclosedParents,
     draftRefs,
   });
@@ -5921,7 +5946,13 @@ export function useThreadNavigation(
           }),
         ownerDirectories.map((directory) => {
           const expanded = directoryDisclosure.unpinnedExpandedByKey[directory.key];
-          return expanded === undefined ? directory : { ...directory, directoryThreadsCollapsed: !expanded };
+          const settledExpanded = directoryDisclosure.settledExpandedByKey?.[directory.key];
+          if (expanded === undefined && settledExpanded === undefined) return directory;
+          return {
+            ...directory,
+            ...(expanded === undefined ? {} : { directoryThreadsCollapsed: !expanded }),
+            ...(settledExpanded === undefined ? {} : { settledCollapsed: !settledExpanded }),
+          };
         }),
       );
 
@@ -5945,6 +5976,7 @@ export function useThreadNavigation(
       state.rows,
       rendererFederationTarget,
       directoryDisclosure.unpinnedExpandedByKey,
+      directoryDisclosure.settledExpandedByKey,
     ]
   );
 
@@ -9854,6 +9886,8 @@ export function useThreadNavigation(
   const reorderDirectoryPinsRequest = desktopApi?.reorderDirectoryPins;
   const setDirectoryThreadsCollapsedRequest =
     desktopApi?.setDirectoryThreadsCollapsed;
+  const setThreadSettledRequest = desktopApi?.setThreadSettled;
+  const settleDirectoryUnpinnedRequest = desktopApi?.settleDirectoryUnpinned;
   const setProjectForgeAutomationRequest =
     desktopApi?.setProjectForgeAutomation;
   const listProjectHeldWakeupsRequest = desktopApi?.listProjectHeldWakeups;
@@ -10509,6 +10543,79 @@ export function useThreadNavigation(
     [publishThreadActionError, setDirectoryThreadsCollapsedRequest, setUnpinnedExpandedByKey, noteDirectoryPatch],
   );
 
+  // The Settled fold: window-local first, so the section's pages follow the
+  // click, then saved with the project as Unpinned's is.
+  const setDirectorySettledCollapsed = useCallback(
+    async (directory: NavigationDirectorySummary, collapsed: boolean): Promise<void> => {
+      setSettledExpandedByKey?.((current) => ({ ...current, [directory.key]: !collapsed }));
+      if (!setDirectoryThreadsCollapsedRequest) return;
+      const federationTarget = readRendererFederationTarget();
+      publishThreadActionError("save-collapsed");
+      try {
+        await setDirectoryThreadsCollapsedRequest({
+          directoryKey: directory.key,
+          collapsed,
+          section: "settled",
+          ...(federationTarget ? { federationTarget } : {}),
+        });
+      } catch (error) {
+        publishThreadActionError("save-collapsed", error);
+      }
+    },
+    [publishThreadActionError, setDirectoryThreadsCollapsedRequest, setSettledExpandedByKey],
+  );
+
+  const setThreadSettled = useCallback(
+    async (thread: NavigationThreadSummary, settled: boolean): Promise<SetThreadSettledResponse | undefined> => {
+      if (!setThreadSettledRequest) return undefined;
+      const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
+      publishThreadActionError("settle-thread");
+      try {
+        // A peer thread pinned in the main window holds this viewer's pin.
+        // Settle files it away everywhere, so that pin goes too.
+        if (settled && thread.federation && !readRendererFederationTarget()
+          && thread.pinnedRank && setRemoteThreadLocalPinRequest) {
+          await setRemoteThreadLocalPinRequest({ ref: thread.federation.ref, pinned: false });
+        }
+        const response = await setThreadSettledRequest({
+          backend: thread.source,
+          threadId: thread.id,
+          settled,
+          ...(settled && thread.updatedAt !== undefined ? { seenUpdatedAt: thread.updatedAt } : {}),
+          ...(federationTarget ? { federationTarget } : {}),
+        });
+        invalidateNavigation();
+        return response;
+      } catch (error) {
+        publishThreadActionError("settle-thread", error);
+        return undefined;
+      }
+    },
+    [invalidateNavigation, publishThreadActionError, setRemoteThreadLocalPinRequest, setThreadSettledRequest],
+  );
+
+  const settleDirectoryUnpinned = useCallback(
+    async (
+      directory: Pick<NavigationDirectorySummary, "key">,
+      threads?: SettleDirectoryUnpinnedCandidate[],
+    ): Promise<SettleDirectoryUnpinnedResponse> => {
+      if (!settleDirectoryUnpinnedRequest) throw new Error("Settle is unavailable in this window.");
+      const federationTarget = readRendererFederationTarget();
+      const response = await settleDirectoryUnpinnedRequest({
+        directoryKey: directory.key,
+        ...(threads ? { threads: threads.map((thread) => ({
+          backend: thread.backend,
+          threadId: thread.threadId,
+          ...(thread.updatedAt !== undefined ? { seenUpdatedAt: thread.updatedAt } : {}),
+        })) } : {}),
+        ...(federationTarget ? { federationTarget } : {}),
+      });
+      if (threads) invalidateNavigation();
+      return response;
+    },
+    [invalidateNavigation, settleDirectoryUnpinnedRequest],
+  );
+
   // Owner-scoped: a peer window's request names that peer, and so does a
   // placeholder row standing for one peer's project; main sends it there.
   // Not optimistic: a pause changes what the owner polls and dispatches, so
@@ -11066,6 +11173,9 @@ export function useThreadNavigation(
     setDirectoryPin,
     reorderDirectoryPins,
     setDirectoryThreadsCollapsed,
+    setDirectorySettledCollapsed,
+    setThreadSettled,
+    settleDirectoryUnpinned,
     setProjectForgeAutomation,
     listProjectHeldWakeups,
     resolveProjectHeldWakeups,

@@ -345,4 +345,85 @@ describe("stuckBandBottom", () => {
       },
     ));
   });
+
+  /*
+   * With a Settled section, the project's list holds two dividers: Settled
+   * sticks at the bottom edge and Unpinned one divider plus its 4px margin
+   * above it, as app.css offsets it. The band ends above both while the
+   * project crosses the edge: a seam no taller than the stacking slack
+   * between two dividers reads as one band, never as visible rows.
+   */
+  const ROW = 28;
+  const MARGIN = 4;
+  const SLACK = 4;
+
+  function coveredAcrossSeams(listBottom: number, dividers: readonly DockExtent[]): number {
+    let edge = coveredFrom(listBottom, dividers);
+    while (edge < listBottom) {
+      const next = dividers.find((divider) => divider.bottom < edge && divider.bottom >= edge - SLACK);
+      if (!next) break;
+      edge = coveredFrom(next.bottom, dividers);
+    }
+    return edge;
+  }
+
+  function layOutSettled(
+    sections: readonly { header: number; pinned: number; unpinned: number; settled: number }[],
+    listTop: number,
+    listBottom: number,
+    offset: number,
+  ): DockExtent[] {
+    const dividers: DockExtent[] = [];
+    let cursor = listTop - offset;
+    for (const { header, pinned, unpinned, settled } of sections) {
+      const listStart = cursor + PAD + header;
+      const hasSettled = settled > 0;
+      const hasUnpinned = pinned > 0 || hasSettled;
+      const unpinnedAt = listStart + pinned + (hasUnpinned ? 4 : 0);
+      const settledAt = unpinnedAt + (hasUnpinned ? DIVIDER : 0) + unpinned;
+      const listEnd = settledAt + (hasSettled ? DIVIDER + settled : 0);
+      const stick = (natural: number, bottomInset: number) => {
+        let top = natural;
+        if (natural + DIVIDER > listBottom - bottomInset) top = Math.max(listBottom - bottomInset - DIVIDER, listStart);
+        return Math.max(top, Math.min(listTop + header, listEnd - DIVIDER));
+      };
+      if (hasUnpinned) {
+        const top = stick(unpinnedAt, hasSettled ? DIVIDER + MARGIN : 0);
+        dividers.push({ top, bottom: top + DIVIDER });
+      }
+      if (hasSettled) {
+        const top = stick(settledAt, 0);
+        dividers.push({ top, bottom: top + DIVIDER });
+      }
+      cursor = listEnd;
+    }
+    return dividers;
+  }
+
+  it("ends above Unpinned and Settled when both are stuck at the bottom, in logarithmic probes", () => {
+    fc.assert(fc.property(
+      // Whole rows: a gap between two dividers is at least one row, never
+      // a sliver inside the stacking slack.
+      fc.array(fc.record({
+        header: fc.integer({ min: 24, max: 52 }),
+        pinned: fc.integer({ min: 0, max: 20 }).map((rows) => rows * ROW),
+        unpinned: fc.integer({ min: 0, max: 20 }).map((rows) => rows * ROW),
+        settled: fc.integer({ min: 0, max: 20 }).map((rows) => rows * ROW),
+      }), { minLength: 1, maxLength: 40 }),
+      fc.integer({ min: 0, max: 40 }),
+      fc.integer({ min: 80, max: 900 }),
+      fc.integer({ min: 0, max: 20_000 }),
+      (sections, listTop, height, offset) => {
+        const listBottom = listTop + height;
+        const dividers = layOutSettled(sections, listTop, listBottom, offset);
+        let probes = 0;
+        const measured = stuckBandBottom(listBottom, dividers, (extent) => {
+          probes++;
+          return extent;
+        });
+        expect(measured).toBe(coveredAcrossSeams(listBottom, dividers));
+        expect(probes).toBeLessThanOrEqual(Math.ceil(Math.log2(dividers.length + 1)));
+      },
+    ));
+  });
 });

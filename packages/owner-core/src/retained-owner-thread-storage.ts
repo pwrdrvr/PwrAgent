@@ -43,7 +43,7 @@ export function projectRetainedOwnerThread(
     executionMode: record?.executionMode ?? (job?.sandbox === "workspace-write" ? "auto" : "default"),
     model: record?.model ?? job?.model ?? undefined, reasoningEffort: record?.reasoningEffort ?? job?.reasoningEffort ?? undefined,
     serviceTier: record?.serviceTier ?? job?.serviceTier ?? undefined, fastMode: record?.fastMode,
-    pinnedRank: record?.pinnedRank, parentThreadId: record?.parent?.threadId, parentThreadBackend: record?.parent?.backend,
+    pinnedRank: record?.pinnedRank, ...(record?.settledAt !== undefined ? { settledAt: record.settledAt } : {}), parentThreadId: record?.parent?.threadId, parentThreadBackend: record?.parent?.backend,
     parentThreadInstanceId: record?.parent?.instanceId, subthreadOrder: record?.subthreadOrder, subthreadsCollapsed: record?.subthreadsCollapsed,
     threadStatus: "idle", inbox: { inInbox: updatedAt > (record?.seenUpdatedAt ?? record?.seenAt ?? 0), reason: "updated-since-seen" },
   };

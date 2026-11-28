@@ -268,6 +268,11 @@ type DirectoriesListProps = {
     directory: NavigationDirectorySummary,
     collapsed: boolean,
   ) => Promise<void>;
+  /** Folds or opens a project's Settled section. */
+  onSetDirectorySettledCollapsed?: (
+    directory: NavigationDirectorySummary,
+    collapsed: boolean,
+  ) => Promise<void>;
   /**
    * Opens the directory context menu at the cursor position. Sidebar
    * owns the menu (so it can escape the sidebar's scroll container,
@@ -343,7 +348,18 @@ const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   directoryPinnedThreads: [],
   directoryThreadsCollapsed: false,
   directoryUnpinnedThreadCount: 0,
+  settledThreads: [],
+  selectedSettledThreads: [],
+  settledCollapsed: true,
+  directorySettledThreadCount: 0,
 };
+
+/** A project's foldable thread sections below its pins, in drawing order. */
+type DirectoryThreadSection = "unpinned" | "settled";
+
+function sectionDivider(row: Element | null | undefined, section: DirectoryThreadSection): HTMLElement | null {
+  return row?.querySelector<HTMLElement>(`.directory-row__thread-divider[data-section="${section}"]`) ?? null;
+}
 
 /**
  * The user can pin both `kind: "directory"` and `kind: "workspace"`
@@ -626,7 +642,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
   // right under its header. Collapse is applied by the owner, so this waits
   // for the render that shows it.
   const directoryThreadsCollapseAnchorRef = useRef<
-    { directoryKey: string; top: number; at: number } | undefined
+    { directoryKey: string; section: DirectoryThreadSection; top: number; at: number } | undefined
   >(undefined);
   useLayoutEffect(() => {
     const anchor = directoryThreadsCollapseAnchorRef.current;
@@ -636,9 +652,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       directoryThreadsCollapseAnchorRef.current = undefined;
       return;
     }
-    const divider = projectHeaders.current.get(anchor.directoryKey)
-      ?.closest(".directory-row")
-      ?.querySelector<HTMLElement>(".directory-row__thread-divider");
+    const divider = sectionDivider(projectHeaders.current.get(anchor.directoryKey)
+      ?.closest(".directory-row"), anchor.section);
     if (!divider || divider.getAttribute("aria-expanded") !== "false") return;
     directoryThreadsCollapseAnchorRef.current = undefined;
     list.scrollTop += divider.getBoundingClientRect().top - anchor.top;
@@ -667,7 +682,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
   // Once the owner renders the open section, the project scrolls to its
   // start instead, as a press on the bar beside the label does.
   const directoryThreadsOpenFromBottomRef = useRef<
-    { directoryKey: string; at: number } | undefined
+    { directoryKey: string; section: DirectoryThreadSection; at: number } | undefined
   >(undefined);
   useLayoutEffect(() => {
     const request = directoryThreadsOpenFromBottomRef.current;
@@ -676,9 +691,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       directoryThreadsOpenFromBottomRef.current = undefined;
       return;
     }
-    const divider = projectHeaders.current.get(request.directoryKey)
-      ?.closest(".directory-row")
-      ?.querySelector<HTMLElement>(".directory-row__thread-divider");
+    const divider = sectionDivider(projectHeaders.current.get(request.directoryKey)
+      ?.closest(".directory-row"), request.section);
     if (!divider || divider.getAttribute("aria-expanded") !== "true") return;
     directoryThreadsOpenFromBottomRef.current = undefined;
     scrollToDirectoryThreads(divider);
@@ -1412,6 +1426,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     const pinResource = props.pagedNavigation?.resources.get(pinResourceId);
     const rootResourceId = `directory:${directory.key}`;
     const rootResource = props.pagedNavigation?.resources.get(rootResourceId);
+    const settledResourceId = `directory-settled:${directory.key}`;
+    const settledResource = props.pagedNavigation?.resources.get(settledResourceId);
     const forgeActivityPaused = directory.forgeAutomation?.paused === true;
     // A placeholder's menu holds its peer project's Forge Automation only
     // while that peer can take the change.
@@ -1438,6 +1454,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       ...expandedThreadModel.directoryPinnedThreads,
       ...expandedThreadModel.selectedUnpinnedThreads,
       ...expandedThreadModel.unpinnedThreads,
+      ...expandedThreadModel.selectedSettledThreads,
+      ...expandedThreadModel.settledThreads,
     ];
     // A tray row folds its own sub-threads only where it draws a chevron:
     // folding behind a missing control would strand the rows it hides.
@@ -1617,7 +1635,14 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       directoryPinnedThreads,
       directoryThreadsCollapsed,
       directoryUnpinnedThreadCount,
+      settledThreads,
+      selectedSettledThreads,
+      settledCollapsed,
+      directorySettledThreadCount,
     } = expandedThreadModel;
+    // Settled sits below Unpinned, drawn only while the project has settled
+    // threads. Its rows page on their own.
+    const settledSectionDrawn = directorySettledThreadCount > 0;
     // Starting threads, placed where the owner will put each one. A sub-thread
     // lands under its parent wherever that row renders. A top-level thread
     // lands in its project: newest first among the unpinned rows, or before
@@ -1625,7 +1650,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     // pins it then so it stays visible), or beside the open transcript when
     // they are collapsed with nothing pinned.
     const renderedThreadKeys = new Set<string>();
-    for (const thread of [...directoryPinnedThreads, ...selectedUnpinnedThreads, ...unpinnedThreads]) {
+    for (const thread of [...directoryPinnedThreads, ...selectedUnpinnedThreads, ...unpinnedThreads,
+      ...selectedSettledThreads, ...settledThreads]) {
       const threadKey = threadSummaryIdentityKey(thread);
       renderedThreadKeys.add(threadKey);
       for (const child of trays.subtree(threadKey)) renderedThreadKeys.add(threadSummaryIdentityKey(child));
@@ -1671,6 +1697,8 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       ...directoryPinnedThreads,
       ...selectedUnpinnedThreads,
       ...(directoryThreadsCollapsed ? [] : unpinnedThreads),
+      ...selectedSettledThreads,
+      ...settledThreads,
     ].flatMap((thread) => {
       const key = threadSummaryIdentityKey(thread);
       return [
@@ -1759,6 +1787,115 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
         </Fragment>
       );
     };
+    // Both foldable sections share one divider: the label (caret, name,
+    // count) folds and opens; a pointer press on the bar beside it scrolls to
+    // the section's start. Each sticks under the project header and to the
+    // bottom of the list, Settled below Unpinned.
+    const renderSectionDivider = (section: DirectoryThreadSection): ReactElement => {
+      const settled = section === "settled";
+      const collapsed = settled ? settledCollapsed : directoryThreadsCollapsed;
+      const setCollapsed = settled ? props.onSetDirectorySettledCollapsed : props.onSetDirectoryThreadsCollapsed;
+      const openSectionMenu = !settled && props.onOpenDirectoryContextMenu && isPinnableDirectoryKind(directory)
+        ? props.onOpenDirectoryContextMenu : undefined;
+      return (
+        <div className="directory-row__threads-slot" role="listitem">
+          <span className="directory-row__thread-divider-origin" aria-hidden="true" />
+          <button
+            type="button"
+            className="recents-pinned-divider directory-row__thread-divider"
+            data-section={section}
+            aria-expanded={!collapsed}
+            aria-label={`${collapsed ? "Show" : "Hide"} ${section} threads for ${directory.label}`}
+            disabled={directoryUnconfigured || !setCollapsed}
+            // Unpinned's menu is the project's, which holds Settle Unpinned….
+            onContextMenu={openSectionMenu ? (event) => {
+              event.preventDefault();
+              const rect = event.currentTarget.getBoundingClientRect();
+              openSectionMenu(directory, { x: event.clientX, y: event.clientY, anchorTop: rect.top });
+            } : undefined}
+            onPointerDown={(event) => {
+              directoryDividerBarPressRef.current =
+                event.button === 0
+                && (event.target as Element).closest(
+                  ".directory-row__thread-divider-label",
+                ) === null
+                  ? event.currentTarget
+                  : undefined;
+            }}
+            onClick={(event) => {
+              // `detail` 0 is the keyboard, even after a stray
+              // press that never became a click.
+              const pressedBar = event.detail > 0
+                && directoryDividerBarPressRef.current === event.currentTarget;
+              directoryDividerBarPressRef.current = undefined;
+              if (
+                directoryUnconfigured
+                || Date.now() - lastDirectoryThreadDropAtRef.current <
+                  POST_DRAG_CLICK_SUPPRESS_MS
+              ) {
+                return;
+              }
+              // The label (chevron, name, count) toggles the
+              // list. A pointer press on the rest of the bar,
+              // the rules either side, scrolls back to the
+              // start of the section: from deep in a
+              // long list that is the other way out.
+              if (pressedBar) {
+                scrollToDirectoryThreads(event.currentTarget);
+                return;
+              }
+              directoryThreadsOpenFromBottomRef.current =
+                collapsed && isStuckToListBottom(event.currentTarget)
+                  ? { directoryKey: directory.key, section, at: Date.now() }
+                  : undefined;
+              directoryThreadsCollapseAnchorRef.current = collapsed
+                ? undefined
+                : {
+                    directoryKey: directory.key,
+                    section,
+                    top: event.currentTarget.getBoundingClientRect().top,
+                    at: Date.now(),
+                  };
+              void setCollapsed?.(directory, !collapsed);
+            }}
+          >
+            <span className="directory-row__thread-divider-label">
+              <span
+                aria-hidden="true"
+                className={`directory-row__thread-divider-chevron${
+                  collapsed ? "" : " is-open"
+                }`}
+              />
+              <span>{settled ? "Settled" : "Unpinned"}</span>
+              {/* Open or closed: hiding it while open made
+                  the label, and the rules beside it, change
+                  width on every toggle. Drawn by CSS from
+                  `data-count`: the aria-label names the action,
+                  and WCAG 2.5.3 wants every visible text word
+                  in it, so a text-node count would have to
+                  rename the button. It was never in the name. */}
+              <span
+                aria-hidden="true"
+                className="directory-row__thread-divider-count"
+                data-count={settled ? directorySettledThreadCount : directoryUnpinnedThreadCount}
+              />
+            </span>
+          </button>
+        </div>
+      );
+    };
+    const hasRootResourceControls = Boolean((rootResource?.loading && !rootResource.state.page)
+      || rootResource?.state.rebaselineRequired || rootResource?.state.page?.nextCursor);
+    const rootResourceControls = (
+      <>
+        {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty directory-row__empty">Loading threads…</p> : null}
+        {rootResource?.state.rebaselineRequired ? (
+          <SidebarShowMore kind="reload" label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
+        ) : rootResource?.state.page?.nextCursor ? (
+          <SidebarShowMore busy={rootResource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)} />
+        ) : null}
+      </>
+    );
 
     return (
       <section
@@ -2021,7 +2158,13 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
             {expanded ? (
               <div className="directory-row__details">
                 {visibleThreadCount > 0 || startingRootThreads.length > 0 ? (
-                  <div className="sidebar-list sidebar-list--compact directory-row__threads" role="list" aria-label={`Threads in ${directory.label}`}>
+                  <div
+                    className={`sidebar-list sidebar-list--compact directory-row__threads${
+                      settledSectionDrawn ? " directory-row__threads--settled" : ""
+                    }`}
+                    role="list"
+                    aria-label={`Threads in ${directory.label}`}
+                  >
                     {directoryPinnedThreads.map((thread, pinnedIndex) => {
 	                      const threadKey = threadSummaryIdentityKey(thread);
                           const ordinarySubthreadCount =
@@ -2144,97 +2287,35 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                     {selectedUnpinnedThreads.map(renderUnpinnedRow)}
                     {(directory.pinnedRootCount ?? 0) > 0 &&
                     (directoryUnpinnedThreadCount > 0
-                      || (startingRootSlot === "unpinned" && startingRootThreads.length > 0)) ? (
-                      <div className="directory-row__threads-slot" role="listitem">
-                        <span className="directory-row__thread-divider-origin" aria-hidden="true" />
-                        <button
-                          type="button"
-                          className="recents-pinned-divider directory-row__thread-divider"
-                          aria-expanded={!directoryThreadsCollapsed}
-                          aria-label={`${
-                            directoryThreadsCollapsed ? "Show" : "Hide"
-                          } unpinned threads for ${directory.label}`}
-                          disabled={
-                            directoryUnconfigured
-                            || !props.onSetDirectoryThreadsCollapsed
-                          }
-                          onPointerDown={(event) => {
-                            directoryDividerBarPressRef.current =
-                              event.button === 0
-                              && (event.target as Element).closest(
-                                ".directory-row__thread-divider-label",
-                              ) === null
-                                ? event.currentTarget
-                                : undefined;
-                          }}
-                          onClick={(event) => {
-                            // `detail` 0 is the keyboard, even after a stray
-                            // press that never became a click.
-                            const pressedBar = event.detail > 0
-                              && directoryDividerBarPressRef.current === event.currentTarget;
-                            directoryDividerBarPressRef.current = undefined;
-                            if (
-                              directoryUnconfigured
-                              || Date.now() - lastDirectoryThreadDropAtRef.current <
-                                POST_DRAG_CLICK_SUPPRESS_MS
-                            ) {
-                              return;
-                            }
-                            // The label (chevron, name, count) toggles the
-                            // list. A pointer press on the rest of the bar,
-                            // the rules either side, scrolls back to the
-                            // start of the Unpinned section: from deep in a
-                            // long list that is the other way out.
-                            if (pressedBar) {
-                              scrollToDirectoryThreads(event.currentTarget);
-                              return;
-                            }
-                            directoryThreadsOpenFromBottomRef.current =
-                              directoryThreadsCollapsed && isStuckToListBottom(event.currentTarget)
-                                ? { directoryKey: directory.key, at: Date.now() }
-                                : undefined;
-                            directoryThreadsCollapseAnchorRef.current = directoryThreadsCollapsed
-                              ? undefined
-                              : {
-                                  directoryKey: directory.key,
-                                  top: event.currentTarget.getBoundingClientRect().top,
-                                  at: Date.now(),
-                                };
-                            void props.onSetDirectoryThreadsCollapsed?.(
-                              directory,
-                              !directoryThreadsCollapsed,
-                            );
-                          }}
-                        >
-                          <span className="directory-row__thread-divider-label">
-                            <span
-                              aria-hidden="true"
-                              className={`directory-row__thread-divider-chevron${
-                                directoryThreadsCollapsed ? "" : " is-open"
-                              }`}
-                            />
-                            <span>Unpinned</span>
-                            {/* Open or closed: hiding it while open made
-                                the label, and the rules beside it, change
-                                width on every toggle. Drawn by CSS from
-                                `data-count`: the aria-label names the action,
-                                and WCAG 2.5.3 wants every visible text word
-                                in it, so a text-node count would have to
-                                rename the button. It was never in the name. */}
-                            <span
-                              aria-hidden="true"
-                              className="directory-row__thread-divider-count"
-                              data-count={directoryUnpinnedThreadCount}
-                            />
-                          </span>
-                        </button>
-                      </div>
-                    ) : null}
+                      || (startingRootSlot === "unpinned" && startingRootThreads.length > 0))
+                      ? renderSectionDivider("unpinned") : null}
 
                     {renderStartingRootThreads("unpinned")}
                     {directoryThreadsCollapsed
                       ? null
                       : unpinnedThreads.map(renderUnpinnedRow)}
+                    {settledSectionDrawn ? (
+                      <>
+                        {/* Unpinned's own paging stays with its rows,
+                            above the Settled section. */}
+                        {hasRootResourceControls ? (
+                          <div className="directory-row__threads-slot" role="listitem">{rootResourceControls}</div>
+                        ) : null}
+                        {selectedSettledThreads.map(renderUnpinnedRow)}
+                        {renderSectionDivider("settled")}
+                        {settledThreads.map(renderUnpinnedRow)}
+                        {settledResource && !settledCollapsed && (settledResource.state.rebaselineRequired
+                          || settledResource.state.page?.nextCursor) ? (
+                          <div className="directory-row__threads-slot" role="listitem">
+                            {settledResource.state.rebaselineRequired ? (
+                              <SidebarShowMore kind="reload" label="Reload settled threads" onClick={() => void props.pagedNavigation?.restart(settledResourceId)} />
+                            ) : (
+                              <SidebarShowMore busy={settledResource.loading} label="Load more settled threads" onClick={() => void props.pagedNavigation?.loadMore(settledResourceId)} />
+                            )}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
                   </div>
                 ) : (
                   <p className="sidebar-empty directory-row__empty">{directory.counts ? "No threads in this directory yet." : "Loading directory counts…"}</p>
@@ -2245,12 +2326,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                     line keeps the sidebar-level 12px top margin and no lane
                     inset, so it landed 20px below that sibling and 8px to its
                     left. Both render together while a directory first opens. */}
-                {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty directory-row__empty">Loading threads…</p> : null}
-                {rootResource?.state.rebaselineRequired ? (
-                  <SidebarShowMore kind="reload" label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
-                ) : rootResource?.state.page?.nextCursor ? (
-                  <SidebarShowMore busy={rootResource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)} />
-                ) : null}
+                {settledSectionDrawn ? null : rootResourceControls}
               </div>
             ) : null}
           </section>

@@ -7,6 +7,14 @@ import type {
   ManageThreadDependenciesRequest,
   ManageThreadDependenciesResponse,
 } from "@pwragent/shared/contracts/thread-dependencies";
+import {
+  readSetThreadSettledRequest,
+  readSettleDirectoryUnpinnedRequest,
+  type SetThreadSettledRequest,
+  type SetThreadSettledResponse,
+  type SettleDirectoryUnpinnedRequest,
+  type SettleDirectoryUnpinnedResponse,
+} from "@pwragent/shared/contracts/thread-settle";
 import { authenticateMessageOrigin, type ResolvedSourceInstance } from "@pwragent/federation/federation-message-origin";
 import { resolveTurnInputSource, type TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import {
@@ -832,6 +840,9 @@ export type FederationBackendOperations = NavigationBackendOperations & {
   ): Promise<SetThreadLockResponse>;
   setThreadCheckoutHibernation?(request: SetThreadCheckoutHibernationRequest): Promise<SetThreadCheckoutHibernationResponse>;
   setThreadPin(request: SetThreadPinRequest): Promise<SetThreadPinResponse>;
+  /** Settle on this owner's threads; absent on owners that predate `thread_settle_snooze`. */
+  setThreadSettledV1?(request: Omit<SetThreadSettledRequest, "federationTarget">): Promise<SetThreadSettledResponse>;
+  settleDirectoryUnpinnedV1?(request: Omit<SettleDirectoryUnpinnedRequest, "federationTarget">): Promise<SettleDirectoryUnpinnedResponse>;
   reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse>;
@@ -1584,6 +1595,20 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as SendThreadPrAutoDispatchNowRequest,
       ),
   );
+  if (params.backend.setThreadSettledV1) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.setThreadSettledV1, async (envelope) => {
+      const request = readSetThreadSettledRequest(envelope.params);
+      if (!request) throw new Error("Invalid Settle request.");
+      return await params.backend.setThreadSettledV1!(request);
+    });
+  }
+  if (params.backend.settleDirectoryUnpinnedV1) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.settleDirectoryUnpinnedV1, async (envelope) => {
+      const request = readSettleDirectoryUnpinnedRequest(envelope.params);
+      if (!request) throw new Error("Invalid Settle Unpinned request.");
+      return await params.backend.settleDirectoryUnpinnedV1!(request);
+    });
+  }
   if (params.backend.manageThreadDependencies) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.manageThreadDependencies,
@@ -2803,6 +2828,16 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async legacyManageThreadMergeHolds(request: unknown): Promise<{ holds: []; dependents: [] }> {
     return await this.rpc.request<{ holds: []; dependents: [] }>({ method: FEDERATION_BACKEND_METHODS.manageThreadMergeHolds, params: request });
+  }
+
+  async setThreadSettledV1(request: Omit<SetThreadSettledRequest, "federationTarget">): Promise<SetThreadSettledResponse> {
+    return await this.rpc.request<SetThreadSettledResponse>({ method: FEDERATION_BACKEND_METHODS.setThreadSettledV1, params: request });
+  }
+
+  async settleDirectoryUnpinnedV1(
+    request: Omit<SettleDirectoryUnpinnedRequest, "federationTarget">,
+  ): Promise<SettleDirectoryUnpinnedResponse> {
+    return await this.rpc.request<SettleDirectoryUnpinnedResponse>({ method: FEDERATION_BACKEND_METHODS.settleDirectoryUnpinnedV1, params: request });
   }
 
   async manageThreadDependencies(request: ManageThreadDependenciesRequest): Promise<ManageThreadDependenciesResponse> {

@@ -188,6 +188,13 @@ export const FEDERATION_CAPABILITIES = [
    * notices. The owner keeps them, their schedule, bounds and read state.
    */
   "agent_notifications",
+  /**
+   * The owner holds Settle on its threads (`settledAt`, its projects'
+   * Settled sections) and answers `backend.setThreadSettledV1` and
+   * `backend.settleDirectoryUnpinnedV1`. A viewer offers no Settle on an
+   * older owner's threads. Snooze will join it under the same name.
+   */
+  "thread_settle_snooze",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

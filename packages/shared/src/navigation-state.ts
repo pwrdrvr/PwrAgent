@@ -365,6 +365,7 @@ export function materializeNavigationThreads(params: {
       ...(overlay?.keepCheckoutAwake ? { keepCheckoutAwake: true } : {}),
       scheduledStart: overlay?.scheduledStart,
       pinnedRank: overlay?.pinnedRank,
+      ...(overlay?.settledAt !== undefined ? { settledAt: overlay.settledAt } : {}),
       ...parentThread,
       forkSourceThreadId: overlay?.forkSourceThreadId,
       subthreadOrder: overlay?.subthreadOrder,
@@ -742,6 +743,7 @@ export function serializeNavigationSnapshotForHash(params: {
       lock: thread.lock ?? null,
       keepCheckoutAwake: thread.keepCheckoutAwake ?? false,
       pinnedRank: thread.pinnedRank ?? null,
+      settledAt: thread.settledAt ?? null,
       parentThreadId: thread.parentThreadId ?? null,
       parentThreadBackend: thread.parentThreadBackend ?? null,
       parentThreadInstanceId: thread.parentThreadInstanceId ?? null,
@@ -836,6 +838,7 @@ export function serializeNavigationSnapshotForHash(params: {
       // the same overlay and must invalidate the snapshot cache too.
       directoryThreadsCollapsed:
         directory.directoryThreadsCollapsed ?? null,
+      settledCollapsed: directory.settledCollapsed ?? null,
       // Forge Automation lives in the same overlay; a Save must get past
       // the unchanged-snapshot short-circuit too.
       forgeAutomation: directory.forgeAutomation ?? null,

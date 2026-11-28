@@ -83,7 +83,14 @@ function usePresentationOwner(props: FixtureProps) {
   } else if (mode !== "directories") add("lens", { kind: "lens", lens: mode }, ownerThreads);
   for (const directory of props.directories) {
     add(`directory-pins:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "pinned" });
-    if (!directory.directoryThreadsCollapsed) add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned" });
+    // As the real demand: Settled pages on its own while open; Unpinned then asks for the rest.
+    const descriptor = index.directories?.find((row) => row.key === directory.key);
+    const hasSettled = (descriptor?.settledRootCount ?? 0) > 0;
+    if (!directory.directoryThreadsCollapsed) add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned",
+      ...(hasSettled ? { settled: "exclude" as const } : {}) });
+    if (hasSettled && descriptor?.settledCollapsed === false) {
+      add(`directory-settled:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned", settled: "only" });
+    }
   }
   const byKey = new Map(ownerThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
   const parents = new Set(ownerThreads.map((thread) => resolveThreadParentKey(thread, byKey)).filter(Boolean));

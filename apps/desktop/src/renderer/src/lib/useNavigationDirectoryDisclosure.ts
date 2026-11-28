@@ -8,8 +8,11 @@ export type NavigationDirectoryDisclosure = {
   handledRevealRequestRef: RefObject<number>;
   expandedByKey: Record<string, boolean>;
   unpinnedExpandedByKey: Record<string, boolean>;
+  /** The Settled section's window-local fold, ahead of the owner's saved one. */
+  settledExpandedByKey?: Record<string, boolean>;
   setExpandedByKey: Dispatch<SetStateAction<Record<string, boolean>>>;
   setUnpinnedExpandedByKey: Dispatch<SetStateAction<Record<string, boolean>>>;
+  setSettledExpandedByKey?: Dispatch<SetStateAction<Record<string, boolean>>>;
 };
 
 export function useNavigationDirectoryDisclosure(resume?: NavigationResumeState): NavigationDirectoryDisclosure {
@@ -17,7 +20,9 @@ export function useNavigationDirectoryDisclosure(resume?: NavigationResumeState)
   const handledRevealRequestRef = useRef(0);
   const [expandedByKey, setExpandedByKey] = useState<Record<string, boolean>>(() => resume?.expandedByKey ?? {});
   const [unpinnedExpandedByKey, setUnpinnedExpandedByKey] = useState<Record<string, boolean>>(() => resume?.unpinnedExpandedByKey ?? {});
+  const [settledExpandedByKey, setSettledExpandedByKey] = useState<Record<string, boolean>>({});
   return useMemo(() => ({
-    expandedByKey, unpinnedExpandedByKey, setExpandedByKey, setUnpinnedExpandedByKey, previousSelectedItemKeyRef, handledRevealRequestRef,
-  }), [expandedByKey, unpinnedExpandedByKey]);
+    expandedByKey, unpinnedExpandedByKey, settledExpandedByKey, setExpandedByKey, setUnpinnedExpandedByKey, setSettledExpandedByKey,
+    previousSelectedItemKeyRef, handledRevealRequestRef,
+  }), [expandedByKey, unpinnedExpandedByKey, settledExpandedByKey]);
 }

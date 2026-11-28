@@ -169,6 +169,41 @@ Read this before changing thread lenses, Attention membership/order, unread stat
     start without toggling.
   - The selected thread's dock and row reveal treat rows behind the stuck
     divider as hidden, at the bottom as at the top.
+- **Settle** files a root thread away without archiving it. The owner holds
+  `settledAt` beside `pinnedRank`; a profile that never settles stores and
+  reads exactly what it did before.
+  - A thread is pinned, settled, or neither. Settle clears the pin and marks
+    the thread read in one commit, up to the update the operator saw.
+    Pinning un-settles; archive and restore clear it.
+  - Any turn start un-settles, wherever the turn came from. The owner's
+    registry does it as the harness reports the turn. Nothing settles a
+    thread on its own.
+  - Settle is refused, never forced, while the thread works (a live turn,
+    which is also where an approval waits, a running sub-agent or a
+    background task) or has a queued send. Sub-threads move with their root.
+  - Settle releases the harness's live session at once (Codex
+    `thread/unsubscribe`). It never calls the harness's archive.
+  - Each project draws its roots in exactly one section: pins, **Unpinned**,
+    then **Settled**. Settled appears only while the project has settled
+    roots, starts folded, and uses the Unpinned divider's sticky top and
+    bottom; stuck together at the bottom, Unpinned sits above Settled and the
+    band ends above both. Its fold is `settledCollapsed` (absent means
+    folded), saved on the owner like the Unpinned fold.
+  - Settled roots page as their own resource (`directory-settled:<key>`,
+    `settled: "only"`); Unpinned then asks `settled: "exclude"`. A project
+    with no settled roots asks exactly the old query, and the row's unpinned
+    counts still include settled roots, so an older viewer lists them under
+    Unpinned.
+  - Updated and Created still list every thread. Attention drops a settled
+    thread because Settle marks it read and refuses one that is working.
+  - **Settle Unpinned…** on a project's menu (also on a right-click of its
+    Unpinned divider) lists the idle Unpinned roots by title as the owner
+    counts them, says how many busy ones stay, and settles exactly the
+    confirmed list in one commit. The owner skips any that changed since.
+  - Federation: `thread_settle_snooze` plus a `thread_navigation` grant.
+    Without both, a peer's rows offer no Settle and its projects draw no
+    Settled section. Requests are new `backend.setThreadSettledV1` and
+    `backend.settleDirectoryUnpinnedV1` methods; contained peers are denied.
 - Project folders, sub-threads, and pins all use one pointer drag:
   a 4px lift, the tilted held card, the dimmed source, Escape to cancel.
   Never native HTML drag (see `pointer-reorder-drag.ts`).

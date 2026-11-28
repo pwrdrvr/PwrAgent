@@ -116,12 +116,13 @@ export function useBoundedNavigationWindow(params: Demand & {
   const baseDemandParams = useMemo(() => ({
     browseMode: params.browseMode, target: params.target, attentionView: params.attentionView,
     expandedByKey: params.expandedByKey, unpinnedExpandedByKey: params.unpinnedExpandedByKey,
+    settledExpandedByKey: params.settledExpandedByKey,
     selectedRef: params.selectedRef, removedDirectoryKeys: params.removedDirectoryKeys, draftRefs: params.draftRefs,
     pinnedThreadsOnTop: params.pinnedThreadsOnTop, attentionScope: params.attentionScope, directories, selectedDirectoryKeys,
     selectedRootRef: selectedRoot?.row.ref, selectedContextReady,
     indexedDirectoryKeys: new Set((indexedDirectories ?? []).map((directory) => directory.key)),
   }), [params.browseMode, params.target, params.attentionView, params.expandedByKey, params.unpinnedExpandedByKey,
-    params.selectedRef, params.removedDirectoryKeys, params.draftRefs, params.pinnedThreadsOnTop, params.attentionScope,
+    params.settledExpandedByKey, params.selectedRef, params.removedDirectoryKeys, params.draftRefs, params.pinnedThreadsOnTop, params.attentionScope,
     directories, selectedDirectoryKeys, selectedRoot?.row.ref, selectedContextReady, indexedDirectories]);
   const baseCollections = useMemo(
     () => buildNavigationWindowDemand({ ...baseDemandParams, disclosedParents: [] }),

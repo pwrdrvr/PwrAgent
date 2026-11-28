@@ -48,6 +48,9 @@ export const FEDERATION_BACKEND_METHODS = {
   manageThreadMergeHolds: "backend.manageThreadMergeHolds",
   manageThreadDependencies: "backend.manageThreadDependencies",
   setThreadPin: "backend.setThreadPin",
+  /** Owners advertising `thread_settle_snooze`. */
+  setThreadSettledV1: "backend.setThreadSettledV1",
+  settleDirectoryUnpinnedV1: "backend.settleDirectoryUnpinnedV1",
   reorderThreadPins: "backend.reorderThreadPins",
   setDirectoryPin: "backend.setDirectoryPin",
   reorderDirectoryPins: "backend.reorderDirectoryPins",
@@ -223,6 +226,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.setThreadCheckoutHibernation]: "turn_control",
   [FEDERATION_BACKEND_METHODS.manageThreadMergeHolds]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
+  // Settle files a thread away and marks it read, as Mark Read and Unpin do.
+  [FEDERATION_BACKEND_METHODS.setThreadSettledV1]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.settleDirectoryUnpinnedV1]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setDirectoryPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderDirectoryPins]: "thread_navigation",
@@ -410,6 +416,8 @@ export const FEDERATION_BACKEND_CONTAINED_DECISIONS = {
   [FEDERATION_BACKEND_METHODS.manageThreadMergeHolds]: "deny",
   [FEDERATION_BACKEND_METHODS.manageThreadDependencies]: "deny",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "deny",
+  [FEDERATION_BACKEND_METHODS.setThreadSettledV1]: "deny",
+  [FEDERATION_BACKEND_METHODS.settleDirectoryUnpinnedV1]: "deny",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "deny",
   [FEDERATION_BACKEND_METHODS.setDirectoryPin]: "deny",
   [FEDERATION_BACKEND_METHODS.reorderDirectoryPins]: "deny",

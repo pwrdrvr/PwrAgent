@@ -1,3 +1,9 @@
+import type {
+  SetThreadSettledRequest,
+  SetThreadSettledResponse,
+  SettleDirectoryUnpinnedRequest,
+  SettleDirectoryUnpinnedResponse,
+} from "@pwragent/shared/contracts/thread-settle";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import type { FactoryProjectOption, FactoryProjectProjection, FactoryProjectReadRequest } from "@pwragent/shared/factory-projection";
 import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
@@ -1976,6 +1982,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadPin?: (
     request: SetThreadPinRequest
   ) => Promise<SetThreadPinResponse>;
+  setThreadSettled?: (
+    request: SetThreadSettledRequest,
+  ) => Promise<SetThreadSettledResponse>;
+  settleDirectoryUnpinned?: (
+    request: SettleDirectoryUnpinnedRequest,
+  ) => Promise<SettleDirectoryUnpinnedResponse>;
   setThreadPrAutoDispatch?: (
     request: SetThreadPrAutoDispatchRequest,
   ) => Promise<SetThreadPrAutoDispatchResponse>;

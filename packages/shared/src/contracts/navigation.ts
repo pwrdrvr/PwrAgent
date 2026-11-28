@@ -220,6 +220,13 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
   /**
+   * When the owner's operator settled this root thread: filed away in its
+   * project's Settled section until it is unsettled or a turn starts on it.
+   * Owner-held, like the pin, and never set together with one. Absent from
+   * an owner that predates Settle.
+   */
+  settledAt?: number;
+  /**
    * UI-only sub-thread relationship. The child remains an independent
    * agent thread; this only controls sidebar grouping.
    */
@@ -1746,6 +1753,8 @@ export type NavigationDirectorySummary = {
    * "Unpinned" section while keeping pinned threads visible.
    */
   directoryThreadsCollapsed?: boolean;
+  /** The Settled section's fold. Absent means folded. */
+  settledCollapsed?: boolean;
   /**
    * The owner's Forge Automation for this project. Absent means the
    * defaults. A peer window's rows carry what the peer stored, and so does a
@@ -2584,9 +2593,19 @@ export type NavigationDirectoryRow = {
    * Absent on older serving instances; independent of pagination/disclosure.
    */
   unpinnedThreadCount?: number;
+  /**
+   * Settled roots, a subset of `unpinnedRootCount`: a settled thread is never
+   * pinned. Absent, or zero, draws no Settled section. An owner that predates
+   * Settle never sends it, and its viewers list every unpinned root together.
+   */
+  settledRootCount?: number;
+  /** Ordinary threads under settled roots, including all descendants; a subset of `unpinnedThreadCount`. */
+  settledThreadCount?: number;
   latestUpdatedAt?: number;
   pinnedRank?: string;
   directoryThreadsCollapsed?: boolean;
+  /** The Settled section's fold. Absent means folded. */
+  settledCollapsed?: boolean;
   /**
    * The owner's Forge Automation. Absent means defaults. A placeholder row
    * carries it only with a `peerProject`, as that peer stored it.
@@ -2677,6 +2696,15 @@ export type NavigationQuery =
       kind: "directory";
       directoryKey: string;
       roots?: "all" | "pinned" | "unpinned";
+      /**
+       * Split unpinned roots by Settle: `exclude` lists the active ones (the
+       * Unpinned section, or a pinless project's flat list) and `only` the
+       * Settled section. A root's subtree goes with it. Absent keeps settled
+       * roots among the unpinned, which is what a viewer that predates Settle
+       * asks for. An owner that predates Settle ignores the field and has no
+       * settled threads to split.
+       */
+      settled?: "exclude" | "only";
       /** Parent rows whose children are explicitly disclosed by the viewer. */
       disclosedParentThreadKeys?: string[];
     }
@@ -2849,6 +2877,8 @@ export type NavigationRemoteOwner = {
   celestialIcon?: CelestialIconId;
   /** This viewer's disclosure for the page's directories, by directory key. */
   directoryThreadsCollapsed?: Record<string, boolean>;
+  /** This viewer's Settled fold for the page's directories, by directory key. */
+  settledCollapsed?: Record<string, boolean>;
   /**
    * UTF-8 bytes of the owner's content as it arrived, recorded when rows are
    * filled in. Its presence marks a page whose rows are already filled in.
@@ -3487,6 +3517,8 @@ export type ReorderDirectoryPinsResponse = {
 export type SetDirectoryThreadsCollapsedRequest = {
   directoryKey: string;
   collapsed: boolean;
+  /** The section to fold. Absent is Unpinned, the only section an older main process knows. */
+  section?: "settled";
   /**
    * Remote-viewer disclosures are viewer-owned display state. The target
    * namespaces the local preference; it is never routed to the owner.
@@ -3497,6 +3529,7 @@ export type SetDirectoryThreadsCollapsedRequest = {
 export type SetDirectoryThreadsCollapsedResponse = {
   directoryKey: string;
   collapsed: boolean;
+  section?: "settled";
 };
 
 /**
@@ -3815,6 +3848,8 @@ export type DirectoryOverlayState = {
   pinnedRank?: string;
   /** Hide unpinned directory threads while leaving pinned threads visible. */
   directoryThreadsCollapsed?: boolean;
+  /** The Settled section's fold. Absent means folded. */
+  settledCollapsed?: boolean;
   /**
    * Per-project Forge Automation. Absent means the defaults. Owner-scoped:
    * only the instance that owns the project's threads stores or enforces it.
@@ -3979,6 +4014,8 @@ export type ThreadOverlayState = {
   threadSpendAlertPending?: ThreadSpendAlert;
   /** User-curated position in the pinned section. Undefined means unpinned. */
   pinnedRank?: string;
+  /** Settled by the operator; cleared by Unsettle, a pin, archive, or any turn start. */
+  settledAt?: number;
   /**
    * UI-only parent relationship. This does not grant the child agent
    * access to the parent transcript or state.
