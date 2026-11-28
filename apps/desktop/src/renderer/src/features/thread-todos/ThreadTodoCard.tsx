@@ -1067,6 +1067,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               <button
                 type="button"
                 className="button thread-todo-card__button thread-todo-card__button--quiet"
+                aria-describedby={confirmTextId}
                 onClick={() => setConfirmingMerge(undefined)}
               >
                 Cancel
@@ -1074,6 +1075,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               <button
                 type="button"
                 className="button button--primary thread-todo-card__button"
+                aria-describedby={confirmTextId}
                 onClick={() => {
                   const confirmation = confirmingMerge;
                   setConfirmingMerge(undefined);
@@ -1442,7 +1444,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           {confirmCiApprovalText(confirmingApproval, todo.federationTarget !== undefined)}
         </p>
       ) : confirmingMerge && action?.type === "merge_pull_request" ? (
-        <p className="thread-todo-card__confirm">
+        <p id={confirmTextId} className="thread-todo-card__confirm">
           {openSteps > 0 ? `${openStepsText} ` : ""}
           {mergeQueue
             ? confirmQueueText(action.pullRequest, mergeQueue.kind, mergePullRequest?.baseRefName, todo.targetProject?.label)

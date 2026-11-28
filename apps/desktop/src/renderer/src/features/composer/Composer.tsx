@@ -12242,10 +12242,9 @@ function useComposerController(props: ComposerProps) {
     composerErrorEntries,
   } = useComposerPresentation();
 
-  const reviewStartDisabled =
-    !buildConfiguredReviewCommand(reviewConfig) ||
-    (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd) ||
-    reviewSubmissionUnavailable;
+  const reviewStartDisabled = !buildConfiguredReviewCommand(reviewConfig)
+    || (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd)
+    || reviewSubmissionUnavailable;
   const reviewStartLabel = reviewPullRequestsTogether
     ? "Start combined review"
     : reviewPullRequestBatch

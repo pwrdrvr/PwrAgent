@@ -1073,6 +1073,9 @@ describe("thread to-do checklists", () => {
             .compareDocumentPosition(question!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
           expect(aboveFooter(article)).toEqual(before);
           expect(lastButton(article).textContent).toBe(label);
+          // Read after the buttons now, so the button names it.
+          expect(question!.id).not.toBe("");
+          expect(lastButton(article).getAttribute("aria-describedby")).toBe(question!.id);
         },
       ),
       // Rendered cards are a heavy fixture: a few random runs plus the named
