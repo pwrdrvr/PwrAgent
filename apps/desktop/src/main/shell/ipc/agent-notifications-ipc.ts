@@ -68,9 +68,12 @@ export function registerAgentNotificationIpcHandlers(): void {
   unsubscribe?.();
   const offEvents = runtime.onRemoteBackendEvent((event) => notices.onRemoteEvent(event));
   const offPeers = runtime.onPeerStatusChanged(() => notices.syncPeers());
+  // A peer's notices name it; a new short name relabels them.
+  const offNames = runtime.onShortNamesChanged(() => notices.syncPeers());
   unsubscribe = () => {
     offEvents();
     offPeers();
+    offNames();
     runtime.setEventSubscriptions(AGENT_NOTIFICATIONS_EVENT_CONSUMER_ID, []);
   };
   notices.syncPeers();

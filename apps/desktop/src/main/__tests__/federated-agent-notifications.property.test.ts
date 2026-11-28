@@ -531,6 +531,32 @@ describe("FederatedAgentNotifications", () => {
     for (const peer of PEERS) expect(h.owners.get(peer)!.unread).toEqual([]);
   });
 
+  it("relabels a renamed peer's notices and tells windows", async () => {
+    let label = "Old name";
+    let changes = 0;
+    const owner = new FakeOwner();
+    owner.unread.push(item("one"));
+    const notices = new FederatedAgentNotifications({
+      local: async () => ({ ok: true, snapshot: { unread: [], scheduled: [], earlier: [] } }),
+      remote: async (_target, request) => owner.manage(request),
+      peers: () => [{ target: target("peer-a"), label }],
+      watch: () => undefined,
+      nativeNotificationsEnabled: () => true,
+      notifyNative: () => undefined,
+      clearNative: () => undefined,
+      showThread: () => undefined,
+      changed: () => { changes++; },
+    });
+    notices.syncPeers();
+    await settle();
+    const before = changes;
+    label = "Outpost";
+    notices.syncPeers();
+
+    expect(changes - before).toBe(1);
+    expect((await snapshotOf(notices, undefined)).unread.map((entry) => entry.ownerLabel)).toEqual(["Outpost"]);
+  });
+
   it("keeps a peer's last notices through a failed read", async () => {
     const h = harness();
     h.owners.get("peer-a")!.unread.push(item("kept"));

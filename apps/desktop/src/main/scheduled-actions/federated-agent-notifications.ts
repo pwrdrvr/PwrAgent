@@ -69,11 +69,12 @@ export class FederatedAgentNotifications {
 
   constructor(private readonly deps: FederatedAgentNotificationDependencies) {}
 
-  /** Follows the peers connected now and forgets the rest. */
+  /** Follows the peers connected now, under their current names, and forgets the rest. */
   syncPeers(): void {
     const peers = this.deps.peers();
     const connected = new Set(peers.map((peer) => peer.target.instanceId));
     let dropped = false;
+    let renamed = false;
     for (const [instanceId, owner] of this.owners) {
       if (connected.has(instanceId)) continue;
       this.owners.delete(instanceId);
@@ -84,6 +85,12 @@ export class FederatedAgentNotifications {
     for (const peer of peers) {
       const owner = this.owners.get(peer.target.instanceId);
       if (owner) {
+        if (owner.peer.label !== peer.label) {
+          // A renamed peer's listed notices carry its new name.
+          const retag = (items: AgentNotificationItem[]) => items.map((item) => ({ ...item, ownerLabel: peer.label }));
+          owner.snapshot = { unread: retag(owner.snapshot.unread), scheduled: retag(owner.snapshot.scheduled), earlier: retag(owner.snapshot.earlier) };
+          renamed ||= hasItems(owner.snapshot);
+        }
         owner.peer = peer;
         continue;
       }
@@ -91,7 +98,7 @@ export class FederatedAgentNotifications {
       added.push(peer.target.instanceId);
     }
     this.deps.watch([...connected]);
-    if (dropped) this.deps.changed();
+    if (dropped || renamed) this.deps.changed();
     for (const instanceId of added) void this.refresh(instanceId);
   }
 
