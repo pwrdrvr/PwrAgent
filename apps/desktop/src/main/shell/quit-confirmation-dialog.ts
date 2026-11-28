@@ -158,7 +158,7 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     textSecondary: "#454756",
     textMuted: "#515363",
     accent: "#953500",
-    accentBright: "#8e3401",
+    accentBright: "#8b3100",
     accentFill: "#fe640b",
     buttonText: "#11111b",
     danger: "#d20f39",

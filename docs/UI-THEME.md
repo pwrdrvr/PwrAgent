@@ -403,7 +403,7 @@ Per theme:
   floor. Its terminal is Catppuccin's port mapping.
 - **Catppuccin Latte** text, accent, and semantic colors move, because
   Catppuccin tunes Latte below AA. Muted text has to move to about
-  `#53566b`, which leaves no room under Catppuccin's text, so primary
+  `#515363`, which leaves no room under Catppuccin's text, so primary
   darkens to keep the ladder. Peach is 2.6:1 as text, so text and marks use
   a darker orange, and `--accent-fill` keeps peach under dark ink (6.3:1).
   Hover sits between mantle and crust, 1.06:1 off the sidebar; the first

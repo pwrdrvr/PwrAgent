@@ -3651,6 +3651,21 @@ describe("color theme contract", () => {
     }
   });
 
+  it("keeps each accent ramp step visible", () => {
+    // Hover and pressed states swap --accent for --accent-strong (the
+    // incident explorer's token bars). Retuning --accent alone in Latte left
+    // the pair 1.007:1 apart, so the swap drew nothing. The tightest designed
+    // step is Phosphor's 1.030:1.
+    const RAMP_STEP_FLOOR = 1.025;
+    for (const [name, theme] of Object.entries(themes)) {
+      const color = (token: string): string => paint(theme, theme[token], "#000000");
+      expect(contrastRatio(color("accent"), color("accent-strong")), `${name}: accent to strong`)
+        .toBeGreaterThanOrEqual(RAMP_STEP_FLOOR);
+      expect(contrastRatio(color("accent-strong"), color("accent-bright")), `${name}: strong to bright`)
+        .toBeGreaterThanOrEqual(RAMP_STEP_FLOOR);
+    }
+  });
+
   it("keeps borrowed palettes on their upstream colors unless AA moves them", () => {
     // Each token starts from Catppuccin's own color. One that clears its
     // floor there keeps it; one that fails moves by lightness only, so it

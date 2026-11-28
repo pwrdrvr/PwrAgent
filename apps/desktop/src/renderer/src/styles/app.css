@@ -764,8 +764,9 @@
   --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
   --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
 
-  /* Text: subtext0 needs AA (#53566b at the floor), which leaves no room
-     between it and Catppuccin's text, so primary darkens to keep a ladder. */
+  /* Text: subtext0 needs AA (#515363 at the floor, set by the accent tint
+     over hover), which leaves no room between it and Catppuccin's text, so
+     primary darkens to keep a ladder. */
   --text-primary: #343648;
   --text-secondary: #454756;
   --text-muted: #515363;
@@ -773,8 +774,10 @@
 
   /* Accent: Peach */
   --accent: #953500;
-  --accent-strong: #933601;
-  --accent-bright: #8e3401;
+  /* The ramp steps 1.048:1 each way; moving --accent alone collapses it
+     onto --accent-strong, which the incident explorer's hover relies on. */
+  --accent-strong: #903300;
+  --accent-bright: #8b3100;
   /* Peach is 2.6:1 as text on base, so text and marks take a darker
      orange; fills keep Catppuccin's peach under dark ink (6.3:1). */
   --accent-fill: #fe640b;
@@ -1777,7 +1780,12 @@
   padding-left: 8px;
 }
 
-.pr-rollup-popover__item:hover,
+/* Hover is a neutral wash; the accent belongs to the keyboard-focused row
+   and the menu target, which the pointer does not move. */
+.pr-rollup-popover__item:hover:not(.is-menu-target) {
+  background: var(--surface-overlay-hover);
+}
+
 .pr-rollup-popover__item:has(.pr-rollup-popover__row:focus-visible) {
   background: var(--accent-soft);
 }
