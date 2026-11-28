@@ -13,6 +13,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { PullRequestLinkChip } from "../PullRequestLinkChip";
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { TranscriptPrContextProvider } from "../transcript-pr-context";
+import { ThreadMarkdown } from "../../thread-detail/ThreadMarkdown";
 
 it("shows the thread's local branch and Auto-fix only on its matching PR, including deep links", () => {
   fc.assert(fc.property(
@@ -112,8 +113,8 @@ describe("transcript PR renderer store", () => {
     const store = new TranscriptPrStatusStore(h.api);
     const first = vi.fn();
     const second = vi.fn();
-    const releaseFirst = store.subscribe(pr, false, first);
-    const releaseSecond = store.subscribe(pr, true, second);
+    const releaseFirst = store.subscribe(key, url, false, first);
+    const releaseSecond = store.subscribe(key, url, true, second);
     await vi.advanceTimersByTimeAsync(50);
     expect(h.set).toHaveBeenLastCalledWith({ removedUrls: [], updates: [{ url, visible: true }] });
     h.publish({ statuses: [{ pr: { ...pr, state: "merged" }, fetchedAt: 100 }] });
@@ -134,7 +135,7 @@ describe("transcript PR renderer store", () => {
     let resolve!: (statuses: TranscriptPullRequestStatuses) => void;
     h.set.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
     const store = new TranscriptPrStatusStore(h.api);
-    const release = store.subscribe(pr, true, vi.fn());
+    const release = store.subscribe(key, url, true, vi.fn());
     await vi.advanceTimersByTimeAsync(50);
     h.publish({ statuses: [{ pr: { ...pr, state: "merged" }, fetchedAt: 200 }] });
     resolve({ statuses: [{ pr: { ...pr, state: "pending" }, fetchedAt: 100 }] });
@@ -146,12 +147,12 @@ describe("transcript PR renderer store", () => {
   it("keeps the last status when the IPC request fails", async () => {
     const h = apiHarness();
     const store = new TranscriptPrStatusStore(h.api);
-    const release = store.subscribe(pr, true, vi.fn());
+    const release = store.subscribe(key, url, true, vi.fn());
     await vi.advanceTimersByTimeAsync(50);
     h.publish({ statuses: [{ pr: { ...pr, state: "passing" }, fetchedAt: 100 }] });
     h.set.mockRejectedValueOnce(new Error("offline"));
     release();
-    const releaseOther = store.subscribe(pr, false, vi.fn());
+    const releaseOther = store.subscribe(key, url, false, vi.fn());
     await vi.advanceTimersByTimeAsync(50);
     expect(store.getSnapshot(key)?.state).toBe("passing");
     releaseOther();
@@ -160,12 +161,13 @@ describe("transcript PR renderer store", () => {
   it("sends one changed identity among 1,000 chips without republishing the rest", async () => {
     const h = apiHarness();
     const store = new TranscriptPrStatusStore(h.api);
-    const releases = Array.from({ length: 1_000 }, (_, index) => store.subscribe({
-      ...pr, number: index + 1, url: `https://github.com/example/project/pull/${index + 1}`,
-    }, false, vi.fn()));
+    const releases = Array.from({ length: 1_000 }, (_, index) => {
+      const candidate = { ...pr, number: index + 1, url: `https://github.com/example/project/pull/${index + 1}` };
+      return store.subscribe(buildPullRequestStatusKey(candidate), candidate.url, false, vi.fn());
+    });
     await vi.advanceTimersByTimeAsync(50);
     expect(h.set.mock.calls[0]?.[0].updates).toHaveLength(1_000);
-    const releaseVisible = store.subscribe(pr, true, vi.fn());
+    const releaseVisible = store.subscribe(key, url, true, vi.fn());
     await vi.advanceTimersByTimeAsync(50);
     expect(h.set).toHaveBeenLastCalledWith({ removedUrls: [], updates: [{ url, visible: true }] });
     releaseVisible();
@@ -295,6 +297,34 @@ describe("PR ownership across local and pinned remote threads", () => {
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     return h;
   }
+
+  it("updates the same Markdown chip and leaves polling alone when navigation repeats the status", async () => {
+    const h = harness();
+    const deepUrl = `${url}/files#diff-123`;
+    const text = `Open ${deepUrl} for details.`;
+    const pending: PrSummary = { ...pr, state: "pending" };
+    const passing: PrSummary = { ...pr, state: "passing" };
+    const markdown = (status: PrSummary) => {
+      const selected = thread("local", [status], "github.com/example/project");
+      return <PullRequestLinkProvider activeThread={selected} threads={[selected]}>
+        <ThreadMarkdown text={text} />
+      </PullRequestLinkProvider>;
+    };
+    const view = render(markdown(pending));
+    const chip = screen.getByRole("button", { name: /checks pending/ });
+    const dot = chip.querySelector(".pr-chip__dot");
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(h.set).toHaveBeenCalledWith({ updates: [{ url: deepUrl, visible: true }], removedUrls: [] });
+
+    act(() => h.publish({ statuses: [{ pr: passing, fetchedAt: 100 }] }));
+    expect(screen.getByRole("button", { name: /checks passing/ })).toBe(chip);
+    view.rerender(markdown(passing));
+    expect(screen.getByRole("button", { name: /checks passing/ })).toBe(chip);
+    expect(chip.querySelector(".pr-chip__dot")).toBe(dot);
+    expect(chip).toHaveAttribute("data-pr-url", deepUrl);
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(h.set).toHaveBeenCalledTimes(1);
+  });
 
   it.each([undefined, "github.com/example/other-project"])("a local attachment with primary %s cannot mask a peer", async (primary) => {
     const h = harness();

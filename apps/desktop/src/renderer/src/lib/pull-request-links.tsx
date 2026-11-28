@@ -90,6 +90,7 @@ class PullRequestLinkMetadataStore {
   private prs = new Map<string, PrSummary>();
   private peerOwnedKeys = new Set<string>();
   private shorthandPrs = new Map<number, PrSummary>();
+  private activeThreadKey: string | undefined;
   private threads: NavigationThreadSummary[];
   private threadNumberListeners = new Set<() => void>();
   /** Resolutions for the current `threads`, keyed by request. */
@@ -100,14 +101,15 @@ class PullRequestLinkMetadataStore {
     activeThread: NavigationThreadSummary | undefined,
   ) {
     this.threads = threads;
-    const candidates = pullRequestsByKey(threads);
+    const scope = pullRequestLinkScope(threads, activeThread);
+    this.activeThreadKey = scope.activeThreadKey;
+    const candidates = pullRequestsByKey(scope.threads);
     this.prs = new Map([...candidates].map(([key, candidate]) => [key, candidate.pr]));
     this.peerOwnedKeys = new Set([...candidates].filter(([, candidate]) => candidate.peerOwned).map(([key]) => key));
     this.shorthandPrs = pullRequestsByNumberForActiveProject({
-      activeThread,
+      ...scope,
       prsByKey: this.prs,
-      threads,
-    });
+    }).resolved;
   }
 
   hasPeerStatusAuthority(pr: PrSummary): boolean {
@@ -245,7 +247,8 @@ class PullRequestLinkMetadataStore {
     threads: NavigationThreadSummary[],
     activeThread: NavigationThreadSummary | undefined,
   ): void {
-    const candidates = pullRequestsByKey(threads);
+    const scope = pullRequestLinkScope(threads, activeThread);
+    const candidates = pullRequestsByKey(scope.threads);
     const nextPrs = new Map<string, PrSummary>();
     const nextPeerOwnedKeys = new Set<string>();
     const changedKeys = new Set<string>();
@@ -263,17 +266,32 @@ class PullRequestLinkMetadataStore {
       }
     }
 
-    for (const key of this.prs.keys()) {
-      if (!nextPrs.has(key)) {
-        changedKeys.add(key);
+    const { resolved: nextShorthandPrs, ambiguous, repositoryKeys } = pullRequestsByNumberForActiveProject({
+      ...scope,
+      prsByKey: nextPrs,
+    });
+    if (scope.activeThreadKey && scope.activeThreadKey === this.activeThreadKey) {
+      // A mounted shorthand reference already resolved in this repository can
+      // outlive its source row's compact preview or page. Retain its identity
+      // and last status while its row is absent. Check the current scope and
+      // drop the binding if the number becomes ambiguous.
+      for (const number of this.numberListeners.keys()) {
+        if (nextShorthandPrs.has(number) || ambiguous.has(number)) continue;
+        const previous = this.shorthandPrs.get(number);
+        if (!previous || !repositoryKeys.some((key) => pullRequestMatchesRepositoryKey(previous, key))) continue;
+        const key = buildPullRequestStatusKey(previous);
+        const current = nextPrs.get(key);
+        nextShorthandPrs.set(number, current ?? previous);
+        if (!current) {
+          nextPrs.set(key, previous);
+          if (this.peerOwnedKeys.has(key)) nextPeerOwnedKeys.add(key);
+        }
       }
     }
 
-    const nextShorthandPrs = pullRequestsByNumberForActiveProject({
-      activeThread,
-      prsByKey: nextPrs,
-      threads,
-    });
+    for (const key of this.prs.keys()) {
+      if (!nextPrs.has(key)) changedKeys.add(key);
+    }
     const changedNumbers = new Set<number>();
     for (const [number, candidate] of nextShorthandPrs) {
       if (!samePullRequestChip(this.shorthandPrs.get(number), candidate)) {
@@ -286,12 +304,13 @@ class PullRequestLinkMetadataStore {
       }
     }
 
-    const threadsChanged = threads !== this.threads;
+    const threadNumbersChanged = threads !== this.threads || changedKeys.size > 0;
     this.prs = nextPrs;
     this.peerOwnedKeys = nextPeerOwnedKeys;
     this.shorthandPrs = nextShorthandPrs;
+    this.activeThreadKey = scope.activeThreadKey;
     this.threads = threads;
-    if (threadsChanged) {
+    if (threadNumbersChanged) {
       this.threadNumberSnapshots.clear();
     }
     for (const key of changedKeys) {
@@ -306,7 +325,7 @@ class PullRequestLinkMetadataStore {
     }
     // Few cards subscribe, and each re-read returns the same object unless
     // its PR changed, so a broad wake costs no render.
-    if (threadsChanged) {
+    if (threadNumbersChanged) {
       for (const listener of this.threadNumberListeners) {
         listener();
       }
@@ -315,6 +334,25 @@ class PullRequestLinkMetadataStore {
 }
 
 type PullRequestCandidate = { pr: PrSummary; peerOwned: boolean; priority: number };
+
+function pullRequestLinkScope(
+  threads: NavigationThreadSummary[],
+  selected: NavigationThreadSummary | undefined,
+): { activeThread: NavigationThreadSummary | undefined; activeThreadKey?: string; threads: NavigationThreadSummary[] } {
+  if (!selected) return { activeThread: undefined, threads };
+  const activeThreadKey = threadSummaryIdentityKey(selected);
+  const index = threads.findIndex((row) => threadSummaryIdentityKey(row) === activeThreadKey);
+  const selectedRow = threads[index];
+  if (selectedRow === selected) return { activeThread: selected, activeThreadKey, threads };
+  // A status change can re-rank a PR out of the sidebar's compact preview.
+  // Use the selected detail's attachments once its collection is available.
+  const activeThread = selected.prs === undefined && selectedRow?.prs
+    ? { ...selected, prs: selectedRow.prs }
+    : selected;
+  const linkThreads = [...threads];
+  linkThreads[index < 0 ? linkThreads.length : index] = activeThread;
+  return { activeThread, activeThreadKey, threads: linkThreads };
+}
 
 function pullRequestsByKey(
   threads: NavigationThreadSummary[],
@@ -342,29 +380,22 @@ function pullRequestsByNumberForActiveProject(params: {
   activeThread: NavigationThreadSummary | undefined;
   prsByKey: Map<string, PrSummary>;
   threads: NavigationThreadSummary[];
-}): Map<number, PrSummary> {
+}): { resolved: Map<number, PrSummary>; ambiguous: Set<number>; repositoryKeys: string[] } {
+  const resolved = new Map<number, PrSummary>();
+  const ambiguous = new Set<number>();
   if (!params.activeThread) {
-    return new Map();
+    return { resolved, ambiguous, repositoryKeys: [] };
   }
 
-  const selectedThread = params.activeThread;
-  const activeThread = params.threads.find(
-    (thread) => threadSummaryIdentityKey(thread) === threadSummaryIdentityKey(selectedThread),
-  ) ?? selectedThread;
-  const activeKey = threadSummaryIdentityKey(activeThread);
-  const repositoryKeys = threadRepositoryKeys(activeThread);
+  const { activeThread } = params;
+  const repositoryKeys = [...threadRepositoryKeys(activeThread)];
   const candidatesByNumber = new Map<number, Map<string, PrSummary>>();
 
-  // Selected detail can be present before its navigation row is loaded.
-  const candidates = [activeThread, ...params.threads.filter(
-    (thread) => threadSummaryIdentityKey(thread) !== activeKey,
-  )];
-  for (const thread of candidates) {
-    const sameThread = threadSummaryIdentityKey(thread) === activeKey;
+  for (const thread of params.threads) {
     for (const pr of thread.prs ?? []) {
       // An attachment can outlive the directory it came from. Only the active
       // thread's own attachments establish scope without a repository match.
-      if (!sameThread && ![...repositoryKeys].some((key) => pullRequestMatchesRepositoryKey(pr, key))) {
+      if (thread !== activeThread && !repositoryKeys.some((key) => pullRequestMatchesRepositoryKey(pr, key))) {
         continue;
       }
       const key = buildPullRequestStatusKey(pr);
@@ -374,16 +405,17 @@ function pullRequestsByNumberForActiveProject(params: {
     }
   }
 
-  const resolved = new Map<number, PrSummary>();
   for (const [number, candidates] of candidatesByNumber) {
     if (candidates.size === 1) {
       const [pr] = candidates.values();
       if (pr) {
         resolved.set(number, pr);
       }
+    } else {
+      ambiguous.add(number);
     }
   }
-  return resolved;
+  return { resolved, ambiguous, repositoryKeys };
 }
 
 function threadRepositoryKeys(thread: NavigationThreadSummary, projectPath?: string): Set<string> {
