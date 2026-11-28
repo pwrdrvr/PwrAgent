@@ -1453,8 +1453,8 @@ export class TokenMiserStore {
       const changed: TokenMiserObjectMetadata[] = [];
       this.storage.runExclusive(() => {
         for (const id of params.objectIds) {
-          const row = this.readPersistedMetadata(id, params.threadId);
-          if (!row) continue;
+          const row = this.readPersistedMetadata(id);
+          if (!row || row.threadId !== params.threadId) continue;
           const current = mergeReplayUpdate(row, this.replayUpdates.get(id));
           if (row.replayTrackingVersion === 2 && row.replayTrackingStoppedAt === undefined
             && row.createdAt < params.stoppedAt) {

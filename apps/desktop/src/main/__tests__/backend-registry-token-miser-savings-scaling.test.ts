@@ -372,6 +372,47 @@ describe("Token Miser savings scaling", () => {
     expect(counter.reads.pricing).toBe(0);
   });
 
+  it.each([false, true])("recovers a peer-reassigned replay gate for its current thread (compacted=%s)", async (compacted) => {
+    const peer = StateDb.open(tokenMiserStore.stateDb.raw.name);
+    try {
+      const persisted = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, never>(peer);
+      const gate = {
+        ...buildWorkload(1).entries[0]!, objectId: "00000000-0000-4000-8000-000000000001",
+        threadId: "original", replayTrackingVersion: 2 as const, parentRequestsObservedAfterGate: 2,
+      };
+      persisted.writeMetadata(gate);
+      persisted.writeMetadata({ ...gate, threadId: "current" });
+      const at = gate.createdAt + 10;
+      await store.recordThreadCompaction({ compaction: {
+        backend: "codex", threadId: compacted ? "current" : "original", compactionId: "boundary", observedAt: at, updatedAt: at,
+      } });
+      const tokens = { inputTokens: 100, cachedInputTokens: 0, outputTokens: 10, totalTokens: 110 };
+      for (const threadId of ["current", "original"]) {
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "thread/tokenUsage/updated",
+          params: { threadId, turnId: "request", model: PARENT_MODELS[0], tokenUsage: { last: tokens, total: tokens } } } });
+        await tokenMiserStore.flushAll();
+        const row = persisted.readMetadata(gate.objectId)!;
+        expect(row.parentRequestsObservedAfterGate).toBe(compacted ? 2 : 3);
+        expect(row.replayTrackingStoppedAt).toBe(compacted ? at : undefined);
+      }
+    } finally { peer.close(); }
+  });
+
+  it("reads overlay-free native child spend from the summary without projecting usage rows", async () => {
+    const child = gateLine({ index: 0, monitorId: "native-child", inputTokens: 1000 });
+    const thread = { backend: "codex" as const, threadId: child.threadId };
+    const own = { ...parentLine({ id: "own", ...thread, turnId: "turn" }), priceStatus: "priced" as const, pricingBasis: "provider-reported" as const, totalCostMicros: 41 };
+    await store.upsertThreadUsageLine({ line: own });
+    for (let i = 0; i < 8; i++) {
+      await store.upsertThreadUsageLine({ line: { ...child, usageLineId: "child-" + i, provider: "anthropic", pricingBasis: "provider-reported" } });
+    }
+    const reads = countTurnPricingReads(stateDb);
+    const spend = { ...thread, liveLines: [], localModelIds: [] };
+    expect(await store.readThreadSpendMicros(spend)).toBe(41);
+    expect(await store.readThreadSpendMicros({ ...spend, thresholdMicros: 41 })).toBe(41);
+    expect(reads.usageRows).toBe(0);
+  });
+
   it("completes a cold owner turn without rebuilding history and loads only gates whose replay advances", async () => {
     const thread = { backend: "codex", threadId: THREAD_ID } as const;
     const model = PARENT_MODELS[0];
@@ -416,6 +457,9 @@ describe("Token Miser savings scaling", () => {
     const summarySql = vi.mocked(stateDb.raw.prepare).mock.calls.find(([sql]) => sql.includes("AS direct_ceiling"))![0];
     const plan = stateDb.raw.prepare("EXPLAIN QUERY PLAN " + summarySql).all(thread) as { detail: string }[];
     expect(plan.map(row => row.detail).join("\n")).not.toMatch(/TEMP B-TREE/);
+    const spendLookups = plan.filter(row => row.detail.includes("idx_thread_usage_lines_spend_"));
+    expect(spendLookups).toHaveLength(4);
+    for (const { detail } of spendLookups) expect(detail).toContain("<expr>=?");
     expect(replayReads).toMatchObject({ metadataRows: 2, metadataKeys: 2, payloadQueries: 1 });
     await tokenMiserStore.flushAll();
     for (const [i, entry] of entries.entries()) {
@@ -481,7 +525,7 @@ describe("Token Miser savings scaling", () => {
   it("counts a native child's charge summarized only on its parent before ruling out a spend alert", async () => {
     const hidden = { ...gateLine({ index: 0, inputTokens: 1000, monitorId: "parent-charge" }), totalCostMicros: 12_000_000 };
     const thread = { backend: "codex" as const, threadId: hidden.threadId };
-    // Mix a numeric gap ceiling with the child exception in the same index.
+    // Mix a gap candidate with a hidden child charge under the same thread.
     // An earlier configured provider rate is unknown, so the gap adds no dollars.
     const own: ThreadUsageLineRecord = {
       ...parentLine({ ...thread, id: "own", turnId: "own", model: GATE_MODEL }),

@@ -149,12 +149,12 @@ export class SqliteTokenMiserStorage<
   }
 
   readOpenReplayPage(threadId: string, afterId: string | undefined, limit: number): TokenMiserObjectRecord[] {
-    // The partial index supplies identity and the current payload timestamp,
-    // including after another owner corrects the original insert's timestamp.
-    return prepareSqliteRead(this.db, `SELECT object_id AS objectId, thread_id AS threadId,
+    // Replay membership and compaction follow the current payload. The stable
+    // object ID still advances the page cursor after a peer reassigns a gate.
+    return prepareSqliteRead(this.db, `SELECT object_id AS objectId, json_extract(payload, '$.threadId') AS threadId,
         json_extract(payload, '$.createdAt') AS createdAt
       FROM token_miser_objects INDEXED BY idx_token_miser_open_replay
-      WHERE thread_id = ? AND object_id > ? AND ` + OPEN_REPLAY_GATE + " ORDER BY object_id LIMIT ?").all(threadId, afterId ?? "", limit) as TokenMiserObjectRecord[];
+      WHERE json_extract(payload, '$.threadId') = ? AND object_id > ? AND ` + OPEN_REPLAY_GATE + " ORDER BY object_id LIMIT ?").all(threadId, afterId ?? "", limit) as TokenMiserObjectRecord[];
   }
 
   writeMetadata(metadata: Metadata): void {

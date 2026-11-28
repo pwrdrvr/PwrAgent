@@ -6,10 +6,58 @@ import { CURRENT_STATE_DB_USER_VERSION as SHARED_STATE_DB_USER_VERSION, StateDb 
 import { StateDb as DesktopStateDb } from "../storage/state-db";
 import { StateDb, CURRENT_STATE_DB_USER_VERSION } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { createTempStateDb, openFreshStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 const oraclePath = path.join(import.meta.dirname, "fixtures/shared-sqlite-schema-oracle.json");
 const hosts = [DesktopStateDb, SharedStateDb, StateDb];
+
+it("replaces both legacy spend indexes atomically while a previous owner keeps its prepared reads", async () => {
+  const fixture = createTempStateDb("spend-index-upgrade-");
+  const old = StateDb.open(fixture.dbPath);
+  const fresh = StateDb.open(":memory:");
+  try {
+    const legacyPredicate = "status != 'superseded' AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL";
+    const definitions = [["thread", "thread_id", legacyPredicate], ["parent", "parent_thread_id", "parent_thread_id IS NOT NULL AND " + legacyPredicate]];
+    // Recreate main's schema, then keep its INDEXED BY statements alive across convergence.
+    old.raw.exec("DROP INDEX IF EXISTS idx_thread_usage_gap_ceiling_thread; DROP INDEX IF EXISTS idx_thread_usage_gap_ceiling_parent;");
+    const previous = definitions.map(([suffix, column, predicate]) => {
+      const name = "idx_thread_usage_lines_spend_" + suffix;
+      old.raw.exec("DROP INDEX IF EXISTS " + name);
+      old.raw.exec("CREATE INDEX " + name + " ON thread_usage_lines(backend, " + column + ") WHERE " + predicate);
+      return old.raw.prepare("SELECT 1 FROM thread_usage_lines INDEXED BY " + name + " WHERE backend=? AND " + column + "=? AND " + predicate + " LIMIT 1");
+    });
+    await new SqliteOverlayStore(old).upsertThreadUsageLine({ line: {
+      usageLineId: "shared", backend: "codex", threadId: "child", parentThreadId: "parent",
+      source: "live", scope: "turn", status: "finalized", createdAt: 10, model: "gpt-5.5",
+      inputTokens: 10, cachedInputTokens: 0, uncachedInputTokens: 10, outputTokens: 1,
+      reasoningOutputTokens: 0, totalTokens: 11, cumulativeOutputTokens: 1, provider: "openai",
+      currency: "USD", priceStatus: "priced", totalCostMicros: 1, outputCostMicros: 0,
+      uncachedInputCostMicros: 1, cachedInputCostMicros: 0,
+    } });
+    const checkLegacyReads = () => {
+      expect(previous[0]!.pluck().get("codex", "child")).toBe(1);
+      expect(previous[1]!.pluck().get("codex", "parent")).toBe(1);
+    };
+    // A usage write must maintain the same number of index entries before
+    // and after upgrading. The fixtures contain one row in each spend index.
+    const indexInserts = (db: StateDb) => (db.raw.prepare(
+      "EXPLAIN UPDATE thread_usage_lines SET cumulative_output_tokens = 2 WHERE usage_line_id = 'shared'",
+    ).all() as { opcode: string }[]).filter(row => row.opcode === "IdxInsert").length;
+    const originalIndexInserts = indexInserts(old);
+    old.raw.exec("BEGIN");
+    checkLegacyReads();
+    const upgraded = StateDb.open(fixture.dbPath);
+    try {
+      const indexes = (db: StateDb) => db.raw.prepare("SELECT name, sql FROM sqlite_schema WHERE type='index' AND tbl_name='thread_usage_lines' ORDER BY name").all();
+      expect(indexes(upgraded)).toEqual(indexes(fresh));
+      expect(indexInserts(upgraded)).toBe(originalIndexInserts);
+      checkLegacyReads();
+      old.raw.exec("COMMIT");
+      checkLegacyReads();
+    } finally { upgraded.close(); }
+  } finally { fresh.close(); old.close(); removeTempStateDbDir(fixture.tempDir); }
+});
 
 function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersion: number } {
   const rows = db.raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all() as Array<{ name: string; tbl_name: string; sql: string | null }>;
@@ -57,8 +105,6 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
     && row.name !== "idx_thread_usage_lines_unpriced_thread"
     && row.name !== "idx_thread_usage_lines_unpriced_parent"
     && row.name !== "idx_token_miser_open_replay"
-    && row.name !== "idx_thread_usage_gap_ceiling_thread"
-    && row.name !== "idx_thread_usage_gap_ceiling_parent"
     && row.name !== "idx_thread_usage_lines_spend_thread"
     && row.name !== "idx_thread_usage_lines_spend_parent"
     && row.name !== "idx_thread_usage_turns_pending_acp_compaction"
