@@ -9286,7 +9286,7 @@ export class DesktopBackendRegistry {
       const collapsed = overlay?.directoryThreadsCollapsed ?? directory?.directoryThreadsCollapsed;
       if (!collapsed) {
         if (!directory?.hasPinnedTopLevelThread) return {};
-        // With only pins left, Directory threads has no disclosure to close.
+        // With only pins left, Unpinned has no disclosure to close.
         // Treat that empty section as closed too. A refresh may already include
         // this creation; it must not count as pre-existing unpinned overflow.
         for (const row of directory.rowsByThreadKey.values()) {

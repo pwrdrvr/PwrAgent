@@ -75,6 +75,8 @@ export function selectedThreadDockPlacement(
 // A project's header sits 2px under the one above it, so the next header
 // is this close to the list's top at the moment the last one leaves.
 const STUCK_SLACK_PX = 4;
+// Chromium snaps a stuck box to a layout unit, a fraction short of its edge.
+const STUCK_EDGE_PX = 0.5;
 
 function firstStuckExtent<T>(
   nodes: readonly T[],
@@ -119,4 +121,35 @@ export function stuckBandTop<T>(
   const top = header ? listTop + (header.bottom - header.top) : listTop;
   const divider = firstStuckExtent(dividers, top, read);
   return divider ? divider.bottom : top;
+}
+
+/**
+ * Where the band ends: above the divider stuck to the bottom of the list.
+ * Each project's divider also sticks to the bottom while its pinned rows run
+ * past it, so the section that holds the rest stays one click away. Only the
+ * project crossing the list's bottom edge can hold a divider there, and the
+ * dividers are in document order, so the first one that reaches the edge is
+ * the only one that can cover it.
+ */
+export function stuckBandBottom<T>(
+  listBottom: number,
+  dividers: readonly T[],
+  read: (node: T) => DockExtent,
+): number {
+  let first = 0;
+  let end = dividers.length;
+  let candidate: DockExtent | undefined;
+  while (first < end) {
+    const middle = first + Math.floor((end - first) / 2);
+    const extent = read(dividers[middle]!);
+    if (extent.bottom < listBottom - STUCK_EDGE_PX) {
+      first = middle + 1;
+    } else {
+      end = middle;
+      candidate = extent;
+    }
+  }
+  return candidate && candidate.bottom > candidate.top && candidate.top < listBottom
+    ? candidate.top
+    : listBottom;
 }

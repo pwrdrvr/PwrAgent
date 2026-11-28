@@ -22,7 +22,8 @@ const REGION = SIDEBAR_REGION;
 // Directory and Pinned group headers stick to the top of the list and
 // cover the rows that scroll under them.
 const STICKY_HEADER = ".directory-row__header";
-// A project's Directory threads divider sticks just under its header.
+// A project's Unpinned divider sticks just under its header, and to the
+// bottom of the list while the project's pinned rows run past it.
 const STICKY_DIVIDER = ".directory-row__thread-divider";
 // Chromium snaps scroll offsets to device pixels, so a row flush with an
 // edge can measure a fraction past it.
@@ -70,22 +71,26 @@ export function revealThreadRowAtNearestEdge(row: HTMLElement): void {
   if (isInFullView(placement)) {
     return;
   }
-  const { scroller, rowBox, stuckTop, view } = placement;
+  const { scroller, rowBox, stuckTop, stuckBottom } = placement;
   const delta = rowBox.top < placement.visibleTop
     ? rowBox.top - stuckTop
     // A row taller than the list keeps its top in view.
-    : Math.min(rowBox.bottom - view.bottom, rowBox.top - stuckTop);
+    : Math.min(rowBox.bottom - stuckBottom, rowBox.top - stuckTop);
   scroller.scrollBy({ top: delta, behavior: "auto" });
 }
 
 type Placement = {
   scroller: HTMLElement;
-  view: DOMRect;
   rowBox: DOMRect;
   // The top of what the operator can see, below the header if it covers it.
   visibleTop: number;
   // Where the header's bottom sits once it is stuck to the top of the list.
   stuckTop: number;
+  // The bottom of what the operator can see, above the Unpinned divider
+  // when it is stuck to the bottom of the list over the row.
+  visibleBottom: number;
+  // Where that divider's top sits while it is stuck to the bottom.
+  stuckBottom: number;
 };
 
 function measure(row: HTMLElement): Placement | undefined {
@@ -109,26 +114,34 @@ function measure(row: HTMLElement): Placement | undefined {
     visibleTop = Math.max(visibleTop, headerBox.bottom);
     stuckTop = view.top + headerBox.height;
   }
-  const divider = stickyDividerAbove(row);
+  // One subtree search finds the project's divider; the row sits on one
+  // side of it.
+  const projectDivider = dividerOf(row);
+  const dividerFollows = projectDivider !== undefined
+    && (projectDivider.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  const divider = dividerFollows ? projectDivider : undefined;
   if (divider) {
     const dividerBox = divider.getBoundingClientRect();
     visibleTop = Math.max(visibleTop, dividerBox.bottom);
     stuckTop += dividerBox.height;
   }
-  return { scroller, view, rowBox, visibleTop, stuckTop };
+  let visibleBottom = view.bottom;
+  let stuckBottom = view.bottom;
+  const below = dividerFollows ? undefined : projectDivider;
+  if (below) {
+    const belowBox = below.getBoundingClientRect();
+    visibleBottom = Math.min(visibleBottom, belowBox.top);
+    stuckBottom -= belowBox.height;
+  }
+  return { scroller, rowBox, visibleTop, stuckTop, visibleBottom, stuckBottom };
 }
 
-// A project's unpinned rows follow its Directory threads divider, which
-// sticks under the header and covers them too. Pinned rows sit above it.
-function stickyDividerAbove(row: HTMLElement): HTMLElement | undefined {
-  const divider = row.closest(".directory-row__threads")
-    ?.querySelector<HTMLElement>(STICKY_DIVIDER);
-  if (!divider) {
-    return undefined;
-  }
-  return divider.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING
-    ? divider
-    : undefined;
+// A project's unpinned rows follow its Unpinned divider, which sticks under
+// the header and covers them too. Pinned rows sit above it, and it sticks to
+// the bottom of the list over them while they run past.
+function dividerOf(row: HTMLElement): HTMLElement | undefined {
+  return row.closest(".directory-row__threads")
+    ?.querySelector<HTMLElement>(STICKY_DIVIDER) ?? undefined;
 }
 
 // The region clips the lens; the lane inside it (`.sidebar-list--dense`,
@@ -150,15 +163,15 @@ export function sidebarLaneOf(row: HTMLElement): HTMLElement | undefined {
   return undefined;
 }
 
-function isInFullView({ rowBox, view, visibleTop }: Placement): boolean {
+function isInFullView({ rowBox, visibleTop, visibleBottom }: Placement): boolean {
   const fitsInside =
     rowBox.top >= visibleTop - EDGE_TOLERANCE_PX
-    && rowBox.bottom <= view.bottom + EDGE_TOLERANCE_PX;
+    && rowBox.bottom <= visibleBottom + EDGE_TOLERANCE_PX;
   // A row taller than the list can never fit. When it already covers the
   // whole visible area, scrolling it would only nudge it.
   const coversView =
     rowBox.top <= visibleTop + EDGE_TOLERANCE_PX
-    && rowBox.bottom >= view.bottom - EDGE_TOLERANCE_PX;
+    && rowBox.bottom >= visibleBottom - EDGE_TOLERANCE_PX;
   return fitsInside || coversView;
 }
 

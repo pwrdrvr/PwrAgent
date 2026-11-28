@@ -97,7 +97,7 @@ export function buildDirectoryThreadRenderModel(params: {
   const directoryThreadsCollapsed =
     directoryPinnedThreads.length > 0
     && params.directory.directoryThreadsCollapsed === true;
-  // A sticky Directory threads collapse only renders pins. Keep its large
+  // A sticky Unpinned collapse only renders pins. Keep its large
   // hidden population as a count instead of allocating and slicing three
   // arrays that no JSX will consume.
   const unpinnedThreads = directoryThreadsCollapsed

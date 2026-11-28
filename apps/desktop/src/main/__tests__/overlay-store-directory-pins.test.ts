@@ -65,7 +65,7 @@ describe("SqliteOverlayStore — directory pins", () => {
     ).resolves.toMatchObject({ pinnedRank: "2048" });
   });
 
-  it("persists the Directory threads disclosure without erasing pin state", async () => {
+  it("persists the Unpinned disclosure without erasing pin state", async () => {
     const directoryKey = "directory:/Users/me/code/PwrAgent";
     await store.setDirectoryPin({
       directoryKey,

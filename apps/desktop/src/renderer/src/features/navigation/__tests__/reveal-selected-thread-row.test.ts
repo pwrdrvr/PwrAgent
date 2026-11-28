@@ -191,10 +191,11 @@ describe("revealThreadRowAtNearestEdge", () => {
   });
 });
 
-// A project's Directory threads divider sticks under its header, so the
-// header and divider together cover the project's unpinned rows: 30px of
-// header at y=100, then 24px of divider. Pinned rows come before the divider
-// in the list, so it never covers them.
+// A project's Unpinned divider sticks under its header, so the header and
+// divider together cover the project's unpinned rows: 30px of header at
+// y=100, then 24px of divider. Pinned rows come before the divider in the
+// list, so at the top it never covers them; at the bottom (476 to 500) it
+// covers the pinned rows running past it.
 function mountDirectoryThreads(
   rowTop: number,
   options: { pinned?: boolean; dividerTop?: number } = {},
@@ -229,7 +230,7 @@ function mountDirectoryThreads(
   lane.scrollBy = scrollBy as typeof lane.scrollBy;
 }
 
-describe("the sticky Directory threads divider", () => {
+describe("the sticky Unpinned divider", () => {
   it("centers an unpinned row hidden under the stuck divider", () => {
     // Below the header's bottom (130), so the header alone does not cover
     // it, but its top 14px are under the divider.
@@ -252,6 +253,34 @@ describe("the sticky Directory threads divider", () => {
   it("leaves a pinned row above the divider to the header alone", () => {
     // The divider is further down, in its place below the pins.
     mountDirectoryThreads(140, { pinned: true, dividerTop: 300 });
+
+    revealSelectedSidebarThreadRow();
+    revealThreadRowAtNearestEdge(selectedRow());
+
+    expect(scroll).not.toHaveBeenCalled();
+    expect(scrollBy).not.toHaveBeenCalled();
+  });
+
+  it("centers a pinned row hidden behind the divider stuck to the bottom", () => {
+    // Inside the lane (bottom 500), but its bottom 14px are behind the rail.
+    mountDirectoryThreads(430, { pinned: true, dividerTop: 476 });
+
+    revealSelectedSidebarThreadRow();
+
+    expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center" }));
+  });
+
+  it("brings a pinned row from below to just above the divider stuck to the bottom", () => {
+    mountDirectoryThreads(470, { pinned: true, dividerTop: 476 });
+
+    revealThreadRowAtNearestEdge(selectedRow());
+
+    // 530 - (500 - 24 divider).
+    expect(scrollBy).toHaveBeenCalledWith({ top: 54, behavior: "auto" });
+  });
+
+  it("leaves a pinned row that clears the stuck divider where it is", () => {
+    mountDirectoryThreads(410, { pinned: true, dividerTop: 476 });
 
     revealSelectedSidebarThreadRow();
     revealThreadRowAtNearestEdge(selectedRow());

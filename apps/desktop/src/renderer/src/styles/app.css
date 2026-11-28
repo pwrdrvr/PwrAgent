@@ -11016,8 +11016,17 @@ button.stack-display__thread,
 }
 
 .directory-list {
+  /* The lane's end pad, from `.sidebar-list`. A sticky box stops this far
+     above the lane's bottom edge, so the Unpinned divider that sticks
+     there offsets its inset by it and sits flush on the edge. */
+  --directory-list-end-pad: 16px;
   gap: 0;
   padding-top: 0;
+  padding-bottom: var(--directory-list-end-pad);
+  /* Tab into a pinned row at the bottom edge and the browser scrolls it
+     only as far as the edge, behind that stuck divider (its 24px
+     min-height), focus ring and all. Native focus scrolling honours this. */
+  scroll-padding-bottom: 24px;
 }
 
 .directory-row {
@@ -11054,7 +11063,7 @@ button.stack-display__thread,
   display: grid;
   position: sticky;
   top: 0;
-  /* One above the Directory threads divider, which sticks under it and
+  /* One above the Unpinned divider, which sticks under it and
      slides beneath it as its list scrolls out. */
   z-index: 6;
   /* One column: the launchpad cluster no longer owns a lane outside the
@@ -11679,7 +11688,7 @@ button.stack-display__thread,
 
 .directory-row__threads-slot {
   /* `role="listitem"` box around the children of `.directory-row__threads`
-     that are not thread rows: the "Directory threads" disclosure, "Show
+     that are not thread rows: the "Unpinned" disclosure, "Show
      more", and a row's sub-thread list. That container is a `role="list"`
      (its rows carry `role="listitem"` and need it), and a list owns only
      listitem — so a bare <button> or a nested `role="list"` there fails
@@ -11847,14 +11856,23 @@ button.stack-display__thread,
   min-height: 24px;
   /* Sticks under its project's header while the project's unpinned rows
      scroll past, so with a long list open the disclosure that closes it is
-     still one click away instead of 150 rows up. Its containing block is
+     still one click away instead of 150 rows up. It also sticks to the
+     bottom of the list while the project's pinned rows run past it, so in
+     a project with hundreds of pins the Unpinned section is one click
+     away from anywhere among them, open or closed. Its containing block is
      `.directory-row__threads` (the slot around it is `display: contents`),
      so it lets go with the last row and slides under the header (z 6).
-     Above the rows' own layers (the sub-thread toggle is z 4). The offset
-     is the header's measured height, published on the section by
-     DirectoriesList; 24px is the summary's floor, for the first frame. */
+     At the bottom it rises no higher than the start of that list, so a
+     project scrolling in from below shows its header, then the divider,
+     and its pins come out from behind the divider as they rise. Above
+     the rows' own layers (the sub-thread toggle is z 4). The top offset is
+     the header's measured height, published on the section by
+     DirectoriesList; 24px is the summary's floor, for the first frame.
+     The selected thread's bottom dock sits above the stuck divider
+     (`stuckBandBottom`). */
   position: sticky;
   top: var(--directory-row-header-height);
+  bottom: calc(-1 * var(--directory-list-end-pad, 0px));
   z-index: 5;
   /* Opaque and as wide as the header: out to the section edges over the
      lane's 8px insets (`.directory-row__threads`), so a selected row's

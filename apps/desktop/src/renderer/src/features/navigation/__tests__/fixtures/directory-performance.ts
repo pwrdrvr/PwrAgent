@@ -14,7 +14,7 @@ export type LargeDirectoryFixture = {
  * Reproduces the operator shape that exposed the renderer cost: a small number
  * of project headers, each backed by a three-digit thread population. Callers
  * choose whether each project has a pinned row so they can exercise both the
- * sticky "Directory threads" disclosure and the ordinary Show more cap.
+ * sticky "Unpinned" disclosure and the ordinary Show more cap.
  */
 export function buildLargeDirectoryFixture(options: {
   directoryCount?: number;

@@ -3,7 +3,7 @@
 // `ThreadRow` renders `role="listitem"`, so its container has to be a
 // `role="list"` or axe reports `aria-required-parent` (critical) on every row.
 // The catch is the other direction: a list owns ONLY listitem, so every other
-// child of that container — the "Directory threads" disclosure, "Show more",
+// child of that container — the "Unpinned" disclosure, "Show more",
 // and a row's sub-thread list — has to be wrapped in one, or the fix trades
 // `aria-required-parent` for `aria-required-children`.
 //
@@ -117,7 +117,7 @@ describe("Directories lens thread list ARIA", () => {
     // wrapper. Names come from the fixture: the unpinned lane is 12 threads
     // minus the one re-parented as a sub-thread, so 11 against a cap of 10.
     for (const name of [
-      "Hide directory threads for Project 1",
+      "Hide unpinned threads for Project 1",
     ]) {
       const control = within(threads).getByRole("button", { name });
       expect(control.parentElement).toHaveAttribute("role", "listitem");

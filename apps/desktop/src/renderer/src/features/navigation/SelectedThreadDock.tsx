@@ -15,6 +15,7 @@ import { ThreadRowStatus, type ThreadRowStatusKind } from "./ThreadRowStatus";
 import { centerSidebarThreadRow } from "./reveal-selected-thread-row";
 import {
   selectedThreadDockPlacement,
+  stuckBandBottom,
   stuckBandTop,
   type DockEdge,
   type DockExtent,
@@ -31,7 +32,7 @@ import {
 import { formatRelativeTime } from "./thread-time";
 
 // What sticks to the top of a lane and covers the rows under it: a project
-// or Pinned header, and a project's Directory threads divider below it.
+// or Pinned header, and a project's Unpinned divider below it.
 const STICKY_HEADER = ".directory-row__header";
 const STICKY_DIVIDER = ".directory-row__thread-divider";
 // The project header and divider fit in this strip at supported densities.
@@ -52,7 +53,7 @@ type DockState = {
   edge: DockEdge;
   /** From the region's top to the list's top edge, for the top dock. */
   top: number;
-  /** From the list's bottom edge to the region's, for the bottom dock. */
+  /** From the band's bottom edge (above a stuck Unpinned divider) to the region's, for the bottom dock. */
   bottom: number;
   /** The lane's reserved scrollbar gutter, which rows stay clear of. */
   gutter: number;
@@ -153,7 +154,7 @@ function isProjectSection(element: Element): boolean {
 
 // A closed project that holds the open thread draws its header selected. An
 // open one shows nothing for a thread it has not drawn a row for: one past
-// the loaded page, or under a collapsed Directory threads divider.
+// the loaded page, or under a collapsed Unpinned divider.
 function speaksForThread(holder: Element): boolean {
   return !isProjectSection(holder)
     || holder.querySelector(".directory-row__summary[aria-expanded='false']") !== null;
@@ -166,6 +167,13 @@ type DockElements = {
   holders?: HTMLElement[];
   sticky?: { headers: Element[]; dividers: Element[] };
 };
+
+function stickyMembers(lane: HTMLElement, elements: DockElements): NonNullable<DockElements["sticky"]> {
+  return elements.sticky ??= {
+    headers: [...lane.querySelectorAll(STICKY_HEADER)],
+    dividers: [...lane.querySelectorAll(STICKY_DIVIDER)],
+  };
+}
 
 /**
  * Cache the list's members, whose identity can survive many commits. Read
@@ -219,20 +227,25 @@ function measure(
     && !(view.height > STICKY_REACH_PX && extents.every((extent) => extent.bottom <= listTop))) {
     // Resolve sticky boxes without the reserve they acquire from the dock.
     // Otherwise a row at the very start could stay covered forever.
-    if (!elements.sticky) {
-      elements.sticky = {
-        headers: [...lane.querySelectorAll(STICKY_HEADER)],
-        dividers: [...lane.querySelectorAll(STICKY_DIVIDER)],
-      };
-    }
+    const sticky = stickyMembers(lane, elements);
     // Computed insets use CSS pixels, while the client rectangles include
     // the effective CSS zoom of the lane.
     const zoom = lane.currentCSSZoom ?? 1;
     const stickyEdge = reserve > 0 ? listTop + lane.clientTop * zoom : listTop;
-    bandTop = stuckBandTop(listTop, elements.sticky.headers, elements.sticky.dividers,
+    bandTop = stuckBandTop(listTop, sticky.headers, sticky.dividers,
       (element) => unreservedStickyExtent(element, stickyEdge, reserve * zoom, zoom));
   }
-  const band = { top: bandTop, bottom: view.bottom };
+  // The Unpinned divider of the project crossing the bottom edge sticks
+  // there and covers the pinned rows running under it. Read it only when a
+  // target is near that edge, for the same reasons as the top.
+  const listBottom = view.bottom;
+  let bandBottom: number | undefined;
+  if (!(held[0] && isProjectSection(held[0]))
+    && extents.some((extent) => extent.bottom > listBottom - STICKY_REACH_PX)
+    && !(view.height > STICKY_REACH_PX && extents.every((extent) => extent.top >= listBottom))) {
+    bandBottom = stuckBandBottom(listBottom, stickyMembers(lane, elements).dividers, extentOf);
+  }
+  const band = { top: bandTop, bottom: bandBottom ?? listBottom };
   const placement = selectedThreadDockPlacement(extents, band);
   const holder = placement ? held[placement.index] : held[0];
   // A row in view speaks for itself, and so does what holds a hidden row: a
@@ -249,6 +262,11 @@ function measure(
     return undefined;
   }
   const edge = placement?.edge ?? "bottom";
+  // The bottom dock sits above that divider, so the control that opens and
+  // closes the rest of the project stays in reach.
+  const dockBottom = edge === "bottom"
+    ? bandBottom ?? stuckBandBottom(listBottom, stickyMembers(lane, elements).dividers, extentOf)
+    : listBottom;
   const row = placement && held.length === 0 ? rows[placement.index] : undefined;
   const regionBox = region.getBoundingClientRect();
   return {
@@ -257,9 +275,9 @@ function measure(
       edge,
       // The top dock sits at the list's own top edge, above every stuck
       // header. Under them it moved whenever one of them did: down as a
-      // Directory threads divider stuck, then up a pixel at a time as it left.
+      // Unpinned divider stuck, then up a pixel at a time as it left.
       top: view.top - regionBox.top,
-      bottom: regionBox.bottom - view.bottom,
+      bottom: regionBox.bottom - dockBottom,
       gutter: lane.offsetWidth - lane.clientWidth,
       directoryKey: (row ?? holder)?.closest<HTMLElement>("[data-thread-directory-key]")
         ?.dataset.threadDirectoryKey

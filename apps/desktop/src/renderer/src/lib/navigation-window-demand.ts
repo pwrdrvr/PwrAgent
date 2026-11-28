@@ -178,7 +178,7 @@ export function visibleDisclosedNavigationParents(params: {
     .map((id) => ({ id, directoryKey: id.startsWith("directory-pins:") ? id.slice("directory-pins:".length)
       : id.startsWith("directory:") ? id.slice("directory:".length) : undefined }));
   // Directory presentation admits an exact selected pin outside its page,
-  // and retains an unpinned selected root while Directory threads is closed.
+  // and retains an unpinned selected root while Unpinned is closed.
   // Both roots need child demand even though no collection page contains them.
   // An open unpinned collection still owns its visible membership.
   const selected = params.selectionAncestry !== undefined ? params.selectionAncestry

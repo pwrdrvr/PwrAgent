@@ -1576,7 +1576,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         // Pins are desktop-local overlay state, not `thread/list` data, so no
         // fixture can produce them and the only UI path is a native context
         // menu. Without a pinned lane the directory renders undivided and the
-        // "Directory threads" disclosure never mounts — the disclosure is what
+        // "Unpinned" disclosure never mounts — the disclosure is what
         // needs a pin, not the pin-drop boundary, which mounts off
         // `onReorderThreadPins && directoryUnpinnedThreadCount > 0` and does
         // not read the pinned count at all. Two rather than one so the lane
@@ -1720,7 +1720,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           ).toHaveCount(2);
           await expect(
             threads.getByRole("button", {
-              name: "Hide directory threads for PwrAgent",
+              name: "Hide unpinned threads for PwrAgent",
               exact: true,
             }),
           ).toBeVisible();

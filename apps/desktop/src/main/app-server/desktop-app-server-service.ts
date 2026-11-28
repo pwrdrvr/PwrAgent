@@ -8386,7 +8386,7 @@ class DesktopAppServerService {
   /**
    * Mirror of the created-thread visibility auto-pin (backend-registry):
    * when the freshly pinned remote thread's home directory group has its
-   * Directory Threads section collapsed and the pinned section is in use,
+   * Unpinned section collapsed and the pinned section is in use,
    * the row would be invisible — give its top-level row a VIEWER-owned rank
    * so it surfaces at the top of Pins. The top-level row is the companion
    * parent when one is pinned; otherwise the thread itself, since a child

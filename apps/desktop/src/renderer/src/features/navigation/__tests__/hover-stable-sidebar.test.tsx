@@ -133,7 +133,7 @@ function renderSidebar(params: {
 }
 
 // `listitem` is no longer a synonym for "thread row": the Directories lane's
-// "Directory threads" disclosure, "Show more", a row's sub-thread list, and the
+// "Unpinned" disclosure, "Show more", a row's sub-thread list, and the
 // pin-drop boundary are each wrapped in one, so they are valid children of the
 // list its rows need as their parent. Without filtering, every ordering
 // assertion below picks a control up as an untitled row.
@@ -706,7 +706,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
   });
 
-  it("shows an unpinned selected row with a pin action in collapsed Directory threads", async () => {
+  it("shows an unpinned selected row with a pin action in a collapsed Unpinned section", async () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
     const pinnedBravo = { ...bravo, pinnedRank: "2048" };
@@ -931,7 +931,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     ]);
   });
 
-  it("shows a newly created pinned thread while Directory threads are collapsed", async () => {
+  it("shows a newly created pinned thread while Unpinned is collapsed", async () => {
     const onOpenLaunchpad = vi.fn(async () => undefined);
     const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
     const collapsedDirectory = {

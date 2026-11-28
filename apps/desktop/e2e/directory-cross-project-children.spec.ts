@@ -73,10 +73,10 @@ test("keeps a peer parent's cross-project audit in its own directory", async ({ 
     }
     // The collapsed population includes descendants whose child pages have
     // never been opened, while the mounted peer pin stays above the divider.
-    const hideDirectoryThreads = app.window.getByRole("button", { name: "Hide directory threads for HarborGit", exact: true });
+    const hideDirectoryThreads = app.window.getByRole("button", { name: "Hide unpinned threads for HarborGit", exact: true });
     await expect(hideDirectoryThreads).toBeVisible();
     await hideDirectoryThreads.click();
-    const showDirectoryThreads = app.window.getByRole("button", { name: "Show directory threads for HarborGit", exact: true });
+    const showDirectoryThreads = app.window.getByRole("button", { name: "Show unpinned threads for HarborGit", exact: true });
     await expect(app.window.getByRole("button", { name: /^Repository property tests/ })).toBeVisible();
     await expect(app.window.getByRole("button", { name: /^Preserve scanned bytes/ }).first()).toBeVisible();
     await app.window.evaluate(async () => { await document.fonts.ready; });

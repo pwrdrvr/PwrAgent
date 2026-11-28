@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DOCK_COVER_PX,
   selectedThreadDockPlacement,
+  stuckBandBottom,
   stuckBandTop,
   type DockExtent,
 } from "../selected-thread-dock";
@@ -228,6 +229,119 @@ describe("stuckBandTop", () => {
         expect(probes).toBeLessThanOrEqual(
           Math.ceil(Math.log2(headers.length + 1)) + Math.ceil(Math.log2(dividers.length + 1)),
         );
+      },
+    ));
+  });
+});
+
+/*
+ * The bottom of the band: the Unpinned divider of the project crossing the
+ * list's bottom edge sticks there while that project's pinned rows run past
+ * it, and the rows behind it are as hidden as rows under a stuck header.
+ *
+ * The layout below resolves each divider the way Chromium resolves
+ * `position: sticky; top: <header>; bottom: 0` inside its project's thread
+ * list, and the oracle scans pixel rows up from the list's bottom edge for
+ * the run a divider covers. Neither shares the binary search.
+ */
+describe("stuckBandBottom", () => {
+  const PAD = 2;
+  const DIVIDER = 24;
+  const section = fc.record({
+    header: fc.integer({ min: 24, max: 52 }),
+    pinned: fc.integer({ min: 0, max: 600 }),
+    unpinned: fc.integer({ min: 0, max: 600 }),
+  });
+
+  function layOut(
+    sections: readonly { header: number; pinned: number; unpinned: number }[],
+    listTop: number,
+    listBottom: number,
+    offset: number,
+  ): DockExtent[] {
+    const dividers: DockExtent[] = [];
+    let cursor = listTop - offset;
+    for (const { header, pinned, unpinned } of sections) {
+      const listStart = cursor + PAD + header;
+      // A project shows the divider only when it has pinned rows above it.
+      const hasDivider = pinned > 0;
+      const listEnd = listStart + pinned + (hasDivider ? 4 + DIVIDER : 0) + unpinned;
+      if (hasDivider) {
+        const natural = listStart + pinned + 4;
+        let top = natural;
+        // Bottom inset: shift up to the list's bottom, never above the list start.
+        if (natural + DIVIDER > listBottom) top = Math.max(listBottom - DIVIDER, listStart);
+        // Top inset wins: under the header, never past the list's end.
+        top = Math.max(top, Math.min(listTop + header, listEnd - DIVIDER));
+        dividers.push({ top, bottom: top + DIVIDER });
+      }
+      cursor = listEnd;
+    }
+    return dividers;
+  }
+
+  function coveredFrom(listBottom: number, dividers: readonly DockExtent[]): number {
+    let edge = listBottom;
+    while (dividers.some((divider) => divider.top <= edge - 1 && divider.bottom >= edge)) {
+      edge -= 1;
+    }
+    return edge;
+  }
+
+  it("ends where a pixel scan finds the divider covering the bottom edge, in logarithmic probes", () => {
+    fc.assert(fc.property(
+      fc.array(section, { minLength: 1, maxLength: 40 }),
+      fc.integer({ min: 0, max: 40 }),
+      fc.integer({ min: 80, max: 900 }),
+      fc.integer({ min: 0, max: 20_000 }),
+      (sections, listTop, height, offset) => {
+        const listBottom = listTop + height;
+        const dividers = layOut(sections, listTop, listBottom, offset);
+        let probes = 0;
+        const measured = stuckBandBottom(listBottom, dividers, (extent) => {
+          probes++;
+          return extent;
+        });
+        expect(measured).toBe(coveredFrom(listBottom, dividers));
+        expect(probes).toBeLessThanOrEqual(Math.ceil(Math.log2(dividers.length + 1)));
+      },
+    ));
+  });
+
+  it("holds the divider at the bottom edge for the whole time its pinned rows cross it", () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 24, max: 52 }),
+      fc.integer({ min: 200, max: 1200 }),
+      fc.integer({ min: 0, max: 300 }),
+      fc.integer({ min: 200, max: 600 }),
+      (header, pinned, unpinned, height) => {
+        const listTop = 0;
+        const listBottom = height;
+        const project = [{ header, pinned, unpinned }];
+        const listStart = PAD + header;
+        // From the first pinned row crossing the bottom edge until the
+        // divider's own place comes into view.
+        for (let offset = 0; offset < listStart + pinned; offset += 7) {
+          const crossing = listStart - offset < listBottom - DIVIDER
+            && listStart + pinned + 4 - offset + DIVIDER > listBottom;
+          const dividers = layOut(project, listTop, listBottom, offset);
+          if (crossing && listStart + pinned + 4 - offset > listTop + header) {
+            expect(stuckBandBottom(listBottom, dividers, (extent) => extent))
+              .toBe(listBottom - DIVIDER);
+          }
+        }
+      },
+    ), { numRuns: 60 });
+  });
+
+  it("ends at the list's bottom when no project with pinned rows crosses it", () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 0, max: 100 }),
+      fc.integer({ min: 0, max: 400 }),
+      (listBottom, below) => {
+        const above = { top: listBottom - 300, bottom: listBottom - 276 };
+        const after = { top: listBottom + below, bottom: listBottom + below + DIVIDER };
+        expect(stuckBandBottom(listBottom, [above, after], (extent) => extent)).toBe(listBottom);
       },
     ));
   });

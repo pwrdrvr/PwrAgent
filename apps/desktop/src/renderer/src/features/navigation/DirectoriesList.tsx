@@ -317,11 +317,22 @@ export function buildLaunchpadSelectionKey(directoryKey: string): string {
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
 
 /**
- * How long a Directory threads collapse click waits for the owner to render
- * the collapse before its scroll anchor is dropped. A failed or rejected
- * collapse must not move the list on some unrelated later render.
+ * How long an Unpinned collapse or open click waits for the owner to render
+ * it before its scroll anchor is dropped. A failed or rejected change must
+ * not move the list on some unrelated later render.
  */
 const DIRECTORY_THREADS_COLLAPSE_ANCHOR_MS = 2000;
+
+/**
+ * The Unpinned divider sticks to the bottom of the list while its project's
+ * pinned rows run past it. Its normal-flow place, read from the origin
+ * marker before it, is then further down than where it is drawn.
+ */
+function isStuckToListBottom(divider: HTMLElement): boolean {
+  const origin = divider.previousElementSibling;
+  return origin?.classList.contains("directory-row__thread-divider-origin") === true
+    && divider.getBoundingClientRect().top < origin.getBoundingClientRect().top - 1;
+}
 
 const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   unpinnedThreads: [],
@@ -482,11 +493,11 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
   const directoryPinSlotRef = useRef<HTMLDivElement>(null);
   const [directoryPinSlotOpen, setDirectoryPinSlotOpen] = useState(false);
   useEffect(() => () => directoryDragDisposeRef.current?.(), []);
-  // The Directory threads disclosure is also a thread-pin drop target.
+  // The Unpinned disclosure is also a thread-pin drop target.
   // Suppress the click browsers synthesize immediately after a drop so
   // pinning a thread never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
-  // The Directory threads disclosure sticks just under its project's sticky
+  // The Unpinned disclosure sticks just under its project's sticky
   // header, so a long project's divider stays one click away. CSS cannot read
   // a sibling's height, so each header publishes its own on its section as
   // `--directory-row-header-height`; it follows the title size and density
@@ -606,7 +617,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     threadsByKey,
   );
   const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
-  // Collapsing Directory threads from its stuck position removes every row
+  // Collapsing Unpinned from its stuck position removes every row
   // below it. Left alone, the list would land on later projects with this
   // one scrolled out of view, so the divider is held where it was on screen,
   // right under its header. Collapse is applied by the owner, so this waits
@@ -629,7 +640,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     directoryThreadsCollapseAnchorRef.current = undefined;
     list.scrollTop += divider.getBoundingClientRect().top - anchor.top;
   });
-  // Scrolls a project back to the start of its Directory threads: the divider
+  // Scrolls a project back to the start of its Unpinned section: the divider
   // resting right under the stuck project header, the first unpinned row
   // below it. While the divider is stuck its box says where it sticks, not
   // where it sits in the list, so it is measured unstuck for one synchronous
@@ -648,7 +659,28 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       + header.getBoundingClientRect().height;
     list.scrollTo({ top: list.scrollTop + restingTop - stuckTop, behavior: "smooth" });
   };
-  // A pointer press on the Directory threads bar beside its label. Only a
+  // Opening Unpinned from where it sticks to the bottom of the list, below
+  // the project's pinned rows, would add every row out of sight under it.
+  // Once the owner renders the open section, the project scrolls to its
+  // start instead, as a press on the bar beside the label does.
+  const directoryThreadsOpenFromBottomRef = useRef<
+    { directoryKey: string; at: number } | undefined
+  >(undefined);
+  useLayoutEffect(() => {
+    const request = directoryThreadsOpenFromBottomRef.current;
+    if (!request) return;
+    if (Date.now() - request.at > DIRECTORY_THREADS_COLLAPSE_ANCHOR_MS) {
+      directoryThreadsOpenFromBottomRef.current = undefined;
+      return;
+    }
+    const divider = projectHeaders.current.get(request.directoryKey)
+      ?.closest(".directory-row")
+      ?.querySelector<HTMLElement>(".directory-row__thread-divider");
+    if (!divider || divider.getAttribute("aria-expanded") !== "true") return;
+    directoryThreadsOpenFromBottomRef.current = undefined;
+    scrollToDirectoryThreads(divider);
+  });
+  // A pointer press on the Unpinned bar beside its label. Only a
   // real press sets it, so keyboard, assistive-technology, and scripted
   // clicks (whatever their `detail` or target) always toggle.
   const directoryDividerBarPressRef = useRef<EventTarget | undefined>(undefined);
@@ -2118,7 +2150,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                           aria-expanded={!directoryThreadsCollapsed}
                           aria-label={`${
                             directoryThreadsCollapsed ? "Show" : "Hide"
-                          } directory threads for ${directory.label}`}
+                          } unpinned threads for ${directory.label}`}
                           disabled={
                             directoryUnconfigured
                             || !props.onSetDirectoryThreadsCollapsed
@@ -2148,12 +2180,16 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             // The label (chevron, name, count) toggles the
                             // list. A pointer press on the rest of the bar,
                             // the rules either side, scrolls back to the
-                            // start of the Directory threads: from deep in a
+                            // start of the Unpinned section: from deep in a
                             // long list that is the other way out.
                             if (pressedBar) {
                               scrollToDirectoryThreads(event.currentTarget);
                               return;
                             }
+                            directoryThreadsOpenFromBottomRef.current =
+                              directoryThreadsCollapsed && isStuckToListBottom(event.currentTarget)
+                                ? { directoryKey: directory.key, at: Date.now() }
+                                : undefined;
                             directoryThreadsCollapseAnchorRef.current = directoryThreadsCollapsed
                               ? undefined
                               : {
@@ -2174,7 +2210,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                                 directoryThreadsCollapsed ? "" : " is-open"
                               }`}
                             />
-                            <span>Directory threads</span>
+                            <span>Unpinned</span>
                             {/* Open or closed: hiding it while open made
                                 the label, and the rules beside it, change
                                 width on every toggle. Drawn by CSS from
