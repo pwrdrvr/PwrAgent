@@ -234,7 +234,7 @@ describe("GitHub tool client", () => {
     await expect(client.execute("get_pull_request_diff", { number: 4, path: "src", ...first.diff.next }, ctx())).rejects.toMatchObject({ code: "diff_changed" });
   });
 
-  it("merges only the head the agent checked", async () => {
+  it.each([undefined, "a".repeat(40)])("merges only the checked head when the supplied head is %s", async (expectedHeadSha) => {
     const { calls, client } = harness(({ method }) => {
       if (method === "POST") return stackHistory("main");
       if (method === "GET") return json(pull(9, {
@@ -242,8 +242,17 @@ describe("GitHub tool client", () => {
       }));
       return json({ message: "Head branch was modified. Review and try the merge again." }, 409);
     });
-    await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "c".repeat(40) }, ctx())).rejects.toMatchObject({ code: "head_changed" });
-    expect(calls[2]).toMatchObject({ method: "PUT", body: { merge_method: "squash", sha: "c".repeat(40) } });
+    await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha }, ctx())).rejects.toMatchObject({ code: "head_changed" });
+    expect(calls[2]).toMatchObject({ method: "PUT", body: { merge_method: "squash", sha: "a".repeat(40) } });
+  });
+
+  it("refuses when the agent's requested merge head and the preflight head differ", async () => {
+    const { calls, client } = harness(({ method }) => method === "POST" ? stackHistory("main") : json(pull(9, {
+      created_at: "2026-11-22T10:00:00Z", base: { ref: "main", repo: { default_branch: "main" } },
+    })));
+    await expect(client.execute("merge_pull_request", { number: 9, expectedHeadSha: "c".repeat(40) }, ctx()))
+      .rejects.toMatchObject({ code: "head_changed" });
+    expect(calls.map(({ method }) => method)).toEqual(["GET", "POST"]);
   });
 
   it("merges a pull request in a GitHub stack through the asynchronous merge, at the checked head", async () => {

@@ -18,10 +18,14 @@ export type GithubStackGraphql = (query: string, variables: { owner: string; rep
 type Get = (route: string) => Promise<unknown>;
 type BaseWindow = { branch: string; since: number; until: number };
 type StackParent = { number: number; branch: string; merged: boolean };
+type HeadRewrite = { at: number; before: string };
+type BaseHistory = { windows: BaseWindow[]; rewrites?: HeadRewrite[] };
+type CommitComparison = { merge_base_commit?: { sha?: string }; ahead_by?: number; commits?: Array<{ sha?: string }> };
 
 const HISTORY_LIMIT = 16;
 const BASE_LIMIT = 4;
 const BRANCH_PR_LIMIT = 20;
+const COMMIT_PAGE_LIMIT = 64;
 const HISTORY_QUERY = `query PwrAgentStackHistory($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){pullRequest(number:$number){
     baseRefName headRefOid timelineItems(last:${HISTORY_LIMIT},itemTypes:[BASE_REF_CHANGED_EVENT,AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT]){
@@ -29,17 +33,41 @@ const HISTORY_QUERY = `query PwrAgentStackHistory($owner:String!,$repo:String!,$
       nodes{... on BaseRefChangedEvent{createdAt previousRefName currentRefName}
         ... on AutomaticBaseChangeSucceededEvent{createdAt previousRefName:oldBase currentRefName:newBase}}
     }
+    headRewrites:timelineItems(last:${HISTORY_LIMIT},itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]){
+      pageInfo{hasPreviousPage}
+      nodes{... on HeadRefForcePushedEvent{createdAt beforeCommit{oid}}}
+    }
   }}
 }`;
 
 const time = (value: string | null | undefined): number => Date.parse(value ?? "");
-const isSha = (value: string | undefined): value is string => Boolean(value && /^[a-f0-9]{40}$/i.test(value));
+const isSha = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{40}$/i.test(value);
 
 function incomplete(number: number): ForgeReadError {
   return new ForgeReadError("stack_parent_open", `Could not verify the historical base of pull request #${number}. Confirm its lower layers and retry once GitHub can provide the stack evidence.`);
 }
 
-async function formerBases(repository: ForgeRepository, child: GithubStackPull, number: number, get: Get, graphql: GithubStackGraphql): Promise<BaseWindow[]> {
+type RewriteTimeline = {
+  pageInfo?: { hasPreviousPage?: boolean };
+  nodes?: Array<{ createdAt?: string; beforeCommit?: { oid?: string } | null } | null>;
+};
+
+function readHeadRewrites(timeline: RewriteTimeline | undefined, created: number): HeadRewrite[] | undefined {
+  if (timeline?.pageInfo?.hasPreviousPage !== false || !Array.isArray(timeline.nodes)
+    || timeline.nodes.length > HISTORY_LIMIT) return undefined;
+  const rewrites: HeadRewrite[] = [];
+  let previous = created;
+  for (const node of timeline.nodes) {
+    const at = time(node?.createdAt);
+    const before = node?.beforeCommit?.oid;
+    if (!Number.isFinite(at) || at < previous || !isSha(before)) return undefined;
+    rewrites.push({ at, before });
+    previous = at;
+  }
+  return rewrites;
+}
+
+async function formerBases(repository: ForgeRepository, child: GithubStackPull, number: number, get: Get, graphql: GithubStackGraphql): Promise<BaseHistory> {
   const created = time(child.created_at);
   if (!Number.isFinite(created) || !isSha(child.head?.sha)) throw incomplete(number);
   let response: unknown;
@@ -53,13 +81,14 @@ async function formerBases(repository: ForgeRepository, child: GithubStackPull, 
     const events = await get(`/issues/${number}/timeline?per_page=100`) as Array<{ event?: string }>;
     if (!Array.isArray(events) || events.length >= 100 || events.some((entry) =>
       !entry?.event || entry.event === "base_ref_changed" || entry.event === "automatic_base_change_succeeded")) throw incomplete(number);
-    return [];
+    return { windows: [] };
   }
   const current = (response as { repository?: { pullRequest?: {
     baseRefName?: string; headRefOid?: string;
     timelineItems?: { pageInfo?: { hasPreviousPage?: boolean }; nodes?: Array<{
       previousRefName?: string; currentRefName?: string; createdAt?: string;
     } | null> };
+    headRewrites?: RewriteTimeline;
   } } })?.repository?.pullRequest;
   const timeline = current?.timelineItems;
   if (current?.baseRefName !== child.base?.ref || current?.headRefOid !== child.head?.sha
@@ -82,7 +111,26 @@ async function formerBases(repository: ForgeRepository, child: GithubStackPull, 
     branch = node.previousRefName;
     until = at;
   }
-  return windows;
+  return { windows, rewrites: windows.length ? readHeadRewrites(current?.headRewrites, created) : undefined };
+}
+
+function formerHeads(branch: string, history: BaseHistory): Set<string> | undefined {
+  if (!history.rewrites?.length) return undefined;
+  const heads = new Set<string>();
+  for (const window of history.windows) {
+    if (window.branch !== branch) continue;
+    let witnessed = false;
+    for (const rewrite of history.rewrites) {
+      if (rewrite.at < window.since) continue;
+      // Fast-forwards retain earlier commits. Check the heads before each
+      // rewrite during the base window and the first rewrite after it.
+      heads.add(rewrite.before);
+      witnessed = true;
+      if (rewrite.at > window.until) break;
+    }
+    if (!witnessed) return undefined;
+  }
+  return heads;
 }
 
 /** GitHub supplies historical ref names, not parent identities. Bind a ref to
@@ -98,9 +146,9 @@ export async function readGithubStackParents(input: {
   if (!base || !trunk) throw incomplete(number);
   const history = await formerBases(repository, child, number, get, graphql);
   const active = base !== trunk ? [{
-    branch: base, since: history[0]?.until ?? time(child.created_at), until: Number.POSITIVE_INFINITY,
+    branch: base, since: history.windows[0]?.until ?? time(child.created_at), until: Number.POSITIVE_INFINITY,
   }] : [];
-  const windows = [...active, ...history].filter(({ branch }) => branch !== trunk);
+  const windows = [...active, ...history.windows].filter(({ branch }) => branch !== trunk);
   const sources = new Set(windows.map(({ branch }) => branch));
   if (sources.size > BASE_LIMIT) throw incomplete(number);
   const parents = new Map<number, StackParent>();
@@ -126,16 +174,17 @@ export async function readGithubStackParents(input: {
     });
   };
   let comparisons = 0;
-  const compare = async (ancestor: string, descendant: string): Promise<boolean> => {
+  const readComparison = async (from: string, to: string, pageSize: number): Promise<CommitComparison | undefined> => {
     if (++comparisons > 2 * BASE_LIMIT) throw incomplete(number);
     try {
-      const comparison = await get(`/compare/${ancestor}...${encodeURIComponent(descendant)}?per_page=1`) as { merge_base_commit?: { sha?: string } };
-      return comparison?.merge_base_commit?.sha === ancestor;
+      return await get(`/compare/${from}...${encodeURIComponent(to)}?per_page=${pageSize}`) as CommitComparison;
     } catch (error) {
       if (!(error instanceof ForgeReadError) || error.code !== "not_found") throw error;
-      return false;
+      return undefined;
     }
   };
+  const compare = async (ancestor: string, descendant: string): Promise<boolean> =>
+    (await readComparison(ancestor, descendant, 1))?.merge_base_commit?.sha === ancestor;
   // Former bases can converge on the same lower layers. Reuse comparisons
   // between immutable commits. A named trunk ref may move during the check.
   const comparedCommits = new Map<string, boolean>();
@@ -147,6 +196,36 @@ export async function readGithubStackParents(input: {
     const included = await compare(ancestor, descendant);
     comparedCommits.set(pair, included);
     return included;
+  };
+  const head = child.head?.sha;
+  const trunkHead = child.base?.sha;
+  const comparedRanges = new Map<string, Set<string> | undefined>();
+  const commitsOutsideTrunk = async (trunkHead: string, tip: string): Promise<Set<string> | undefined> => {
+    if (!comparedRanges.has(tip)) {
+      const page = await readComparison(trunkHead, tip, COMMIT_PAGE_LIMIT);
+      const shas = Array.isArray(page?.commits) && page.commits.length <= COMMIT_PAGE_LIMIT
+        ? page.commits.map((commit) => commit?.sha) : undefined;
+      const commits = shas?.every(isSha) ? new Set(shas) : undefined;
+      comparedRanges.set(tip, commits && commits.size === page?.ahead_by ? commits : undefined);
+    }
+    return comparedRanges.get(tip);
+  };
+  const provesFormerBaseCleared = async (branch: string, parentHead: string): Promise<boolean> => {
+    if (base !== trunk || child.stack || !isSha(trunkHead) || !isSha(head)) return false;
+    const oldHeads = formerHeads(branch, history);
+    if (!oldHeads?.size) return false;
+    const changed = await commitsOutsideTrunk(trunkHead, head);
+    if (!changed?.size) return false;
+    oldHeads.add(parentHead);
+    // Compare lists commits reachable from each head and missing from trunk.
+    // The current and old ranges must be disjoint even when the histories
+    // have several merge bases.
+    for (const oldHead of oldHeads) {
+      if (oldHead === trunkHead) continue;
+      const oldRange = await commitsOutsideTrunk(trunkHead, oldHead);
+      if (!oldRange || [...oldRange].some((commit) => changed.has(commit))) return false;
+    }
+    return true;
   };
   const followMerge = async (intermediate: GithubStackPull, seen: Set<number>): Promise<void> => {
     const target = intermediate.base?.ref;
@@ -194,6 +273,7 @@ export async function readGithubStackParents(input: {
       unresolved = true;
       continue;
     }
+    if (branch !== base && await provesFormerBaseCleared(branch, ancestor)) continue;
     if (!(await includesCommit(ancestor, descendant))) {
       unresolved = true;
       continue;

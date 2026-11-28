@@ -404,6 +404,7 @@ export class GithubPrFetcher {
       }
     }
     const checkedBase = checked?.base;
+    const checkedHead = checked?.headSha;
     const label = `#${reference.number}`;
     // GitHub's own stacks merge only through its asynchronous merge, which
     // also takes a required merge queue.
@@ -411,12 +412,14 @@ export class GithubPrFetcher {
     // A repository never seen with a queue merges exactly as before.
     const queueRepository = isMergeQueueRepository(reference.provider, reference.org, reference.repo);
     if (queueRepository) {
-      const queued = await this.mergeThroughQueue(reference, label, run, checkedBase);
+      const queued = await this.mergeThroughQueue(reference, label, run, checkedBase, checkedHead);
       if (queued) return queued;
     }
     let output: { stdout: string; stderr?: string };
     try {
-      output = await run(["pr", "merge", mergeTarget, `--${params.method}`], 60_000);
+      output = await run(["pr", "merge", mergeTarget, `--${params.method}`,
+        ...(checkedHead ? ["--match-head-commit", checkedHead] : []),
+      ], 60_000);
     } catch (error) {
       const err = error as { stderr?: string; message?: string; killed?: boolean };
       const detail = err.stderr?.trim() || err.message || String(error);
@@ -427,6 +430,9 @@ export class GithubPrFetcher {
         const pull = await get(`/pulls/${reference.number}`) as GithubStackPull;
         // The order check passed at one base; a stack GitHub formed since may have retargeted it.
         if (checkedBase !== undefined) assertStackMergeBaseUnchanged(checkedBase, pull?.base?.ref);
+        if (checkedHead && checkedHead !== pull?.head?.sha) {
+          throw new ForgeReadError("head_changed", "The pull request head changed while checking stack order. Read it again before merging.");
+        }
         // Learned from the refusal: read the whole stack, so the decision and
         // the result account for every pull request in it.
         const stack = await assertGithubNativeStackMergeAllowed(reference.number, pull, get, undefined, {
@@ -439,7 +445,7 @@ export class GithubPrFetcher {
       // Refused for want of the queue: learn the repository and queue it.
       if (!queueRepository && mentionsMergeQueue(detail)) {
         noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
-        const queued = await this.mergeThroughQueue(reference, label, run, checkedBase);
+        const queued = await this.mergeThroughQueue(reference, label, run, checkedBase, checkedHead);
         if (queued) return queued;
       }
       return await this.reportFailedMerge(reference, params, error, "gh pr merge failed", `gh pr merge did not finish ${label} within 60 seconds`);
@@ -608,6 +614,7 @@ export class GithubPrFetcher {
     label: string,
     run: (args: string[], timeout?: number) => Promise<{ stdout: string }>,
     checkedBase?: string,
+    checkedHead?: string,
   ): Promise<{ summary: string; queued: true } | undefined> {
     const host = ["--hostname", reference.provider];
     const graphql = async (query: string, fields: string[]) => {
@@ -636,9 +643,12 @@ export class GithubPrFetcher {
     }
     if (checkedBase !== undefined) assertStackMergeBaseUnchanged(checkedBase, gate.baseRef);
     if (!gate.required) return undefined;
+    if (checkedHead && gate.headSha && checkedHead !== gate.headSha) {
+      throw new ForgeReadError("head_changed", "The pull request head changed while checking stack order. Read it again before merging.");
+    }
     const result = await runGithubQueueMerge(gate, async (query, variables) => await graphql(query, [
       "-f", `id=${variables.id}`, ...(variables.head ? ["-f", `head=${variables.head}`] : []),
-    ]));
+    ]), checkedHead);
     if (result.action === "already_queued") {
       return { queued: true, summary: `${label} is already in the merge queue · ${describeMergeQueueState(result.status) ?? "queued"}` };
     }
