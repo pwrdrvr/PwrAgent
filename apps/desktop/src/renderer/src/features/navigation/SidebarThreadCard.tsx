@@ -390,12 +390,15 @@ export function useSidebarThreadCardTriggers(
       if (shell === rowShellOf(event.relatedTarget)) {
         // Back on the row from one of its own chips: the chip's card took
         // over from (or cancelled) this row's card, so ask for it again.
-        if (
-          crossed !== shell
-          && inNestedCardTrigger(event.relatedTarget)
-          && !inNestedCardTrigger(event.target)
-        ) {
+        if (crossed === shell) return;
+        const fromChip = inNestedCardTrigger(event.relatedTarget);
+        const toChip = inNestedCardTrigger(event.target);
+        if (fromChip && !toChip) {
           enterRow(shell);
+        } else if (toChip && !fromChip) {
+          // Onto one of its chips: the chip's card is what the pointer is
+          // asking about, so the row's card still waiting never opens over it.
+          card.current?.cancelPending();
         }
         return;
       }

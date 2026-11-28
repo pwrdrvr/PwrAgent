@@ -442,6 +442,25 @@ describe("sidebar thread card", () => {
     expect(card()).toHaveTextContent("Thread a");
   });
 
+  // Found in review: the row's card re-asked from the row body kept waiting
+  // after the pointer moved on to a chip, and took over from the PR card
+  // while the pointer rested on that chip.
+  it("drops the row's re-asked card once the pointer moves onto a chip again", () => {
+    mockSidebarLayout();
+    renderSidebar({ threads: [thread("a", { prs: [pr(7)] })] });
+    const chip = row("a").querySelector("[data-pr-chip]")!;
+    move(document.querySelector(".sidebar")!, rowTitle("a"));
+    move(rowTitle("a"), chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#7");
+    move(chip, rowTitle("a"));
+    act(() => vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS - 50));
+    move(rowTitle("a"), chip);
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(card()).toBeNull();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#7");
+  });
+
   // Moving among the row's own parts is not a new arrival: only leaving a
   // chip re-asks for the row's card.
   it("does not re-ask for the row's card while the pointer stays on the chip", () => {
