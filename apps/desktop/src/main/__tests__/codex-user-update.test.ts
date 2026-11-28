@@ -368,6 +368,11 @@ describe("CodexUserUpdateService", () => {
     managed.target.current = { ...managed.target.current!, managedByPwrAgent: true };
     expect((await settleReads(managed.service)).offer).toBeUndefined();
 
+    // OpenAI's Codex that PwrAgent installed updates itself once a day.
+    const openAi = harness({ resolvedPath: "/Users/x/.pwragent/agents/codex/openai/versions/0.172.0/codex" });
+    openAi.target.current = { ...openAi.target.current!, openAiInstalledByPwrAgent: true };
+    expect((await settleReads(openAi.service)).offer).toBeUndefined();
+
     // The control: the same harness does offer for an older stock Codex.
     expect((await settleReads(harness({}).service)).offer).toBeDefined();
   });
