@@ -13,6 +13,7 @@ import type {
 import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { DECISION_BATCH_LIMITS } from "../openai-decisions/decision-batches.js";
+import { FACTORY_PR_PRESET } from "../openai-decisions/factory-pr-assessment.js";
 
 export const PWRAGENT_OPENAI_DECISIONS_UNAVAILABLE_MESSAGE =
   "OpenAI Decisions tools are not available in this PwrAgent runtime.";
@@ -144,6 +145,7 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
   ].join(" "),
   decisions_invoke: [
     "Run a registered decision on new input, or pass definition to run one ad hoc without registering it.",
+    "Use definition.preset=factory_pr_review_v1 for a first-party PR or an issue-linked branch. It assesses impact, evidence coverage and regression risk. The assessment is advisory.",
     "One input returns its answers. For OpenAI it also returns the request id, response body, and token usage with an estimated price.",
     "Pass inputs or inputsFile for a batch of up to 500 items, at most 8 at once.",
     "Prefer generating inputsFile with a script instead of reading source text into context and copying it inline.",
@@ -361,10 +363,15 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
       },
       definition: {
         type: "object",
-        description: "An ad hoc decision instead of name: provider, instructions, question or questions, prefix, optional inputSchema. Nothing is stored.",
+        description: "An ad hoc decision instead of name. Specify questions and optional schema, or use a preset with an optional provider.",
         additionalProperties: false,
         properties: {
           provider: DEFINITION_PROPERTIES.provider,
+          preset: {
+            type: "string",
+            enum: [FACTORY_PR_PRESET],
+            description: "Identify the change with pullRequest or candidate {issue, repository, branch}. Include headSha, baseSha (full non-null Git OIDs), outcome, change and evidence (0–64 rows). Each row has kind (review/test/ux/scaling/migration/integration/other), matching headSha, reference, observation and optional matching baseSha (required for integration).",
+          },
           instructions: DEFINITION_PROPERTIES.instructions,
           question: DEFINITION_PROPERTIES.question,
           questions: DEFINITION_PROPERTIES.questions,

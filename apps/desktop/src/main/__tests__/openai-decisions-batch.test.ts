@@ -58,6 +58,82 @@ async function errorOf(work: () => Promise<unknown>): Promise<OpenAIDecisionsErr
 }
 
 describe("ad hoc decisions", () => {
+  it.each(["jev", "openai"])("sends one Factory assessment per head to %s and refuses stale evidence before dispatch", async (provider) => {
+    const requests: Array<Record<string, unknown>> = [];
+    const service = makeService(async (_url, init) => {
+      requests.push(JSON.parse(String(init!.body)));
+      const impact = { type: "choice", name: "impact", choice: "severe", probabilities: { severe: 1 } };
+      const risk = { type: "choice", name: "regression_risk", choice: "unknown", probabilities: { unknown: 1 } };
+      return json(provider === "jev"
+        ? { model: "jev-latest", answers: {
+          impact, evidence_coverage: { type: "choice", choice: "partial", probabilities: { partial: 1 } }, regression_risk: risk,
+        } }
+        : { ...OPENAI_OK, answers: [impact, { type: "score", name: "evidence_coverage", score: 1 }, risk] });
+    });
+    const definition = { provider, preset: "factory_pr_review_v1" };
+    const headSha = "a".repeat(40);
+    const baseSha = "b".repeat(40);
+    const packet = {
+      pullRequest: "https://github.com/example/service/pull/12", baseSha, headSha,
+      outcome: "Keep existing accounts readable after upgrade.", change: "Migrate the accounts table.",
+      evidence: [{ kind: "test", headSha, reference: "ci/run/123", observation: "Upgrade test passed." }],
+    };
+    for (const count of [8, 16, 32]) {
+      const input = { ...packet, evidence: Array.from({ length: count }, () => packet.evidence[0]) };
+      const result = await service.invoke(CALLER, { definition, input, detail: "compact" });
+      expect(result).toMatchObject({
+        provider, name: definition.preset, answers: [
+          { name: "impact", choice: "severe" }, { name: "evidence_coverage", score: 1 }, { name: "regression_risk", choice: "unknown" },
+        ],
+      });
+    }
+    expect(requests).toHaveLength(3);
+    for (const request of requests) {
+      const questions = request.questions as Array<{ name: string }> | Record<string, unknown>;
+      expect(Array.isArray(questions) ? questions.map((q) => q.name) : Object.keys(questions))
+        .toEqual(["impact", "evidence_coverage", "regression_risk"]);
+    }
+    const stale = { ...packet, evidence: [{ ...packet.evidence[0], headSha: baseSha }] };
+    expect((await errorOf(() => service.invoke(CALLER, { definition, inputs: [packet, stale] }))).code).toBe("invalid_input");
+    expect((await errorOf(() => service.invoke(CALLER, { definition, input: { ...packet, headSha: "main" } }))).code).toBe("invalid_input");
+    const images = [{ type: "input_json", data: packet }, { type: "input_image", image_url: "data:image/png;base64,AAAA" }];
+    expect(await errorOf(() => service.invoke(CALLER, { definition, inputs: [packet, images] })))
+      .toMatchObject({ code: "invalid_input", message: expect.stringContaining("inputs[1]") });
+    expect((await errorOf(() => service.invoke(CALLER, { definition: { ...definition, prefix: "override" }, input: packet }))).code)
+      .toBe("invalid_definition");
+    expect(requests).toHaveLength(3);
+  });
+
+  it.each(["reference", "observation"])("rejects a whitespace-only %s before invoking a provider", async (field) => {
+    const service = makeService(() => { throw new Error("unexpected provider request"); });
+    const headSha = "1".repeat(40);
+    const input = {
+      pullRequest: "pr/123", headSha, baseSha: "2".repeat(40), outcome: "Open settings", change: "Fix focus",
+      evidence: [{ kind: "ux", headSha, reference: "capture/12", observation: "Focus visible", [field]: " \t\n" }],
+    };
+    expect(await errorOf(() => service.invoke(CALLER, { definition: { preset: "factory_pr_review_v1" }, input })))
+      .toMatchObject({ code: "invalid_input", message: expect.stringContaining(field) });
+  });
+
+  it("assesses an issue-linked branch before a PR exists and requires a complete identity", async () => {
+    const requests: unknown[] = [];
+    const service = makeService(async (_url, init) => {
+      requests.push(JSON.parse(String(init!.body)));
+      return json(OPENAI_OK);
+    });
+    const input = {
+      headSha: "a".repeat(40), baseSha: "b".repeat(40), outcome: "Open settings", change: "Fix focus", evidence: [],
+    };
+    const definition = { provider: "openai", preset: "factory_pr_review_v1" };
+    const candidate = { issue: "PWR-123", repository: "github.com/example/app", branch: "fix/settings" };
+    await service.invoke(CALLER, { definition, input: { ...input, candidate } });
+    expect(JSON.stringify(requests)).toContain("PWR-123");
+    for (const invalid of [input, { ...input, candidate: { ...candidate, repository: " " } }, { ...input, candidate: { issue: "PWR-123" } }]) {
+      expect((await errorOf(() => service.invoke(CALLER, { definition, input: invalid }))).code).toBe("invalid_input");
+    }
+    expect(requests).toHaveLength(1);
+  });
+
   it("runs a definition without registering it, with a stable cache key per definition", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const service = makeService(async (_url, init) => {

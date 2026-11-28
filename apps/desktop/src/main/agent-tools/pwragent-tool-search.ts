@@ -103,7 +103,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   // classifier" or "a rubric", in the singular, rather than for the tool names.
   decisions_register: "decision decisions decide model prompt rubric classifier classify judge evaluate evaluator grade score predicate choice create define save reusable jev typesafe clef local",
   decisions_list: "decision decisions registered existing available show prompts models",
-  decisions_invoke: "decision decisions decide run evaluate classify classifier judge grade score answer test new input inputsFile outputFile jsonl file batch jev typesafe clef",
+  decisions_invoke: "decision decisions decide run evaluate classify classifier judge grade score answer test new input inputsFile outputFile jsonl file batch jev typesafe clef factory PR risk impact evidence coverage",
   decisions_update: "decision decisions edit change revise rubric prompt version",
   decisions_delete: "decision decisions remove retire",
   decisions_batch_results: "decision decisions batch results answers read page progress status background failed skipped",
