@@ -1,7 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { useMemo } from "react";
-import fc from "fast-check";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
   ManagedRuntimeId,
@@ -21,25 +20,26 @@ import {
 // ready strip, the strip's rows are the same rows, and the status slot already
 // holds every line it will show later. The slot is one grid cell sized by its
 // tallest member, so a line it already holds cannot change its height.
+//
+// The property over every install lives on the pure copy in
+// managed-runtime-progress-copy.property.test.ts; these are rendered examples
+// of the same rule, one install per runtime.
 
 afterEach(cleanup);
 
 const RUNTIMES: ManagedRuntimeId[] = ["antigravity", "codex", "openai-codex", "grok", "git"];
 
-const downloadArb = fc.record({
-  receivedBytes: fc.integer({ min: 0, max: 900 * 1024 * 1024 }),
-  totalBytes: fc.option(fc.integer({ min: 1, max: 900 * 1024 * 1024 }), { nil: undefined }),
-  bytesPerSecond: fc.option(fc.integer({ min: 1, max: 90 * 1024 * 1024 }), { nil: undefined }),
-});
+const MB = 1024 * 1024;
 
-/** One install as main reports it: checking, a run of byte reports, the
- *  remaining steps, and the ready strip. Each step may or may not wait for idle. */
-const installArb = fc.record({
-  runtime: fc.constantFrom(...RUNTIMES),
-  tag: fc.constantFrom("1.5.19", "v0.128.0-pwrdrvr.3", "v2.53.0.pwrdrvr.1"),
-  downloads: fc.array(downloadArb, { minLength: 1, maxLength: 6, size: "max" }),
-  waitingForIdle: fc.array(fc.boolean(), { minLength: 32, maxLength: 32 }),
-});
+/** One install per runtime: no total, then a rate, then a total, with
+ *  `waitingForIdle` flipping on partway, as a Codex build that lands while
+ *  turns run does. */
+const DOWNLOADS = [
+  { receivedBytes: 0 },
+  { receivedBytes: 4.5 * MB, bytesPerSecond: 18 * MB },
+  { receivedBytes: 41.2 * MB, totalBytes: 96 * MB, bytesPerSecond: 8.3 * MB },
+];
+const WAITING_FOR_IDLE = [false, false, false, false, false, true, false, true];
 
 type Install = {
   runtime: ManagedRuntimeId;
@@ -93,41 +93,32 @@ function layout(container: HTMLElement): Layout {
 }
 
 describe("managed runtime progress strip layout", () => {
-  it("keeps every row, and a slot that already holds each later line, from checking to ready", () => {
-    fc.assert(
-      fc.property(installArb, (install) => {
-        const steps = phases(install);
-        const { container, rerender } = render(
-          <ManagedRuntimeProgressStrip
-            progress={steps[0]!}
-            waitingForIdle={install.waitingForIdle[0]}
-          />,
-        );
-        const seen: Layout[] = [];
-        steps.forEach((progress, index) => {
-          rerender(
-            <ManagedRuntimeProgressStrip
-              progress={progress}
-              waitingForIdle={install.waitingForIdle[index % 32]}
-            />,
-          );
-          seen.push(layout(container));
-        });
-        cleanup();
-
-        const first = seen[0]!;
-        for (const [index, current] of seen.entries()) {
-          expect(current.rows, `rows at ${steps[index]!.phase}`).toEqual(first.rows);
-          expect(current.holdsMeterLine).toBe(true);
-          for (const later of seen.slice(index + 1)) {
-            const isMeter = !later.held.includes(later.shown);
-            if (isMeter) continue; // held by the meter line above
-            expect(current.held, `${steps[index]!.phase} holds a later line`).toContain(later.shown);
-          }
-        }
-      }),
-      { numRuns: 60 },
+  it.each(RUNTIMES)("keeps every row, and a slot that already holds each later line, for %s", (runtime) => {
+    const steps = phases({ runtime, tag: "1.5.19", downloads: DOWNLOADS });
+    const { container, rerender } = render(
+      <ManagedRuntimeProgressStrip progress={steps[0]!} waitingForIdle={WAITING_FOR_IDLE[0]} />,
     );
+    const seen: Layout[] = [];
+    steps.forEach((progress, index) => {
+      rerender(
+        <ManagedRuntimeProgressStrip
+          progress={progress}
+          waitingForIdle={WAITING_FOR_IDLE[index % WAITING_FOR_IDLE.length]}
+        />,
+      );
+      seen.push(layout(container));
+    });
+
+    const first = seen[0]!;
+    for (const [index, current] of seen.entries()) {
+      expect(current.rows, `rows at ${steps[index]!.phase}`).toEqual(first.rows);
+      expect(current.holdsMeterLine).toBe(true);
+      for (const later of seen.slice(index + 1)) {
+        const isMeter = !later.held.includes(later.shown);
+        if (isMeter) continue; // held by the meter line above
+        expect(current.held, `${steps[index]!.phase} holds a later line`).toContain(later.shown);
+      }
+    }
   });
 });
 
@@ -157,51 +148,49 @@ describe("useManagedRuntimeProgress", () => {
     };
   }
 
-  it("shows a strip from the click to ready, and never for a check nobody asked to install", async () => {
-    await fc.assert(
-      fc.asyncProperty(
-        fc.constantFrom(...RUNTIMES),
-        fc.boolean(),
-        fc.boolean(),
-        async (runtime, reportsChecking, priorReady) => {
-          const host = api();
-          const { getByTestId, rerender } = render(
-            <Probe api={host.value} installing={false} runtime={runtime} />,
-          );
-          await act(async () => undefined);
-          if (priorReady) {
-            // A ready strip left from an earlier install, still lingering.
-            act(() => host.emit({ runtime, phase: "ready", tag: "old", updatedAt: Date.now() - 1 }));
-          }
-          // A background check: never on screen.
-          act(() => host.emit({ runtime, phase: "checking", updatedAt: Date.now() }));
-          expect(getByTestId("phase")).toHaveTextContent("none");
-          act(() => host.emit({ runtime, phase: "idle", updatedAt: Date.now() }));
-          if (priorReady) {
-            act(() => host.emit({ runtime, phase: "ready", tag: "old", updatedAt: Date.now() - 1 }));
-          }
+  it.each([
+    { reportsChecking: false, priorReady: false },
+    { reportsChecking: true, priorReady: false },
+    { reportsChecking: false, priorReady: true },
+    { reportsChecking: true, priorReady: true },
+  ])(
+    "shows a strip from the click to ready, and never for a check nobody asked to install (main reports checking: $reportsChecking, earlier ready strip: $priorReady)",
+    async ({ reportsChecking, priorReady }) => {
+      const runtime: ManagedRuntimeId = "antigravity";
+      const host = api();
+      const { getByTestId, rerender } = render(
+        <Probe api={host.value} installing={false} runtime={runtime} />,
+      );
+      await act(async () => undefined);
+      if (priorReady) {
+        // A ready strip left from an earlier install, still lingering.
+        act(() => host.emit({ runtime, phase: "ready", tag: "old", updatedAt: Date.now() - 1 }));
+      }
+      // A background check: never on screen.
+      act(() => host.emit({ runtime, phase: "checking", updatedAt: Date.now() }));
+      expect(getByTestId("phase")).toHaveTextContent("none");
+      act(() => host.emit({ runtime, phase: "idle", updatedAt: Date.now() }));
+      if (priorReady) {
+        act(() => host.emit({ runtime, phase: "ready", tag: "old", updatedAt: Date.now() - 1 }));
+      }
 
-          // The operator clicks Install: a strip from that render on.
-          await new Promise((resolve) => setTimeout(resolve, 2));
-          rerender(<Probe api={host.value} installing runtime={runtime} />);
-          expect(getByTestId("phase")).toHaveTextContent("checking");
-          if (reportsChecking) {
-            act(() => host.emit({ runtime, phase: "checking", updatedAt: Date.now() }));
-            expect(getByTestId("phase")).toHaveTextContent("checking");
-          }
-          for (const phase of ["downloading", "verifying", "unpacking", "activating", "ready"] as const) {
-            act(() => host.emit({ runtime, phase, tag: "new", updatedAt: Date.now() }));
-            expect(getByTestId("phase")).toHaveTextContent(phase);
-          }
-          // The install's reply lands after ready: the ready strip stays.
-          rerender(<Probe api={host.value} installing={false} runtime={runtime} />);
-          expect(getByTestId("phase")).toHaveTextContent("ready");
-          cleanup();
-        },
-      ),
-      { numRuns: 24 },
-    );
-  });
+      // The operator clicks Install: a strip from that render on.
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      rerender(<Probe api={host.value} installing runtime={runtime} />);
+      expect(getByTestId("phase")).toHaveTextContent("checking");
+      if (reportsChecking) {
+        act(() => host.emit({ runtime, phase: "checking", updatedAt: Date.now() }));
+        expect(getByTestId("phase")).toHaveTextContent("checking");
+      }
+      for (const phase of ["downloading", "verifying", "unpacking", "activating", "ready"] as const) {
+        act(() => host.emit({ runtime, phase, tag: "new", updatedAt: Date.now() }));
+        expect(getByTestId("phase")).toHaveTextContent(phase);
+      }
+      // The install's reply lands after ready: the ready strip stays.
+      rerender(<Probe api={host.value} installing={false} runtime={runtime} />);
+      expect(getByTestId("phase")).toHaveTextContent("ready");
+    },
+  );
 
   it("hands back one starting object per install, so a memo on it holds", async () => {
     // A fresh object per render made AntigravityUpdateNotice rebuild its
