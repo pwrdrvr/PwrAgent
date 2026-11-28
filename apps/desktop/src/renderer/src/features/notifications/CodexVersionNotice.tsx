@@ -7,8 +7,11 @@ import { OPENAI_CODEX_RELEASES_URL } from "../../lib/codex-release-channel";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
+import { codexInstallOffer } from "../onboarding/get-started-agents";
 import { ManagedRuntimeProgressStrip, useManagedRuntimeProgress } from "../settings/ManagedRuntimeProgress";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
+import { useOpenAiCodexInstall } from "../settings/useOpenAiCodexInstall";
+import type { ManagedRuntimeProgress } from "../../../../shared/managed-runtime-progress";
 
 /**
  * Every durable notice id this producer can emit, as prefixes, for the host to
@@ -22,12 +25,17 @@ export const CODEX_VERSION_NOTICE_ID_PREFIXES = ["codex-version:"] as const;
  * adds no probe of its own: discovery has already run the version check.
  */
 export function CodexVersionNotice(props: {
-  desktopApi?: Pick<DesktopApi, "copyText" | "onManagedRuntimeProgress" | "readManagedRuntimeProgress">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "copyText" | "onManagedRuntimeProgress" | "readManagedRuntimeProgress" | "refreshCodexDiscovery"
+  >;
   snapshot?: DesktopSettingsSnapshot;
   onNoticeChanged: (notice: AppNoticeToastNotice | undefined) => void;
   onOpenCodexSettings: () => void;
   onManagedBuildsChange?: (enabled: boolean) => Promise<boolean>;
   onCheckManagedBuildUpdates?: () => Promise<void>;
+  /** Re-read settings and models once OpenAI's Codex is installed. */
+  onOpenAiCodexInstalled?: () => Promise<void>;
 }) {
   const latestAdvisory = props.snapshot?.models?.codex?.versionAdvisory;
   // Every settings write hands back a new snapshot, so the advisory is a new
@@ -44,6 +52,14 @@ export function CodexVersionNotice(props: {
   }
   const advisory = stableAdvisory.current.value;
   const progress = useManagedRuntimeProgress(props.desktopApi, "codex");
+  const openAi = useOpenAiCodexInstall({
+    desktopApi: props.desktopApi,
+    discoveryIntent: "settings-user-action",
+    onInstalled: props.onOpenAiCodexInstalled,
+  });
+  // Set once this notice asks for the install, so its progress and result
+  // stay on screen after the new Codex clears the advisory.
+  const [openAiRequested, setOpenAiRequested] = useState(false);
   const [operationAdvisory, setOperationAdvisory] = useState<DesktopCodexVersionAdvisory>();
   const [pendingNext, setPendingNext] = useState<boolean>();
   const [operationError, setOperationError] = useState<string>();
@@ -52,9 +68,18 @@ export function CodexVersionNotice(props: {
   const managedRequired = props.snapshot?.models?.codex?.managedBuildsRequiredBy !== undefined;
   const managedOn = managedRequired || props.snapshot?.models?.codex?.managedBuilds?.value === true;
   const runtime = props.snapshot?.runtime?.tokenMiser?.managedCodex;
-  const busy = pendingNext !== undefined
-    || (progress !== undefined && progress.phase !== "ready" && progress.phase !== "failed");
+  const customBusy = pendingNext !== undefined || isRunning(progress);
   const displayedAdvisory = advisory ?? operationAdvisory;
+  // The same offer Get started makes: OpenAI's Codex fills in over a
+  // user-installed Codex that is too old, but never over a path the
+  // operator chose. PwrAgent's own installs keep their own guidance.
+  const openAiOffered = props.desktopApi?.refreshCodexDiscovery !== undefined
+    && advisory !== undefined
+    && advisory.installer !== "pwragent-openai"
+    && codexInstallOffer({ snapshot: props.snapshot, discovering: false })?.reason === "outdated";
+  const openAiProgress = openAiRequested || openAiOffered ? openAi.progress : undefined;
+  const openAiBusy = openAi.installing || isRunning(openAiProgress);
+  const busy = customBusy || openAiBusy;
   const { onManagedBuildsChange, onCheckManagedBuildUpdates } = props;
   const changeBuild = useCallback(async (next: boolean, check = false) => {
     if (inFlight.current) return;
@@ -78,6 +103,12 @@ export function CodexVersionNotice(props: {
       setPendingNext(undefined);
     }
   }, [displayedAdvisory, onManagedBuildsChange, onCheckManagedBuildUpdates]);
+  const { install: installOpenAi } = openAi;
+  const installOpenAiCodex = useCallback(() => {
+    setOperationAdvisory(displayedAdvisory);
+    setOpenAiRequested(true);
+    void installOpenAi();
+  }, [displayedAdvisory, installOpenAi]);
   const retryOperation = useCallback(() => {
     // A retained installer failure may have started in another window. Only
     // that case falls back to the current preference; our own retries retain
@@ -89,13 +120,18 @@ export function CodexVersionNotice(props: {
   useEffect(() => {
     // Keep the originating warning through the ready strip, even if the
     // settings response already names the new build and clears its advisory.
-    if (!busy && !progress && !operationError) setOperationAdvisory(undefined);
-  }, [busy, progress, operationError]);
+    if (!busy && !progress && !openAiProgress && !operationError && !openAi.error) {
+      setOperationAdvisory(undefined);
+      if (!advisory) setOpenAiRequested(false);
+    }
+  }, [advisory, busy, progress, openAiProgress, operationError, openAi.error]);
   // Held in memory: closing the toast silences it for this launch, and a
   // Codex that is still old asks again at the next one. It is a warning about
   // models the operator cannot see, so it should not quietly stay gone.
   const [dismissedVersion, setDismissedVersion] = useState<string>();
   const { desktopApi, onNoticeChanged, onOpenCodexSettings } = props;
+  const openAiInstalled = !advisory && !busy && openAiRequested && openAiProgress?.phase === "ready";
+  const openAiInstalledVersion = openAiProgress?.tag;
 
   const notice = useMemo(
     () => buildCodexVersionNotice({
@@ -110,63 +146,47 @@ export function CodexVersionNotice(props: {
         window.open(url, "_blank", "noopener,noreferrer");
       },
       installed: !advisory && !busy && progress?.phase === "ready",
+      openAiInstalled: openAiInstalled ? { version: openAiInstalledVersion } : undefined,
+      openAiInstall: openAiOffered || openAiRequested
+        ? { onInstall: !busy && !openAiProgress ? installOpenAiCodex : undefined }
+        : undefined,
       waitingForIdle: runtime?.state === "pending-switch",
-      body: onManagedBuildsChange ? (
+      body: onManagedBuildsChange || openAiProgress || openAi.error ? (
         <div className="codex-version-build">
-          <div className="codex-version-build__toggle">
-            <span>Use PwrAgent custom Codex build</span>
-            <SettingsSwitch
-              label="Use PwrAgent custom Codex build"
-              checked={pendingNext ?? managedOn}
-              disabled={busy}
-              pending={busy}
-              locked={managedRequired}
-              describedBy={managedRequired ? "codex-version-build-lock" : undefined}
-              onChange={(next) => { void changeBuild(next); }}
-            />
-          </div>
-          {managedRequired ? (
-            <p id="codex-version-build-lock" className="app-notice-toast__detail">
-              Token Miser requires the custom build. Turn Token Miser off in settings to disable it.
-            </p>
-          ) : null}
-          {progress ? (
+          {openAiProgress ? (
             <ManagedRuntimeProgressStrip
-              progress={progress}
-              waitingForIdle={runtime?.state === "pending-switch"}
-              onRetry={retryOperation}
+              progress={openAiProgress}
+              onRetry={openAi.installing ? undefined : installOpenAiCodex}
             />
-          ) : busy ? (
-            <p className="app-notice-toast__status">Checking and installing the Codex build…</p>
-          ) : runtime?.state === "pending-switch" ? (
-            <p className="app-notice-toast__detail">Installed and verified. Takes over after active turns finish.</p>
+          ) : openAi.installing ? (
+            <p className="app-notice-toast__status">Installing OpenAI's latest Codex…</p>
           ) : null}
-          {operationError && progress?.phase !== "failed" ? (
-            <>
-              <p className="app-notice-toast__suppression-error">{operationError}</p>
-              <button className="button button--ghost"
-                type="button"
-                disabled={busy}
-                onClick={retryOperation}
-              >
-                Try again
-              </button>
-            </>
+          {openAi.error && openAiProgress?.phase !== "failed" ? (
+            <p className="app-notice-toast__suppression-error">{openAi.error}</p>
           ) : null}
-          {managedOn && !busy && progress?.phase !== "failed" && onCheckManagedBuildUpdates ? (
-            <button className="button button--ghost"
-              type="button"
-              onClick={() => { void changeBuild(true, true); }}
-            >
-              Check for updates
-            </button>
+          {onManagedBuildsChange && !openAiInstalled ? (
+            <CustomBuildControls
+              checked={pendingNext ?? managedOn}
+              busy={busy}
+              locked={managedRequired}
+              progress={progress}
+              customBusy={customBusy}
+              waitingForIdle={runtime?.state === "pending-switch"}
+              operationError={operationError}
+              canCheckForUpdates={managedOn && onCheckManagedBuildUpdates !== undefined}
+              onChange={(next) => { void changeBuild(next); }}
+              onRetry={retryOperation}
+              onCheckForUpdates={() => { void changeBuild(true, true); }}
+            />
           ) : null}
         </div>
       ) : undefined,
     }),
     [advisory, displayedAdvisory, desktopApi, dismissedVersion, onOpenCodexSettings,
       onManagedBuildsChange, onCheckManagedBuildUpdates, pendingNext, managedOn,
-      busy, managedRequired, progress, runtime?.state, operationError, changeBuild, retryOperation],
+      busy, customBusy, managedRequired, progress, runtime?.state, operationError, changeBuild,
+      retryOperation, openAiOffered, openAiProgress, openAiRequested, openAi.installing, openAi.error,
+      openAiInstalled, openAiInstalledVersion, installOpenAiCodex],
   );
 
   useEffect(() => {
@@ -174,6 +194,82 @@ export function CodexVersionNotice(props: {
   }, [notice, onNoticeChanged]);
 
   return null;
+}
+
+/** A download that has started and not yet settled. */
+function isRunning(progress: ManagedRuntimeProgress | undefined): boolean {
+  return progress !== undefined && progress.phase !== "ready" && progress.phase !== "failed";
+}
+
+/**
+ * PwrAgent's own Codex build, as the secondary choice under OpenAI's: the
+ * switch, its install progress, and its update check.
+ */
+function CustomBuildControls(props: {
+  checked: boolean;
+  busy: boolean;
+  locked: boolean;
+  progress?: ManagedRuntimeProgress;
+  customBusy: boolean;
+  waitingForIdle: boolean;
+  operationError?: string;
+  canCheckForUpdates: boolean;
+  onChange: (next: boolean) => void;
+  onRetry: () => void;
+  onCheckForUpdates: () => void;
+}) {
+  return (
+    <>
+      <div className="codex-version-build__toggle">
+        <span>Use PwrAgent custom Codex build</span>
+        <SettingsSwitch
+          label="Use PwrAgent custom Codex build"
+          checked={props.checked}
+          disabled={props.busy}
+          pending={props.customBusy}
+          locked={props.locked}
+          describedBy={props.locked ? "codex-version-build-lock" : undefined}
+          onChange={props.onChange}
+        />
+      </div>
+      {props.locked ? (
+        <p id="codex-version-build-lock" className="app-notice-toast__detail">
+          Token Miser requires the custom build. Turn Token Miser off in settings to disable it.
+        </p>
+      ) : null}
+      {props.progress ? (
+        <ManagedRuntimeProgressStrip
+          progress={props.progress}
+          waitingForIdle={props.waitingForIdle}
+          onRetry={props.onRetry}
+        />
+      ) : props.customBusy ? (
+        <p className="app-notice-toast__status">Checking and installing the Codex build…</p>
+      ) : props.waitingForIdle ? (
+        <p className="app-notice-toast__detail">Installed and verified. Takes over after active turns finish.</p>
+      ) : null}
+      {props.operationError && props.progress?.phase !== "failed" ? (
+        <>
+          <p className="app-notice-toast__suppression-error">{props.operationError}</p>
+          <button className="button button--ghost"
+            type="button"
+            disabled={props.busy}
+            onClick={props.onRetry}
+          >
+            Try again
+          </button>
+        </>
+      ) : null}
+      {props.canCheckForUpdates && !props.busy && props.progress?.phase !== "failed" ? (
+        <button className="button button--ghost"
+          type="button"
+          onClick={props.onCheckForUpdates}
+        >
+          Check for updates
+        </button>
+      ) : null}
+    </>
+  );
 }
 
 export function buildCodexVersionNotice(params: {
@@ -186,6 +282,13 @@ export function buildCodexVersionNotice(params: {
   body?: ReactNode;
   installed?: boolean;
   waitingForIdle?: boolean;
+  /**
+   * PwrAgent can replace this Codex with OpenAI's latest. `onInstall` is
+   * absent while an install runs: its progress is in the body.
+   */
+  openAiInstall?: { onInstall?: () => void };
+  /** OpenAI's Codex, installed from this notice, is ready. */
+  openAiInstalled?: { version?: string };
 }): AppNoticeToastNotice | undefined {
   const { advisory } = params;
   if (!advisory || advisory.version === params.dismissedVersion) {
@@ -206,6 +309,18 @@ export function buildCodexVersionNotice(params: {
   const message =
     `Codex ${advisory.version} is too old for GPT-6.1-Sol. Update to`
     + ` Codex ${advisory.minimumVersion}+ to use it.`;
+
+  if (params.openAiInstalled) {
+    const version = params.openAiInstalled.version;
+    return {
+      ...base,
+      tone: "success",
+      title: "OpenAI Codex installed",
+      message: `${version ? `Codex ${version}` : "OpenAI's latest Codex"} is installed and ready.`
+        + " PwrAgent keeps it up to date.",
+      actions: [openSettings],
+    };
+  }
 
   if (params.installed) {
     return {
@@ -248,6 +363,39 @@ export function buildCodexVersionNotice(params: {
         "PwrAgent installed this Codex from OpenAI and updates it on its own."
         + " Once the newer release downloads, check again in Codex settings to use it.",
       actions: [{ ...openSettings, tone: "primary" }],
+    };
+  }
+
+  const openAiInstall = params.openAiInstall;
+  if (openAiInstall) {
+    // OpenAI's own release, kept current by PwrAgent, is the one-click way
+    // out. The way this Codex was installed stays on offer beside it.
+    const install = openAiInstall.onInstall
+      ? [{ label: "Install latest Codex", onClick: openAiInstall.onInstall, tone: "primary" as const }]
+      : [];
+    const command = advisory.upgradeCommand;
+    const lead = "PwrAgent can install OpenAI's latest Codex and keep it up to date.";
+    if (command) {
+      return {
+        ...base,
+        title: "Update Codex for GPT-6.1-Sol",
+        message,
+        detail: `${lead} Or run this in a terminal, then restart PwrAgent:\n${command}`,
+        copyText: command,
+        actions: [
+          ...install,
+          { label: "Copy command", onClick: () => params.onCopyCommand(command), tone: "secondary" },
+        ],
+      };
+    }
+    return {
+      ...base,
+      title: "Update Codex for GPT-6.1-Sol",
+      message,
+      detail: advisory.installer === "application"
+        ? `${lead} Or update the ChatGPT / Codex app that supplies this Codex, then restart PwrAgent.`
+        : `${lead} Or update this Codex the way you installed it, then restart PwrAgent.`,
+      actions: [...install, openSettings],
     };
   }
 

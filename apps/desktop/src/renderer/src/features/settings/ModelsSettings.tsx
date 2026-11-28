@@ -89,6 +89,7 @@ import {
   ManagedRuntimeProgressStrip,
   useManagedRuntimeProgress,
 } from "./ManagedRuntimeProgress";
+import { useOpenAiCodexInstall } from "./useOpenAiCodexInstall";
 import {
   ProviderCatalogRefreshControl,
   useProviderCatalogRefresh,
@@ -399,6 +400,18 @@ export function ModelsSettings(props: {
     }
   };
 
+  // OpenAI's Codex that PwrAgent installed: its daily update check and any
+  // install report here, so a checksum failure or an offline backoff is not
+  // silent. Retry asks for the install again, then rediscovers.
+  const openAiCodexInstall = useOpenAiCodexInstall({
+    desktopApi: props.desktopApi,
+    discoveryIntent: "settings-user-action",
+    onInstalled: async () => {
+      await props.onRefresh();
+      await readCatalog(false);
+    },
+  });
+
   const checkManagedCodexUpdates = async (): Promise<void> => {
     setManagedCodexCheckError(undefined);
     setCheckingManagedCodex(true);
@@ -489,6 +502,33 @@ export function ModelsSettings(props: {
   const codexSection = (
       <SettingsSection eyebrow="Models" title="Codex">
         <div className="settings-fields">
+          {openAiCodexInstall.progress || openAiCodexInstall.error || openAiCodexInstall.installing ? (
+            <SettingsField
+              label="OpenAI Codex"
+              sub="PwrAgent installs OpenAI's Codex release and keeps it up to date."
+              source="openai/codex"
+              error={openAiCodexInstall.progress?.phase === "failed" ? undefined : openAiCodexInstall.error}
+              control={openAiCodexInstall.progress ? (
+                <ManagedRuntimeProgressStrip
+                  progress={openAiCodexInstall.progress}
+                  onRetry={openAiCodexInstall.installing
+                    ? undefined
+                    : () => void openAiCodexInstall.install()}
+                />
+              ) : (
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button--primary"
+                    type="button"
+                    disabled={openAiCodexInstall.installing}
+                    onClick={() => void openAiCodexInstall.install()}
+                  >
+                    {openAiCodexInstall.installing ? "Installing…" : "Try again"}
+                  </button>
+                </div>
+              )}
+            />
+          ) : null}
           {props.onManagedCodexBuildsChange ? (
             <ToggleField
               checked={managedCodexOn}

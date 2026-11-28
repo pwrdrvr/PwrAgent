@@ -14600,6 +14600,18 @@ button.stack-display__thread,
   font-size: 12px;
 }
 
+/* A strip's Try again and the build's own buttons sit in the body, where
+   `.button` would take the 16px document default; size them as the footer's. */
+.codex-version-build .button {
+  justify-self: start;
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .quit-blocker-queue__list {
   max-height: min(240px, 40vh);
   overflow-y: auto;

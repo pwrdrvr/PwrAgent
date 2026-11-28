@@ -46,6 +46,7 @@ import type {
 import { buildProviderPickerEntries } from "@pwragent/shared/provider-picker";
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import type { ManagedRuntimeProgress } from "../../../../../shared/managed-runtime-progress";
 import { ProviderSetupStep } from "../guided-setup/MessagingSetupSteps";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
@@ -5838,6 +5839,119 @@ describe("SettingsScreen", () => {
     expect(screen.queryByRole("radiogroup", { name: "Build track" }))
       .not.toBeInTheDocument();
     expect(readManagedCodexTrackTags).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed OpenAI Codex update and retries it as an install", async () => {
+    // The daily check reports on `openai-codex`; Settings followed only
+    // `codex`, so a checksum failure or an offline backoff never showed.
+    const snapshot = createSnapshot();
+    const settings = createSettingsState(snapshot);
+    const handlers = new Set<(event: ManagedRuntimeProgress) => void>();
+    const refreshCodexDiscovery = vi.fn(async () => ({ snapshot }));
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+    render(
+      <SettingsScreen
+        desktopApi={{
+          listBackends,
+          refreshCodexDiscovery,
+          readManagedRuntimeProgress: async () => [{
+            runtime: "openai-codex",
+            phase: "failed",
+            failedPhase: "verifying",
+            error: "SHA-256 mismatch for codex-package-aarch64-apple-darwin",
+            fallbackTag: "0.159.0",
+            updatedAt: Date.now(),
+          }],
+          onManagedRuntimeProgress: (handler: (event: ManagedRuntimeProgress) => void) => {
+            handlers.add(handler);
+            return () => { handlers.delete(handler); };
+          },
+        } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const strip = await screen.findByTestId("managed-progress-openai-codex");
+    expect(strip).toHaveTextContent("Could not check for updates");
+    expect(strip).toHaveTextContent("SHA-256 mismatch");
+    expect(screen.getByText("OpenAI Codex")).toBeInTheDocument();
+    expect(refreshCodexDiscovery).not.toHaveBeenCalled();
+
+    fireEvent.click(within(strip).getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(refreshCodexDiscovery).toHaveBeenCalledExactlyOnceWith({
+      discoveryIntent: "settings-user-action",
+      installOpenAiCodex: true,
+    }));
+    await waitFor(() => expect(settings.refresh).toHaveBeenCalled());
+
+    // The retry's own progress replaces the failure, and PwrAgent's build
+    // reports elsewhere.
+    act(() => {
+      for (const handler of handlers) {
+        handler({ runtime: "codex", phase: "failed", error: "pwrdrvr/codex failed", updatedAt: Date.now() });
+        handler({
+          runtime: "openai-codex", phase: "downloading", tag: "0.160.0",
+          receivedBytes: 40, totalBytes: 100, updatedAt: Date.now(),
+        });
+      }
+    });
+    const live = screen.getByTestId("managed-progress-openai-codex");
+    expect(within(live).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "40");
+    expect(live).not.toHaveTextContent("pwrdrvr/codex failed");
+  });
+
+  it("names an OpenAI Codex failure once when its retry fails again", async () => {
+    const snapshot = createSnapshot();
+    const refreshCodexDiscovery = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'settings:refreshCodexDiscovery': Error: PwrAgent couldn't install Codex.");
+    });
+    render(
+      <SettingsScreen
+        desktopApi={{
+          listBackends: vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] })),
+          refreshCodexDiscovery,
+          readManagedRuntimeProgress: async () => [{
+            runtime: "openai-codex", phase: "failed", failedPhase: "checking",
+            error: "registry.npmjs.org is unreachable", updatedAt: Date.now(),
+          }],
+          onManagedRuntimeProgress: () => () => undefined,
+        } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+    const strip = await screen.findByTestId("managed-progress-openai-codex");
+    fireEvent.click(within(strip).getByRole("button", { name: "Try again" }));
+    // The retained strip still names the last failure; the request's own
+    // reason is not shown twice.
+    await waitFor(() => expect(refreshCodexDiscovery).toHaveBeenCalledOnce());
+    expect(screen.queryByText("PwrAgent couldn't install Codex.")).not.toBeInTheDocument();
+    expect(screen.getByTestId("managed-progress-openai-codex")).toHaveTextContent("registry.npmjs.org is unreachable");
+  });
+
+  it("shows no OpenAI Codex row while nothing is installing", async () => {
+    const readManagedRuntimeProgress = vi.fn(async () => []);
+    render(
+      <SettingsScreen
+        desktopApi={{
+          readManagedRuntimeProgress,
+          onManagedRuntimeProgress: () => () => undefined,
+        } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(readManagedRuntimeProgress).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByText("OpenAI Codex")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("managed-progress-openai-codex")).not.toBeInTheDocument();
   });
 
   it("rediscovers Codex models after installing a newer managed build", async () => {
