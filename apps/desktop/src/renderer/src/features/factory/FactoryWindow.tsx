@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type {
   FactoryProjectOption, FactoryProjectProjection, FactoryProjectReadRequest,
   FactoryEvidenceSnapshot,
@@ -8,6 +8,7 @@ import { useDesktopApi } from "../../lib/desktop-api";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { FactoryDecisionDrawer } from "./FactoryDecisionDrawer";
+import { FactoryObservationTime } from "./FactoryObservationTime";
 import { FactoryProjectForm } from "./FactoryProjectForm";
 import { FACTORY_LANES, factoryRows, type FactoryRow } from "./factory-board";
 import { useFactoryReads } from "./useFactoryReads";
@@ -19,14 +20,35 @@ export function FactoryWindow() {
   const [projects, setProjects] = useState<FactoryProjectOption[]>();
   const [listError, setListError] = useState(false);
   const [retry, setRetry] = useState(0);
+  const [listing, setListing] = useState(true);
   useEffect(() => {
     let active = true;
     if (list) void list().then(
-      (result) => { if (active) setProjects(result); },
-      () => { if (active) setListError(true); },
+      (result) => {
+        if (!active) return;
+        setProjects(result);
+        setListing(false);
+      },
+      () => {
+        if (!active) return;
+        setListError(true);
+        setListing(false);
+      },
     );
     return () => { active = false; };
   }, [list, retry]);
+
+  function refreshProjects() {
+    setListing(true);
+    setListError(false);
+    setRetry((value) => value + 1);
+  }
+
+  const refresh = (
+    <button className="button button--secondary" type="button" onClick={refreshProjects} disabled={listing}>
+      Refresh projects
+    </button>
+  );
 
   return (
     <main className="document-window factory-window" aria-label="Factory">
@@ -38,23 +60,18 @@ export function FactoryWindow() {
       </header>
       {!list || !api?.readFactoryProject || !api.openFactoryThread ? (
         <p className="factory-initial" role="status">Factory is unavailable in this window.</p>
-      ) : listError ? (
-        <div className="factory-initial">
-          <p role="alert">Could not load registered projects.</p>
-          <button className="button button--secondary" type="button" onClick={() => {
-            setListError(false);
-            setRetry((value) => value + 1);
-          }}>Try again</button>
-        </div>
-      ) : !projects ? (
-        <p className="factory-initial" role="status">Loading registered projects…</p>
-      ) : !projects.length ? (
+      ) : projects?.length ? (
+        <FactoryBoard projects={projects} read={api.readFactoryProject} openThread={api.openFactoryThread}
+          refresh={refresh} listError={listError} />
+      ) : projects || listError ? (
         <div className="factory-initial">
           <h1>Factory board</h1>
-          <p>Register a project in the Directories lens to read its Factory evidence.</p>
+          {listError ? <p role="alert">Could not load registered projects.</p>
+            : <p>Register a project in the Directories lens to read its Factory evidence.</p>}
+          {refresh}
         </div>
       ) : (
-        <FactoryBoard projects={projects} read={api.readFactoryProject} openThread={api.openFactoryThread} />
+        <p className="factory-initial" role="status">Loading registered projects…</p>
       )}
     </main>
   );
@@ -66,8 +83,13 @@ function FactoryBoard(props: {
   projects: FactoryProjectOption[];
   read: (request: FactoryProjectReadRequest) => Promise<FactoryProjectProjection>;
   openThread: (reference: string) => Promise<void>;
+  refresh: ReactNode;
+  listError: boolean;
 }) {
-  const { board, error, pending, readPr, readScope } = useFactoryReads(props.read);
+  const reads = useFactoryReads(props.read);
+  const { error, pending, readPr, readScope } = reads;
+  const label = props.projects.find((project) => project.key === reads.board?.scope.projectKey)?.label;
+  const board = label === undefined ? undefined : reads.board;
   const [online, setOnline] = useState(() => navigator.onLine);
   const [selection, setSelection] = useState<Selection>();
   const drawerRef = useRef<HTMLElement>(null);
@@ -103,6 +125,11 @@ function FactoryBoard(props: {
   }, [board?.details, online, pending, readPr, requestedNumber, selection]);
   const prNumber = selected?.pr?.number;
   const detail = prNumber === undefined ? undefined : board?.details.get(prNumber);
+  const workItem = selected?.branch?.workItem;
+  const trackedPr = !selected?.pr && workItem?.provider === "github" && workItem.kind === "pull_request"
+    ? workItem : undefined;
+  const trackedDetail = trackedPr && trackedPr.repositoryId === repositoryId
+    ? board?.details.get(trackedPr.number) : undefined;
   const open = Boolean(selected);
   useDismissableLayer({ open, onDismiss: close, surfaceRef: drawerRef });
   useLayoutEffect(() => {
@@ -119,23 +146,22 @@ function FactoryBoard(props: {
     (target ?? queueRef.current)?.focus();
   }, [open, selection]);
 
-  const observedAt = Math.max(board?.inventory?.authority.observedAt ?? 0, board?.branch?.branch.authority.observedAt ?? 0);
-  const label = board && props.projects.find((project) => project.key === board.scope.projectKey)?.label;
-
   return (
     <div className="factory-screen" data-drawer={open}>
       <header className="factory-heading">
         <div>
           <h1>Factory board</h1>
           <p>{board
-            ? `${label ?? "Project"} · ${board.repository.owner}/${board.repository.name}`
+            ? `${label} · ${board.repository.owner}/${board.repository.name}`
             : "Select a registered project and repository."}</p>
         </div>
-        {observedAt > 0 ? <span className="factory-context">Last confirmed <ObservationTime value={observedAt} /></span> : null}
+        {board?.inventory ? (
+          <FactoryObservationTime label="Pull request inventory observed" value={board.inventory.authority.observedAt} />
+        ) : null}
       </header>
       <details className="factory-scope" open={!board}>
         <summary>Project and evidence source</summary>
-        <FactoryProjectForm projects={props.projects} busy={pending} online={online}
+        <FactoryProjectForm projects={props.projects} busy={pending} online={online} refresh={props.refresh}
           observedRepository={board && repositoryId ? { scope: board.scope, id: repositoryId } : undefined}
           onRead={(scope, candidate) => {
             setSelection(undefined);
@@ -143,6 +169,7 @@ function FactoryBoard(props: {
           }} />
       </details>
 
+      {props.listError ? <p className="factory-banner" role="alert">Could not load registered projects.</p> : null}
       {!online ? <p className="factory-banner">Network offline. Local branch evidence is still available.</p> : null}
       {error ? <p className="factory-banner" role="alert">{error}{board ? " Showing last confirmed evidence." : ""}</p> : null}
       {pending ? <p className="factory-banner" role="status">Reading Factory evidence…</p> : null}
@@ -183,11 +210,16 @@ function FactoryBoard(props: {
         {selected ? (
           <FactoryDecisionDrawer key={selection?.key} row={selected}
             evidence={detail?.evidence ?? (selected.branch ? board?.branch?.linked : undefined)} expected={detail?.expected}
-            checks={detail?.checks} unavailable={detail?.unavailable}
+            checks={detail?.checks} unavailable={detail?.unavailable ?? trackedDetail?.unavailable}
+            observedAt={detail?.observedAt}
+            trackedNumber={trackedPr?.number}
             busy={pending} online={online} canCompare={!!board?.branch && !!selected.pr && !selected.branch}
             drawerRef={drawerRef} titleRef={titleRef} onClose={close}
             openThread={props.openThread}
-            onCompare={() => { if (prNumber !== undefined) void readPr(prNumber, true); }}
+            onCompare={() => {
+              if (trackedPr) void readPr(trackedPr.number, true, undefined, trackedPr.repositoryId);
+              else if (prNumber !== undefined) void readPr(prNumber, true);
+            }}
             onRefresh={(checks) => {
               if (prNumber !== undefined) void readPr(prNumber, false, checks);
               else if (board?.branch) void readScope(board.scope, board.branch.request);
@@ -205,11 +237,6 @@ function FactoryBoard(props: {
     restore.current = selected ?? selection;
     setSelection(undefined);
   }
-}
-
-function ObservationTime({ value }: { value: number }) {
-  const date = new Date(value);
-  return <time dateTime={date.toISOString()}>{date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time>;
 }
 
 function moveRowFocus(event: KeyboardEvent<HTMLElement>) {

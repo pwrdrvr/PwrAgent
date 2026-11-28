@@ -618,3 +618,20 @@ it("opens GitHub review permalinks without credentials, query, or arbitrary frag
     expect.soft(evidence.receipts).toContainEqual(expect.objectContaining({ kind: "review", reference: expected }));
   }
 });
+
+it.each([25, 50, 100])("reads an off-page immutable PR once at a project size of %s", async (history) => {
+  const number = history + 1;
+  const fixture = forgeFixture({ history });
+  Object.assign(fixture.data.repository.selected!, pull(number));
+  const ports = collector(fixture);
+  const result = await collectFactoryProject({ ...request, selection: { ...request.selection, number } }, ports);
+
+  expect(result.pullRequests).toHaveLength(25);
+  expect(result.pullRequests.some((pr) => pr.number === number)).toBe(false);
+  expect(readEvidence(result).pullRequest.number).toBe(number);
+  expect(ports.github).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({
+    body: expect.objectContaining({ variables: expect.objectContaining({ limit: 25, number }) }),
+  }));
+  expect(ports.resolveProject).toHaveBeenCalledTimes(1);
+  expect(ports.cachedStatus).toHaveBeenCalledTimes(1);
+});

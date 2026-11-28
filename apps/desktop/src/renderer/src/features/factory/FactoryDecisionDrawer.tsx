@@ -2,6 +2,7 @@ import { useState, type RefObject } from "react";
 import { parseThreadUrl } from "@pwragent/shared/contracts/thread-link";
 import type { FactoryEvidenceSnapshot, FactoryReceiptProjection } from "@pwragent/shared/factory-projection";
 import type { FactoryWorkItem } from "@pwragent/shared/factory-work-item";
+import { FactoryObservationTime } from "./FactoryObservationTime";
 import { RECEIPT_STATUS, revisionNotice, trackingLabel, type FactoryRevision, type FactoryRow } from "./factory-board";
 
 export function FactoryDecisionDrawer(props: {
@@ -10,6 +11,8 @@ export function FactoryDecisionDrawer(props: {
   expected?: FactoryRevision;
   checks?: string[];
   unavailable?: "missing" | "mismatch";
+  observedAt?: number;
+  trackedNumber?: number;
   busy: boolean;
   online: boolean;
   canCompare: boolean;
@@ -67,9 +70,9 @@ export function FactoryDecisionDrawer(props: {
             disabled={props.busy || (!!row.pr && !props.online)}>
             {row.pr && !evidence ? "Read evidence" : "Refresh evidence"}
           </button>
-          {props.canCompare ? (
+          {props.canCompare || props.trackedNumber !== undefined ? (
             <button className="button button--secondary" type="button" onClick={props.onCompare} disabled={props.busy || !props.online}>
-              Compare with local branch
+              {props.trackedNumber === undefined ? "Compare with local branch" : `Compare tracked PR #${props.trackedNumber}`}
             </button>
           ) : null}
         </div>
@@ -78,6 +81,7 @@ export function FactoryDecisionDrawer(props: {
 
       <section className="factory-drawer-section" aria-label="Owner evidence">
         <h3>Evidence</h3>
+        {props.observedAt !== undefined ? <FactoryObservationTime label="GitHub evidence observed" value={props.observedAt} /> : null}
         {evidence ? (
           <>
             <dl className="factory-revisions">
@@ -90,7 +94,12 @@ export function FactoryDecisionDrawer(props: {
         ) : null}
         {navigationError ? <p role="alert">{navigationError}</p> : null}
         <ReceiptList receipts={evidence?.receipts ?? []} onOpenThread={open} />
-        {row.branch ? <ReceiptList receipts={row.branch.receipts} onOpenThread={open} heading={row.pr ? "Local branch reviews" : undefined} /> : null}
+        {row.branch ? (
+          <>
+            <FactoryObservationTime label="Local branch observed" value={row.branch.authority.observedAt} />
+            <ReceiptList receipts={row.branch.receipts} onOpenThread={open} heading={row.pr ? "Local branch reviews" : undefined} />
+          </>
+        ) : null}
         {!evidence && !row.branch?.receipts.length ? (
           <p>{row.pr ? "Pull request evidence has yet to be confirmed." : "No review evidence was confirmed for this branch."}</p>
         ) : null}

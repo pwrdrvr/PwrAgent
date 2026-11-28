@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import type { FactoryBranchSelection, FactoryProjectOption, FactoryProjectReadRequest } from "@pwragent/shared/factory-projection";
 import { parseFactoryWorkItem } from "@pwragent/shared/factory-work-item";
 import { Select } from "../../components/Select";
@@ -16,10 +16,12 @@ export function FactoryProjectForm(props: {
   projects: FactoryProjectOption[];
   busy: boolean;
   online: boolean;
+  refresh: ReactNode;
   observedRepository?: { scope: FactoryScope; id: string };
   onRead: (scope: FactoryScope, candidate?: FactoryBranchSelection) => void;
 }) {
-  const [projectKey, setProjectKey] = useState(props.projects[0]?.key ?? "");
+  const [chosenKey, setProjectKey] = useState<string>();
+  const projectKey = (props.projects.find((project) => project.key === chosenKey) ?? props.projects[0])?.key ?? "";
   const [repository, setRepository] = useState("");
   const [tracker, setTracker] = useState("issue");
   const [trackingError, setTrackingError] = useState("");
@@ -72,7 +74,10 @@ export function FactoryProjectForm(props: {
                 value={repository} onChange={(event) => setRepository(event.target.value.trim())}
                 placeholder="Repository name from origin" spellCheck={false} />
             </label>
-            <button className="button button--secondary" type="submit" disabled={!props.online || !validRepository}>Read pull requests</button>
+            <div className="factory-actions">
+              <button className="button button--secondary" type="submit" disabled={!props.online || !validRepository}>Read pull requests</button>
+              {props.refresh}
+            </div>
           </div>
         </fieldset>
       </form>

@@ -37,6 +37,10 @@
   overflow-wrap: anywhere;
 }
 
+.factory-initial .button {
+  margin-block-start: 12px;
+}
+
 .factory-context,
 .factory-row-reason {
   color: var(--text-muted);
@@ -89,6 +93,10 @@
 .factory-checks .settings-input {
   min-width: 0;
   width: 100%;
+}
+
+.factory-fields > .factory-actions {
+  grid-column: 1 / -1;
 }
 
 .factory-branch-fields {

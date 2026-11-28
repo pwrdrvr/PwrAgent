@@ -257,7 +257,7 @@ it.each(["headOid", "baseOid"] as const)("invalidates a confirmed publication wh
   expect(drawer.queryByText("Check for PR 1")).toBeNull();
   await click(prRow(1));
   expect(read).toHaveBeenLastCalledWith(expect.objectContaining({
-    selection: expect.objectContaining({ expected: undefined, number: 1 }),
+    selection: expect.objectContaining({ expected: { headOid, baseOid }, number: 1 }),
   }));
 });
 
@@ -373,4 +373,122 @@ it("keeps a published outcome in Needs you when its linked local review covers a
   expect(within(screen.getByRole("region", { name: "Needs you" })).getByRole("button", {
     name: /Improve cache 1.*Review refers to an earlier base/,
   })).toHaveAttribute("data-row-key", branch.outcomeId);
+});
+
+it("keeps the GitHub comparison baseline when comparing an unrelated branch", async () => {
+  const { read } = depot(2);
+  await load();
+  read.mockResolvedValueOnce(branchResponse({ ...branch, headOid: mergeBase }));
+  await loadBranch();
+  await click(prRow(1));
+  read.mockResolvedValueOnce({ ...list(2), candidate: { ...branch, publication: "mismatch" } });
+  await click(screen.getByRole("button", { name: "Compare with local branch" }));
+
+  expect(read.mock.lastCall?.[0].selection?.expected).toEqual({ headOid, baseOid });
+  await click(screen.getByRole("button", { name: "Read evidence" }));
+  expect(read.mock.lastCall?.[0].selection?.expected).toEqual({ headOid, baseOid });
+});
+
+it("retains an applied check policy and the prior PR baseline after a failed selected read", async () => {
+  const { read } = depot(2);
+  await load();
+  await click(prRow(1));
+  fireEvent.click(screen.getByText("Required CI checks"));
+  fireEvent.change(screen.getByLabelText("Check names, one per line"), { target: { value: "build\nverify" } });
+  read.mockRejectedValueOnce(new Error("Forge unavailable"));
+  await click(screen.getByRole("button", { name: "Read with these checks" }));
+  expect(screen.queryByText("Merge candidate")).not.toBeInTheDocument();
+  await click(screen.getByRole("button", { name: "Read evidence" }));
+  expect(read.mock.lastCall?.[0].selection).toMatchObject({
+    repositoryId: repo.id, requiredChecks: ["build", "verify"], expected: { headOid, baseOid },
+  });
+
+  read.mockResolvedValueOnce({ ...list(2), repository: { ...repo, id: "repo-B" } });
+  const toggle = screen.getByText("Project and evidence source", { selector: "summary" });
+  if (!toggle.closest("details")?.open) await click(toggle);
+  await load();
+  await click(prRow(1));
+  expect(read.mock.lastCall?.[0].selection).toMatchObject({
+    repositoryId: "repo-B", requiredChecks: [], expected: undefined,
+  });
+});
+
+it.each([false, true])("reconciles linked A when reading B from a page with truncated=%s", async (truncated) => {
+  const { read } = depot(2);
+  await load();
+  await confirmPublication(read);
+  read.mockResolvedValueOnce({ ...selectionResponse(2), pullRequests: list(2).pullRequests.slice(1), truncated });
+  await click(prRow(2));
+
+  if (truncated) {
+    expect(prRow(1)).toHaveAttribute("data-row-key", branch.outcomeId);
+    expect(prRow(1)).not.toHaveTextContent(/merged|closed/i);
+  } else {
+    expect(screen.queryByRole("button", { name: /^Improve cache 1/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^fix\/focus/ })).toHaveAttribute("data-row-key", branch.outcomeId);
+  }
+  expect(read.mock.calls.map(([args]) => args.selection?.number)).toEqual([undefined, undefined, 1, 1, 2]);
+});
+
+it("displays inventory, PR evidence and local branch times from their own observations", async () => {
+  const { read } = depot(2);
+  await load();
+  await confirmPublication(read);
+  read.mockResolvedValueOnce(branchResponse({
+    ...branch, authority: { ...branch.authority, observedAt: observedAt + 60_000 },
+  }));
+  await loadBranch();
+  read.mockResolvedValueOnce({
+    ...selectionResponse(2), authority: { source: "local_owner_github", observedAt: observedAt + 120_000 },
+  });
+  await click(prRow(2));
+  await click(prRow(1));
+  expect(screen.getByText(/Pull request inventory observed/).querySelector("time"))
+    .toHaveAttribute("datetime", new Date(observedAt + 120_000).toISOString());
+  expect(screen.getByText(/GitHub evidence observed/).querySelector("time"))
+    .toHaveAttribute("datetime", new Date(observedAt).toISOString());
+  expect(screen.getByText(/Local branch observed/).querySelector("time"))
+    .toHaveAttribute("datetime", new Date(observedAt + 60_000).toISOString());
+});
+
+it("compares an explicitly tracked off-page PR in one selected read through the local row", async () => {
+  const { read } = depot(25);
+  await load();
+  openBranchForm();
+  chooseSelectOption(screen.getByRole("combobox", { name: "Tracking record" }), "GitHub pull request");
+  fireEvent.change(screen.getByLabelText("Pull request number"), { target: { value: "42" } });
+  fireEvent.change(screen.getByLabelText("Branch"), { target: { value: branch.branch } });
+  fireEvent.change(screen.getByLabelText("Base ref"), { target: { value: branch.baseRef } });
+  const workItem = { provider: "github", kind: "pull_request", repositoryId: repo.id, number: 42 } as const;
+  const candidate = { ...branch, workItem, outcomeId: factoryWorkItemKey(workItem) };
+  read.mockResolvedValueOnce(branchResponse(candidate));
+  await click(screen.getByRole("button", { name: "Read branch evidence" }));
+  await click(screen.getByRole("button", { name: /^fix\/focus/ }));
+  const response = selectionResponse(2, { ...candidate, publication: "confirmed", stage: "published" });
+  if (response.selected?.kind !== "observed") throw new Error("Missing selected evidence.");
+  response.selected.evidence.pullRequest = list(42).pullRequests[41]!;
+  read.mockResolvedValueOnce({ ...response, pullRequests: list(25).pullRequests, truncated: true });
+  await click(screen.getByRole("button", { name: "Compare tracked PR #42" }));
+
+  expect(prRow(42)).toHaveAttribute("data-row-key", candidate.outcomeId);
+  expect(read.mock.calls.map(([args]) => args.selection?.number)).toEqual([undefined, undefined, 42]);
+  expect(read.mock.lastCall?.[0].selection).toMatchObject({ repositoryId: repo.id, number: 42, expected: undefined });
+});
+
+it("refreshes registered projects from both the empty and populated picker without reading GitHub", async () => {
+  const read = vi.fn();
+  const projects = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([
+    { key: projectKey, label: "Aster", path: "/example/aster" },
+  ]).mockResolvedValueOnce([
+    { key: "directory:/example/cedar", label: "Cedar", path: "/example/cedar" },
+  ]);
+  vi.stubGlobal("pwragent", { listFactoryProjects: projects, readFactoryProject: read, openFactoryThread: vi.fn() });
+  render(<FactoryWindow />);
+
+  await click(await screen.findByRole("button", { name: "Refresh projects" }));
+  expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent("Aster");
+  await click(screen.getByRole("button", { name: "Refresh projects" }));
+  expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent("Cedar");
+  expect(projects).toHaveBeenCalledTimes(3);
+  expect(read).not.toHaveBeenCalled();
 });

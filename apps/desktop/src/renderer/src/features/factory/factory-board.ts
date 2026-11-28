@@ -95,7 +95,7 @@ export function factoryRows(
   const linked = local?.linked;
   const inventory = new Map(project?.pullRequests.map((pr) => [pr.number, pr]));
   for (const [number, detail] of evidence) {
-    if (!inventory.has(number)) inventory.set(number, detail.pullRequest);
+    if (!inventory.has(number) || detail.pullRequest.lifecycle !== "open") inventory.set(number, detail.pullRequest);
   }
   const published = linked && (inventory.get(linked.pullRequest.number) ?? linked.pullRequest);
   const rows = [...inventory.values()].flatMap((pr) => {

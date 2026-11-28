@@ -46,6 +46,9 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { expect, test, type Locator, type Page } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import {
+  factoryBranch, factoryReviewId, factoryWorktreePath, fillFactoryBranch, openFactoryBoard, seedFactoryBoard,
+} from "./fixtures/factory-board";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import {
   PR_WATCH_AUDIT_UNWATCHED_PR,
@@ -609,6 +612,40 @@ function registerSharedAudit({
     });
   }
 }
+
+registerSharedAudit({
+  key: "factory",
+  title: "populated Factory board and evidence drawer have no violations",
+  launch: (appearance) => launchAuditApp({
+    ...appearance,
+    env: NO_FORGE_ACCESS,
+    preLaunchHook: async (homeRoot) => { await seedFactoryBoard(homeRoot); },
+  }),
+  exercise: async (app, scan) => {
+    const factory = await openFactoryBoard(app);
+    await factory.emulateMedia({ reducedMotion: "reduce" });
+    await factory.getByText("Read a local branch", { exact: true }).click();
+    await factory.getByRole("combobox", { name: "Tracking record", exact: true }).click();
+    await factory.getByRole("option", { name: "GitHub pull request", exact: true }).click();
+    await factory.getByLabel("GitHub repository ID", { exact: true }).fill("R_aster_fixture");
+    await factory.getByLabel("Pull request number", { exact: true }).fill("42");
+    await fillFactoryBranch(factory, await factoryWorktreePath(app.homeRoot));
+    const row = factory.getByRole("region", { name: "Outcomes", exact: true })
+      .getByRole("button", { name: /^fix\/keyboard-focus\b/ });
+    await expect(row).toBeVisible();
+    const picker = factory.getByText("Project and evidence source", { exact: true });
+    if (!await picker.evaluate((summary) => summary.closest("details")?.open)) await picker.click();
+    await expect(factory.getByRole("button", { name: "Refresh projects", exact: true })).toBeVisible();
+    await scan(factory, "Factory board and project picker");
+    await picker.click();
+    await row.click();
+    const drawer = factory.getByRole("complementary");
+    await expect(drawer.getByRole("heading", { name: factoryBranch, exact: true })).toBeFocused();
+    await expect(drawer.getByText(factoryReviewId, { exact: true })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "Compare tracked PR #42", exact: true })).toBeVisible();
+    await scan(factory, "Factory evidence drawer");
+  },
+});
 
 // The dedicated fixture carries worktree, local-directory, and branch chips.
 registerSharedAudit({

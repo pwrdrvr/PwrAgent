@@ -6,11 +6,15 @@ import type { FactoryScope } from "./FactoryProjectForm";
 import type { FactoryBranchRow, FactoryRevision } from "./factory-board";
 
 type BranchRead = FactoryBranchRow & { request: FactoryBranchSelection };
-type PrRead = {
-  evidence?: FactoryEvidenceSnapshot;
-  unavailable?: "missing" | "mismatch";
+type PrInputs = {
   expected?: FactoryRevision;
   checks: string[];
+  retryCandidate?: FactoryBranchSelection;
+};
+type PrRead = Pick<PrInputs, "expected" | "checks"> & {
+  evidence?: FactoryEvidenceSnapshot;
+  observedAt?: number;
+  unavailable?: "missing" | "mismatch";
 };
 type Repository = FactoryProjectProjection["repository"];
 type BoardRead = {
@@ -20,23 +24,26 @@ type BoardRead = {
   branch?: BranchRead;
   details: Map<number, PrRead>;
 };
+type VerifiedInputs = {
+  scope: FactoryScope;
+  repositoryId: string;
+  prs: Map<number, PrInputs>;
+};
 type ReadProject = (request: FactoryProjectReadRequest) => Promise<FactoryProjectProjection>;
 
 function sameScope(left: FactoryScope, right: FactoryScope): boolean {
   return left.projectKey === right.projectKey && left.repository.toLowerCase() === right.repository.toLowerCase();
 }
 
-function sameRepository(left: Repository, right: Repository): boolean {
-  return left.host === right.host && left.owner.toLowerCase() === right.owner.toLowerCase()
-    && left.name.toLowerCase() === right.name.toLowerCase()
-    && (!left.id || !right.id || left.id === right.id);
-}
-
 function forRepository(current: BoardRead | undefined, scope: FactoryScope, repository: Repository): BoardRead {
-  if (!current || !sameScope(current.scope, scope) || !sameRepository(current.repository, repository)) {
+  const previous = current?.repository;
+  if (!current || !previous || !sameScope(current.scope, scope) || previous.host !== repository.host
+    || previous.owner.toLowerCase() !== repository.owner.toLowerCase()
+    || previous.name.toLowerCase() !== repository.name.toLowerCase()
+    || (previous.id && repository.id && previous.id !== repository.id)) {
     return { scope, repository, details: new Map() };
   }
-  return { ...current, repository: { ...repository, id: repository.id ?? current.repository.id } };
+  return { ...current, repository: { ...repository, id: repository.id ?? previous.id } };
 }
 
 function sameBranchSubject(previous: FactoryBranchRow | undefined, next: FactoryBranchRow["branch"]): boolean {
@@ -46,14 +53,40 @@ function sameBranchSubject(previous: FactoryBranchRow | undefined, next: Factory
     && branch.headOid === next.headOid && branch.baseOid === next.baseOid;
 }
 
-/** Keep cached reads bounded by the current inventory page plus an explicit selection. */
-function detailsForInventory(previous: Map<number, PrRead>, result: FactoryProjectProjection): Map<number, PrRead> {
+function withoutPublication(local: BranchRead): BranchRead {
+  const branch = local.branch;
+  return {
+    ...local, linked: undefined, compared: undefined,
+    branch: { ...branch, publication: "unobserved" },
+  };
+}
+
+/** Reconcile the displayed page and linked outcome on every new open inventory. */
+function withInventory(previous: BoardRead, inventory: FactoryProjectProjection): BoardRead {
   const details = new Map<number, PrRead>();
-  for (const pr of result.pullRequests) {
-    const prior = previous.get(pr.number);
-    if (prior?.evidence?.pullRequest.firstParty === pr.firstParty) details.set(pr.number, prior);
+  let branch = previous.branch;
+  const linked = branch?.linked?.pullRequest;
+  let linkedRow: FactoryEvidenceSnapshot["pullRequest"] | undefined;
+  for (const pr of inventory.pullRequests) {
+    if (pr.number === linked?.number) linkedRow = pr;
+    const prior = previous.details.get(pr.number);
+    const observed = prior?.evidence?.pullRequest;
+    if (prior && observed?.firstParty === pr.firstParty && observed.lifecycle === pr.lifecycle) {
+      details.set(pr.number, prior);
+    }
   }
-  return details;
+  if (branch && linked) {
+    const retainLink = linkedRow
+      ? linkedRow.firstParty && linked.lifecycle === linkedRow.lifecycle
+      : inventory.truncated || linked.lifecycle !== "open";
+    if (retainLink) {
+      const prior = previous.details.get(linked.number);
+      if (prior) details.set(linked.number, prior);
+    } else {
+      branch = withoutPublication(branch);
+    }
+  }
+  return { ...previous, inventory, branch, details };
 }
 
 export function useFactoryReads(read: ReadProject) {
@@ -61,6 +94,9 @@ export function useFactoryReads(read: ReadProject) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const busy = useRef(false);
+  // Operator inputs are independent of the disposable evidence page. Only explicit
+  // PR reads create entries, and a newly verified repository starts with no inputs.
+  const verifiedInputs = useRef<VerifiedInputs>(undefined);
 
   async function request(
     args: FactoryProjectReadRequest,
@@ -73,16 +109,21 @@ export function useFactoryReads(read: ReadProject) {
     const scope = { projectKey: args.projectKey, repository: args.repository };
     try {
       const result = await read(args);
-      setBoard((current) => decorate(forRepository(current, scope, result.repository), result));
+      const repositoryId = result.inventory === "observed" && result.authority.source === "local_owner_github"
+        ? result.repository.id : undefined;
+      if (args.selection && args.selection.repositoryId !== repositoryId) {
+        throw new Error("The selected project repository could not be confirmed by GitHub.");
+      }
+      if (repositoryId && (verifiedInputs.current?.repositoryId !== repositoryId
+        || !sameScope(verifiedInputs.current.scope, scope))) {
+        verifiedInputs.current = { scope, repositoryId, prs: new Map() };
+      }
+      setBoard(decorate(forRepository(board, scope, result.repository), result));
     } catch (error) {
-      // The selected read can fail if the owner can no longer verify the old repository ID.
-      // Keep the last inventory as history, and require a fresh observation for details.
-      if (args.selection) setBoard((current) => current && sameScope(current.scope, scope)
-        ? {
-          ...current, details: new Map(),
-          branch: current.branch && { ...current.branch, linked: undefined, compared: undefined },
-        }
-        : current);
+      // A failed GitHub read cannot revalidate receipts or a publication link.
+      if (board && sameScope(board.scope, scope) && (!args.candidate || args.selection)) {
+        setBoard({ ...board, details: new Map(), branch: board.branch && withoutPublication(board.branch) });
+      }
       setError(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "") : "Could not read Factory evidence.");
     } finally {
       busy.current = false;
@@ -96,56 +137,57 @@ export function useFactoryReads(read: ReadProject) {
       const previous = before.branch;
       if (candidate && branch) {
         const linked = sameBranchSubject(previous, branch) ? previous?.linked : undefined;
+        if (linked || !previous?.linked) {
+          return { ...before, branch: { key: branch.outcomeId, branch, request: candidate, linked } };
+        }
         const details = new Map(before.details);
-        if (!linked && previous?.linked) details.delete(previous.linked.pullRequest.number);
-        return { ...before, details, branch: { key: branch.outcomeId, branch, request: candidate, linked } };
+        details.delete(previous.linked.pullRequest.number);
+        return { ...before, details, branch: { key: branch.outcomeId, branch, request: candidate } };
       }
-      const details = detailsForInventory(before.details, result);
-      const linked = previous?.linked;
-      const hasLinkedPr = linked && result.pullRequests.some((pr) => pr.number === linked.pullRequest.number && pr.firstParty);
-      return {
-        ...before, inventory: result, details,
-        branch: previous && { ...previous, linked: hasLinkedPr ? linked : undefined },
-      };
+      return withInventory(before, result);
     });
   }
 
-  function readPr(number: number, compare: boolean, checks?: string[]) {
-    const repositoryId = board?.inventory?.repository.id;
-    if (!board || !repositoryId) return;
-    const before = board.details.get(number);
+  function readPr(number: number, compare: boolean, checks?: string[], repositoryId = board?.inventory?.repository.id) {
+    if (busy.current || !board || !repositoryId) return;
+    const verified = verifiedInputs.current;
+    const inputs = board.inventory?.repository.id === repositoryId && verified?.repositoryId === repositoryId
+      && sameScope(verified.scope, board.scope) ? verified.prs : undefined;
+    const previous = inputs?.get(number);
     const local = board.branch;
-    const bound = local && (compare || local.linked?.pullRequest.number === number) ? local : undefined;
-    const { headOid, baseOid } = bound?.branch ?? {};
-    const expectedBranch = headOid && baseOid ? { headOid, baseOid } : undefined;
-    const expected = (compare ? expectedBranch : before?.expected) ?? expectedBranch;
-    const requiredChecks = checks ?? before?.checks ?? [];
+    const bound = local && (compare || local.linked?.pullRequest.number === number || previous?.retryCandidate === local.request)
+      ? local : undefined;
+    const expected = previous?.expected;
+    const requiredChecks = checks ?? previous?.checks ?? [];
+    inputs?.set(number, { expected, checks: requiredChecks, retryCandidate: bound?.request });
+
     return request({
       ...board.scope,
       candidate: bound?.request,
       selection: { repositoryId, number, expected, requiredChecks },
     }, (current, result) => {
       const observed = result.selected?.kind === "observed" ? result.selected.evidence : undefined;
-      const details = detailsForInventory(current.details, result);
-      let branch = current.branch;
-      const linked = branch?.linked;
-      if (branch && linked && result.pullRequests.some((pr) => pr.number === linked.pullRequest.number && !pr.firstParty)) {
-        branch = { ...branch, linked: undefined };
-      }
+      const next = withInventory(current, result);
+      const baseline = expected ?? observed?.revision;
+      verifiedInputs.current?.prs.set(number, { expected: baseline, checks: requiredChecks });
+      next.details.set(number, {
+        evidence: observed, observedAt: observed ? result.authority.observedAt : undefined,
+        expected: baseline, checks: requiredChecks,
+        unavailable: observed ? undefined : result.candidate?.publication === "mismatch" ? "mismatch" : "missing",
+      });
       if (bound && result.candidate) {
         const candidate = result.candidate;
-        if (branch?.linked && !sameBranchSubject(branch, candidate)) details.delete(branch.linked.pullRequest.number);
-        branch = {
+        const oldLink = next.branch?.linked?.pullRequest.number;
+        if (oldLink !== undefined && oldLink !== number && !sameBranchSubject(next.branch, candidate)) {
+          next.details.delete(oldLink);
+        }
+        next.branch = {
           key: candidate.outcomeId, branch: candidate, request: bound.request,
           linked: candidate.publication === "confirmed" ? observed : undefined,
           compared: candidate.publication === "revision_changed" ? observed?.revision : undefined,
         };
       }
-      details.set(number, {
-        evidence: observed, expected: expected ?? observed?.revision, checks: requiredChecks,
-        unavailable: observed ? undefined : result.candidate?.publication === "mismatch" ? "mismatch" : "missing",
-      });
-      return { ...current, inventory: result, branch, details };
+      return next;
     });
   }
 
