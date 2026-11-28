@@ -10949,6 +10949,32 @@ button.stack-display__thread,
   outline-offset: 2px;
 }
 
+/* Settle Unpinned…: thread titles, not identifiers, so the list keeps the
+   body face and wraps a long title instead of running past the frame. */
+.settle-unpinned-dialog h2 {
+  overflow-wrap: anywhere;
+}
+
+.settle-unpinned-dialog__list {
+  font-family: inherit;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.settle-unpinned-dialog__error {
+  margin-top: 8px;
+  color: var(--danger-text);
+}
+
+.pr-detach-warning-dialog__actions .settle-unpinned-dialog__confirm {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pr-detach-warning-dialog__actions .settle-unpinned-dialog__confirm:disabled {
+  opacity: 0.6;
+}
+
 .pr-detach-warning-dialog__actions .button--danger {
   border-color: var(--danger-border);
   background: var(--danger-soft);
@@ -12033,6 +12059,14 @@ button.stack-display__thread,
   margin-inline: -8px;
   padding-inline: 14px;
   background: var(--bg-sidebar);
+}
+
+/* With a Settled section below it, Unpinned stacks on top of Settled at the
+   bottom of the list: each header below the viewport sticks there, in
+   section order, and a later header covers an earlier one at the top. The
+   offset is Settled's band: its 24px floor plus the margin above it. */
+.directory-row__threads--settled .directory-row__thread-divider[data-section="unpinned"] {
+  bottom: calc(24px + var(--directory-thread-divider-margin) - var(--directory-list-end-pad, 0px));
 }
 
 :root:not([data-native-drag-active]) .directory-row__thread-divider:hover:not(:disabled) {

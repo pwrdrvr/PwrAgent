@@ -432,6 +432,14 @@ import { materializeTranscriptImageUrlsForRenderer } from "../transcript-images"
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { setLocalDirectoryPin, reorderLocalDirectoryPins, rejectNonUserDirectoryKey } from "./local-directory-pins";
+import {
+  THREAD_SETTLE_FEDERATION_CAPABILITY,
+  type SetThreadSettledRequest,
+  type SetThreadSettledResponse,
+  type SettleDirectoryUnpinnedRequest,
+  type SettleDirectoryUnpinnedResponse,
+} from "@pwragent/shared/contracts/thread-settle";
+import { setLocalThreadSettled, settleLocalDirectoryUnpinned } from "./thread-settle-service";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
 import { createThreadReviewStorage, getAppScheduledThreadActionStore, getAppStateMode } from "../storage/desktop-runtime-storage";
 import {
@@ -674,6 +682,21 @@ function remoteProjectForgeOwner(request: {
   return runtime.remoteBackend(target);
 }
 
+/**
+ * The peer that owns a thread or project being settled. An owner that does
+ * not advertise Settle, or grants this machine no `thread_navigation`, is
+ * refused here rather than asked.
+ */
+function remoteSettleOwner(target: FederationRemoteTarget): FederationRemoteBackendClient {
+  const runtime = getDesktopFederationRuntime();
+  if (!runtime.remoteTargetSupportsCapability(target, THREAD_SETTLE_FEDERATION_CAPABILITY)) {
+    throw new Error("The owning instance does not support Settle. Update PwrAgent there to settle its threads.");
+  }
+  if (!runtime.remoteTargetSupportsCapability(target, "thread_navigation")) {
+    throw new Error("The owning instance does not allow this machine to change its sidebar.");
+  }
+  return runtime.remoteBackend(target);
+}
 
 /**
  * `preferredBackendFallback` for an ensure response, given the provider the
@@ -8104,6 +8127,44 @@ class DesktopAppServerService {
     };
   }
 
+  /**
+   * Settle or Unsettle one thread on its owner. A peer's thread goes to its
+   * owner, which must advertise Settle; this machine never writes a phantom
+   * settle that the owner's next page would overwrite.
+   */
+  async setThreadSettled(request: SetThreadSettledRequest): Promise<SetThreadSettledResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await remoteSettleOwner(federationTarget).setThreadSettledV1(remoteRequest);
+    }
+    const response = await setLocalThreadSettled(request);
+    logDebug("setThreadSettled", {
+      backend: response.backend,
+      threadId: response.threadId,
+      settled: response.settledAt !== undefined,
+      refusal: response.refusal ?? null,
+    });
+    return response;
+  }
+
+  /** Settle Unpinned…: preview, then settle the confirmed list, on the project's owner. */
+  async settleDirectoryUnpinned(request: SettleDirectoryUnpinnedRequest): Promise<SettleDirectoryUnpinnedResponse> {
+    rejectNonUserDirectoryKey(request.directoryKey);
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await remoteSettleOwner(federationTarget).settleDirectoryUnpinnedV1(remoteRequest);
+    }
+    const response = await settleLocalDirectoryUnpinned(request);
+    if (request.threads) {
+      logDebug("settleDirectoryUnpinned", {
+        directoryKey: request.directoryKey,
+        confirmed: request.threads.length,
+        settled: response.settled ?? 0,
+      });
+    }
+    return response;
+  }
+
   async accessAgentMemory(request: AgentMemoryRequest): Promise<AgentMemoryResult> {
     const { federationTarget, ...ownerRequest } = request;
     if (federationTarget && isRemoteFederationTarget(federationTarget)) {
@@ -8796,8 +8857,11 @@ class DesktopAppServerService {
           instanceId: request.federationTarget.instanceId,
           directoryKey: request.directoryKey,
           collapsed: request.collapsed,
+          ...(request.section ? { section: request.section } : {}),
         });
-      const collapsed = overlay.directoryThreadsCollapsed === true;
+      const collapsed = request.section === "settled"
+        ? overlay.settledCollapsed === true
+        : overlay.directoryThreadsCollapsed === true;
       logDebug("setDirectoryThreadsCollapsed:remote-viewer", {
         instanceId: request.federationTarget.instanceId,
         directoryKey: request.directoryKey,
@@ -8806,34 +8870,36 @@ class DesktopAppServerService {
       return {
         directoryKey: request.directoryKey,
         collapsed,
+        ...(request.section ? { section: request.section } : {}),
       };
     }
 
     const overlay = await this.getOverlayStore().setDirectoryThreadsCollapsed({
       directoryKey: request.directoryKey,
       collapsed: request.collapsed,
+      ...(request.section ? { section: request.section } : {}),
     });
-    const collapsed = overlay.directoryThreadsCollapsed === true;
+    const collapsed = request.section === "settled"
+      ? overlay.settledCollapsed === true
+      : overlay.directoryThreadsCollapsed === true;
 
     logDebug("setDirectoryThreadsCollapsed", {
       directoryKey: request.directoryKey,
+      section: request.section ?? "unpinned",
       collapsed,
     });
 
     await getDesktopBackendRegistry().publishLocalEvent({
       backend: "codex",
-      notification: {
-        method: "directory/threadsCollapsed/updated",
-        params: {
-          directoryKey: request.directoryKey,
-          collapsed,
-        },
-      },
+      notification: request.section === "settled"
+        ? { method: "directory/settledCollapsed/updated", params: { directoryKey: request.directoryKey, collapsed } }
+        : { method: "directory/threadsCollapsed/updated", params: { directoryKey: request.directoryKey, collapsed } },
     });
 
     return {
       directoryKey: request.directoryKey,
       collapsed,
+      ...(request.section ? { section: request.section } : {}),
     };
   }
 

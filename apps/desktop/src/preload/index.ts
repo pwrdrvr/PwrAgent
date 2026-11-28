@@ -1,4 +1,10 @@
 import type {
+  SetThreadSettledRequest,
+  SetThreadSettledResponse,
+  SettleDirectoryUnpinnedRequest,
+  SettleDirectoryUnpinnedResponse,
+} from "@pwragent/shared/contracts/thread-settle";
+import type {
   ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent, ResourceCheckoutsWindowFocus, ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
@@ -1341,6 +1347,8 @@ import {
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
   NAVIGATION_SET_THREAD_JOB_MONITOR_CREATION_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
+  NAVIGATION_SET_THREAD_SETTLED_CHANNEL,
+  NAVIGATION_SETTLE_DIRECTORY_UNPINNED_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_LOCK_CHANNEL,
   NAVIGATION_SET_THREAD_CHECKOUT_HIBERNATION_CHANNEL,
@@ -3412,6 +3420,14 @@ const desktopApi = Object.freeze({
     request: SetThreadPinRequest,
   ): Promise<SetThreadPinResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_PIN_CHANNEL, request),
+  setThreadSettled: async (
+    request: SetThreadSettledRequest,
+  ): Promise<SetThreadSettledResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_SETTLED_CHANNEL, request),
+  settleDirectoryUnpinned: async (
+    request: SettleDirectoryUnpinnedRequest,
+  ): Promise<SettleDirectoryUnpinnedResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SETTLE_DIRECTORY_UNPINNED_CHANNEL, request),
   accessAgentMemory: async (request: AgentMemoryRequest): Promise<AgentMemoryResult> =>
     await ipcRenderer.invoke(AGENT_MEMORY_CHANNEL, request),
   setThreadAgent: async (

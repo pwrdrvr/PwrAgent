@@ -139,15 +139,26 @@ export function stuckBandBottom<T>(
   let first = 0;
   let end = dividers.length;
   let candidate: DockExtent | undefined;
+  // `first` only moves past a probe, so the divider just above the first
+  // one reaching the edge has always been read already.
+  let above: DockExtent | undefined;
   while (first < end) {
     const middle = first + Math.floor((end - first) / 2);
     const extent = read(dividers[middle]!);
     if (extent.bottom < listBottom - STUCK_EDGE_PX) {
       first = middle + 1;
+      above = extent;
     } else {
       end = middle;
       candidate = extent;
     }
+  }
+  // A project's Unpinned divider sticks just above its Settled one, or
+  // under it when the list is too short to hold both, so the band ends
+  // above both. Only the project crossing the edge can stack.
+  if (candidate && above && candidate.top < listBottom && above.bottom > above.top
+    && above.top < candidate.top && above.bottom >= candidate.top - STUCK_SLACK_PX) {
+    candidate = { ...candidate, top: above.top };
   }
   return candidate && candidate.bottom > candidate.top && candidate.top < listBottom
     ? candidate.top

@@ -15,7 +15,7 @@ import { rankDirectoryMentionMatches } from "@pwragent/shared/directory-mention-
 import { rankThreadJumpMatches } from "@pwragent/shared/thread-jump-match";
 import { getHomeDir } from "../lib/tildify-path";
 
-type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "checkoutPaths" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability" | "forgeAutomation" | "peerProject"> & {
+type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "checkoutPaths" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "settledCollapsed" | "gitStatus" | "launchpad" | "localAvailability" | "forgeAutomation" | "peerProject"> & {
   threadKeys?: string[];
   repositoryKey?: string;
   repositoryKeys?: string[];
@@ -119,6 +119,8 @@ export function navigationQueryFixture(
     const memberKeys = new Set(members.map(key));
     threads = members.filter((thread) => !resolveParentKey(thread) || !memberKeys.has(resolveParentKey(thread)!))
       .filter((thread) => query.roots === "pinned" ? Boolean(thread.pinnedRank) : query.roots === "unpinned" ? !thread.pinnedRank : true)
+      // Settled is the owner's: an unpinned root with `settledAt`.
+      .filter((thread) => !query.settled || (query.settled === "only") === (!thread.pinnedRank && thread.settledAt !== undefined))
       .sort((left, right) => left.pinnedRank && right.pinnedRank ? Number(left.pinnedRank) - Number(right.pinnedRank)
         : Number(Boolean(right.pinnedRank)) - Number(Boolean(left.pinnedRank)) || (right.createdAt ?? 0) - (left.createdAt ?? 0));
   }
@@ -155,7 +157,7 @@ export function navigationQueryFixture(
       const members = inDirectory(directory);
       const memberKeys = new Set(members.map(key));
       const roots = members.filter((thread) => !resolveParentKey(thread) || !memberKeys.has(resolveParentKey(thread)!));
-      const unpinnedThreadCount = members.filter((thread) => {
+      const rootInDirectory = (thread: NavigationPresentedThread) => {
         let root = thread;
         const visited = new Set<string>();
         while (!visited.has(key(root))) {
@@ -164,7 +166,13 @@ export function navigationQueryFixture(
           if (!parent || !memberKeys.has(key(parent))) break;
           root = parent;
         }
-        return !root.pinnedRank && !thread.codexNativeSubAgent;
+        return root;
+      };
+      const unpinnedThreadCount = members.filter((thread) => !rootInDirectory(thread).pinnedRank && !thread.codexNativeSubAgent).length;
+      const settledRootCount = roots.filter((thread) => !thread.pinnedRank && thread.settledAt !== undefined).length;
+      const settledThreadCount = members.filter((thread) => {
+        const root = rootInDirectory(thread);
+        return !root.pinnedRank && root.settledAt !== undefined && !thread.codexNativeSubAgent;
       }).length;
       return { key: directory.key, kind: directory.kind, label: directory.label, path: directory.path,
         ...(directory.checkoutPaths ? { checkoutPaths: directory.checkoutPaths } : {}),
@@ -177,6 +185,8 @@ export function navigationQueryFixture(
         pinnedRootCount: roots.filter((thread) => thread.pinnedRank).length,
         unpinnedRootCount: roots.filter((thread) => !thread.pinnedRank).length,
         unpinnedThreadCount,
+        ...(settledRootCount > 0 ? { settledRootCount, settledThreadCount } : {}),
+        ...(directory.settledCollapsed !== undefined ? { settledCollapsed: directory.settledCollapsed } : {}),
         launchpadPresent: Boolean(directory.launchpad), launchpadBackend: directory.launchpad?.backend };
     });
   const size = request.pageSize ?? 100;

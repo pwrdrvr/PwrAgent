@@ -394,6 +394,33 @@ export class CodexRuntimeSupervisor {
     this.codexIdleThreadTimer.unref?.();
   }
 
+  /**
+   * Release one Codex thread now instead of at the idle sweep, as Settle
+   * does. The sweep's own checks apply: work Codex or the owner tracks for
+   * it, or a sub-agent thread, keeps the subscription. The next operation
+   * on the thread resumes it. Never throws.
+   */
+  async releaseCodexThreadNow(threadId: string): Promise<boolean> {
+    const unsubscribe = this.context.providers.codex.unsubscribeIdleThreads?.bind(this.context.providers.codex);
+    if (this.context.lifecycle.closed || this.host().shutdownRequested || !unsubscribe) return false;
+    try {
+      const released = await unsubscribe({
+        idleMs: 0,
+        threadIds: [threadId],
+        isThreadBusy: (candidate) => this.context.lifecycle.closed
+          || this.host().shutdownRequested
+          || this.codexThreadNeedsLiveEvents(candidate),
+      });
+      return Array.isArray(released) && released.includes(threadId);
+    } catch (error) {
+      backendRegistryLog.warn("settled Codex thread release failed", {
+        threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
   /** One pass over the Codex threads this app keeps loaded. Never throws. */
   async unsubscribeIdleCodexThreads(): Promise<void> {
     const unsubscribe = this.context.providers.codex.unsubscribeIdleThreads?.bind(this.context.providers.codex);

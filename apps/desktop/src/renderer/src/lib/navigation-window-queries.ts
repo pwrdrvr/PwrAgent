@@ -42,7 +42,7 @@ import {
 const OWNER_ROW_CHANGES = new Set([
   "thread/started", "thread/archived", "thread/unarchived", "thread/deleted", "thread/parent/set", "thread/parent/cleared",
   "thread/pin/added", "thread/pin/removed", "thread/pin/reordered", "thread/subthreadsCollapsed/updated", "thread/subthreadOrder/updated",
-  "thread/status/changed", "thread/subAgents/updated", "thread/name/updated", "thread/modelSettings/updated",
+  "thread/settled/updated", "thread/status/changed", "thread/subAgents/updated", "thread/name/updated", "thread/modelSettings/updated",
   "thread/backgroundTasks/updated", "thread/turnQueue/updated", "navigation/thread/seen", "federation/peerStatus/changed",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled", "navigation/directoryGitStatus/updated",
   "navigation/threadDirectories/updated",
@@ -878,13 +878,16 @@ export class NavigationWindowQueries {
     const anchor = resource.anchor;
     if (request.query.kind !== "directory" || anchor?.kind !== "thread") return false;
     const params = event.notification.params as { sourceMethod?: string; threadId?: string; instanceId?: string; pinned?: boolean;
-      anchorChanges?: NavigationIdentity[] };
+      anchorChanges?: NavigationIdentity[]; settledAt?: number };
     const method = event.notification.method === "navigation/invalidated" ? params.sourceMethod : event.notification.method;
     const viewerPin = method === "navigation/remoteThreadPins/changed";
     const pinned = viewerPin ? params.pinned : method === "thread/pin/added" ? true
       : method === "thread/pin/removed" ? false : undefined;
-    if (pinned === undefined || !params.threadId
-      || request.query.roots !== (pinned ? "unpinned" : "pinned")) return false;
+    // Settle moves a root between Unpinned and Settled the same way.
+    const settled = method === "thread/settled/updated" ? params.settledAt !== undefined : undefined;
+    const leaves = pinned !== undefined ? request.query.roots === (pinned ? "unpinned" : "pinned")
+      : settled !== undefined && request.query.settled === (settled ? "exclude" : "only");
+    if (!leaves || !params.threadId) return false;
     // Owner pins never change a mounted thread's viewer-owned rank.
     if (!federationTargetsEqual(request.federationTarget, event.federationTarget)
       || (viewerPin && (request.federationTarget?.scope === "remote" || !params.instanceId))) return false;

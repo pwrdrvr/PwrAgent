@@ -443,6 +443,7 @@ export type BackendClient = {
   unsubscribeIdleThreads?(params: {
     idleMs: number;
     isThreadBusy: (threadId: string) => boolean;
+    threadIds?: readonly string[];
   }): Promise<string[] | void>;
   resetAppServerRestarts?(reason: string): void;
   readAppServerProcessSample?(): Promise<CodexAppServerProcessSample | undefined>;

@@ -2,6 +2,11 @@ import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPr
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import type { NavigationQueryPage, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { comparePinnedThreads, isPinnedThread } from "@pwragent/shared/thread-pins";
+
+/** A root filed in its project's Settled section; a pin wins if both are ever stored. */
+export function isSettledThread(thread: Pick<NavigationThreadSummary, "pinnedRank" | "settledAt">): boolean {
+  return thread.settledAt !== undefined && !thread.pinnedRank;
+}
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import type { NavigationWindowQueriesState } from "../../lib/navigation-window-queries";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
@@ -16,6 +21,13 @@ export type PagedDirectoryPresentation = {
   ordinaryChildCounts: Map<string, number>;
   directoryThreadsCollapsed: boolean;
   directoryUnpinnedThreadCount: number;
+  /** Settled roots, below Unpinned. Empty while the section is folded. */
+  settledThreads: NavigationThreadSummary[];
+  /** The open thread when it is settled and its section is folded, drawn above that section's header. */
+  selectedSettledThreads: NavigationThreadSummary[];
+  settledCollapsed: boolean;
+  /** Owner count of the Settled section; zero draws no section. */
+  directorySettledThreadCount: number;
 };
 
 export type DirectoryChildren<Row = NavigationThreadSummary> = {
@@ -99,17 +111,24 @@ export function buildPagedDirectoryPresentation(params: {
   const rootEntries = [...(presentation.get(`directory-pins:${params.directory.key}`) ?? []),
     ...(presentation.get(`directory:${params.directory.key}`) ?? [])];
   const seen = new Set<string>();
-  const roots = rootEntries.filter((entry) => {
+  const rootsOf = (entries: readonly (typeof rootEntries)[number][]) => entries.filter((entry) => {
     if (entry.placement.kind !== "root" || seen.has(entry.key)) return false;
     seen.add(entry.key);
     return true;
   })
     .map((entry) => params.threadsByKey.get(entry.key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+  const roots = rootsOf(rootEntries);
+  // Settled roots page on their own. Each row's live summary decides its
+  // section, so a settle or unsettle moves the row before the next read.
+  const settledRoots = rootsOf(presentation.get(`directory-settled:${params.directory.key}`) ?? []);
+  const directorySettledRootCount = params.directory.settledRootCount ?? 0;
+  const directorySettledThreadCount = directorySettledRootCount > 0
+    ? params.directory.settledThreadCount ?? directorySettledRootCount : 0;
   const children: DirectoryChildren = (params.children ?? buildPagedDirectoryChildren({ ...params, presentationOrder: presentation })).get(params.directory.key)
     ?? { childThreadsByParentKey: new Map(), ownerChildOrder: new Map(), ordinaryChildCounts: new Map() };
   let childThreadsByParentKey = children.childThreadsByParentKey;
   const ordinaryChildCounts = new Map(children.ordinaryChildCounts);
-  for (const id of [`directory-pins:${params.directory.key}`, `directory:${params.directory.key}`]) {
+  for (const id of [`directory-pins:${params.directory.key}`, `directory:${params.directory.key}`, `directory-settled:${params.directory.key}`]) {
     for (const { row } of params.resources.get(id)?.state.page?.entries ?? []) {
       ordinaryChildCounts.set(navigationThreadSelectionKey(row.ref), row.ordinaryChildCount);
     }
@@ -132,14 +151,20 @@ export function buildPagedDirectoryPresentation(params: {
   // An all-pinned project has no Unpinned disclosure. Keep a new
   // starting row with the pins, matching the owner's automatic pin decision.
   const directoryThreadsCollapsed = params.directory.directoryThreadsCollapsed === true
-    || ((params.directory.pinnedRootCount ?? 0) > 0 && params.directory.unpinnedRootCount === 0);
-  const unpinnedThreads = directoryThreadsCollapsed ? [] : roots.filter((thread) => !isPinnedThread(thread));
+    || ((params.directory.pinnedRootCount ?? 0) > 0
+      && params.directory.unpinnedRootCount !== undefined
+      && params.directory.unpinnedRootCount - directorySettledRootCount === 0);
+  const unpinnedThreads = directoryThreadsCollapsed ? [] : roots.filter((thread) => !isPinnedThread(thread) && !isSettledThread(thread));
+  const settledCollapsed = directorySettledRootCount === 0 || params.directory.settledCollapsed !== false;
+  const settledThreads = settledCollapsed ? [] : settledRoots.filter(isSettledThread);
+  const selectedHere = selected?.selectionDirectory?.key === params.directory.key
+    && selectedThread && !isPinnedThread(selectedThread) ? selectedThread : undefined;
   // Keep the open transcript (or its root ancestor) above the collapsed
   // disclosure without claiming that it has a saved pin.
-  const selectedUnpinnedThreads = directoryThreadsCollapsed
-    && selected?.selectionDirectory?.key === params.directory.key
-    && selectedThread && !isPinnedThread(selectedThread)
-    ? [selectedThread] : [];
+  const selectedUnpinnedThreads = directoryThreadsCollapsed && selectedHere && !isSettledThread(selectedHere)
+    ? [selectedHere] : [];
+  const selectedSettledThreads = settledCollapsed && selectedHere && isSettledThread(selectedHere)
+    ? [selectedHere] : [];
   // Exact ancestry also admits the selected child while its independently
   // paged siblings are loading (or the child lies beyond their loaded range).
   // Do not change that range's membership or continuation cursor.
@@ -147,7 +172,8 @@ export function buildPagedDirectoryPresentation(params: {
     // An off-page selection augments this directory only. Do not mutate the
     // window's shared membership projection or another directory's view.
     childThreadsByParentKey = new Map(childThreadsByParentKey);
-    const visibleParents = new Set([...directoryPinnedThreads, ...selectedUnpinnedThreads, ...unpinnedThreads].map(threadSummaryIdentityKey));
+    const visibleParents = new Set([...directoryPinnedThreads, ...selectedUnpinnedThreads, ...unpinnedThreads,
+      ...selectedSettledThreads, ...settledThreads].map(threadSummaryIdentityKey));
     for (const entry of selected.entries) {
       const key = navigationThreadSelectionKey(entry.row.ref);
       if (!ordinaryChildCounts.has(key)) ordinaryChildCounts.set(key, entry.row.ordinaryChildCount);
@@ -164,6 +190,8 @@ export function buildPagedDirectoryPresentation(params: {
   return {
     directoryPinnedThreads, unpinnedThreads, selectedUnpinnedThreads, childThreadsByParentKey,
     ownerChildOrder: children.ownerChildOrder, ordinaryChildCounts, directoryThreadsCollapsed,
-    directoryUnpinnedThreadCount: params.directory.unpinnedThreadCount ?? params.directory.unpinnedRootCount ?? 0,
+    directoryUnpinnedThreadCount: (params.directory.unpinnedThreadCount ?? params.directory.unpinnedRootCount ?? 0)
+      - directorySettledThreadCount,
+    settledThreads, selectedSettledThreads, settledCollapsed, directorySettledThreadCount,
   };
 }

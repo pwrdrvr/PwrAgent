@@ -3413,6 +3413,15 @@ export type AppServerNotification =
       };
     }
   | {
+      /** Settle or Unsettle, including the unsettle any turn start makes. */
+      method: "thread/settled/updated";
+      params: {
+        threadId: string;
+        /** Absent once the thread is unsettled. */
+        settledAt?: number;
+      };
+    }
+  | {
       method: "thread/pin/reordered";
       params: {
         pinnedRanks: Record<string, string>;
@@ -3537,6 +3546,13 @@ export type AppServerNotification =
     }
   | {
       method: "directory/threadsCollapsed/updated";
+      params: {
+        directoryKey: string;
+        collapsed: boolean;
+      };
+    }
+  | {
+      method: "directory/settledCollapsed/updated";
       params: {
         directoryKey: string;
         collapsed: boolean;

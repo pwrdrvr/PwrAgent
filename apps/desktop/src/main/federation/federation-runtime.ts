@@ -429,6 +429,7 @@ import {
 } from "@pwragent/shared/contracts/federation-short-names";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { markLocalThreadSeen } from "../app-server/mark-local-thread-seen";
+import { setLocalThreadSettled, settleLocalDirectoryUnpinned } from "../app-server/thread-settle-service";
 import { setLocalDirectoryPin, reorderLocalDirectoryPins } from "../app-server/local-directory-pins";
 import { linkedDirectoryForRegistration, registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
@@ -829,6 +830,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_dependency_provenance_v1",
   "thread_research",
   "agent_notifications",
+  "thread_settle_snooze",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -914,6 +916,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "directory/pin/removed",
   "directory/pin/reordered",
   "directory/threadsCollapsed/updated",
+  "directory/settledCollapsed/updated",
   "directory/forgeAutomation/updated",
   "navigation/directoryGitStatus/updated",
   "navigation/threadDirectories/updated",
@@ -943,6 +946,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/pin/removed",
   "thread/pin/reordered",
   "thread/reactions/updated",
+  "thread/settled/updated",
   "thread/prAutoDispatch/pendingUpdated",
   "thread/prAutoDispatch/updated",
   "thread/prWatches/updated",
@@ -8375,6 +8379,14 @@ function localBackendOperations(
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
       };
+    },
+    async setThreadSettledV1(request) {
+      // The same path as the owner's own window, so its windows and other
+      // viewers hear about a peer's settle.
+      return await setLocalThreadSettled(request);
+    },
+    async settleDirectoryUnpinnedV1(request) {
+      return await settleLocalDirectoryUnpinned(request);
     },
     async setDirectoryPin(request) {
       return await setLocalDirectoryPin(request);

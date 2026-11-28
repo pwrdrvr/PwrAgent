@@ -196,6 +196,15 @@ import { applyDirectoryDrop, type DirectoryDrop } from "./directory-pin-drop";
 import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
 import { projectTurnMarks } from "./project-index";
 import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog";
+import { SettleUnpinnedDialog } from "./SettleUnpinnedDialog";
+import {
+  threadSettleOffered,
+  threadSettleRefusal,
+  threadSettleRefusalText,
+  type SetThreadSettledResponse,
+  type SettleDirectoryUnpinnedCandidate,
+  type SettleDirectoryUnpinnedResponse,
+} from "@pwragent/shared/contracts/thread-settle";
 import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
 import { usePublishForgeAutomationOpener } from "../forge-automation/thread-hands-off";
 import {
@@ -636,6 +645,26 @@ type SidebarProps = {
     directory: NavigationDirectorySummary,
     collapsed: boolean,
   ) => Promise<void>;
+  onSetDirectorySettledCollapsed?: (
+    directory: NavigationDirectorySummary,
+    collapsed: boolean,
+  ) => Promise<void>;
+  /** Settle or Unsettle a root on its owner. Without it no row offers Settle. */
+  onSetThreadSettled?: (
+    thread: NavigationThreadSummary,
+    settled: boolean,
+  ) => Promise<SetThreadSettledResponse | undefined>;
+  /** Settle Unpinned… on a project's owner: candidates, then the confirmed list. */
+  onSettleDirectoryUnpinned?: (
+    directory: Pick<NavigationDirectorySummary, "key" | "label">,
+    threads?: SettleDirectoryUnpinnedCandidate[],
+  ) => Promise<SettleDirectoryUnpinnedResponse>;
+  /**
+   * In a peer's window, whether that peer advertises `thread_settle_snooze`
+   * and lets this machine change its sidebar. Ignored in this instance's own
+   * windows, where each peer row carries its owner's capabilities.
+   */
+  federationOwnerSettle?: boolean;
   /**
    * Per-project Forge Automation, saved on the instance that owns the
    * project. Without it the project menu offers neither Pause Forge
@@ -992,6 +1021,8 @@ function SidebarContent(props: SidebarProps) {
     | undefined
   >();
   const [projectCheckoutsDirectory, setProjectCheckoutsDirectory] = useState<NavigationDirectorySummary>();
+  /** The project whose Settle Unpinned… confirmation is open. */
+  const [settleUnpinnedDirectory, setSettleUnpinnedDirectory] = useState<Pick<NavigationDirectorySummary, "key" | "label">>();
   /** The project whose Forge Automation dialog is open. */
   const [forgeAutomationDialog, setForgeAutomationDialog] = useState<
     { directory: NavigationDirectorySummary; returnFocus?: RefObject<HTMLElement | null> } | undefined
@@ -1517,6 +1548,10 @@ function SidebarContent(props: SidebarProps) {
     revealHoverStableSnapshot,
     props.onSetDirectoryThreadsCollapsed,
   );
+  const releasedSetDirectorySettledCollapsed = useRevealListChange(
+    revealHoverStableSnapshot,
+    props.onSetDirectorySettledCollapsed,
+  );
   const releasedSetSubthreadsCollapsed = useRevealListChange(
     revealHoverStableSnapshot,
     props.onSetSubthreadsCollapsed,
@@ -1598,6 +1633,7 @@ function SidebarContent(props: SidebarProps) {
     reorderThreadPins: releasedReorderThreadPins,
     setDirectoryPin: releasedSetDirectoryPin,
     setDirectoryThreadsCollapsed: releasedSetDirectoryThreadsCollapsed,
+    setDirectorySettledCollapsed: releasedSetDirectorySettledCollapsed,
     setSubthreadsCollapsed: releasedSetSubthreadsCollapsed,
     setThreadPin,
     nestThread,
@@ -2442,6 +2478,11 @@ function SidebarContent(props: SidebarProps) {
     void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.(threads));
   };
 
+  const settleFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    void revealHoverStableSnapshot(() => props.onSetThreadSettled?.(thread, thread.settledAt === undefined));
+  };
+
   const removeRemotePinsFromContextMenu = (
     threads: NavigationThreadSummary[],
   ): void => {
@@ -3006,6 +3047,11 @@ function SidebarContent(props: SidebarProps) {
     Boolean(props.onMarkThreadsSeen)
     && thread.inbox.inInbox
     && threadCanRouteRemoteCapability(thread, "thread_navigation");
+  // Settle is the owner's. A peer that predates it gets no Settle item on
+  // its threads, here or in its own window.
+  const threadCanSettle = (thread: NavigationThreadSummary): boolean =>
+    Boolean(props.onSetThreadSettled)
+    && threadSettleOffered(thread, federationTarget ? props.federationOwnerSettle === true : undefined);
 
   /**
    * Rename in place: in the thread's sidebar row when the list shows one,
@@ -3664,6 +3710,15 @@ function SidebarContent(props: SidebarProps) {
       && lensShowsPinOrder(browseMode, pinnedThreadsOnTop)
       && props.onReorderThreadPins,
   );
+  // Settle sits right below the pin items. A settled row offers Unsettle in
+  // its place. Settle waits while the thread is working or has a queued
+  // send, and says so.
+  const contextMenuCanSettle = Boolean(
+    contextMenuPinThread && !contextMenuIsBulk && threadCanSettle(contextMenuPinThread),
+  );
+  const contextMenuSettleRefusal = contextMenuCanSettle && contextMenuPinThread!.settledAt === undefined
+    ? threadSettleRefusal(contextMenuPinThread!)
+    : undefined;
   const contextMenuHasCreationActions =
     contextMenuCanCreateSubthread || contextMenuCanFork;
   const contextMenuHasManagementActions =
@@ -3679,6 +3734,7 @@ function SidebarContent(props: SidebarProps) {
     contextMenuCanArchive;
   const contextMenuHasTopActions =
     contextMenuHasCheckSection ||
+    contextMenuCanSettle ||
     contextMenuHasCreationActions ||
     contextMenuHasManagementActions ||
     contextMenuCanRemoveRemotePin;
@@ -3743,6 +3799,15 @@ function SidebarContent(props: SidebarProps) {
   const directoryMenuIsPlaceholder =
     directoryContextMenu?.directory.localAvailability === "unconfigured";
   const directoryMenuCanMarkRead = Boolean(props.onMarkDirectoriesSeen && !directoryMenuIsPlaceholder);
+  // The project's owner settles its own idle Unpinned roots. A peer window
+  // offers it only when that peer advertises Settle.
+  const directoryMenuCanSettleUnpinned = Boolean(
+    props.onSettleDirectoryUnpinned
+      && !directoryContextMenuIsBulk
+      && !directoryMenuIsPlaceholder
+      && (directoryContextMenu?.directory.kind === "directory" || directoryContextMenu?.directory.kind === "workspace")
+      && (!federationTarget || props.federationOwnerSettle === true),
+  );
   // Thread maintenance runs on this machine only; a placeholder or a peer
   // window has no provider, so the item hides itself there.
   const directoryMenuCleanUpPath = !directoryContextMenuIsBulk && !directoryMenuIsPlaceholder
@@ -4408,6 +4473,9 @@ function SidebarContent(props: SidebarProps) {
                 onSetDirectoryThreadsCollapsed={
                   hoverReleasedListHandlers.setDirectoryThreadsCollapsed
                 }
+                onSetDirectorySettledCollapsed={
+                  hoverReleasedListHandlers.setDirectorySettledCollapsed
+                }
                 onOpenDirectoryContextMenu={
                   props.onSetDirectoryPin || props.onMarkDirectoriesSeen || props.onMarkThreadsSeen || props.onArchiveDirectories
                     ? openDirectoryContextMenu
@@ -4728,6 +4796,41 @@ function SidebarContent(props: SidebarProps) {
                           </button>
                         ) : null}
                       </div>
+                    ) : null}
+                    {contextMenuCanSettle ? (
+                      <>
+                        {contextMenuHasCheckSection ? (
+                          <div className="thread-context-menu__separator" role="separator" />
+                        ) : null}
+                        <div className="thread-context-menu__section">
+                          {contextMenuSettleRefusal ? (
+                            <button
+                              aria-disabled="true"
+                              className="thread-context-menu__button--stacked"
+                              role="menuitem"
+                              type="button"
+                              onClick={(event) => event.preventDefault()}
+                            >
+                              <span>Settle</span>
+                              <span className="thread-context-menu__item-detail">
+                                {threadSettleRefusalText(contextMenuSettleRefusal)}
+                              </span>
+                            </button>
+                          ) : (
+                            <button
+                              role="menuitem"
+                              type="button"
+                              onClick={() => settleFromContextMenu(contextMenuPinThread!)}
+                            >
+                              {contextMenuPinThread!.settledAt !== undefined ? "Unsettle" : "Settle"}
+                            </button>
+                          )}
+                        </div>
+                        {!contextMenuHasCheckSection
+                          && (contextMenuHasCreationActions || contextMenuHasManagementActions) ? (
+                          <div className="thread-context-menu__separator" role="separator" />
+                        ) : null}
+                      </>
                     ) : null}
                     {contextMenuHasCheckSection &&
                     (contextMenuHasCreationActions || contextMenuHasManagementActions) ? (
@@ -5349,18 +5452,32 @@ function SidebarContent(props: SidebarProps) {
             }}
             onClick={(event) => event.stopPropagation()}
           >
-            {directoryMenuCanMarkRead ? (
+            {directoryMenuCanMarkRead || directoryMenuCanSettleUnpinned ? (
               <div className="thread-context-menu__section">
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={markSelectedDirectoryThreadsRead}
-                >
-                  Mark Read
-                </button>
+                {directoryMenuCanMarkRead ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={markSelectedDirectoryThreadsRead}
+                  >
+                    Mark Read
+                  </button>
+                ) : null}
+                {directoryMenuCanSettleUnpinned ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setDirectoryContextMenu(undefined);
+                      setSettleUnpinnedDirectory(directoryContextMenu.directory);
+                    }}
+                  >
+                    Settle Unpinned…
+                  </button>
+                ) : null}
               </div>
             ) : null}
-            {directoryMenuCanMarkRead && directoryMenuHasPinActions ? (
+            {(directoryMenuCanMarkRead || directoryMenuCanSettleUnpinned) && directoryMenuHasPinActions ? (
               <div className="thread-context-menu__separator" role="separator" />
             ) : null}
             {directoryMenuHasPinActions ? (
@@ -5415,7 +5532,7 @@ function SidebarContent(props: SidebarProps) {
               </div>
             ) : null}
             {directoryMenuHasPathSection
-              && (directoryMenuCanMarkRead || directoryMenuHasPinActions) ? (
+              && (directoryMenuCanMarkRead || directoryMenuCanSettleUnpinned || directoryMenuHasPinActions) ? (
               <div className="thread-context-menu__separator" role="separator" />
             ) : null}
             {directoryMenuPath !== undefined ? (
@@ -5452,7 +5569,7 @@ function SidebarContent(props: SidebarProps) {
               </div>
             ) : null}
             {directoryMenuHasForgeSection
-              && (directoryMenuCanMarkRead || directoryMenuHasPinActions || directoryMenuHasPathSection) ? (
+              && (directoryMenuCanMarkRead || directoryMenuCanSettleUnpinned || directoryMenuHasPinActions || directoryMenuHasPathSection) ? (
               <div className="thread-context-menu__separator" role="separator" />
             ) : null}
             {directoryMenuHasForgeSection ? (
@@ -5535,7 +5652,7 @@ function SidebarContent(props: SidebarProps) {
               </div>
             ) : null}
             {directoryMenuCanRemove
-              && (directoryMenuCanMarkRead || directoryMenuHasPinActions) ? (
+              && (directoryMenuCanMarkRead || directoryMenuCanSettleUnpinned || directoryMenuHasPinActions) ? (
               <div className="thread-context-menu__separator" role="separator" />
             ) : null}
             {directoryMenuCanRemove ? (
@@ -5584,6 +5701,15 @@ function SidebarContent(props: SidebarProps) {
             revealPath={canRevealPath ? (path) => revealProjectPath(path, projectCheckoutsDirectory.label) : undefined}
             onSave={props.onSetProjectCheckoutGroup}
             onClose={() => setProjectCheckoutsDirectory(undefined)}
+          />
+        ) : null}
+
+        {settleUnpinnedDirectory && props.onSettleDirectoryUnpinned ? (
+          <SettleUnpinnedDialog
+            directory={settleUnpinnedDirectory}
+            settle={props.onSettleDirectoryUnpinned}
+            returnFocus={directoryContextMenuOpenerRef}
+            onClose={() => setSettleUnpinnedDirectory(undefined)}
           />
         ) : null}
 

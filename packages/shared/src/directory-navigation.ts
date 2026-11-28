@@ -605,6 +605,7 @@ export function applyNavigationDirectoryOverlay(summary: NavigationDirectorySumm
   if (!overlay || (summary.kind !== "directory" && summary.kind !== "workspace")) return;
   if (overlay.pinnedRank) summary.pinnedRank = overlay.pinnedRank;
   if (overlay.directoryThreadsCollapsed !== undefined) summary.directoryThreadsCollapsed = overlay.directoryThreadsCollapsed;
+  if (overlay.settledCollapsed !== undefined) summary.settledCollapsed = overlay.settledCollapsed;
   if (overlay.forgeAutomation && summary.kind === "directory") {
     const automation = resolveProjectForgeAutomation(overlay.forgeAutomation);
     if (!isDefaultProjectForgeAutomation(automation)) summary.forgeAutomation = automation;

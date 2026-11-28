@@ -293,6 +293,11 @@ function validateRequest(request: NavigationQueryRequest): void {
     && !["all", "pinned", "unpinned"].includes(request.query.roots)) {
     throw new NavigationQueryError("navigation_invalid_request", "Invalid directory root disclosure.");
   }
+  if (request.query.kind === "directory" && request.query.settled !== undefined
+    && (!["exclude", "only"].includes(request.query.settled)
+      || (request.query.roots !== undefined && request.query.roots !== "all" && request.query.roots !== "unpinned"))) {
+    throw new NavigationQueryError("navigation_invalid_request", "Invalid directory Settled split.");
+  }
   if (request.query.kind === "lens" && request.query.roots !== undefined
     && !["pinned", "unpinned"].includes(request.query.roots)) {
     throw new NavigationQueryError("navigation_invalid_request", "Invalid lens root split.");

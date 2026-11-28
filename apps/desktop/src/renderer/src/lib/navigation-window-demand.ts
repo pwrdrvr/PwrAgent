@@ -43,6 +43,14 @@ export function lensHasPinnedGroup(browseMode: string, pinnedThreadsOnTop: boole
   return pinnedThreadsOnTop && (browseMode === "inbox" || browseMode === "recents");
 }
 
+/** The Settled section starts folded: open only by an explicit choice, here or saved on the owner. */
+export function directorySettledOpen(
+  directory: Pick<NavigationDirectoryRow, "key" | "settledCollapsed">,
+  settledExpandedByKey?: Readonly<Record<string, boolean>>,
+): boolean {
+  return settledExpandedByKey?.[directory.key] ?? directory.settledCollapsed === false;
+}
+
 /** Demand is explicit window state; a missing page never implies a missing item. */
 export function buildNavigationWindowDemand(params: {
   browseMode: "attention" | "drafts" | "inbox" | "recents" | "directories";
@@ -53,6 +61,8 @@ export function buildNavigationWindowDemand(params: {
   indexedDirectoryKeys?: ReadonlySet<string>;
   expandedByKey: Readonly<Record<string, boolean>>;
   unpinnedExpandedByKey: Readonly<Record<string, boolean>>;
+  /** Window-local Settled folds; absent falls back to the owner's, then folded. */
+  settledExpandedByKey?: Readonly<Record<string, boolean>>;
   selectedDirectoryKeys?: readonly string[];
   /** Confirmed owner removals remain hidden while older descriptor pages are retained. */
   removedDirectoryKeys?: readonly string[];
@@ -106,7 +116,15 @@ export function buildNavigationWindowDemand(params: {
         && params.expandedByKey[directory.key] !== true) continue;
       const showUnpinned = params.unpinnedExpandedByKey[directory.key] ?? !directory.directoryThreadsCollapsed;
       demand.set(`directory-pins:${directory.key}`, request({ kind: "directory", directoryKey: directory.key, roots: "pinned" }));
-      if (showUnpinned) demand.set(`directory:${directory.key}`, request({ kind: "directory", directoryKey: directory.key, roots: "unpinned" }));
+      // Settled roots page on their own, beneath Unpinned. A project with
+      // none asks exactly what it always has, so an owner without Settle,
+      // or a profile that never settles, reads the same pages as before.
+      const hasSettled = (directory.settledRootCount ?? 0) > 0;
+      if (showUnpinned) demand.set(`directory:${directory.key}`, request({ kind: "directory", directoryKey: directory.key, roots: "unpinned",
+        ...(hasSettled ? { settled: "exclude" as const } : {}) }));
+      if (hasSettled && directorySettledOpen(directory, params.settledExpandedByKey)) {
+        demand.set(`directory-settled:${directory.key}`, request({ kind: "directory", directoryKey: directory.key, roots: "unpinned", settled: "only" }));
+      }
     }
 
   } else if (params.browseMode === "drafts") {

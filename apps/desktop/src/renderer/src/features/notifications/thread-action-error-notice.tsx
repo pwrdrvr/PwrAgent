@@ -43,6 +43,7 @@ export type ThreadActionErrorKind =
   | "save-collapsed"
   | "save-skill-profile"
   | "set-thread-parent"
+  | "settle-thread"
   | "unlink-thread"
   | "update-pin";
 
@@ -65,6 +66,7 @@ const THREAD_ACTION_ERROR_TITLES: Record<ThreadActionErrorKind, string> = {
   "save-collapsed": "Could not save collapsed state",
   "save-skill-profile": "Could not save skill profile",
   "set-thread-parent": "Could not change parent thread",
+  "settle-thread": "Settle failed",
   "unlink-thread": "Unlink failed",
   "update-pin": "Pin change failed",
 };

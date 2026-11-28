@@ -1451,6 +1451,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             'lastSeenUpdatedAt', json_extract(payload, '$.lastSeenUpdatedAt'),
             'extraLinkedDirectories', json_extract(payload, '$.extraLinkedDirectories'),
             'pinnedRank', json_extract(payload, '$.pinnedRank'),
+            'settledAt', json_extract(payload, '$.settledAt'),
             'parentThreadId', json_extract(payload, '$.parentThreadId'),
             'parentThreadBackend', json_extract(payload, '$.parentThreadBackend'),
             'parentThreadInstanceId', json_extract(payload, '$.parentThreadInstanceId'),
@@ -5668,6 +5669,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       archiveTombstonedAt: params.archivedAt,
       archiveRestoredAt: params.restoredAt ?? current.archiveRestoredAt,
       archiveRetentionStartedAt: params.restoredAt === undefined ? current.archiveRetentionStartedAt : undefined,
+      // Archive clears Settle, and a restored thread comes back active.
+      settledAt: params.archivedAt !== undefined || params.restoredAt !== undefined ? undefined : current.settledAt,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -5734,10 +5737,55 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       const nextState: ThreadOverlayState = {
         ...current,
         pinnedRank: pinnedRank || undefined,
+        // A pin and Settle never hold together: pinning un-settles.
+        settledAt: pinnedRank ? undefined : current.settledAt,
       };
       this.putThread(threadKey, nextState);
       return nextState;
     }).immediate();
+  }
+
+  /**
+   * Settle or unsettle threads in one commit. Settle clears the pin and
+   * marks the thread read: its watermark only moves forward, as bulk Mark
+   * Read's does. Rows already in the asked state are left untouched, so a
+   * repeat writes nothing. Returns the threads whose state changed, with
+   * whether a pin was cleared.
+   */
+  setThreadsSettled(params: {
+    threads: readonly { backend: ThreadOverlayState["backend"]; threadId: string; seenUpdatedAt?: number }[];
+    settled: boolean;
+    at: number;
+  }): Array<{ backend: ThreadOverlayState["backend"]; threadId: string; settledAt?: number; unpinned: boolean }> {
+    const changed = params.threads.filter((thread) => {
+      const current = this.getThread(buildThreadIdentityKey(thread.backend, thread.threadId));
+      return params.settled ? current?.settledAt === undefined : current?.settledAt !== undefined;
+    });
+    if (!changed.length) return [];
+    return this.stateDb.raw.transaction(() => changed.flatMap((thread) => {
+      const threadKey = buildThreadIdentityKey(thread.backend, thread.threadId);
+      const current = this.getThread(threadKey) ?? {
+        backend: thread.backend,
+        threadId: thread.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      if (params.settled ? current.settledAt !== undefined : current.settledAt === undefined) return [];
+      if (!params.settled) {
+        this.putThread(threadKey, { ...current, settledAt: undefined });
+        return [{ backend: thread.backend, threadId: thread.threadId, unpinned: false }];
+      }
+      const lastSeenUpdatedAt = thread.seenUpdatedAt === undefined ? current.lastSeenUpdatedAt
+        : Math.max(thread.seenUpdatedAt, current.lastSeenUpdatedAt ?? 0);
+      this.putThread(threadKey, {
+        ...current,
+        settledAt: params.at,
+        pinnedRank: undefined,
+        lastSeenAt: params.at,
+        lastSeenUpdatedAt,
+      });
+      return [{ backend: thread.backend, threadId: thread.threadId, settledAt: params.at, unpinned: Boolean(current.pinnedRank) }];
+    })).immediate();
   }
 
   async addRemoteThreadPin(params: {
@@ -7131,11 +7179,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   async setDirectoryThreadsCollapsed(params: {
     directoryKey: string;
     collapsed: boolean;
+    /** Absent folds Unpinned, as it always has. */
+    section?: "settled";
   }): Promise<DirectoryOverlayState> {
     const nextState: DirectoryOverlayState = {
       ...this.getDirectoryOverlay(params.directoryKey),
       directoryKey: params.directoryKey,
-      directoryThreadsCollapsed: params.collapsed,
+      ...(params.section === "settled"
+        ? { settledCollapsed: params.collapsed }
+        : { directoryThreadsCollapsed: params.collapsed }),
     };
     this.putDirectoryOverlay(params.directoryKey, nextState);
     return nextState;
@@ -7180,11 +7232,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     instanceId: string;
     directoryKey: string;
     collapsed: boolean;
+    section?: "settled";
   }): Promise<DirectoryOverlayState> {
     const nextState: RemoteDirectoryOverlayPayload = {
       ...this.readRemoteDirectoryOverlay(params.instanceId, params.directoryKey),
       directoryKey: params.directoryKey,
-      directoryThreadsCollapsed: params.collapsed,
+      ...(params.section === "settled"
+        ? { settledCollapsed: params.collapsed }
+        : { directoryThreadsCollapsed: params.collapsed }),
     };
     this.writeRemoteDirectoryOverlay(params.instanceId, nextState);
     return nextState;
@@ -12797,7 +12852,7 @@ const OWNER_OVERLAY_FIELDS = [
   ["executionModeUpdatedAt", "executionModeUpdatedAt"], ["reasoningEffortsByModel", "reasoningEffortsByModel"],
   ["modelMigrationRevision", "modelMigrationRevision"], ["modelSettingsManuallyUpdatedAt", "modelSettingsManuallyUpdatedAt"],
   ["createdAt", "createdAt"], ["updatedAt", "updatedAt"], ["cwd", "cwd"],
-  ["pinnedRank", "pinnedRank"], ["seenAt", "lastSeenAt"], ["seenUpdatedAt", "lastSeenUpdatedAt"],
+  ["pinnedRank", "pinnedRank"], ["settledAt", "settledAt"], ["seenAt", "lastSeenAt"], ["seenUpdatedAt", "lastSeenUpdatedAt"],
   ["archivedAt", "archiveTombstonedAt"], ["restoredAt", "archiveRestoredAt"],
   ["archiveRetentionStartedAt", "archiveRetentionStartedAt"],
   ["subthreadOrder", "subthreadOrder"], ["subthreadsCollapsed", "subthreadsCollapsed"],
@@ -14060,6 +14115,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadArchiveTombstone"
   | "setThreadScheduledStart"
   | "setThreadPin"
+  | "setThreadsSettled"
   | "setThreadParent"
   | "setThreadAgent"
   | "setQueuedThreadAgentChange"

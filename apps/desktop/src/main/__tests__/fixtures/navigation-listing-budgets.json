@@ -60,7 +60,7 @@
     "fullOverlayParses": 0,
     "fullOverlayBytes": 0,
     "compactOverlayParses": 119,
-    "compactOverlayBytes": 79729
+    "compactOverlayBytes": 81752
   },
   "pr-candidate-bootstrap-and-unchanged": {
     "readsPerBatch": 3,

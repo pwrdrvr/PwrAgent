@@ -27,6 +27,8 @@ export type OwnerThreadMetadata = {
   serviceTier?: string;
   fastMode?: boolean;
   pinnedRank?: string;
+  /** Settled by the operator. Never held with `pinnedRank`; any turn start clears it. */
+  settledAt?: number;
   seenAt?: number;
   /** The displayed update acknowledged by the reader, not the read's time. */
   seenUpdatedAt?: number;
@@ -79,7 +81,7 @@ export interface ImmediateOwnerThreadRegistry {
 }
 
 export const OWNER_THREAD_METADATA_FIELDS = [
-  "title", "createdAt", "updatedAt", "cwd", "pinnedRank", "seenAt", "seenUpdatedAt",
+  "title", "createdAt", "updatedAt", "cwd", "pinnedRank", "settledAt", "seenAt", "seenUpdatedAt",
   "executionMode", "model", "reasoningEffort", "serviceTier", "fastMode",
   "executionModeUpdatedAt", "reasoningEffortsByModel", "modelMigrationRevision", "modelSettingsManuallyUpdatedAt",
   "archived", "archivedAt", "restoredAt", "archiveRetentionStartedAt", "parent", "subthreadOrder", "subthreadsCollapsed", "messagingFileTools", "nativeMembershipRetired", "stackLead",
