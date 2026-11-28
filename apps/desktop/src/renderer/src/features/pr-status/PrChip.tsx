@@ -16,7 +16,7 @@ import {
   sidebarPrCardBridge,
   type BridgedHoverCard,
 } from "../../lib/hover-card-bridge";
-import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { useViewportTooltip, type TooltipKeep } from "../../lib/useViewportTooltip";
 import { observeElementVisibility } from "../../lib/observe-element-visibility";
 import { statusPulseRef } from "../../lib/status-pulse";
 import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
@@ -140,8 +140,8 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   );
   // The merge control changes the card's height; placing it again keeps a
   // card near the window's bottom edge on screen.
-  const relayoutCard = useCallback(() => {
-    updateTooltip(latestCardRef.current);
+  const relayoutCard = useCallback((keep?: TooltipKeep) => {
+    updateTooltip(latestCardRef.current, keep ? { keep } : undefined);
   }, [updateTooltip]);
   const card = (
     <>

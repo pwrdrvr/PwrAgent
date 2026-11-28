@@ -21,6 +21,7 @@ import {
 } from "@pwragent/shared/contracts/navigation";
 import { type BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
+import { useReviewCardStart, type ComposerReviewSetup } from "./useReviewCardStart";
 import { ModelDropdown } from "./ModelDropdown";
 import { ModelSettingsPicker, ModelSettingsQuickList, type ModelSettingsPickerProps } from "./ModelSettingsPicker";
 import { AccessPicker } from "./AccessPicker";
@@ -483,6 +484,8 @@ function isEditingOutsideComposer(): boolean {
     && !focused.closest("form.composer");
 }
 
+export type { ComposerReviewSetup } from "./useReviewCardStart";
+
 export type ComposerProps = {
   codexSkillProfiles?: readonly CodexSkillProfile[];
   onOpenCodexSkillProfiles?: () => void;
@@ -579,9 +582,11 @@ export type ComposerProps = {
   onReviewRequestHandled?: (id: number) => void;
   /**
    * The to-do card whose review the open panel is setting up, or undefined
-   * once the panel closes or belongs to no card.
+   * once the panel closes or belongs to no card. `start` is present while the
+   * panel's Start review is enabled and on screen, so the card can start it
+   * from the spot its own Start review was.
    */
-  onReviewSetupTodoChange?: (todoId: string | undefined) => void;
+  onReviewSetupChange?: (setup: ComposerReviewSetup | undefined) => void;
   /** An immediately submitted review started. The owner settles scheduled reviews. */
   onReviewStarted?: (threadKey: string, requestId?: number) => void;
   /**
@@ -3738,11 +3743,6 @@ function useComposerController(props: ComposerProps) {
     reviewConfigRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [reviewPanelArrival]);
   const reviewSetupTodoId = reviewConfig?.reviewTodo?.id;
-  const onReviewSetupTodoChange = props.onReviewSetupTodoChange;
-  useEffect(() => {
-    onReviewSetupTodoChange?.(reviewSetupTodoId);
-  }, [onReviewSetupTodoChange, reviewSetupTodoId]);
-  useEffect(() => () => onReviewSetupTodoChange?.(undefined), [onReviewSetupTodoChange]);
 
   function useComposerSessionState() {
     const nativeVoiceApi = isNativeVoiceApi(props.desktopApi) ? props.desktopApi : undefined;
@@ -12244,6 +12244,24 @@ function useComposerController(props: ComposerProps) {
     composerErrorEntries,
   } = useComposerPresentation();
 
+  const reviewStartDisabled = !buildConfiguredReviewCommand(reviewConfig)
+    || (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd)
+    || reviewSubmissionUnavailable;
+  const reviewStartLabel = reviewPullRequestsTogether
+    ? "Start combined review"
+    : reviewPullRequestBatch
+      ? `Start ${selectedReviewPullRequests.length} reviews`
+      : "Start review";
+  const reviewStartButtonRef = useReviewCardStart({
+    todoId: reviewSetupTodoId,
+    label: reviewStartLabel,
+    unavailable: reviewStartDisabled || Boolean(futureScheduledDraftSendAt),
+    start: () => {
+      void submitConfiguredReviewComposer();
+    },
+    onReviewSetupChange: props.onReviewSetupChange,
+  });
+
   function useComposerPresentation() {
     // Remote controls use the owner's feature gate/default, never the viewer's.
     // Older owners omit this metadata, so the override control stays hidden.
@@ -15202,13 +15220,10 @@ function useComposerController(props: ComposerProps) {
             Cancel
           </button>
           <button
+            ref={reviewStartButtonRef}
             type="button"
             className="composer__primary-action"
-            disabled={
-              !buildConfiguredReviewCommand(reviewConfig) ||
-              (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd) ||
-              reviewSubmissionUnavailable
-            }
+            disabled={reviewStartDisabled}
             onClick={() => {
               void submitConfiguredReviewComposer();
             }}
@@ -15218,11 +15233,7 @@ function useComposerController(props: ComposerProps) {
                   futureScheduledDraftSendAt,
                   scheduleNow,
                 )}`
-              : reviewPullRequestsTogether
-                ? "Start combined review"
-                : reviewPullRequestBatch
-                  ? `Start ${selectedReviewPullRequests.length} reviews`
-                  : "Start review"}
+              : reviewStartLabel}
           </button>
         </div>
         {reviewAutoFixSupported && reviewPullRequestBatch ? (
