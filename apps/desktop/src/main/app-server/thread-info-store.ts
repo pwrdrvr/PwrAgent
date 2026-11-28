@@ -146,6 +146,18 @@ function isUsableTitle(
   return (title?.trim().length ?? 0) > 0;
 }
 
+function projectKnownTitle(
+  thread: AppServerThreadSummary,
+  title: string,
+  titleSource: AppServerThreadTitleSource | undefined,
+): AppServerThreadSummary {
+  return {
+    ...thread,
+    title,
+    titleSource: titleSource ?? (thread.title === title ? thread.titleSource : "derived"),
+  };
+}
+
 /**
  * The process-lifetime record of what PwrAgent knows about each thread it has
  * seen, keyed by thread identity rather than by the shape of the query that
@@ -313,6 +325,16 @@ export class ThreadInfoStore {
     return info;
   }
 
+  /** Keep a newer local title on a provider row that was already in flight. */
+  projectTitleObservedAfter(
+    thread: AppServerThreadSummary,
+    sequence: number,
+  ): AppServerThreadSummary {
+    const fields = this.entries.get(identityKey({ backend: thread.source, threadId: thread.id.trim() }))?.fields;
+    if (!fields?.title || fields.title.observationSequence <= sequence) return thread;
+    return projectKnownTitle(thread, fields.title.value, fields.titleSource?.value);
+  }
+
   /**
    * Record the whole row a listing returned, so a later point query about this
    * thread can be answered without walking the collection again.
@@ -452,15 +474,7 @@ export class ThreadInfoStore {
     // here, it describes this title. Otherwise the row's source still applies
     // if the row is talking about the same string, and only a title whose
     // provenance nothing records is reported as `derived`.
-    const titleSource = entry.fields.titleSource?.value
-      ?? (summary.value.title === title.value
-        ? summary.value.titleSource
-        : "derived");
-    return {
-      ...summary.value,
-      title: title.value,
-      titleSource,
-    };
+    return projectKnownTitle(summary.value, title.value, entry.fields.titleSource?.value);
   }
 
   /**

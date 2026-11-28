@@ -1429,6 +1429,7 @@ export class DesktopBackendRegistry {
     string,
     { title: string; titleSource: AppServerRenamedTitleSource; observationSequence: number }
   >();
+  private lastThreadNameEventSequence = 0;
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private readonly queuedMessageTitler: QueuedMessageTitler;
@@ -22961,6 +22962,7 @@ export class DesktopBackendRegistry {
           // Keep the name until a provider read can confirm it. ACP listings
           // already read the session store that the rename updated.
           if (!isAcpBackendId(event.backend)) {
+            this.lastThreadNameEventSequence = observationSequence;
             this.observedThreadNames.set(key, { title: trimmed, titleSource, observationSequence });
             // A start renamed before the provider lists it (a to-do card names
             // its thread at once) is served from this placeholder.
@@ -23000,6 +23002,11 @@ export class DesktopBackendRegistry {
     const key = buildThreadIdentityKey(thread.source, thread.id);
     const observed = this.observedThreadNames.get(key);
     if (!observed) {
+      // A newer listing may already have acknowledged the rename. The name
+      // still applies to provider reads that started before the event.
+      if (providerObservationSequence !== undefined && providerObservationSequence < this.lastThreadNameEventSequence) {
+        return this.threadInfoStore.projectTitleObservedAfter(thread, providerObservationSequence);
+      }
       return thread;
     }
     if (
