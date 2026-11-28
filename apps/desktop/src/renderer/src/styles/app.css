@@ -61603,11 +61603,14 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 /* Thread terminals: one shell canvas plus a 40px strip of session tiles. The
    strip's rail flies out over the shell with names, so the shell never gives
    up more than the strip and never reflows when the names show. */
+/* The remembered height is a preference, not a promise: in a window too short
+   for it beside the composer, the panel shrinks (down to 140px) instead of
+   running past the window's bottom edge with the prompt row out of sight. */
 .thread-terminal-panel {
   position: relative;
   height: var(--integrated-terminal-height, 260px);
   min-height: 140px;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   border-top: 1px solid var(--border-subtle);
   background: var(--terminal-bg);
 }

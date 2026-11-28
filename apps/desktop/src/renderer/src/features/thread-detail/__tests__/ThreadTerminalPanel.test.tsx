@@ -217,4 +217,44 @@ describe("ThreadTerminalPanel", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(document.querySelector(".thread-terminal-panel__rail")).not.toHaveClass("is-open");
   });
+
+  // A window too short for the remembered height paints the panel shorter
+  // (it shrinks to fit beside the composer). Found by the terminal-panel
+  // layout model: resizing from the remembered 560px made a 60px drag down,
+  // or two ArrowDown steps, land above the painted 490px, so nothing moved.
+  describe("resizing a panel painted shorter than its remembered height", () => {
+    function renderShrunkPanel() {
+      const terminals = { ...controller("a"), heightByThread: { "codex:thread-a": 560 } };
+      renderPanel(terminals, [pane("a")]);
+      const grip = screen.getByRole("separator", { name: "Resize terminal" });
+      grip.setPointerCapture = vi.fn();
+      vi.spyOn(grip.parentElement!, "getBoundingClientRect").mockReturnValue(
+        { height: 490 } as DOMRect,
+      );
+      return { terminals, grip };
+    }
+
+    function pointer(target: HTMLElement, type: string, clientY: number) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.assign(event, { pointerId: 1, button: 0, buttons: 1, clientX: 0, clientY });
+      fireEvent(target, event);
+    }
+
+    it("drags from the painted height", () => {
+      const { terminals, grip } = renderShrunkPanel();
+      pointer(grip, "pointerdown", 300);
+      pointer(grip, "pointermove", 360);
+      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 430);
+      pointer(grip, "pointermove", 260);
+      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 530);
+    });
+
+    it("steps from the painted height with the arrow keys", () => {
+      const { terminals, grip } = renderShrunkPanel();
+      fireEvent.keyDown(grip, { key: "ArrowDown" });
+      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 474);
+      fireEvent.keyDown(grip, { key: "ArrowUp" });
+      expect(terminals.setHeight).toHaveBeenLastCalledWith("codex:thread-a", 506);
+    });
+  });
 });

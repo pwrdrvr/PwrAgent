@@ -37,7 +37,7 @@ function declarations(selector: string): Map<string, string> {
   return result;
 }
 
-describe("thread terminal panel top edge", () => {
+describe("thread terminal panel layout", () => {
   it("lays the resize grip over the border instead of above the shell", () => {
     const grip = declarations(
       ".thread-terminal-panel > .integrated-terminal__resize-handle",
@@ -67,6 +67,15 @@ describe("thread terminal panel top edge", () => {
     // The grip starts on the 1px border; its bottom edge must not reach
     // the first row, which begins after the border and the body padding.
     expect(top + height).toBeLessThanOrEqual(1 + paddingTop);
+  });
+
+  it("yields to a window too short for the remembered height", () => {
+    // Found by the terminal-panel layout model: a 560px terminal in a 640px
+    // window would not shrink beside the composer, so its bottom rows (the
+    // prompt, after output) and the ended-shell bar ran past the window edge.
+    const panel = declarations(".thread-terminal-panel");
+    expect(panel.get("flex")).toBe("0 1 auto");
+    expect(panel.get("min-height")).toBe("140px");
   });
 
   it("anchors xterm to the top so the row remainder falls below the last row", () => {

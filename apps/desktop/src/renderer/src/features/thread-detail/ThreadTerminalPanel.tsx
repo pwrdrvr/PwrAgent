@@ -183,13 +183,19 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
   const focusTab = (index: number) =>
     listRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]?.focus();
   const changeHeight = (value: number) => terminals.setHeight(threadKey, Math.max(140, Math.min(560, value)));
+  /** In a short window the panel paints shorter than its remembered height.
+   *  Resizing starts from what is on screen, or a drag down would move
+   *  nothing until it had covered the difference. */
+  const paintedHeight = (grip: HTMLElement) =>
+    Math.round(grip.parentElement?.getBoundingClientRect().height ?? height);
   const resize = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const start = event.clientY;
     const target = event.currentTarget;
-    const move = (next: globalThis.PointerEvent) => changeHeight(height + start - next.clientY);
+    const startHeight = paintedHeight(target);
+    const move = (next: globalThis.PointerEvent) => changeHeight(startHeight + start - next.clientY);
     const end = () => {
       target.removeEventListener("pointermove", move);
       target.removeEventListener("lostpointercapture", end);
@@ -238,7 +244,7 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
         aria-label="Resize terminal" aria-orientation="horizontal" aria-valuemin={140} aria-valuemax={560} aria-valuenow={height}
         onPointerDown={resize} onKeyDown={(event) => {
           if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-            event.preventDefault(); changeHeight(height + (event.key === "ArrowUp" ? 16 : -16));
+            event.preventDefault(); changeHeight(paintedHeight(event.currentTarget) + (event.key === "ArrowUp" ? 16 : -16));
           }
         }} />
       <div className="thread-terminal-panel__body">
