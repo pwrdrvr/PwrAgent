@@ -79,7 +79,7 @@ int wmain(int argc, wchar_t **argv) {
     return 2;
   }
   if (!wcscmp(argv[1], L"remote")) {
-    verified_pipe_with_wait(L"\\\\remote-server\\pipe\\squatter", 0);
+    verified_pipe(L"\\\\remote-server\\pipe\\squatter");
     return 2;
   }
   if (!wcscmp(argv[1], L"squatter")) {
@@ -98,7 +98,7 @@ int wmain(int argc, wchar_t **argv) {
       PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 4096, 4096, 0, &attributes);
     LocalFree(descriptor);
     if (server == INVALID_HANDLE_VALUE) return 77;
-    HANDLE client = verified_pipe_with_wait(name, 0);
+    HANDLE client = verified_pipe(name);
     CloseHandle(client); CloseHandle(server);
     return 2;
   }
