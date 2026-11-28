@@ -11023,6 +11023,10 @@ button.stack-display__thread,
   gap: 0;
   padding-top: 0;
   padding-bottom: var(--directory-list-end-pad);
+  /* Tab into a pinned row at the bottom edge and the browser scrolls it
+     only as far as the edge, behind that stuck divider (its 24px
+     min-height), focus ring and all. Native focus scrolling honours this. */
+  scroll-padding-bottom: 24px;
 }
 
 .directory-row {

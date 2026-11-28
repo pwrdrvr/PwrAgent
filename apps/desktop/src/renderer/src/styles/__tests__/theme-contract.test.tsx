@@ -641,6 +641,11 @@ describe("Tangerine Terminal theme contract", () => {
     expect(list).toMatch(/--directory-list-end-pad:\s*16px;/);
     expect(list).toMatch(/\bpadding-bottom:\s*var\(--directory-list-end-pad\);/);
     expect(divider).toMatch(/\bbottom:\s*calc\(-1 \* var\(--directory-list-end-pad, 0px\)\);/);
+    // Keyboard focus scrolled to the bottom edge must clear the stuck
+    // divider: a headless Tab walk through 60 pins left 4 focused rows
+    // partly behind it without this.
+    const dividerHeight = Number(/\bmin-height:\s*(\d+)px;/.exec(divider)?.[1]);
+    expect(list).toMatch(new RegExp(`\\bscroll-padding-bottom:\\s*${dividerHeight}px;`));
   });
 
   it("does not leave unresolved theme token references in app.css", () => {
