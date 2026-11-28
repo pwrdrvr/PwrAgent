@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import * as git from "../app-server/git-executable";
-import { bundledGitExecutable } from "../bundled-git";
+import { bundledGitDirectory, bundledGitExecutable, configureBundledGit } from "../bundled-git";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
+import { setGitCommandResolver } from "../git-command";
 import { clearGitHubRemoteCache, observeForgeRepositoriesForDirectory, parseForgeRemote, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
 import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
@@ -175,10 +176,18 @@ it.skipIf(process.platform === "win32")("refreshes stored default branches witho
   expect(lists()).toHaveLength(checkouts.length);
 });
 
-it.skipIf(process.platform === "win32").each(["common", "global", "worktree"] as const)(
+it.skipIf(process.platform === "win32").each(["common", "global", "worktree", "system"] as const)(
   "keeps per-checkout Git authority when %s config changes during the seed read",
   async (scope) => {
-    const { clone, checkouts } = await ordinaryWorktrees();
+    const { root, clone, checkouts } = await ordinaryWorktrees();
+    if (scope === "system") {
+      configureBundledGit(path.dirname(bundledGitDirectory()));
+      onTestFinished(() => { configureBundledGit(); });
+      process.env.PWRAGENT_GIT_PATH = bundledGitExecutable();
+      process.env.GIT_CONFIG_SYSTEM = path.join(root, "system-config");
+      delete process.env.GIT_CONFIG_NOSYSTEM;
+      await writeFile(process.env.GIT_CONFIG_SYSTEM, "");
+    }
     let seed: string | undefined;
     const runGit = git.runGitCommand;
     const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (cwd, args, options) => {
@@ -211,10 +220,140 @@ it.skipIf(process.platform === "win32").each(["common", "global", "worktree"] as
   },
 );
 
+it.skipIf(process.platform === "win32")("rechecks the selected Git before sharing a packaged config sample", async () => {
+  const { root, checkouts: [seed, sibling] } = await ordinaryWorktrees(2);
+  configureBundledGit(path.dirname(bundledGitDirectory()));
+  const executable = bundledGitExecutable();
+  const wrapper = path.join(root, "git-wrapper");
+  await writeFile(wrapper, [
+    "#!/bin/sh",
+    'cwd=$2; shift 2',
+    `exec '${executable}' -C "$cwd" -c 'url.${editedOrigin}.insteadOf=${origin}' "$@"`,
+  ].join("\n"), { mode: 0o755 });
+  let selected = executable;
+  setGitCommandResolver(() => selected);
+  onTestFinished(() => { setGitCommandResolver(undefined); configureBundledGit(); });
+
+  const runGit = git.runGitCommand;
+  const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+    if (cwd === seed && args.includes("--show-origin")) selected = wrapper;
+    return await runGit(cwd, args, options);
+  });
+  onTestFinished(() => { runner.mockRestore(); });
+
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  for (const cwd of [seed, sibling]) {
+    const observed = await resolveGitHubRepoForDirectory(cwd, { inventoryConfig });
+    const native = await runGit(cwd, ["remote", "get-url", "origin"]);
+    expect(observed).toEqual(parseForgeRemote(native.stdout));
+    expect(observed).toEqual(parseForgeRemote(editedOrigin));
+  }
+});
+
+async function usePackagedGitWithCompiledSystemConfig(root: string) {
+  configureBundledGit(path.dirname(bundledGitDirectory()));
+  onTestFinished(() => { configureBundledGit(); });
+  process.env.PWRAGENT_GIT_PATH = bundledGitExecutable();
+  delete process.env.GIT_CONFIG_NOSYSTEM;
+  const system = path.join(root, "compiled-system-config");
+  await writeFile(system, "[core]\n\tabbrev = 12\n");
+  const runGit = git.runGitCommand;
+  return (cwd: string, args: string[], options?: Parameters<typeof runGit>[2]) => runGit(cwd, args, {
+    ...options, env: { ...process.env, ...options?.env, GIT_CONFIG_SYSTEM: system },
+    // Simulate a compiled path while letting Git report and read the file.
+    beforeSpawn: (executable, { GIT_CONFIG_SYSTEM: _system, ...env }) => options?.beforeSpawn?.(executable, env),
+  });
+}
+
+it.skipIf(process.platform === "win32")("shares healthy checkout config after a malformed checkout asks first", async () => {
+  const { root, checkouts } = await ordinaryWorktrees(2);
+  const broken = path.join(root, "broken");
+  const brokenCheckout = path.join(root, "broken-worktree");
+  await git.runGitCommand(root, ["init", "-b", "main", broken]);
+  await git.runGitCommand(broken, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+    "commit", "--allow-empty", "-m", "fixture"]);
+  await git.runGitCommand(broken, ["worktree", "add", "--detach", brokenCheckout]);
+  await writeFile(path.join(broken, ".git", "config"), "[unterminated\n");
+  const runGit = await usePackagedGitWithCompiledSystemConfig(root);
+  await expect(runGit(brokenCheckout, ["var", "GIT_CONFIG_SYSTEM"])).rejects.toThrow(/bad config line/);
+  const expected = await Promise.all(checkouts.map(async (cwd) =>
+    parseForgeRemote((await runGit(cwd, ["remote", "get-url", "origin"])).stdout)));
+
+  const runner = vi.spyOn(git, "runGitCommand").mockImplementation(runGit);
+  onTestFinished(() => { runner.mockRestore(); });
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  const read = (cwd: string) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig });
+  await expect(read(brokenCheckout)).resolves.toBeUndefined();
+  await expect(Promise.all(checkouts.map(read))).resolves.toEqual(expected);
+  // The first checkout's local error cannot consume the healthy group's sample.
+  expect(runner.mock.calls.filter(([cwd, [verb]]) => checkouts.includes(cwd) && verb === "config")).toHaveLength(1);
+});
+
+it.skipIf(process.platform === "win32")("shares registered siblings after a moved checkout cannot seed the clone", async () => {
+  const { root, checkouts: [moved, ...siblings] } = await ordinaryWorktrees(3);
+  const unregistered = path.join(root, "moved-without-repair");
+  await rename(moved, unregistered);
+  const expected = parseForgeRemote((await git.runGitCommand(unregistered, ["remote", "get-url", "origin"])).stdout);
+  expect(expected).toEqual(parseForgeRemote(origin));
+
+  const runner = vi.spyOn(git, "runGitCommand");
+  onTestFinished(() => { runner.mockRestore(); });
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  const read = (cwd: string) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig });
+  await expect(read(unregistered)).resolves.toEqual(expected);
+  await expect(Promise.all(siblings.map(read))).resolves.toEqual(siblings.map(() => expected));
+  // The stale backlink prevents this checkout from seeding reuse. It still
+  // gets its own Git answer, and a registered sibling can seed the group.
+  expect(runner.mock.calls.filter(([cwd, [verb]]) => siblings.includes(cwd) && verb === "config")).toHaveLength(1);
+});
+
+it.skipIf(process.platform === "win32")("retries a canceled packaged Git system config probe for the next inventory reader", async () => {
+  const { root, checkouts: [seed, sibling] } = await ordinaryWorktrees(2);
+  const runGit = await usePackagedGitWithCompiledSystemConfig(root);
+  const paused = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const drained = Promise.withResolvers<void>();
+  let probes = 0;
+  let configs = 0;
+  const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+    const canceledProbe = args.includes("GIT_CONFIG_SYSTEM") && ++probes === 1;
+    try {
+      if (canceledProbe) {
+        paused.resolve();
+        await release.promise;
+      }
+      if (args[0] === "config") configs++;
+      return await runGit(cwd, args, options);
+    } finally {
+      if (canceledProbe) drained.resolve();
+    }
+  });
+  onTestFinished(() => { runner.mockRestore(); });
+
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  const abort = new AbortController();
+  const canceled = resolveGitHubRepoForDirectory(seed, { inventoryConfig, demand: { signal: abort.signal } });
+  try {
+    await Promise.race([paused.promise, canceled.then(() => { throw new Error("Inventory skipped the system config probe"); })]);
+    abort.abort();
+    await expect(canceled).rejects.toBe(abort.signal.reason);
+    const read = (cwd: string) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig });
+    await expect(Promise.all([read(seed), read(sibling)])).resolves.toEqual([parseForgeRemote(origin), parseForgeRemote(origin)]);
+    expect(probes).toBe(2);
+    expect(configs).toBe(1);
+  } finally {
+    release.resolve();
+    if (probes > 0) await drained.promise;
+  }
+});
+
 it.skipIf(process.platform === "win32").each(["wildcard", "single-branch"] as const)(
   "keeps an inactive branch include from supplying sibling config for a %s fetch",
   async (fetch) => {
     const { root, clone, checkouts } = await ordinaryWorktrees();
+    configureBundledGit(path.dirname(bundledGitDirectory()));
+    onTestFinished(() => { configureBundledGit(); });
+    process.env.PWRAGENT_GIT_PATH = bundledGitExecutable();
     const changed = checkouts.at(-1)!;
     const include = path.join(root, "branch-config");
     if (fetch === "single-branch") {
