@@ -627,6 +627,7 @@ import {
   type AgentToolMcpClientContext,
   type AgentToolMcpRegistration,
   type AgentToolMcpServerLike,
+  type CodexAgentToolMcpResult,
   type ResolvedAgentToolMcpCallContext,
 } from "../agent-tools/agent-tool-mcp-server";
 
@@ -899,6 +900,7 @@ import {
   readRecord,
 } from "./backend-registry-notification-values";
 import {
+  PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME,
   TOKEN_MISER_MANAGED_CAPABILITY_REASON,
   buildClaudeConnectionMcpServerName,
   buildCodexAgentToolsMcpConfig,
@@ -2394,6 +2396,7 @@ export class DesktopBackendRegistry {
       publishIncomingWork: (...args: Parameters<typeof this.publishIncomingWork>) => this.publishIncomingWork(...args),
       publishLiveTokenMiserLedgerEntryInOrder: (...args: Parameters<ThreadUsageLedger["publishLiveTokenMiserLedgerEntryInOrder"]>) => this.threadUsageLedger.publishLiveTokenMiserLedgerEntryInOrder(...args),
       publishLocalEvent: (...args: Parameters<typeof this.publishLocalEvent>) => this.publishLocalEvent(...args),
+      publishNativeVoiceMcpToolCall: (call: CodexAgentToolMcpResult) => this.publishNativeVoiceMcpToolCall(call),
       readCausalMessagingContext: (...args: Parameters<typeof this.readCausalMessagingContext>) => this.readCausalMessagingContext(...args),
       readTurnCausalMessagingOrigin: (context: Parameters<typeof this.readTurnCausalMessagingOrigin>[0]) => this.readTurnCausalMessagingOrigin(context),
       readCodexDefaultModelsOnce: (...args: Parameters<typeof this.readCodexDefaultModelsOnce>) => this.readCodexDefaultModelsOnce(...args),
@@ -2432,6 +2435,7 @@ export class DesktopBackendRegistry {
       get resolveCodexModelProviderKeysFn() { return current().resolveCodexModelProviderKeysFn; },
       get resolveCodexModelProvidersFn() { return current().resolveCodexModelProvidersFn; },
       resolveCodexThreadExecutionModeForActiveTurn: (...args: Parameters<typeof this.resolveCodexThreadExecutionModeForActiveTurn>) => this.resolveCodexThreadExecutionModeForActiveTurn(...args),
+      resolveCodexAgentToolsMcpResumeConfig: (...args: Parameters<typeof this.resolveCodexAgentToolsMcpResumeConfig>) => this.resolveCodexAgentToolsMcpResumeConfig(...args),
       resolveCodexToolCallExecutionMode: (...args: Parameters<typeof this.resolveCodexToolCallExecutionMode>) => this.resolveCodexToolCallExecutionMode(...args),
       get resolveDefaultPrAutoDispatchEnabledFn() { return current().resolveDefaultPrAutoDispatchEnabledFn; },
       resolveForgeToolPolicy: (...args: Parameters<ForgeToolBridge["resolveForgeToolPolicy"]>) => this.forgeToolBridge.resolveForgeToolPolicy(...args),
@@ -12478,6 +12482,19 @@ export class DesktopBackendRegistry {
     return buildCodexAgentToolsMcpConfig(await this.registerCodexAgentToolsMcp({ threadId, tokenMiserEnabled }));
   }
 
+  private async resolveCodexAgentToolsMcpResumeConfig(
+    threadId: string,
+    config: CodexThreadStartParams["config"],
+  ): Promise<CodexThreadStartParams["config"]> {
+    if (readRecord(config?.mcp_servers)?.[PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME]) return config;
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId });
+    if (!overlay?.codexAgentToolsMcp) return config;
+    const ownedMcp = await this.buildCodexAgentToolsMcpConfigForThread(
+      threadId, this.resolveTokenMiserEnabledForOverride(overlay.tokenMiserEnabled),
+    );
+    return mergeCodexThreadConfigs(config, ownedMcp);
+  }
+
   private async registerPdfMcpClient(params: {
     threadId?: string;
   }): Promise<AgentToolMcpRegistration | undefined> {
@@ -21059,20 +21076,38 @@ export class DesktopBackendRegistry {
   ): Promise<unknown> {
     const response = await promise;
     if (backend === "codex" && request.method === "item/tool/call" && this.nativeVoiceToolListeners.size > 0) {
-      const call: NativeVoiceToolCall = {
+      this.publishNativeVoiceToolCall({
         threadId: request.params.threadId,
         tool: String(request.params.tool),
         ...(typeof request.params.namespace === "string" ? { namespace: request.params.namespace } : {}),
         arguments: request.params.arguments,
         response,
-      };
-      for (const listener of this.nativeVoiceToolListeners) {
-        try { listener(call); } catch (error) {
-          backendRegistryLog.warn("voice tool-call listener failed", { error: String(error) });
-        }
-      }
+      });
     }
     return response;
+  }
+
+  private publishNativeVoiceMcpToolCall(call: CodexAgentToolMcpResult): void {
+    if (this.nativeVoiceToolListeners.size === 0) return;
+    this.publishNativeVoiceToolCall({
+      threadId: call.threadId,
+      tool: call.tool,
+      namespace: PWRAGENT_TOOL_NAMESPACE,
+      arguments: call.arguments,
+      response: {
+        success: call.result.isError !== true,
+        contentItems: call.result.content.flatMap((item) =>
+          item.type === "text" ? [{ type: "inputText", text: item.text }] : []),
+      },
+    });
+  }
+
+  private publishNativeVoiceToolCall(call: NativeVoiceToolCall): void {
+    for (const listener of this.nativeVoiceToolListeners) {
+      try { listener(call); } catch (error) {
+        backendRegistryLog.warn("voice tool-call listener failed", { error: String(error) });
+      }
+    }
   }
 
   private async performServerRequest(

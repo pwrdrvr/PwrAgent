@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
+import { MCP_CONNECTION_CODEX_TOOL_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
 import { createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
 
 it("uses the creation-time transport for each new Codex thread regardless of later profile settings", async () => {
@@ -31,11 +32,18 @@ it("uses the creation-time transport for each new Codex thread regardless of lat
     try {
       const { threadId } = await registry.startThread({ backend: "codex" });
       const initialServers = client.lastStartThreadParams?.config?.mcp_servers;
+      const serverName = Object.keys(initialServers ?? {})[0] ?? "pwragent_apps";
       const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId });
       expect(overlay?.codexAgentToolsMcp === true).toBe(enabledAtCreation);
       expect(Boolean(client.lastStartThreadParams?.dynamicTools)).toBe(!enabledAtCreation);
+      if (enabledAtCreation) {
+        // Codex merges by server name. The scoped HTTP entry must never merge
+        // with the conventional inherited stdio entry of the same family.
+        expect.soft(serverName).toMatch(/^pwragent_apps_[a-f0-9]{32}$/);
+      }
       expect(initialServers).toEqual(enabledAtCreation ? {
-        pwragent_apps: { enabled: true, required: true, url: "http://127.0.0.1:9001/mcp", http_headers: {} },
+        [serverName]: { enabled: true, required: true, url: "http://127.0.0.1:9001/mcp", http_headers: {},
+          tool_timeout_sec: MCP_CONNECTION_CODEX_TOOL_TIMEOUT_SECONDS },
       } : undefined);
       expect(bindThread.mock.calls).toEqual(enabledAtCreation ? [[threadId]] : []);
 
@@ -43,7 +51,8 @@ it("uses the creation-time transport for each new Codex thread regardless of lat
       await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Hello" }] });
       const turnServers = client.lastStartTurnParams?.config?.mcp_servers;
       expect(turnServers).toEqual(enabledAtCreation ? {
-        pwragent_apps: { enabled: true, required: true, url: "http://127.0.0.1:9002/mcp", http_headers: {} },
+        [serverName]: { enabled: true, required: true, url: "http://127.0.0.1:9002/mcp", http_headers: {},
+          tool_timeout_sec: MCP_CONNECTION_CODEX_TOOL_TIMEOUT_SECONDS },
       } : undefined);
       expect(Boolean(client.lastStartTurnParams?.dynamicTools)).toBe(!enabledAtCreation);
       expect(registerClient.mock.calls.map(([context]) => context.threadId))

@@ -180,6 +180,13 @@ export type AgentToolMcpAuthorization = {
   arguments?: unknown;
 };
 
+export type CodexAgentToolMcpResult = {
+  threadId: string;
+  tool: string;
+  arguments?: unknown;
+  result: AgentMcpToolCallResponse;
+};
+
 export type AgentToolMcpServerOptions = {
   verifyCodexThreadId?: boolean;
   resolveCatalogs: (
@@ -199,6 +206,7 @@ export type AgentToolMcpServerOptions = {
    * allowed tools; `authorizeToolCall` still refuses the rest per call.
    */
   isToolAdvertised?: (name: string, context: AgentToolMcpClientContext) => boolean | Promise<boolean>;
+  onCodexToolResult?: (call: CodexAgentToolMcpResult) => void;
   resolveToolResultReminder?: (
     context: ResolvedAgentToolMcpCallContext,
   ) => Promise<string | undefined>;
@@ -718,6 +726,13 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       responseFlushed,
       ...(reportProgress ? { reportProgress } : {}),
     });
+    if (callContext.backend === "codex") {
+      try {
+        this.options.onCodexToolResult?.({ threadId: callContext.threadId, tool: name, arguments: args, result });
+      } catch (error) {
+        agentToolMcpLog.warn("MCP tool result listener failed", { error: String(error) });
+      }
+    }
     try {
       // Resolve after dispatch using the original turn identity. A reminder
       // can only ride this response; it must never enqueue another turn.

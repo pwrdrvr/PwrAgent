@@ -394,6 +394,11 @@ export type CodexClientOptions = {
   helperExecutionPolicy?: { approvalPolicy: "never"; sandbox: "read-only" };
   /** The host admits ownership before a mutating protocol request. */
   assertOwnerAdmission?: () => void;
+  /** Restore owner-scoped configuration on any operation that loads a thread. */
+  resolveThreadResumeConfig?: (
+    threadId: string,
+    config: CodexThreadResumeParams["config"],
+  ) => Promise<CodexThreadResumeParams["config"]>;
   authenticationRecovery?: boolean;
   /** The profile's helper model settings, read per helper turn. */
   readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
@@ -12956,11 +12961,12 @@ export class CodexAppServerClient {
     const [method, payload, ...rest] = resume;
     const params = asRecord(payload);
     const threadId = params && pickString(params, ["threadId"]);
-    if (!params || !threadId || !this.threadSkillExclusionsResolver) return resume;
-    const names = await this.threadSkillExclusionsResolver(threadId);
-    if (!names?.length) return resume;
-    const config = await this.withSkillExclusions(params.config as CodexThreadStartParams["config"], names);
-    return [method, { ...params, config }, ...rest];
+    if (!params || !threadId) return resume;
+    const currentConfig = params.config as CodexThreadResumeParams["config"];
+    const resumeConfig = await this.options.resolveThreadResumeConfig?.(threadId, currentConfig) ?? currentConfig;
+    const names = await this.threadSkillExclusionsResolver?.(threadId);
+    const config = await this.withSkillExclusions(resumeConfig, names);
+    return config === currentConfig ? resume : [method, { ...params, config }, ...rest];
   }
 
   private async withSkillExclusions(

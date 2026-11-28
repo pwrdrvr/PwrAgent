@@ -628,6 +628,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     };
     const client = new CodexAppServerClient({
       assertOwnerAdmission: () => ports.assertThreadOwnership(),
+      resolveThreadResumeConfig: (threadId, config) => ports.resolveCodexAgentToolsMcpResumeConfig(threadId, config),
       args: settingsService ? undefined : buildCodexClientArgs(codexEnv, [], [], getOwnerHostServices().runtimePolicy),
       command: codexCommand,
       portableDiscovery: provider?.toolDiscovery === "portable",
@@ -1040,6 +1041,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
             }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
+          onCodexToolResult: (call) => ports.publishNativeVoiceMcpToolCall(call),
           isToolAdvertised: async (name, context) => isAgentToolAdvertisedLocally(name)
             && (name !== "capture_token_miser_command" || !context.threadId
               || ports.boundedCommandsEnabled(await ports.resolveTokenMiserThreadOverride(context.backend, context.threadId)))
