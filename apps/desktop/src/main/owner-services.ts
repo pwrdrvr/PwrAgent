@@ -1,3 +1,4 @@
+import { createOwnerFactoryAdmission } from "./factory/factory-admission-runtime";
 import path from "node:path";
 import type { ApprovedLabCheckout } from "./resource-checkouts/pwrsuitelab-checkout-adapter";
 import { createResourceCheckoutToolHandler } from "./agent-tools/pwragent-resource-checkout-agent-tools";
@@ -490,6 +491,11 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       },
     )
     : undefined;
+  const factoryAdmission = resourceCheckouts && createOwnerFactoryAdmission({
+    federation: federationRuntime,
+    checkouts: resourceCheckouts,
+    leaseHeld: () => federationLease.snapshot().leaseHeld,
+  });
   if (resourceCheckouts) registry.setResourceCheckoutHandler(
     createResourceCheckoutToolHandler(
       resourceCheckouts,
@@ -958,7 +964,7 @@ wireOwnerRendererEvents();
   return {
     registry, service, config, settings, federationRuntime, messagingRuntime,
     mcpGateway, scheduledActions, automations, leaseManager, federationLease, messagingLease,
-    queues, resourceCheckouts,
+    queues, resourceCheckouts, factoryAdmission,
     prewarm: prewarmInitialThreadList,
     onConfigPatchWritten: async (patch: DesktopSettingsConfigPatch, previousProviderDefaults?: Record<string, DesktopProviderModelDefaults>) => {
       if (previousProviderDefaults) {

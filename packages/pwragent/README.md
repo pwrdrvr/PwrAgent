@@ -58,6 +58,7 @@ same parameter object as the desktop owner contracts:
 | --- | --- |
 | `start-thread` | `backend`, `cwd`, optional `executionMode` and model settings |
 | `register-directory` | `path`: adds an existing folder as a project, as the desktop's Add Project Directory does |
+| `factory-admission` | `action`, `projectKey`, `workItem`, and the action fields below |
 | `factory-board` | `projectKey` from `register-directory`, `repository` matching the registered GitHub origin, optional `limit`, `candidate` and `selection` |
 | `show` | `backend`, `threadId` |
 | `submit` | `SubmitDurableTurnRequest`: immutable client request ID, creation time, payload hash and request |
@@ -307,3 +308,127 @@ turn oracle. These are protocol fixtures, not live inference or UI proof.
 MIT, Copyright PwrDrvr LLC. Retain `LICENSE`, `dist/THIRD_PARTY_LICENSES` and
 `resources/git-notices` when redistributing. The bundled Git executable has its
 own GPL notices and source/build locations; it runs as a separate process.
+
+### Factory admission pilot
+
+Run `pwragent factory-admission --params-file /request.json` on the selected
+owner profile with its Federation runtime active. Use the registered project
+key and the same immutable `workItem` as the board's local branch selection.
+
+| Tracking record | `workItem` example |
+| --- | --- |
+| GitHub issue | `{"provider":"github","kind":"issue","repositoryId":"R_fixture","number":42}` |
+| Existing GitHub pull request | `{"provider":"github","kind":"pull_request","repositoryId":"R_fixture","number":42}` |
+| Jira issue | `{"provider":"jira","siteId":"fixture-cloud","id":"10042"}` |
+| Linear issue | `{"provider":"linear","id":"521ed3a0-6f45-45fd-b8ec-fa070a530661"}` |
+
+Use the tracking repository's immutable ID for GitHub and the site's and
+issue's immutable IDs for Jira. The tracking record can live in a different
+repository or system from the checkout. Admission needs no tracker connector.
+
+The `arm` request also takes the registered GitHub origin as `owner/repository`,
+the owner and executor's exact Federation instance and machine IDs, and the
+executor platform.
+
+```json
+{
+  "action": "arm",
+  "projectKey": "directory:/projects/PwrAgent",
+  "workItem": {"provider": "github", "kind": "issue", "repositoryId": "R_fixture", "number": 42},
+  "repository": "pwrdrvr/PwrAgent",
+  "owner": {
+    "instanceId": "selected-gateway",
+    "machineId": "mach_00000000-0000-4000-8000-000000000001"
+  },
+  "target": {
+    "instanceId": "selected-builder",
+    "machineId": "mach_00000000-0000-4000-8000-000000000002",
+    "threadId": "operator-prepared-codex-thread",
+    "worktreePath": "/projects/worktrees/factory-42"
+  },
+  "platform": "darwin",
+  "brief": "Implement the approved outcome and verify its acceptance criteria."
+}
+```
+
+Use a dedicated idle first-party OpenAI Codex thread with one PwrAgent-owned
+worktree in the selected repository. Turn off the
+thread's provider MCP servers and disconnect all MCP connections. Use a thread
+without attached PRs, Auto-fix, an active goal, an environment override, or
+PwrAgent automations. A separately enabled auto-merge or forge workflow is
+outside this pilot. The operator must confirm that none acts on the worktree.
+
+Run the worker on an operator-prepared Outpost with
+`PWRAGENT_OUTPOST_FACTORY_BUILDER=on`, agent network disabled and Full Access
+unavailable. The opt-in asserts that the operator has excluded credentials,
+privileged sockets, writable shared mounts, and other side-effecting channels
+from the worker's command environment. Keep the checkout inside the Outpost's
+configured `--workspace`. Use in-repository worktree storage
+(`[worktrees]` with `storage = "in-repo"`) so the sandbox can use the checkout.
+Point `--codex-bin` at a Codex build that advertises dynamic tool replacement
+on `thread/resume`, such as the PwrAgent-managed build. The owner refuses builds without
+that capability. You can select a newly created persistent Codex worktree
+thread with paginated history. Codex saves it during preparation before any
+model input. The daemon must pass its Codex sandbox preflight first. The
+receiving owner checks worker settings again and requires a fresh Codex session with its
+network-disabled workspace-write profile, one workspace root, and an empty
+MCP inventory before sending the prompt. Provider apps, plugins, delegation,
+hooks and web search are disabled for this turn. The owner refuses dynamic
+tools, its MCP tools, and MCP gateway access from the worker. Once the worker
+is idle, the same thread can accept another approved task or an ordinary
+operator turn with its configured tools and sandbox.
+
+The operator is trusting the first-party Codex binary and its sandbox, the
+Outpost OS and launch configuration, and the approved checkout and local
+commands it runs. Builds and tests execute repository code and can change
+everything writable in the sandbox. Review the resulting local changes before
+publication. Ordinary desktop executors and older owners cannot dispatch a
+restricted Factory turn. Approvals recorded before this isolation version
+can still be inspected and reconciled. Their dispatch is refused because the
+old approval did not bind this restriction.
+
+A packaged owner running under an alternate PwrAgent root cannot host its own
+machine CPU pool. Keep the checkout dedicated to this outcome
+until it settles. The owner permits one active outcome per profile and
+reserves one CPU slot on the selected physical machine. For a remote builder,
+add the same entry to `domains` in the version 1
+`resource-checkout-authorities.json` at the PwrAgent root of the gateway and
+capacity authority, then restart the profiles.
+
+```json
+{
+  "canonicalKey": "factory-cpu:mach_00000000-0000-4000-8000-000000000002",
+  "authorityInstanceId": "selected-capacity-owner",
+  "authorityMachineId": "mach_00000000-0000-4000-8000-000000000002",
+  "allowedInstances": ["selected-gateway"]
+}
+```
+
+This binding authorizes the named gateway to reserve from the authority's
+`machine:<machineId>:cpu` pool, which also serves other profiles and local
+test reservations. Ordinary Federation resources use owner catalog discovery.
+The gateway connects directly to the configured capacity authority and the
+builder. A remote builder uses full Federation enrollment
+(`PWRAGENT_OUTPOST_FEDERATION_ROLE=full`) and must advertise durable turn
+requests and an exact repository link for the worktree. Factory still checks
+the builder policy and requires an idle-only start. VM-backed and E2E-VM
+requests wait for a later pilot.
+
+Use `dispatch` with the same `projectKey`, `workItem` and `brief` within
+30 minutes to request an idle-only start. The owner stores the brief's
+hash. Use `status` to read the local record and `reconcile` to read the
+exact dispatch receipt, including after restart. An immediate retry of
+`dispatch` uses the original ID and capacity grant. `pause` and `resume`
+control future starts for that record. `cancel` addresses only the verified
+queue entry or turn ID. The advisory CPU reservation expires after 30 minutes.
+Reconciliation reports ended or unverified capacity separately from the turn's
+status. A running or ambiguous turn continues to hold its Factory worktree
+fence. The selected operator can cancel a matched turn.
+
+Existing Linear callers can supply `issueId` with the immutable UUID in place
+of `workItem`. Both forms address the original approval and receipt. An older
+approval stored under a Linear display identifier such as `PWR-262` can still
+be inspected, paused, reconciled or cancelled using that identifier.
+
+The desktop local main frame reaches the same owner command through
+`window.pwragent.factoryAdmission(request)`.

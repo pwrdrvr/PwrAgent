@@ -25,6 +25,10 @@ export async function handleOutpostCommand(services: Services, method: string, p
     case "status": return { codex: await settings.resolveCodexCommand(), backends: await registry.listBackends(), federation: await federation.health() };
     case "list": return registry.listThreads({ backend: "codex", callerReason: "outpost-cli", enrichDirectories: false, ...params });
     case "show": return registry.readThread(params as Parameters<typeof registry.readThread>[0]);
+    case "factory-admission": {
+      if (!services.factoryAdmission) throw new Error("Factory requires an active owner profile.");
+      return services.factoryAdmission.command(params);
+    }
     case "factory-board": return services.service.readFactoryProject(params);
     case "start-thread": return registry.startThread(params as Parameters<typeof registry.startThread>[0]);
     case "register-directory": {
