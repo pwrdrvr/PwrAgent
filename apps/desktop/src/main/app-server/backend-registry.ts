@@ -4768,7 +4768,9 @@ export class DesktopBackendRegistry {
         // Point reads omit checkout and runtime facts supplied by discovery.
         // Keep those facts and take the activity watermark and acknowledged title.
         const { title, titleSource } = projectOwnerThreadTitle(native, await this.overlayStore.getThreadMetadata?.(ref));
-        summary = this.withObservedThreadName({ ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt });
+        // Only Codex has a listing that can trail this read; other backends
+        // answer it from the store their rename wrote.
+        summary = this.withObservedThreadName({ ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt }, ref.backend !== "codex");
       }
     }
     if (!summary) return undefined;
@@ -19198,6 +19200,9 @@ export class DesktopBackendRegistry {
       allThreads,
       params,
     );
+    // A pending start's placeholder carries the owner's own rename, so only a
+    // row the provider listed can acknowledge it.
+    const providerListedThreadIds = new Set(allThreads.map((thread) => thread.id));
 
     const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
     const overlaysByThreadId = await readOverlays.call(this.overlayStore, {
@@ -19294,7 +19299,7 @@ export class DesktopBackendRegistry {
 
     const statusReconciledThreads = enrichedThreads
       .map((thread) => this.reconcileCodexThreadListStatus(thread))
-      .map((thread) => this.withObservedThreadName(thread));
+      .map((thread) => this.withObservedThreadName(thread, providerListedThreadIds.has(thread.id)));
     const normalizedFilter = params.filter?.trim().toLowerCase();
     const filteredThreads = normalizedFilter && observedFilterThreadIds.size > 0
       ? statusReconciledThreads.filter(
@@ -20965,7 +20970,7 @@ export class DesktopBackendRegistry {
       return await this.withCodexThreadClient(params.threadId, async (client) => {
         const thread = await client.readThreadSummary!(params.threadId);
         const metadata = await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: params.threadId });
-        return thread.archivedAt === undefined ? this.withObservedThreadName({ ...thread, ...projectOwnerThreadTitle(thread, metadata) }) : undefined;
+        return thread.archivedAt === undefined ? this.withObservedThreadName({ ...thread, ...projectOwnerThreadTitle(thread, metadata) }, false) : undefined;
       }).catch(() => undefined);
     }
     if (isAcpBackendId(params.backend)) {
@@ -22953,6 +22958,11 @@ export class DesktopBackendRegistry {
           // nothing can ever retire.
           if (!isAcpBackendId(event.backend)) {
             this.observedThreadNames.set(key, { title: trimmed, titleSource });
+            // A start renamed before the provider lists it (a to-do card names
+            // its thread at once) is served from this placeholder. A point read
+            // can acknowledge the rename above, so the placeholder keeps it too.
+            const pending = this.pendingStartedThreads.get(key);
+            if (pending) this.pendingStartedThreads.set(key, { ...pending, title: trimmed, titleSource });
           }
         }
       }
@@ -22976,23 +22986,34 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * A point read (`listing: false`) can carry the name before thread/list
+   * does, so only a listing retires the entry; otherwise the next listing
+   * would serve its older title again.
+   */
   private withObservedThreadName(
     thread: AppServerThreadSummary,
+    listing = true,
   ): AppServerThreadSummary {
     const key = buildThreadIdentityKey(thread.source, thread.id);
     const observed = this.observedThreadNames.get(key);
     if (!observed) {
       return thread;
     }
-    if (thread.titleSource === observed.titleSource) {
+    if (
+      thread.titleSource === observed.titleSource
+      && (observed.titleSource === "explicit" || thread.title === observed.title)
+    ) {
       // Matching provenance means the provider acknowledged our event. Text
       // that differs under the same source is durable provider truth from a
       // rename this process may not have observed (profiles can be shared by
       // processes). Comparing against the recorded source rather than a
       // hardcoded `explicit` is what lets a generated title retire: stamping
       // `explicit` here would also overwrite the `derived` the rename set,
-      // leaving listThreads and getThreadInfo permanently disagreeing.
-      this.observedThreadNames.delete(key);
+      // leaving listThreads and getThreadInfo permanently disagreeing. A
+      // different `derived` text is the provider's prompt preview, not a
+      // rename, so only the same text acknowledges a generated title.
+      if (listing) this.observedThreadNames.delete(key);
       return thread;
     }
     return {
