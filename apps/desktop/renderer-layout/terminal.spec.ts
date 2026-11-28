@@ -66,10 +66,12 @@ const regressions: { name: string; scenario: Scenario }[] = [
     },
   },
   {
-    name: "dragging down and ArrowDown both shrink from the painted height",
+    name: "a short window preserves the remembered height on growth and shrinks from the painted height",
     scenario: {
       height: 560, windowHeight: 640,
       steps: [
+        { kind: "arrow", key: "ArrowUp" },
+        { kind: "drag", delta: -20 },
         { kind: "drag", delta: 60 },
         { kind: "height", height: 560 },
         { kind: "arrow", key: "ArrowDown" },
@@ -186,7 +188,10 @@ async function replay(page: Page, scenario: Scenario) {
       const next = await check();
       if (step.kind === "drag" || step.kind === "arrow") {
         const delta = step.kind === "drag" ? -step.delta : step.key === "ArrowDown" ? -arrowStep : arrowStep;
-        const requested = Math.max(minHeight, Math.min(maxHeight, Math.round(layout.paintedHeight) + delta));
+        const movedHeight = Math.round(layout.paintedHeight) + delta;
+        // A grow request preserves room the panel can use when the window grows.
+        const targetHeight = delta > 0 ? Math.max(layout.rememberedHeight, movedHeight) : movedHeight;
+        const requested = Math.max(minHeight, Math.min(maxHeight, targetHeight));
         const painted = Math.min(requested, next.availableHeight);
         const oracle = delta < 0 ? "O6 shrink from the painted height" : "O4 resize from the painted height";
         expect.soft(next.paintedHeight, oracle).toBeCloseTo(painted, 1);
