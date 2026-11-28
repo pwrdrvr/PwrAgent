@@ -11,7 +11,7 @@ const source = step.split("          script: |\n")[1].split("\n").map((line) => 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
 async function classify(files, {
-  event = "pull_request", ref, reportedCount = files.length, lookupError, labels = [], labelError,
+  event = "pull_request", ref, reportedCount = files.length, lookupError, labels = [], labelError, head,
 } = {}) {
   const outputs = {};
   let lookupCalls = 0;
@@ -26,7 +26,7 @@ async function classify(files, {
   const listLabelsOnIssue = () => {};
   await new AsyncFunction("core", "context", "github", source)(
     { setOutput: (name, value) => { outputs[name] = value; }, notice() {}, summary },
-    { eventName: event, ref, payload: { pull_request: { changed_files: reportedCount } },
+    { eventName: event, ref, payload: { pull_request: { changed_files: reportedCount, head } },
       repo: { owner: "fixture", repo: "fixture" }, issue: { number: 1 } },
     { rest: { pulls: { listFiles }, issues: { listLabelsOnIssue } }, paginate: async (method) => {
       lookupCalls++;
@@ -46,6 +46,7 @@ async function classify(files, {
     fullCi: outputs.code_impacting === "true",
     planTests: outputs.plan_tests === "true",
     fullPlatforms: outputs.full_platforms === "true",
+    blacksmithTrial: outputs.blacksmith_trial === "true",
     a11y: outputs.a11y === "true",
     windowsE2e: outputs.windows_e2e === "true",
     e2eOnly: outputs.e2e_only === "true",
@@ -96,7 +97,29 @@ it("fails closed for missing or incomplete provider data", async () => {
 
 it("always runs full CI for non-PR events without a changed-file lookup", async () => {
   for (const event of ["push", "schedule", "workflow_dispatch"]) {
-    expect(await classify([], { event })).toEqual({ fullCi: true, planTests: false, fullPlatforms: true, a11y: true, windowsE2e: true, e2eOnly: false, summaryRaw: "", lookupCalls: 0 });
+    expect(await classify([], { event })).toEqual({ fullCi: true, planTests: false, fullPlatforms: true, blacksmithTrial: false, a11y: true, windowsE2e: true, e2eOnly: false, summaryRaw: "", lookupCalls: 0 });
+  }
+});
+
+it("opts into Blacksmith only for a same-repository PR with the live trial label", async () => {
+  const files = [{ filename: ".github/workflows/ci.yml" }];
+  const heads = [
+    { head: { repo: { full_name: "fixture/fixture" } }, sameRepository: true },
+    { head: { repo: { full_name: "fork/fixture" } }, sameRepository: false },
+    { head: { repo: null }, sameRepository: false },
+    { head: undefined, sameRepository: false },
+  ];
+  const labelSets = [[], ["ci:blacksmith"], ["ci:blacksmith", "ci:full"], ["ci:blacksmith-extra"]];
+  for (const event of ["pull_request", "push", "workflow_dispatch"]) {
+    for (const { head, sameRepository } of heads) {
+      for (const labels of labelSets) {
+        for (const labelError of [undefined, new Error("labels unavailable")]) {
+          const expected = event === "pull_request" && sameRepository && labels.includes("ci:blacksmith") && !labelError;
+          const result = await classify(files, { event, head, labels, labelError });
+          expect(result.blacksmithTrial, JSON.stringify({ event, head, labels, labelError: !!labelError })).toBe(expected);
+        }
+      }
+    }
   }
 });
 

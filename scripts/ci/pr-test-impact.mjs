@@ -267,7 +267,7 @@ export function scheduleImpact(plan, { allPlatforms, windowsFull, auditRequested
       "unit-windows-main": unit("windows-main"),
       "unit-windows-renderer": unit("windows-renderer"),
       "unit-macos": allPlatforms ? unit("macos") : [],
-      "e2e-linux": e2eLanes(e2e, 4),
+      "e2e-linux": e2eLanes(e2e, 5),
       "e2e-linux-a11y": a11y || auditRequested || (allPlatforms && e2e.mode === "full") ? [1, 2] : [],
       "e2e-windows": windowsMode === "full" ? range(4) : windowsMode === "selected" ? [1] : [],
       "e2e-macos": allPlatforms ? e2eLanes(nativeE2e, 5) : [],
@@ -336,7 +336,7 @@ export function listAffectedE2eFiles(root, base, config = "apps/desktop/playwrig
 export const unitGroups = {
   linux: { config: "vitest.linux-ci.mts", lanes: 4 },
   macos: { config: "vitest.workspace.mts", lanes: 4 },
-  "windows-main": { config: "vitest.workspace.mts", lanes: 4, projects: ["desktop-main"] },
+  "windows-main": { config: "vitest.windows-main-ci.mts", lanes: 4, projects: ["desktop-main"] },
   "windows-renderer": {
     config: "vitest.workspace.mts", lanes: 2,
     projects: ["desktop-renderer", "desktop-renderer-node", "messaging", "owner-core", "shared"],

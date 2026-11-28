@@ -42,6 +42,8 @@ it("keeps every Linux Desktop E2E and accessibility lane inside its step on a 1.
   const e2e = jobSection("desktop-e2e");
   const weights = e2e.match(/export PWTEST_SHARD_WEIGHTS="([\d:]+)"/)?.[1].split(":").map(Number);
   expect(weights, "Linux E2E weights").toBeDefined();
+  const fallbackLanes = JSON.stringify(weights.map((_, index) => index + 1)).replaceAll(",", ", ");
+  expect(e2e).toContain(`outputs.e2e_lanes || '${fallbackLanes}'`);
   expect(e2e).toContain(`--shard=\${{ matrix.lane }}/${weights.length}`);
   const skipsA11y = e2e.includes("export PWRAGENT_E2E_SKIP_A11Y=1\n");
   const lanes = { "Linux Desktop E2E": laneSeconds(
