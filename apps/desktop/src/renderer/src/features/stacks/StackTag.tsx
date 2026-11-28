@@ -2,9 +2,9 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useRef, type Keybo
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
 import { getDesktopApi } from "../../lib/desktop-api";
-import { sidebarPrCardBridge, type BridgedHoverCard } from "../../lib/hover-card-bridge";
+import { elementRect, sidebarPrCardBridge, type BridgedHoverCard } from "../../lib/hover-card-bridge";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
-import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip } from "../../lib/useViewportTooltip";
 import { StackBody, StackGlyph, StackHeading, StackNode, StackTrunk } from "./StackBody";
 import { prefetchSelectedStacks, readCachedStack, stackOwnerInstanceId } from "./stack-detail-cache";
 import { StackRailContext } from "./stack-presentation";
@@ -140,6 +140,7 @@ export function StackTag({ thread, pr, member, onOpen }: StackTagProps) {
   const { hide, update, visible } = tooltip;
   const bridge = useRef<BridgedHoverCard>({ hide, isPinned: () => pinned.current });
   bridge.current.hide = hide;
+  bridge.current.getRect = () => elementRect(tooltip.getElement());
   const latest = useRef<ReactNode>(null);
   const relayout = useCallback(() => update(latest.current), [update]);
   latest.current = <StackPopover thread={thread} pr={pr} member={member} onOpen={onOpen}
@@ -195,8 +196,9 @@ export function StackTag({ thread, pr, member, onOpen }: StackTagProps) {
           if (!thread.stacks?.length && !readCachedStack(stackOwnerInstanceId(thread), member)?.fresh) {
             prefetchSelectedStacks(getDesktopApi()?.getNavigationSelectedDetail, thread);
           }
-          if (sidebarPrCardBridge.enterTrigger(bridge.current, event.currentTarget)) tooltip.show(event.currentTarget, latest.current);
-          else tooltip.showAfterDelay(event.currentTarget, () => latest.current);
+          const wait = sidebarPrCardBridge.enterTrigger(bridge.current, event.currentTarget, TOOLTIP_HOVER_DELAY_MS);
+          if (wait === 0) tooltip.show(event.currentTarget, latest.current);
+          else tooltip.showAfterDelay(event.currentTarget, () => latest.current, wait);
         }}
         onMouseLeave={() => {
           if (pinned.current) return;

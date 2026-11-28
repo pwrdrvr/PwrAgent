@@ -36,6 +36,7 @@ import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction
 import {
   type BridgedHoverCard,
   cardIsBesideSidebar,
+  elementRect,
   sidebarAnchorRect,
   sidebarPrCardBridge,
 } from "../../lib/hover-card-bridge";
@@ -135,6 +136,7 @@ export const SidebarThreadCardHost = forwardRef<
   });
   const { getElement, hide, show, showAfterDelay, tooltipId, update, visible } = tooltip;
   bridgeCardRef.current.hide = hide;
+  bridgeCardRef.current.getRect = () => elementRect(getElement());
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   // Set while the hover delay runs. The tooltip cancels its own delay on a
@@ -204,9 +206,10 @@ export const SidebarThreadCardHost = forwardRef<
       setShown({ threadKey, row: target });
       heldRowRef.current = target.closest(ROW_SELECTOR) ?? target;
       crossingRowRef.current = null;
-      // Focus opens at once; a pointer swaps at once while any sidebar card is up.
-      const swap = sidebarPrCardBridge.enterTrigger(bridgeCardRef.current);
-      if (!delayed || swap) {
+      // Focus opens at once; a pointer waits as long as the bridge says, so a
+      // row crossed on the way to another sidebar card never takes it.
+      const wait = sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, target, PROJECT_CARD_HOVER_DELAY_MS);
+      if (!delayed || wait === 0) {
         show(target, node);
         return;
       }
@@ -214,7 +217,7 @@ export const SidebarThreadCardHost = forwardRef<
       // chip's card shown meanwhile cancels it through the bridge.
       sidebarPrCardBridge.delaying(bridgeCardRef.current);
       pendingRef.current = true;
-      showAfterDelay(target, () => content(threadKey, target), PROJECT_CARD_HOVER_DELAY_MS);
+      showAfterDelay(target, () => content(threadKey, target), wait);
     };
     return {
       enter: (target, threadKey) => open(target, threadKey, true),
@@ -228,7 +231,7 @@ export const SidebarThreadCardHost = forwardRef<
       },
       hold: (row) => {
         crossingRowRef.current = row;
-        if (row) sidebarPrCardBridge.enterTrigger(bridgeCardRef.current);
+        if (row) sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, row, PROJECT_CARD_HOVER_DELAY_MS);
       },
       hide,
       getElement,

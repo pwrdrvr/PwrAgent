@@ -14,7 +14,7 @@ import {
 } from "../../../lib/backend-status-format";
 import { HoverCardBridge, type BridgedHoverCard } from "../../../lib/hover-card-bridge";
 import { groupRateLimitsByScope } from "../../../lib/rate-limit-scopes";
-import { useViewportTooltip } from "../../../lib/useViewportTooltip";
+import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   useLocalUsagePace,
   usagePaceAccountKey,
@@ -236,11 +236,12 @@ export function useProviderGaugePeek(options: {
 
   return {
     enter: (target) => {
-      if (bridge.enterTrigger(cardRef.current)) {
+      const wait = bridge.enterTrigger(cardRef.current, target, TOOLTIP_HOVER_DELAY_MS);
+      if (wait === 0) {
         show(target, content());
         return;
       }
-      showAfterDelay(target, content);
+      showAfterDelay(target, content, wait);
     },
     leave: () => {
       if (visible) {
