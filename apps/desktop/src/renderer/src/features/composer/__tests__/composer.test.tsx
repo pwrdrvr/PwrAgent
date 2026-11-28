@@ -3976,6 +3976,54 @@ describe("Composer", () => {
     });
   });
 
+  it("marks an undiscoverable environment without a per-row lookup on every keystroke", () => {
+    // The Run split's list is rebuilt on every Composer render, one per
+    // keystroke. Looking each row up in the discovered options made that
+    // O(E²) per keystroke; the picker appends the runtime's environment last,
+    // so its index answers instead.
+    const options = Array.from({ length: 4 }, (_, index) => ({
+      id: `env-${index}`, name: `Env ${index}`, sourcePath: `/repo/env-${index}.toml`, actions: [],
+    }));
+    let lookups = 0;
+    const includes = options.includes.bind(options);
+    Object.defineProperty(options, "includes", {
+      value: (item: (typeof options)[number]) => {
+        lookups += 1;
+        return includes(item);
+      },
+    });
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Environments", titleSource: "explicit", source: "codex",
+          executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+          codexEnvironmentRuntime: {
+            environmentId: "gone", environmentName: "Gone", executionTarget: "local",
+            actions: [{ id: "work", name: "Work", command: "pnpm dev" }],
+          },
+          codexEnvironmentOptions: options,
+        }}
+      />,
+    );
+    const reply = screen.getByRole("textbox", { name: "Reply" });
+    for (const text of ["a", "ab", "abc", "abcd", "abcde"]) {
+      fireEvent.change(reply, { target: { value: text } });
+    }
+    expect(lookups).toBe(0);
+
+    const environments = within(openRunSplitMenu()).getByRole("group", { name: "Environment" });
+    expect(within(environments).getByRole("menuitemradio", { name: /Gone/ }))
+      .toHaveAttribute("aria-disabled", "true");
+    for (const option of options) {
+      expect(within(environments).getByRole("menuitemradio", { name: option.name }))
+        .not.toHaveAttribute("aria-disabled");
+    }
+  });
+
   it("keeps the selected environment on the chip when its config is no longer discoverable", async () => {
     // A thread whose worktree was deleted (or moved to a checkout without
     // `.codex/environments/`) reports no environment options, but its runtime

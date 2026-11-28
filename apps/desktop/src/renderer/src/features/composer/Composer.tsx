@@ -16188,10 +16188,10 @@ function useComposerController(props: ComposerProps) {
           "Environment",
           [
             { label: "No environment", value: "" },
-            ...threadCodexEnvironmentPickerOptions.map((environment) => ({
+            ...threadCodexEnvironmentPickerOptions.map((environment, index) => ({
               label: environment.name,
               value: environment.id,
-              disabled: !threadCodexEnvironmentOptions.includes(environment),
+              disabled: index >= threadCodexEnvironmentOptions.length,
             })),
           ],
           threadEnvironmentValue,
@@ -17076,12 +17076,15 @@ function useComposerController(props: ComposerProps) {
                   editAction={environmentMenuAction}
                   environmentDisabled={!props.desktopApi?.setCodexThreadEnvironment}
                   environmentId={threadEnvironmentValue}
-                  environments={threadCodexEnvironmentPickerOptions.map((environment) => ({
+                  environments={threadCodexEnvironmentPickerOptions.map((environment, index) => ({
                     id: environment.id,
                     name: environment.name,
                     // Main re-reads the workspace to select one, so an
                     // environment it cannot find is listed but not chosen.
-                    unavailableReason: threadCodexEnvironmentOptions.includes(environment)
+                    // The picker is the discovered options plus, at the end,
+                    // the runtime's own when they lack it, so the index says
+                    // which without an O(E) lookup per row on every render.
+                    unavailableReason: index < threadCodexEnvironmentOptions.length
                       ? undefined
                       : "Not found in this workspace",
                   }))}
