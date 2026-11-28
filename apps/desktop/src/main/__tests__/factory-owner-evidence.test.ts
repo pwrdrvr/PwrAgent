@@ -153,10 +153,35 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       expect(parked.candidate).toMatchObject({ stage: "parked", headOid: actualHead, outcomeId: unpublished.candidate?.outcomeId });
       expect(parked.candidate?.receipts).toHaveLength(1);
       expect(fetcher).not.toHaveBeenCalled();
+      const { issueId, ...branch } = candidate;
+      const workItems = [
+        { provider: "github", kind: "issue", repositoryId, number: 7 },
+        { provider: "github", kind: "pull_request", repositoryId, number: 7 },
+        { provider: "jira", siteId: "site-a", id: "10007" },
+        { provider: "jira", siteId: "site-b", id: "10007" },
+        { provider: "linear", id: issueId },
+      ];
+      const keys = new Set<string>();
+      for (const workItem of workItems) {
+        const observed = (await read({ ...params, candidate: { ...branch, workItem } })).candidate!;
+        expect(observed.workItem).toEqual(workItem);
+        expect(observed.stage).toBe("branch");
+        expect(observed.assessment).toMatchObject({ candidate: { issue: observed.outcomeId } });
+        if (workItem.provider === "linear") expect(observed.outcomeId).toBe(unpublished.candidate?.outcomeId);
+        keys.add(observed.outcomeId);
+      }
+      expect(keys.size).toBe(workItems.length);
+      await expect(read({ ...params, candidate: { ...candidate, workItem: workItems[0] } })).rejects.toThrow();
+      expect(fetcher).not.toHaveBeenCalled();
       const published = await read({ ...params, selection: { repositoryId, number: 7 } });
       expect(readEvidence(published).revision).toEqual({ headOid: actualHead, baseOid: actualBase });
       expect(published.candidate).toMatchObject({ stage: "published", publication: "confirmed", outcomeId: unpublished.candidate?.outcomeId });
       expect(fetcher).toHaveBeenCalledTimes(1);
+      const selectPr = (number: number, repoId: string) => read({ ...params, selection: { repositoryId, number: 7 },
+        candidate: { ...branch, workItem: { provider: "github", kind: "pull_request", repositoryId: repoId, number } } });
+      expect((await selectPr(7, repositoryId)).candidate?.publication).toBe("confirmed");
+      expect((await selectPr(8, repositoryId)).candidate?.publication).toBe("mismatch");
+      expect((await selectPr(7, "another-repository")).candidate?.publication).toBe("mismatch");
       fetcher.mockResolvedValueOnce(Response.json(forgeFixture({ actualHead: older, actualBase })));
       const changed = await read({ ...params, selection: { repositoryId, number: 7, expected: { headOid: actualHead, baseOid: actualBase } } });
       expect(readEvidence(changed).revisionState).toBe("head_changed");

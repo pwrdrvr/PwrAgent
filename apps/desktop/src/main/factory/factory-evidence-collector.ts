@@ -7,6 +7,7 @@ import {
   type FactoryBranchSelection, type FactoryProjectProjection, type FactoryProjectPullRequest, type FactoryProjectReadRequest,
   type FactoryReceiptProjection, type FactoryReceiptStatus,
 } from "@pwragent/shared/factory-projection";
+import { parseFactoryWorkItem, type FactoryWorkItem } from "@pwragent/shared/factory-work-item";
 import { isGitObjectId } from "@pwragent/shared/git-object-id";
 import type { ForgeCiClient } from "../pr-status/forge-ci-client";
 import type { GitHubRepoRef } from "../pr-status/git-remote";
@@ -94,25 +95,26 @@ function assessment(value: unknown) {
   return { outcome, change };
 }
 
-function readBranchSelection(value: unknown): FactoryBranchSelection | undefined {
+type SelectedBranch = FactoryBranchSelection & { workItem: FactoryWorkItem };
+
+function readBranchSelection(value: unknown): SelectedBranch | undefined {
   if (value === undefined) return undefined;
   const branchSelection = record(value);
-  const issueId = text(branchSelection.issueId, 36)?.toLowerCase();
+  const workItem = parseFactoryWorkItem(branchSelection);
   const branch = text(branchSelection.branch, 255);
   const baseRef = text(branchSelection.baseRef, 255);
   const ref = /^[a-z0-9_][\w./-]*$/i;
-  if (!issueId || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(issueId)
-    || !branch || !ref.test(branch) || branch.startsWith("refs/")
+  if (!branch || !ref.test(branch) || branch.startsWith("refs/")
     || !baseRef || !ref.test(baseRef) || !/^refs\/(?:heads\/.+|remotes\/[^/]+\/.+)$/.test(baseRef)) requestError();
   const worktree = text(branchSelection.worktree, 4096);
   if (branchSelection.worktree !== undefined && (!worktree || !path.isAbsolute(worktree))) requestError();
   const rawIds = branchSelection.reviewIds ?? [];
   if (!Array.isArray(rawIds) || rawIds.length > REVIEW_LIMIT) requestError();
   const reviewIds = [...new Set(rawIds.map((id) => text(id, 256) ?? requestError()))].sort();
-  return { issueId, branch, baseRef, worktree, reviewIds, assessment: assessment(branchSelection.assessment) };
+  return { workItem, branch, baseRef, worktree, reviewIds, assessment: assessment(branchSelection.assessment) };
 }
 
-function readRequest(value: unknown): FactoryProjectReadRequest {
+function readRequest(value: unknown): FactoryProjectReadRequest & { candidate?: SelectedBranch } {
   const input = record(value);
   const projectKey = text(input.projectKey, 4096);
   const repository = text(input.repository, 100);
@@ -297,7 +299,10 @@ export async function collectFactoryProject(value: unknown, ports: FactoryEviden
   });
   if (!candidate) return { ...result, selected: { kind: "observed", evidence } };
   const baseBranch = candidate.baseRef.replace(/^refs\/(?:heads|remotes\/[^/]+)\//, "");
-  if (!pullRequest.firstParty || node.headRefName !== candidate.branch || node.baseRefName !== baseBranch) {
+  const anchor = candidate.workItem;
+  if (!pullRequest.firstParty || node.headRefName !== candidate.branch || node.baseRefName !== baseBranch
+    || (anchor.provider === "github" && anchor.kind === "pull_request"
+      && (anchor.repositoryId !== id || anchor.number !== pullRequest.number))) {
     return { ...result, candidate: { ...candidate, publication: "mismatch" } };
   }
   const confirmed = revision !== undefined && candidate.headOid === revision.headOid && candidate.baseOid === revision.baseOid;

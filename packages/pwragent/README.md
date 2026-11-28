@@ -90,15 +90,29 @@ verifies the repository against the registered project's GitHub origin. It
 returns up to 25 recent open PRs, including PRs that no local thread has
 attached. `truncated` indicates more open PRs exist.
 
-Before publishing a PR, pass `candidate` with the immutable Linear `issueId`
-from the operator's selected Linear issue, the local `branch` and a full
+For a tracked branch, pass `candidate` with the selected `workItem`, the local `branch` and a full
 `baseRef` such as `refs/remotes/origin/main`. Optionally supply the linked
 `worktree`, up to eight existing local `reviewIds`, and `assessment` with
 `outcome` and `change`. The owner verifies the Git checkout and reports its
 local refs, matching review observations and runtime identity. A ref-only
 candidate remains readable as `parked`. A candidate-only read sets `inventory`
-to `unobserved` and makes zero forge requests. The issue ID comes from the local
-operator's selection.
+to `unobserved` and makes zero forge requests. The local operator supplies the
+tracking reference. Reading it requires no issue-tracker connection.
+
+| Tracking record | Example `candidate.workItem` |
+| --- | --- |
+| GitHub issue | `{"provider":"github","kind":"issue","repositoryId":"R_example","number":42}` |
+| Existing GitHub PR, including a draft | `{"provider":"github","kind":"pull_request","repositoryId":"R_example","number":42}` |
+| Jira issue | `{"provider":"jira","siteId":"site-a","id":"10042"}` |
+| Linear issue | `{"provider":"linear","id":"10000000-0000-4000-a000-000000000042"}` |
+
+For GitHub, use the tracker's repository node ID. The project inventory returns it in
+`repository.id` for the code repository. For Jira, use a stable site identifier and
+the numeric issue ID. The earlier `candidate.issueId` input still identifies the
+same Linear outcome. Supply exactly one tracking reference. A PR used as the
+tracking record must match the selected repository ID and PR number before the
+owner can confirm publication. Draft status is an observation. The repository's
+own workflows determine whether CI runs.
 
 To inspect a PR, add `selection` with its `number` and the `repositoryId` from
 the inventory response (`repository.id`). Pass `expected: { headOid, baseOid }`

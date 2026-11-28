@@ -1,3 +1,5 @@
+import type { FactoryWorkItem } from "./factory-work-item";
+
 /** Read-only inventory and evidence for one operator-selected local project. */
 export const FACTORY_PROJECT_PAGE_LIMIT = 25;
 
@@ -21,8 +23,9 @@ export interface FactoryProjectReadRequest {
 }
 
 export interface FactoryBranchSelection {
-  /** Immutable Linear issue ID explicitly bound by the local operator. */
-  issueId: string;
+  workItem?: FactoryWorkItem;
+  /** Legacy input for a Linear UUID. Supply one of workItem or issueId. */
+  issueId?: string;
   branch: string;
   /** Full local or remote-tracking ref in the registered project's repository. */
   baseRef: string;
@@ -99,7 +102,9 @@ export interface FactoryProjectProjection {
 export interface FactoryBranchProjection {
   /** Derived from the immutable issue anchor. Publication never rekeys the row. */
   outcomeId: string;
-  issue: { provider: "linear"; id: string; source: "local_operator" };
+  workItem: FactoryWorkItem;
+  /** Preserved for existing Linear callers. */
+  issue?: { provider: "linear"; id: string; source: "local_operator" };
   authority: { source: "local_owner_git"; runtimeInstanceId: string; profile: string; observedAt: number };
   branch: string;
   baseRef: string;

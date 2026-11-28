@@ -3,6 +3,7 @@ import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import { buildThreadUrl, isThreadLinkId } from "@pwragent/shared/contracts/thread-link";
 import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import type { FactoryBranchProjection, FactoryBranchSelection, FactoryReceiptProjection } from "@pwragent/shared/factory-projection";
+import { factoryWorkItemKey, type FactoryWorkItem } from "@pwragent/shared/factory-work-item";
 import { isGitObjectId } from "@pwragent/shared/git-object-id";
 import { runGitCommand } from "../app-server/git-executable";
 import { getProcessRuntimeIdentity, resolveActiveProfileName } from "../profile";
@@ -68,7 +69,7 @@ function reviewReceipt(
 
 /** Read the selected branch and recorded review subjects from their local authorities. */
 export async function readFactoryBranch(
-  projectPath: string, repository: string, selection: FactoryBranchSelection, readReview: ReviewLookup, now: () => number,
+  projectPath: string, repository: string, selection: FactoryBranchSelection & { workItem: FactoryWorkItem }, readReview: ReviewLookup, now: () => number,
 ): Promise<FactoryBranchProjection> {
   const project = await checkout(projectPath);
   if (!project) throw new Error("The registered Factory project checkout could not be verified.");
@@ -93,9 +94,10 @@ export async function readFactoryBranch(
   const receipts = reviewIds.map((id) => reviewReceipt(
     readReview(id), roots, selection.branch, headOid, mergeBaseOid,
   )).filter((receipt): receipt is FactoryReceiptProjection => receipt !== undefined);
-  const issue = { provider: "linear", id: selection.issueId, source: "local_operator" } as const;
+  const { workItem } = selection;
   const result: FactoryBranchProjection = {
-    outcomeId: `linear:${issue.id}`, issue, branch: selection.branch, baseRef: selection.baseRef,
+    outcomeId: factoryWorkItemKey(workItem), workItem, branch: selection.branch, baseRef: selection.baseRef,
+    ...(workItem.provider === "linear" ? { issue: { ...workItem, source: "local_operator" as const } } : {}),
     authority: {
       source: "local_owner_git", runtimeInstanceId: getProcessRuntimeIdentity().instanceId,
       profile: resolveActiveProfileName(), observedAt: now(),
