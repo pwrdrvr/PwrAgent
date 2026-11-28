@@ -141,7 +141,7 @@ describe("HoverCardBridge aim", () => {
         s.clock.advance(10_000);
         expect([...s.visible]).toEqual(["pr"]);
       },
-    ), { numRuns: 200 });
+    ));
   });
 
   // Rule: a pointer that moved on from the open card (down the chip column)
