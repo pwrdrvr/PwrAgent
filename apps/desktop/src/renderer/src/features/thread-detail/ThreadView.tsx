@@ -37,6 +37,7 @@ import {
   type SetStateAction,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import type {
   MoveThreadToMainCheckoutResponse,
@@ -732,6 +733,14 @@ function activityHasFileDiff(entry: AppServerThreadActivityEntry | undefined): b
 }
 
 export type ThreadViewProps = {
+  /**
+   * Replaces "Select a thread" while no thread, launchpad or fork is shown.
+   * App passes the agent setup here when the profile has no agent, so an
+   * empty window always shows its next step.
+   */
+  emptyContent?: ReactNode;
+  /** Header title for the empty state; "Pick a Thread" by default. */
+  emptyTitle?: string;
   activeFederationOwnerLabel?: string;
   activeFederationTarget?: FederationRemoteTarget;
   activeTurnId?: string;
@@ -3820,7 +3829,11 @@ export function ThreadView(props: ThreadViewProps) {
             pinned rail's width whenever a thread or launchpad replaced the
             empty state, and the composer rewrapped as the column narrowed
             under it. */}
-        {emptyView ? (
+        {emptyView && props.emptyContent ? (
+          <div key="empty" className="thread-empty-state thread-empty-state--setup">
+            {props.emptyContent}
+          </div>
+        ) : emptyView ? (
           <div key="empty" className="thread-empty-state">
             <div className="thread-empty-state__content">
               <p className="eyebrow">Thread detail</p>
@@ -4335,7 +4348,7 @@ function renderThreadViewHeader({
       title="Forking thread"
     />
   ) : emptyView ? (
-    <ThreadPlaceholderHeader {...headerChrome} title="Pick a Thread" />
+    <ThreadPlaceholderHeader {...headerChrome} title={props.emptyTitle ?? "Pick a Thread"} />
   ) : composerLaunchpad ? (
     <ThreadPlaceholderHeader
       {...headerChrome}

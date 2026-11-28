@@ -413,6 +413,9 @@ const LazySettingsScreen = lazy(async () => ({
   default: (await import("./features/settings/SettingsScreen")).SettingsScreen,
 }));
 
+const LazyAgentSetupPane = lazy(async () => ({
+  default: (await import("./features/onboarding/AgentSetupPane")).AgentSetupPane,
+}));
 const LazyGetStarted = lazy(async () => ({
   default: (await import("./features/onboarding/GetStarted")).GetStarted,
 }));
@@ -579,15 +582,20 @@ function DesktopAppShell(props: {
   //  (2) explicit replay via Help → Replay Onboarding (main process
   //      menu push → renderer subscribes below);
   //  (3) the "Run setup" action on the no-backend startup notice.
-  // A completed profile that lands with no provider gets that notice, never
-  // an unrequested wizard: it has already answered every question the wizard
-  // asks, so a missing provider is a health problem to point at, not setup to
-  // redo. The auto-launch leans on `autoOpenSeen` so we don't re-open after
-  // the user dismisses without persisting (snapshot refresh case).
+  // A completed profile that lands with no provider never gets an
+  // unrequested wizard: it has already answered every question the wizard
+  // asks. Its main pane shows the agent setup instead (`noAgentLanding`), so
+  // the window always carries the next step. The auto-launch leans on
+  // `autoOpenSeen` so we don't re-open after the user dismisses without
+  // persisting (snapshot refresh case).
   const [onboardingOpen, setOnboardingOpen] = useState<
     "auto" | "replay" | null
   >(null);
   const [autoOpenSeen, setAutoOpenSeen] = useState(false);
+  // Set while startup found no agent that can start a thread. The empty main
+  // pane is then the agent setup rather than "Select a thread"; it clears
+  // when an agent answers and the window lands on its composer.
+  const [noAgentLanding, setNoAgentLanding] = useState(false);
   const startupLandingStateRef = useRef<
     "pending" | "notice-shown" | "complete"
   >("pending");
@@ -3069,6 +3077,11 @@ function DesktopAppShell(props: {
       }
       if (startupLandingStateRef.current === "pending") {
         startupLandingStateRef.current = "notice-shown";
+        setNoAgentLanding(true);
+        // With nothing selected, the main pane is the agent setup, which says
+        // everything this notice would. A restored thread covers that pane,
+        // so the notice still points at the problem.
+        if (!navigation.selectedThreadKey) return;
         showAppNotice(
           buildNoStartupBackendNotice({
             backends: backendSummaries.backends,
@@ -3100,6 +3113,7 @@ function DesktopAppShell(props: {
 
     // A provider that showed up late clears the notice it caused.
     dismissAppNotice(NO_STARTUP_BACKEND_NOTICE_ID);
+    setNoAgentLanding(false);
     startupLandingStateRef.current = "complete";
     // Landing is for a window that is still sitting on the startup view. The
     // notice sends operators into Settings to fix exactly this, so a provider
@@ -4207,6 +4221,21 @@ function DesktopAppShell(props: {
   function buildThreadViewProps() {
     return (
       {
+        ...(noAgentLanding && settings.snapshot
+          ? {
+            emptyTitle: "Get started",
+            emptyContent: (
+              <Suspense fallback={null}>
+                <LazyAgentSetupPane
+                  settings={settings}
+                  desktopApi={desktopApi}
+                  claudeSignIn={claudeSignIn.controls}
+                  onOpenProviderSettings={() => openSettingsSection("models")}
+                />
+              </Suspense>
+            ),
+          }
+          : {}),
         titleRename,
         onForkThread: navigation.forkThread,
         onCreateSubthread: navigation.createSubthread,
