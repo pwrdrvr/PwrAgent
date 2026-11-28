@@ -37,7 +37,7 @@ import {
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
-import { PR_METADATA_PRIORITY, SharedPrMetadataRead } from "../pr-status/pr-metadata-process";
+import { PR_METADATA_PRIORITY, SharedPrMetadataRead, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { getDesktopStackReader, StackReadObservation } from "../stacks/stack-reader";
 import {
   compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, STACK_DETAIL_REUSE_MS,
@@ -251,6 +251,7 @@ function publishSidebarEnrichment(registry: DesktopBackendRegistry): void {
 }
 
 type SidebarPrValidation = {
+  input?: PrSummary[];
   rows: PrSummary[];
   prKeys: Set<string>;
   epoch: number;
@@ -311,12 +312,19 @@ function checkoutBinding(pr: PrSummary): string {
     pr.explicitlyAttached, pr.linkedDirectoryPaths, pr.headRefName]);
 }
 
+function sidebarCheckoutProof(cache: SidebarPrCache, binding: string) {
+  const proof = cache.checkouts.get(binding);
+  return proof && proof.expiresAt > Date.now() ? proof : undefined;
+}
+
 async function readSidebarPullRequests(registry: DesktopBackendRegistry, prs: PrSummary[],
-  demand: { signal?: AbortSignal }): Promise<PrSummary[]> {
+  demand: PrMetadataDemand): Promise<PrSummary[]> {
   demand.signal?.throwIfAborted();
   if (!prs.length) return [];
   const cache = sidebarPrCache(registry);
-  const key = createHash("sha256").update(JSON.stringify(prs)).digest("base64url");
+  // A post-turn lookup can rewrite the stored snapshot with fresh status.
+  // Reuse checkout verification while the attachment bindings are the same.
+  const key = createHash("sha256").update(JSON.stringify(prs.map(checkoutBinding))).digest("base64url");
   let validation = cache.validations.get(key);
   if (!validation) {
     if (cache.validations.size >= MAX_SIDEBAR_PR_VALIDATIONS) {
@@ -331,34 +339,55 @@ async function readSidebarPullRequests(registry: DesktopBackendRegistry, prs: Pr
   }
   const entry = validation;
   const { epoch } = entry;
-  if (!entry.pending && (entry.expiresAt <= Date.now() || entry.verifiedEpoch !== epoch)) {
+  if (entry.expiresAt > Date.now() && entry.verifiedEpoch === epoch && isDeepStrictEqual(entry.input, prs)) {
+    return entry.rows;
+  }
+
+  // Warm reads see the latest registry status without waiting on Git. A
+  // changed canonical binding still needs its own checkout verdict.
+  const canonical = entry.input ? await registry.canonicalizeNavigationPullRequests(prs, demand, false) : undefined;
+  demand.signal?.throwIfAborted();
+  const bindings = canonical?.map(checkoutBinding);
+  const reusable = bindings && sidebarCheckoutProof(cache, JSON.stringify(bindings));
+  if (canonical && reusable && entry.epoch === epoch) {
+    entry.input = prs;
+    entry.rows = canonical.filter((pr) => reusable.admitted.has(checkoutBinding(pr)));
+    entry.verifiedEpoch = epoch;
+    entry.expiresAt = reusable.expiresAt;
+    indexValidation(cache, entry, new Set([...prs, ...canonical].map(buildPullRequestStatusKey)));
+    return entry.rows;
+  }
+
+  if (!entry.pending && entry.epoch === epoch) {
     entry.pending = true;
     setImmediate(() => {
       const demand = { priority: () => PR_METADATA_PRIORITY.background, signal: AbortSignal.timeout(30_000) };
       void (async () => {
-        const canonical = await registry.canonicalizeNavigationPullRequests(prs, demand, false);
-        const bindings = JSON.stringify(canonical.map(checkoutBinding));
-        indexValidation(cache, entry, new Set([...prs, ...canonical].map(buildPullRequestStatusKey)));
-        const proof = cache.checkouts.get(bindings);
-        const reusable = proof && proof.expiresAt > Date.now() ? proof : undefined;
-        const verified = reusable ? canonical.filter((pr) => reusable.admitted.has(checkoutBinding(pr)))
-          : await registry.canonicalizeNavigationPullRequests(canonical, demand);
+        const rows = canonical ?? await registry.canonicalizeNavigationPullRequests(prs, demand, false);
+        const binding = JSON.stringify(bindings ?? rows.map(checkoutBinding));
+        indexValidation(cache, entry, new Set([...prs, ...rows].map(buildPullRequestStatusKey)));
+        const proof = sidebarCheckoutProof(cache, binding);
+        const verified = proof ? rows.filter((pr) => proof.admitted.has(checkoutBinding(pr)))
+          : await registry.canonicalizeNavigationPullRequests(rows, demand);
         if (entry.epoch !== epoch) { publishSidebarEnrichment(registry); return; }
-        entry.expiresAt = reusable?.expiresAt ?? Date.now() + SIDEBAR_PR_VALIDATION_REUSE_MS;
-        if (!reusable) {
-          if (!cache.checkouts.has(bindings) && cache.checkouts.size >= MAX_SIDEBAR_PR_VALIDATIONS) {
+        entry.expiresAt = proof?.expiresAt ?? Date.now() + SIDEBAR_PR_VALIDATION_REUSE_MS;
+        if (!proof) {
+          if (!cache.checkouts.has(binding) && cache.checkouts.size >= MAX_SIDEBAR_PR_VALIDATIONS) {
             cache.checkouts.delete(cache.checkouts.keys().next().value!);
           }
-          cache.checkouts.set(bindings, { admitted: new Set(verified.map(checkoutBinding)), expiresAt: entry.expiresAt });
+          cache.checkouts.set(binding, { admitted: new Set(verified.map(checkoutBinding)), expiresAt: entry.expiresAt });
         }
-        if (!isDeepStrictEqual(entry.rows, verified)) publishSidebarEnrichment(registry);
+        if (!isDeepStrictEqual(entry.rows.map(checkoutBinding), verified.map(checkoutBinding))) publishSidebarEnrichment(registry);
+        entry.input = prs;
         entry.rows = verified;
         entry.verifiedEpoch = epoch;
       })().catch((error: unknown) => navigationQueryLog.warn("sidebar PR validation failed", { error: String(error) }))
         .finally(() => { entry.pending = false; });
     });
   }
-  return entry.rows;
+  if (!canonical) return entry.rows;
+  const admitted = new Set(entry.rows.map(checkoutBinding));
+  return canonical.filter((pr) => admitted.has(checkoutBinding(pr)));
 }
 
 export function navigationQueryShowsStacks(

@@ -12762,6 +12762,20 @@ describe("app server ipc", () => {
           ["conflicting", "passing"], ["mergeable", "passing"], ["mergeable", "failing"],
         ]);
         expect(stackReads).toHaveBeenCalledTimes(4);
+
+        // The new head has no CI result yet. Its unknown check state is
+        // valid evidence for this head and is published with the same PR key.
+        const newHead: PrSummary = { ...unknown, headSha: "c".repeat(40), state: "unknown", checkState: "unknown" };
+        const headObservedAt = service.nextPrObservationTimestamp();
+        await expect(service.applyPolledPrStatuses([newHead], headObservedAt)).resolves.toEqual([key]);
+        expect(statuses().at(-1)).toMatchObject({ url: pr.url, number: pr.number,
+          headSha: newHead.headSha, lifecycleState: "open", checkState: "unknown", mergeState: "unknown" });
+        // A slower response for the old head cannot restore its passing dot.
+        await expect(service.applyPolledPrStatuses([pr], headObservedAt - 1)).resolves.toEqual([]);
+        expect(service.prStatusRegistry.get(key)?.pr).toMatchObject({ headSha: newHead.headSha, checkState: "unknown" });
+        await expect(poll({ ...newHead, state: "pending", checkState: "pending" })).resolves.toEqual([key]);
+        expect(statuses().slice(-2).map((status) => [buildPullRequestStatusKey(status), status.checkState]))
+          .toEqual([[key, "unknown"], [key, "pending"]]);
       } finally {
         emitRegistryEvent({ notification: { method: "thread/name/updated" } });
         readNavigationPullRequests.mockImplementation((refs) => refs.map(() => []));

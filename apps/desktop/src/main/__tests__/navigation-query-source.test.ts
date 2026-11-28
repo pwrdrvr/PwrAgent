@@ -1471,7 +1471,7 @@ it.each([8, 16, 32])("reuses checkout verdicts when one PR changes across %i mou
   expect((await page.verify(batches))[0]).toEqual([pr]);
   expect(verify.mock.calls.map(([rows, , checkout]) => [rows[0]?.number, checkout])).toEqual([[1, false]]);
   verify.mockClear();
-  await page.verify([[pr]]);
+  expect((await page.verify([[pr]]))[0]).toEqual([pr]);
   await settle();
   expect((await page.verify([[pr]]))[0]).toEqual([pr]);
   expect(verify.mock.calls.filter(([, , checkout]) => checkout !== false)).toHaveLength(0);
@@ -1481,6 +1481,82 @@ it.each([8, 16, 32])("reuses checkout verdicts when one PR changes across %i mou
   await settle();
   expect((await page.verify([[moved]]))[0]).toEqual([]);
   expect(verify.mock.calls.filter(([, , checkout]) => checkout !== false)).toHaveLength(1);
+});
+
+it("keeps a verified PR visible when a post-turn lookup rewrites its saved status", async () => {
+  const source = createSource();
+  const publish = vi.fn(async () => {});
+  source.registry.publishLocalEvent = publish;
+  const previous: PrSummary = { provider: "github.com", org: "fixture", repo: "project", number: 42,
+    url: "https://github.com/fixture/project/pull/42", state: "passing", headRefName: "topic",
+    headSha: "a".repeat(40), linkedDirectoryPaths: ["/fixture/project"] };
+  let canonical = previous;
+  const verify = vi.fn<DesktopBackendRegistry["canonicalizeNavigationPullRequests"]>(async () => [canonical]);
+  source.registry.canonicalizeNavigationPullRequests = verify;
+  const projection = navigationPullRequestProjection({ kind: "directory", registry: source.registry, backgroundValidation: true });
+  const read = async (stored: PrSummary) => (await projection.verify([[stored]]))[0];
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  await read(previous);
+  await settle();
+  expect(await read(previous)).toEqual([previous]);
+  await settle();
+  publish.mockClear();
+
+  canonical = { ...previous, state: "pending", headSha: "b".repeat(40) };
+  for (const listener of source.listeners) listener({ backend: "codex", notification: {
+    method: "pullRequest/status/updated", params: { prKey: buildPullRequestStatusKey(canonical), pr: canonical },
+  } });
+
+  // The post-turn lookup stores new status alongside the same attachment.
+  // The checkout never changed, so the next read must still include the PR.
+  expect(await read(canonical)).toEqual([canonical]);
+  expect(await read(previous)).toEqual([canonical]);
+  await settle();
+  expect(verify.mock.calls.filter(([, , checkout]) => checkout !== false)).toHaveLength(1);
+  expect(publish).not.toHaveBeenCalled();
+});
+
+it("retains checkout membership across status notifications and overlay writes in either order", async () => {
+  const observations = fc.array(fc.record({
+    checkState: fc.constantFrom("pending", "passing", "failing", "unknown"),
+    mergeState: fc.constantFrom("mergeable", "conflicting", "unknown"),
+    newHead: fc.boolean(),
+    writeFirst: fc.boolean(),
+    redeliver: fc.boolean(),
+  }), { minLength: 1, maxLength: 16, size: "max" });
+  await fc.assert(fc.asyncProperty(observations, async (steps) => {
+    const source = createSource();
+    const initial: PrSummary = { provider: "github.com", org: "fixture", repo: "project", number: 53,
+      url: "https://github.com/fixture/project/pull/53", state: "passing", headRefName: "topic",
+      headSha: "a".repeat(40), lifecycleState: "open", linkedDirectoryPaths: ["/fixture/project"] };
+    let canonical = initial;
+    let stored = initial;
+    const verify = vi.fn<DesktopBackendRegistry["canonicalizeNavigationPullRequests"]>(async () => [canonical]);
+    source.registry.canonicalizeNavigationPullRequests = verify;
+    const projection = navigationPullRequestProjection({ kind: "directory", registry: source.registry, backgroundValidation: true });
+    const read = async () => (await projection.verify([[stored]]))[0];
+    await read();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(await read()).toEqual([canonical]);
+
+    for (const [index, { checkState, mergeState, newHead, writeFirst, redeliver }] of steps.entries()) {
+      canonical = { ...canonical, state: checkState, checkState, mergeState,
+        headSha: newHead ? (index + 1).toString(16).padStart(40, "0") : canonical.headSha };
+      const send = () => {
+        for (const listener of source.listeners) listener({ backend: "codex", notification: {
+          method: "pullRequest/status/updated", params: { prKey: buildPullRequestStatusKey(initial), pr: canonical },
+        } });
+      };
+      if (writeFirst) stored = canonical;
+      else send();
+      expect(await read()).toEqual([canonical]);
+      if (writeFirst) send();
+      else stored = canonical;
+      if (redeliver) send();
+      expect(await read()).toEqual([canonical]);
+    }
+    expect(verify.mock.calls.filter(([, , checkout]) => checkout !== false)).toHaveLength(1);
+  }), { numRuns: 5 });
 });
 
 it.each(["owner", "viewer"] as const)("releases a cancelled sidebar %s waiter while another reader completes", async (stage) => {
