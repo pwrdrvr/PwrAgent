@@ -95,6 +95,7 @@ import {
 import type { SystemOneTarget } from "../decision/system-one";
 import { imageCodec } from "../owner-host";
 import { decisionImageReferences, hasDecisionImageParts, prepareDecisionInput, type PreparedDecisionInput } from "./decision-images";
+import { FACTORY_PR_DEFINITION, FACTORY_PR_PRESET, factoryEvidenceProblem } from "./factory-pr-assessment";
 import { buildSystemOneDecisionRequest, postSystemOneDecision } from "./system-one-decisions";
 import {
   postOpenAIDecision,
@@ -564,6 +565,7 @@ export class OpenAIDecisionsService {
     const { record, schema } = args.definition !== undefined
       ? await this.adHocRecord(caller, args)
       : this.registeredRecord(enrichedCaller, args, requestedRunId);
+    const assessingFactoryPr = args.definition !== undefined && record.name === FACTORY_PR_PRESET;
     const batchResearchRunId = record.scope === "research_run"
       ? record.researchRunId
       : requestedRunId ?? this.soleActiveResearchRunId(caller);
@@ -581,6 +583,9 @@ export class OpenAIDecisionsService {
     // Every input is checked before the key is read or any request is sent.
     const capability = this.imageCapabilities(record.provider);
     const validated = inputs.map((input, index) => {
+      if (assessingFactoryPr && hasDecisionImageParts(input)) {
+        throw new OpenAIDecisionsError("invalid_input", "Include visual proof as a revision-bound Factory evidence reference.");
+      }
       const result = prepareDecisionInput(input, schema, capability, unsupportedImagesMessage(record.provider));
       if (!result.ok) {
         const error = new OpenAIDecisionsError(
@@ -589,6 +594,10 @@ export class OpenAIDecisionsService {
         );
         if (!bulk || result.code === "invalid_input") throw error;
         return error;
+      }
+      if (assessingFactoryPr) {
+        const problem = factoryEvidenceProblem(result.value.value);
+        if (problem) throw new OpenAIDecisionsError("invalid_input", bulk ? `inputs[${index}]: ${problem}` : problem);
       }
       return result.value;
     });
@@ -1508,10 +1517,16 @@ export class OpenAIDecisionsService {
       }
     }
     const raw = args.definition as Record<string, unknown> | undefined;
-    if (raw && hasDecisionImageParts(raw.prefix)) {
+    const factory = raw?.preset === FACTORY_PR_PRESET;
+    if (factory && Object.keys(raw).some((key) => key !== "provider" && key !== "preset")) {
+      throw new OpenAIDecisionsError("invalid_definition", "A Factory preset accepts only preset and optional provider.");
+    }
+    if (!factory && raw && hasDecisionImageParts(raw.prefix)) {
       this.assertDefinitionImages(await this.registrationProvider(raw.provider), raw);
     }
-    const parsed = parseOpenAIDecisionAdHocDefinition(args.definition);
+    const parsed = parseOpenAIDecisionAdHocDefinition(factory
+      ? { ...FACTORY_PR_DEFINITION, provider: raw.provider }
+      : args.definition);
     if (!parsed.ok) throw new OpenAIDecisionsError("invalid_definition", parsed.message);
     const definition = parsed.value;
     const provider = definition.provider
@@ -1525,7 +1540,7 @@ export class OpenAIDecisionsService {
     const record: OpenAIDecisionVersionRecord = {
       decisionId,
       version: 1,
-      name: "ad_hoc",
+      name: factory ? FACTORY_PR_PRESET : "ad_hoc",
       scope: "thread",
       ownerBackend: caller.backend,
       ownerThreadId: caller.threadId,
