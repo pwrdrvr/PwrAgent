@@ -426,6 +426,35 @@ describe("sidebar thread card", () => {
     expect(card()).toBeNull();
   });
 
+  // Reported: after a row's PR card had opened, moving back off the chip
+  // onto the row never brought the row's own card, however long the
+  // pointer stayed, until it left the row and came back.
+  it("opens the row's card again once the pointer moves from its PR chip back onto the row", () => {
+    renderSidebar({ threads: [thread("a", { prs: [pr(7)] })] });
+    const chip = row("a").querySelector("[data-pr-chip]")!;
+    move(document.querySelector(".sidebar")!, rowTitle("a"));
+    move(rowTitle("a"), chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#7");
+    expect(card()).toBeNull();
+    move(chip, rowTitle("a"));
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+    expect(card()).toHaveTextContent("Thread a");
+  });
+
+  // Moving among the row's own parts is not a new arrival: only leaving a
+  // chip re-asks for the row's card.
+  it("does not re-ask for the row's card while the pointer stays on the chip", () => {
+    renderSidebar({ threads: [thread("a", { prs: [pr(7)] })] });
+    const chip = row("a").querySelector("[data-pr-chip]")!;
+    move(document.querySelector(".sidebar")!, rowTitle("a"));
+    move(rowTitle("a"), chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#7");
+    act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS * 3));
+    expect(card()).toBeNull();
+  });
+
   it("lets a PR chip on its row open the PR card after the chip's own delay", () => {
     renderSidebar({ threads: [thread("a", { prs: [pr(7)] })] });
     hoverOpen("a");

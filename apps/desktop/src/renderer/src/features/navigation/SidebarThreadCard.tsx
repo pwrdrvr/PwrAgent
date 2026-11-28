@@ -303,6 +303,13 @@ export const SidebarThreadCardHost = forwardRef<
 
 const ROW_SELECTOR = ".thread-row-shell[data-thread-key]";
 
+/** A control inside a row that opens its own card: a PR chip, a stack tag, the PR rollup. */
+const NESTED_CARD_TRIGGER_SELECTOR = "[data-hover-card-trigger]";
+
+function inNestedCardTrigger(node: EventTarget | null): boolean {
+  return node instanceof Element && node.closest(NESTED_CARD_TRIGGER_SELECTOR) !== null;
+}
+
 /** Keys that move focus between rows: Tab, and the list's own keys. */
 const NAVIGATION_KEYS = new Set(["Tab", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
 
@@ -379,7 +386,19 @@ export function useSidebarThreadCardTriggers(
     };
     const onMouseOver = (event: MouseEvent): void => {
       const shell = rowShellOf(event.target);
-      if (!shell || shell === rowShellOf(event.relatedTarget)) return;
+      if (!shell) return;
+      if (shell === rowShellOf(event.relatedTarget)) {
+        // Back on the row from one of its own chips: the chip's card took
+        // over from (or cancelled) this row's card, so ask for it again.
+        if (
+          crossed !== shell
+          && inNestedCardTrigger(event.relatedTarget)
+          && !inNestedCardTrigger(event.target)
+        ) {
+          enterRow(shell);
+        }
+        return;
+      }
       hovered = shell;
       if (aimsAtCard({ x: event.clientX, y: event.clientY })) {
         crossed = shell;

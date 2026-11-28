@@ -340,6 +340,8 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
       aria-describedby={tooltipVisible ? tooltipController.tooltipId : undefined}
       className={separated ? "pr-chip__trigger" : className}
       data-pr-chip=""
+      // Opens its own card: the thread row's card waits while the pointer is here.
+      data-hover-card-trigger=""
       data-pr-url={pr.url}
       draggable={false}
       // Focus moving onto the card's own buttons keeps it.
@@ -456,7 +458,9 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   return (
     <>
       {separated ? (
-        <span className={`${className} pr-chip--stacked`}>
+        // The pill (number, stack tag, ✕) is one chip to the row: resting on
+        // any part of it is not asking about the thread.
+        <span className={`${className} pr-chip--stacked`} data-hover-card-trigger="">
           {number}
           <StackTag thread={stackThread} pr={pr} member={stack} onOpen={props.onOpen} />
           {detach}
