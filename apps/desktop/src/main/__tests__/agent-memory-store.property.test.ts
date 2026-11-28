@@ -1,6 +1,8 @@
 import fc from "fast-check";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
+import { Readable } from "node:stream";
+import { json } from "node:stream/consumers";
 import { runInNewContext } from "node:vm";
 import { buildAgentToolStdioServer } from "../agent-tools/agent-tool-mcp-stdio";
 import path from "node:path";
@@ -80,26 +82,40 @@ it("the ACP stdio bridge forwards MCP frames with its bound credential", async (
   const response = { jsonrpc: "2.0", id: 7, result: { content: [] } };
   const written: string[] = [];
   const fetched: unknown[][] = [];
+  const gateway = { ...call, id: 8, params: { name: "call_mcp_tool", arguments: {} } };
+  const lines = [initialize, call, gateway].map((frame) => JSON.stringify(frame));
+  const http = {
+    request: (url: string, options: unknown, resolve: (response: Readable) => void) => ({
+      on: () => ({
+        end: (body: string) => {
+          fetched.push([url, options, body]);
+          const frame = fetched.length === 1 ? initialized : { ...response, id: JSON.parse(body).id };
+          resolve(Object.assign(Readable.from([Buffer.from(JSON.stringify(frame))]), {
+            statusCode: 200, headers: { "mcp-session-id": "fixture-session" },
+          }));
+        },
+      }),
+    }),
+  };
+  const modules: Record<string, unknown> = {
+    "node:http": http, "node:stream/consumers": { json }, "node:readline": { createInterface: () => lines },
+  };
   await runInNewContext(config.args[1]!, {
     AbortSignal,
     process: { env: config.env, stdin: {}, stdout: { write: (line: string) => written.push(line) } },
-    require: () => ({ createInterface: () => [JSON.stringify(initialize), JSON.stringify(call)] }),
-    fetch: async (...args: unknown[]) => {
-      fetched.push(args);
-      return fetched.length === 1
-        ? { ok: true, status: 200, headers: new Headers({ "mcp-session-id": "fixture-session" }), json: async () => initialized }
-        : { ok: true, status: 200, json: async () => response };
-    },
+    require: (name: string) => modules[name],
   });
-  expect(fetched).toEqual([
-    [config.env.PWRAGENT_STDIO_MCP_URL, expect.objectContaining({
-      body: JSON.stringify(initialize), headers: expect.objectContaining({ authorization: "Bearer fixture-token" }),
-    })],
-    [config.env.PWRAGENT_STDIO_MCP_URL, expect.objectContaining({
-      body: JSON.stringify(call), headers: expect.objectContaining({
-        authorization: "Bearer fixture-token", "mcp-session-id": "fixture-session", "mcp-protocol-version": "2025-06-18",
+  expect(fetched).toEqual(lines.map((line, index) => [
+    config.env.PWRAGENT_STDIO_MCP_URL,
+    expect.objectContaining({
+      // The gateway owns its human approval and execution deadlines.
+      signal: index === 2 ? undefined : expect.any(AbortSignal),
+      headers: expect.objectContaining({
+        authorization: "Bearer fixture-token",
+        ...(index ? { "mcp-session-id": "fixture-session", "mcp-protocol-version": "2025-06-18" } : {}),
       }),
-    })],
-  ]);
-  expect(written).toEqual([JSON.stringify(initialized) + "\n", JSON.stringify(response) + "\n"]);
+    }),
+    line,
+  ]));
+  expect(written).toEqual([initialized, response, { ...response, id: 8 }].map((frame) => JSON.stringify(frame) + "\n"));
 });

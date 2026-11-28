@@ -117,7 +117,8 @@ const agentToolMcpLog = getMainLogger("pwragent:agent-tool-mcp");
 export type AgentToolMcpClientContext = {
   backend: AppServerBackendKind;
   threadId?: string;
-  stdioFallback?: boolean;
+  /** A stdio credential may reach managed connections only on a gateway-enabled Antigravity registration. */
+  stdioFallback?: boolean | "managed-connections";
   managedReview?: boolean;
   observeJobMonitorCatalog?: boolean;
   tokenMiserEnabled?: boolean;
@@ -337,7 +338,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const normalizedThreadId = context.threadId?.trim();
     const normalizedContext = {
       backend: context.backend,
-      ...(context.stdioFallback ? { stdioFallback: true } : {}),
+      ...(context.stdioFallback ? { stdioFallback: context.stdioFallback } : {}),
       ...(context.managedReview ? { managedReview: true } : {}),
       ...(context.tokenMiserEnabled ? { tokenMiserEnabled: true } : {}),
       ...(normalizedThreadId ? { threadId: normalizedThreadId } : {}),
@@ -671,7 +672,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       );
     }
     if (!allowsStdioFallbackTool(clientContext, request.params.name)) {
-      return forbiddenMcpResponse("This ACP stdio client may call agent_memory and list_reviews only.");
+      return forbiddenMcpResponse("This tool is unavailable to this ACP stdio client.");
     }
     let { name, arguments: args } = request.params;
     if (usesAntigravityCatalog(clientContext) && (name === PWRAGENT_TOOL_SEARCH || name === CALL_PWRAGENT_TOOL)) {
@@ -980,7 +981,9 @@ function unsupportedMcpTool(): AgentMcpToolCallResponse {
 }
 
 function allowsStdioFallbackTool(context: AgentToolMcpClientContext, name: string): boolean {
-  return !context.stdioFallback || name === "agent_memory" || name === "list_reviews";
+  return !context.stdioFallback || name === "agent_memory" || name === "list_reviews"
+    || (context.backend === "acp:antigravity" && context.stdioFallback === "managed-connections"
+      && (name === "search_mcp_tools" || name === "call_mcp_tool" || name === "read_mcp_context"));
 }
 
 function usesAntigravityCatalog(context: AgentToolMcpClientContext): boolean {
@@ -1001,7 +1004,7 @@ function boundThreadKey(
   return JSON.stringify([
     context.backend,
     threadId,
-    context.stdioFallback === true,
+    context.stdioFallback ?? false,
     context.managedReview === true,
   ]);
 }

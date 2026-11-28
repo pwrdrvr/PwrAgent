@@ -16,7 +16,10 @@ The fixed invocation tool lets the agent use the search result in that turn.
 Antigravity discovers and invokes tools from thread-selected
 connections through `search_mcp_tools` and `call_mcp_tool`, which read the
 current selection on every call. PwrAgent uses this route at session creation
-and reload when both tools are available. Sessions without gateway access,
+and reload when both tools are available, including through the authenticated
+stdio bridge on runtimes without HTTP MCP support. The stdio registration adds
+the two gateway tools and the managed context reader to its existing
+`agent_memory` and `list_reviews` catalog. Sessions without gateway access,
 including those on contained members, keep their selected native connections.
 The MCP Access panel reports when a session uses tool search and when the
 gateway has connected to each selected server. When an oversized-schema
@@ -494,9 +497,10 @@ Antigravity keeps managed connections behind PwrAgent's bounded MCP catalog.
 `search_mcp_tools` returns a connection's `contextDiscovery` route when the
 server advertises resources, prompts or the skills extension. Search by the
 connection's name or ID to find servers that publish context without tools.
-Use `call_pwragent_tool` with `toolName: "read_mcp_context"` and
+On the restricted stdio catalog, call `read_mcp_context` directly. On the HTTP
+catalog use `call_pwragent_tool` with `toolName: "read_mcp_context"` and
 `arguments: { connectionId, method, params }`. The deferred definition is
-available through `tool_search`. It adds no native MCP function.
+available through `tool_search` on HTTP.
 Search admits exact tool schemas before adding context routes. A failed tool
 listing reports its error and can still return negotiated context methods.
 

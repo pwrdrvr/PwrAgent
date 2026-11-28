@@ -4305,12 +4305,14 @@ export class AcpBackendAdapter {
             return { servers: [] };
           }
         }
+        const useManagedGateway = backendId === "acp:antigravity" && this.managedMcpGatewayAvailable
+          && isAgentToolAdvertisedLocally("search_mcp_tools") && isAgentToolAdvertisedLocally("call_mcp_tool");
         if (this.agentToolMcpServer) {
           try {
             const registration = await this.agentToolMcpServer.registerClient({
               backend: backendId,
               threadId: sessionId,
-              ...(!http ? { stdioFallback: true } : {}),
+              ...(!http ? { stdioFallback: useManagedGateway ? "managed-connections" as const : true } : {}),
               ...(http && observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
             });
             const readTool = registration.readTool;
@@ -4343,8 +4345,7 @@ export class AcpBackendAdapter {
         // A large connection catalog can crowd out even the small PwrAgent
         // catalog in Antigravity. Its fixed gateway tools read the selected
         // connections live and retain PwrAgent's per-tool approval policy.
-        if (backendId === "acp:antigravity" && http && baseRegistration && this.managedMcpGatewayAvailable
-          && isAgentToolAdvertisedLocally("search_mcp_tools") && isAgentToolAdvertisedLocally("call_mcp_tool")) {
+        if (baseRegistration && useManagedGateway) {
           return { ...baseRegistration, managedConnectionsViaGateway: true };
         }
         const connectionRegistration =

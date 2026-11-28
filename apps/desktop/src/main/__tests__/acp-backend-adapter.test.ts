@@ -4986,7 +4986,7 @@ describe("AcpBackendAdapter", () => {
   });
 
   // Rule: every MCP server PwrAgent offers an ACP session is either the
-  // agent-tool HTTP server, which lists and refuses tools by this member's
+  // authenticated agent-tool server (direct HTTP or stdio), governed by member
   // containment, or an operator MCP connection. The adapter never adds a
   // server of its own that could carry PwrAgent tools past that gate. This
   // holds for a session started now (session/new) and for one stored before
@@ -5082,7 +5082,7 @@ describe("AcpBackendAdapter", () => {
                   name: "pwragent",
                   type: "http" as const,
                   url: "http://127.0.0.1:43210/mcp",
-                  headers: [],
+                  headers: [{ name: "Authorization", value: "Bearer fixture" }],
                 },
                 bindThread: () => undefined,
               };
@@ -5118,12 +5118,12 @@ describe("AcpBackendAdapter", () => {
               request.params as { mcpServers?: Array<{ name: string }> } | undefined
             )?.mcpServers?.map((server) => server.name) ?? [],
           }));
-        const registeredHttp = agentToolServer === "registers" && http === true;
+        const registered = agentToolServer === "registers";
         const expected = [
-          ...(registeredHttp ? ["pwragent"] : []),
+          ...(registered ? ["pwragent"] : []),
           // A working Antigravity PwrAgent server provides the live gateway
           // for selected connections without adding their native catalogs.
-          ...(operatorConnection && !(registryId === "antigravity" && registeredHttp) ? ["operator-connection"] : []),
+          ...(operatorConnection && !(registryId === "antigravity" && registered) ? ["operator-connection"] : []),
         ];
         expect(
           offered,

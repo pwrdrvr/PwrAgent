@@ -82,7 +82,7 @@ function claudeResponse(index: number, model: string | undefined, call?: ClaudeT
 
 const antigravity = "acp:antigravity";
 // Keep the expected route explicit so a fallback to eager schemas cannot pass a gateway budget.
-const antigravityUsesGateway = false;
+const antigravityUsesGateway = true;
 const providers = ["codex", "claude", antigravity] as const;
 type Provider = typeof providers[number];
 const catalogCases = [...providers, kimi] as const;

@@ -151,6 +151,36 @@ describe("AgentToolMcpServer", () => {
     } finally { await client.close(); }
   });
 
+  it("scopes the Antigravity stdio gateway grant to the selected registration", async () => {
+    const dispatch = vi.fn<AgentToolDefinition["dispatch"]>(() => agentToolSuccess({}));
+    const gateway = ["call_mcp_tool", "read_mcp_context", "search_mcp_tools"];
+    const names = ["agent_memory", "list_reviews", ...gateway, "update_review_item"];
+    const router = new AgentToolRouter(names.map((name) => ({
+      namespace: "pwragent", name, description: name, inputSchema: { type: "object" }, dispatch,
+    })));
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => [buildCatalog(router)],
+      resolveCallContext: () => ({ backend: "acp:antigravity", threadId: "thread", turnId: "turn" }),
+    });
+    openServers.push(server);
+    const context = { backend: "acp:antigravity", threadId: "thread" } as const;
+    const restricted = await connectClient(await server.registerClient({ ...context, stdioFallback: true }));
+    const managed = await connectClient(await server.registerClient({ ...context, stdioFallback: "managed-connections" }));
+    try {
+      expect((await restricted.listTools()).tools.map(({ name }) => name)).toEqual(["agent_memory", "list_reviews"]);
+      expect((await managed.listTools()).tools.map(({ name }) => name)).toEqual(["agent_memory", "list_reviews", ...gateway].sort());
+      for (const name of gateway) {
+        expect((await restricted.callTool({ name, arguments: {} })).isError).toBe(true);
+      }
+      for (const name of ["update_review_item", "call_pwragent_tool"]) {
+        expect((await managed.callTool({ name, arguments: {} })).isError).toBe(true);
+      }
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      await Promise.all([managed.close(), restricted.close()]);
+    }
+  });
+
   it("reads a tool exactly as the registration's tools/list describes it", async () => {
     let allowed = true;
     const tool = (name: string, readOnlyHint: boolean): AgentToolDefinition => ({
