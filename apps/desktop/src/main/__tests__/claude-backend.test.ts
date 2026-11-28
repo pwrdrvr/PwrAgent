@@ -200,6 +200,24 @@ describe("Claude SDK backend", () => {
     await f.backend.close();
   });
 
+  it("keeps HTTP initialization for a query driver that does not launch an owned Claude child", async () => {
+    const setMcpServers = vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} });
+    const f = await fixture(undefined, { setMcpServers });
+    const registration = vi.fn();
+    const mcpServers = { pwragent: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
+    try {
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }], mcpServers,
+        registerOwnedMcp: registration });
+      await f.waitForTurn();
+      expect(f.queries[0]).toMatchObject({ mcpServers, mcpServersDelivery: "initialize" });
+      expect(registration).not.toHaveBeenCalled();
+      expect(setMcpServers).not.toHaveBeenCalled();
+    } finally {
+      await f.backend.close();
+    }
+  });
+
   it("relaunches an idle live session to add the gateway rule, and defers it while a task runs", async () => {
     const pwragent = { type: "http" as const, url: "http://127.0.0.1:9/mcp" };
     const controls = { setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }) };

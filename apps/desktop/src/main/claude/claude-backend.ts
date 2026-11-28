@@ -1473,7 +1473,10 @@ export class ClaudeBackend {
       current.usesProviderAuth = sameConfigDir && env.ANTHROPIC_PROFILE === providerEnv.ANTHROPIC_PROFILE
         && env.HOME === providerEnv.HOME && env.USERPROFILE === providerEnv.USERPROFILE;
       const initializeMcp = supportsClaudeMcpInitialize(version);
-      const registerOwnedMcp = process.platform === "darwin" && config.mcpServers?.[PWRAGENT_TOOL_NAMESPACE]
+      // Only the bundled SDK launch is known to use our spawn hook. An
+      // injected driver keeps its existing MCP delivery contract.
+      const registerOwnedMcp = process.platform === "darwin" && !this.options.query && initializeMcp
+        && config.mcpServers?.[PWRAGENT_TOOL_NAMESPACE]
         ? params.registerOwnedMcp : undefined;
       const initialMcpServers = registerOwnedMcp && config.mcpServers
         ? Object.fromEntries(Object.entries(config.mcpServers).filter(([name]) => name !== PWRAGENT_TOOL_NAMESPACE))
@@ -1582,13 +1585,13 @@ export class ClaudeBackend {
         // The SDK buffers the prompt during initialize, so its query object
         // alone is not proof that Claude can accept the first message.
         const mcpTimeout = this.options.mcpStartupTimeoutMs ?? CLAUDE_MCP_STARTUP_TIMEOUT_MS;
-        if (initialMcpServers && Object.keys(initialMcpServers).length > 0 && (initializeMcp || !registerOwnedMcp)) {
+        if (initialMcpServers && Object.keys(initialMcpServers).length > 0) {
           await configureClaudeStartupMcp(current.query, initialMcpServers, initializeMcp, controller.signal, mcpTimeout);
         }
         if (registerOwnedMcp && config.mcpServers) {
           // Deliver the owned server only after the SDK's actual local child
           // has been pinned. Modern initialize still delivers other servers.
-          if (!initializeMcp || !Object.keys(initialMcpServers ?? {}).length) {
+          if (!Object.keys(initialMcpServers ?? {}).length) {
             await configureClaudeStartupMcp(current.query, {}, true, controller.signal, mcpTimeout);
           }
           const child = ownedChild;
