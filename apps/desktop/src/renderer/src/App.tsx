@@ -4810,6 +4810,16 @@ function DesktopAppShell(props: {
             onOpenResources={desktopApi?.openResourceCheckoutsWindow
               ? () => void desktopApi.openResourceCheckoutsWindow?.()
               : undefined}
+            onOpenFactory={!windowFederationTarget && desktopApi?.openFactoryWindow
+              ? () => void desktopApi.openFactoryWindow?.().catch((error: unknown) => {
+                showAppNotice({
+                  id: "factory-window-open",
+                  title: "Could not open Factory",
+                  tone: "error",
+                  message: error instanceof Error ? error.message : "Factory is unavailable.",
+                });
+              })
+              : undefined}
             onSelectThread={(thread, options) => {
               setMainView("thread");
               setComposerFocusRequest(options?.focusComposer && options.focusOrigin

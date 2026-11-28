@@ -184,6 +184,7 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       await runGitCommand(projectPath, ["branch", "target+ipc", actualBase]);
       const plus = await read({ ...params, candidate: { ...candidate, branch: "fixture+ipc", baseRef: "refs/heads/target+ipc" } });
       expect(plus.candidate).toMatchObject({ headOid: actualHead, baseOid: actualBase });
+      expect(await appServerService.listFactoryProjects()).toEqual([{ key, label: "Synthetic", path: projectPath }]);
       const git = vi.spyOn(gitExecutable, "runGitCommand");
       const unpublished = await read(params);
       const gitCalls = git.mock.calls.map(([, args]) => args);

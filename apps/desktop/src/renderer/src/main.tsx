@@ -181,6 +181,9 @@ const AutomationRunWindow = lazy(async () => ({
 const ResourcesWindow = lazy(async () => ({
   default: (await import("./features/resources/ResourcesWindow")).ResourcesWindow,
 }));
+const FactoryWindow = lazy(async () => ({
+  default: (await import("./features/factory/FactoryWindow")).FactoryWindow,
+}));
 const StarMapWindow = lazy(async () => ({
   default: (await import("./features/star-map/StarMapWindow")).StarMapWindow,
 }));
@@ -263,6 +266,10 @@ const routes: Array<{
   {
     match: (hash) => hash === "resources" || hash.startsWith("resources/"),
     render: () => <ResourcesWindow />,
+  },
+  {
+    match: (hash) => hash === "factory",
+    render: () => <FactoryWindow />,
   },
   ...(ResourcesPreviewWindow
     ? [{
