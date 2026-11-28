@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { extract } from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureOpenAiCodexRuntime,
@@ -13,10 +14,12 @@ import {
 } from "../codex-openai-runtime";
 import {
   appleSilicon,
+  appleSiliconTarget,
   makeOpenAiCodexPackage,
   openAiReleaseFetch,
   probeFixtureVersion,
   recordingProgress,
+  sha256,
   withTempRoot,
 } from "./codex-openai-runtime-fixture";
 
@@ -196,6 +199,35 @@ describe.skipIf(process.platform === "win32")("installing OpenAI's Codex", () =>
       // This process marked 0.170.0 in use, so it stays for the app server running it.
       expect(await readdir(path.join(rootDir, "versions"))).toEqual(expect.arrayContaining(["0.170.0", "0.172.0"]));
       expect(await readFile(first!.command, "utf8")).toBe("codex 0.170.0\n");
+    });
+  });
+
+  it("checks at once when a PwrAgent update raised the minimum above the installed copy", async () => {
+    await withTempRoot(async (scratch) => {
+      // An install from before the minimum moved: written the way an older
+      // PwrAgent left it, because today's installer would refuse 0.150.0.
+      const rootDir = path.join(scratch, "openai");
+      const old = await makeOpenAiCodexPackage(scratch, "0.150.0");
+      const versionRoot = path.join(rootDir, "versions", "0.150.0");
+      await mkdir(versionRoot, { recursive: true });
+      await writeFile(path.join(scratch, "old.tar.gz"), old);
+      await extract({ file: path.join(scratch, "old.tar.gz"), cwd: versionRoot });
+      const record = { version: "0.150.0", target: appleSiliconTarget, sha256: sha256(old) };
+      await writeFile(path.join(versionRoot, ".pwragent-install.json"), JSON.stringify(record));
+      const now = 5_000;
+      await writeFile(path.join(rootDir, "openai-release.json"), JSON.stringify({
+        schemaVersion: 1, ...record, installedAt: now, checkedAt: now,
+      }));
+      const archives = new Map([["0.172.0", await makeOpenAiCodexPackage(scratch, "0.172.0")]]);
+      const base = {
+        ...appleSilicon, rootDir, now: () => now + 1,
+        fetch: openAiReleaseFetch({ latest: () => "0.172.0", archives }),
+        probeVersion: probeFixtureVersion, progress: recordingProgress(),
+      };
+      expect((await ensureOpenAiCodexRuntime({ ...base, checkMode: "ttl" }))?.version).toBe("0.150.0");
+      await vi.waitFor(async () => {
+        expect((await readInstalledOpenAiCodexRuntime(base))?.version).toBe("0.172.0");
+      });
     });
   });
 

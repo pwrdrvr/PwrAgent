@@ -289,8 +289,13 @@ export async function ensureOpenAiCodexRuntime(
     const cached = await readInstalledOpenAiCodexRuntime(options);
     if (!cached) return undefined;
     const now = options.now?.() ?? Date.now();
+    // A PwrAgent update can raise the minimum under an installed copy; that
+    // copy is due for a check now, not when its day runs out.
     if (
-      now - cached.metadata.checkedAt >= OPENAI_CODEX_CHECK_TTL_MS
+      (
+        now - cached.metadata.checkedAt >= OPENAI_CODEX_CHECK_TTL_MS
+        || !isOpenAiCodexReleaseEligible(cached.version)
+      )
       && now >= (retryChecksAfter.get(root) ?? 0)
       && !activeChecks.has(root)
     ) {
@@ -626,7 +631,18 @@ async function publishVersion(
     }
     await rm(versionRoot, { recursive: true, force: true });
   }
-  await renameWithRetry(unpacked, versionRoot, platform);
+  try {
+    await renameWithRetry(unpacked, versionRoot, platform);
+  } catch (error) {
+    // Another PwrAgent sharing this root may have published the same release
+    // between the check above and the rename. Its copy is as good as ours.
+    try {
+      await validateInstalledVersion(versionRoot, { ...release, platform });
+      return;
+    } catch {
+      throw error;
+    }
+  }
 }
 
 async function renameWithRetry(
@@ -816,15 +832,26 @@ async function fetchSmallText(
     redirect: "follow",
     signal,
   });
-  if (!response.ok) {
+  if (!response.ok || !response.body) {
     await response.body?.cancel();
     throw new Error(`Request failed with HTTP ${response.status} for ${url}.`);
   }
-  const text = await response.text();
-  if (text.length > OPENAI_CODEX_MAX_METADATA_BYTES) {
-    throw new Error(`Response from ${url} is larger than PwrAgent allows.`);
+  const tooLarge = () => new Error(`Response from ${url} is larger than PwrAgent allows.`);
+  if (Number(response.headers.get("content-length")) > OPENAI_CODEX_MAX_METADATA_BYTES) {
+    await response.body.cancel();
+    throw tooLarge();
   }
-  return text;
+  const chunks: Buffer[] = [];
+  let received = 0;
+  for await (const chunk of Readable.fromWeb(
+    response.body as unknown as NodeReadableStream<Uint8Array>,
+    { signal },
+  )) {
+    received += chunk.length;
+    if (received > OPENAI_CODEX_MAX_METADATA_BYTES) throw tooLarge();
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function parseJson(text: string, label: string): Record<string, unknown> {

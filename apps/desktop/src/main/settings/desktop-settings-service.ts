@@ -2444,8 +2444,11 @@ export class DesktopSettingsService {
       source: discovery.selectedSource,
       managedByPwrAgent:
         managed !== undefined
-        || (command !== undefined && managedCodexTagForCommand(command) !== undefined)
-        || openAiCodexVersionForCommand(command) !== undefined,
+        || (command !== undefined && managedCodexTagForCommand(command) !== undefined),
+      // Never PwrAgent's own build: its notice names OpenAI and the one-click
+      // update, not the custom build's update check.
+      openAiInstalledByPwrAgent:
+        managed === undefined && openAiCodexVersionForCommand(command) !== undefined,
       resolvePath: async (target) => {
         // Keyed on the version too, so an upgrade or reinstall at the same
         // path is looked at again. A failed lookup is not remembered: the

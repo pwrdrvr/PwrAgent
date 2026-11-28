@@ -94,6 +94,14 @@ describe("buildCodexVersionNotice", () => {
     expect(notice?.actions?.map((action) => action.label)).toEqual(["Open Codex settings"]);
   });
 
+  it("tells an old OpenAI Codex that PwrAgent installed that PwrAgent updates it", () => {
+    const { notice } = build({ installer: "pwragent-openai", upgradeCommand: undefined });
+    expect(notice?.title).toBe("Update Codex for GPT-6.1-Sol");
+    expect(notice?.detail).toContain("installed this Codex from OpenAI");
+    expect(notice?.detail).not.toContain("custom build");
+    expect(notice?.actions?.map((action) => action.label)).toEqual(["Open Codex settings"]);
+  });
+
   it("stays quiet with no advisory, or once the version was dismissed", () => {
     expect(build(null).notice).toBeUndefined();
     expect(build({}, { dismissedVersion: "0.152.0" }).notice).toBeUndefined();

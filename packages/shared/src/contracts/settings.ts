@@ -1150,6 +1150,8 @@ export type DesktopCodexInstaller =
   | "bun"
   | "application"
   | "pwragent"
+  /** OpenAI's Codex, installed and kept current by PwrAgent. */
+  | "pwragent-openai"
   | "unknown";
 
 /**
