@@ -350,11 +350,18 @@ type HandoffSuspension = {
 type PendingAutoFix = {
   id: string;
   thread: ReviewAutoFixThread;
-  repositories: readonly (string | undefined)[];
+  forgeScopes: readonly ForgeWakeScope[];
   checking: boolean;
   recheck: boolean;
   hold?: string;
   handoff?: HandoffSuspension;
+};
+
+type ForgeWakeScope = {
+  repository: string | undefined;
+  idle: Set<PendingAutoFix>;
+  reviewCount: number;
+  lastWake: number;
 };
 
 function repositoryOf(prKey: unknown): string | undefined {
@@ -388,8 +395,9 @@ function removePending<Key>(index: Map<Key, Set<PendingAutoFix>>, key: Key, pend
 export class ReviewAutoFixDispatcher {
   private readonly pending = new Map<string, PendingAutoFix>();
   private readonly byThread = new Map<string, Set<PendingAutoFix>>();
-  private readonly byRepository = new Map<string | undefined, Set<PendingAutoFix>>();
+  private readonly byRepository = new Map<string | undefined, ForgeWakeScope>();
   private readonly now: () => number;
+  private forgeWakeSequence = 0;
   private disposed = false;
 
   constructor(private readonly deps: ReviewAutoFixDispatcherDeps) {
@@ -424,9 +432,14 @@ export class ReviewAutoFixDispatcher {
     // A different PR in this repository may be a lower stack layer, including
     // a layer discovered by this very observation. Its thread/backend may differ.
     // Reviews without captured PR context can be affected by any observation.
+    const sequence = ++this.forgeWakeSequence;
     const affected = new Set<PendingAutoFix>();
     for (const key of new Set([undefined, repository, ...aliases.map(repositoryOf)])) {
-      for (const pending of this.byRepository.get(key) ?? []) affected.add(pending);
+      const scope = this.byRepository.get(key);
+      if (!scope) continue;
+      // In-flight checks compare against this sequence when they return.
+      scope.lastWake = sequence;
+      for (const pending of scope.idle) affected.add(pending);
     }
     this.wakePending(affected);
   }
@@ -456,18 +469,31 @@ export class ReviewAutoFixDispatcher {
     const { id, backend, threadId } = review;
     const thread = { backend, threadId };
     const pending: PendingAutoFix = {
-      id, thread, repositories: reviewRepositories(review), checking: false, recheck: false,
+      id, thread, forgeScopes: reviewRepositories(review).map((repository) => this.joinForgeScope(repository)),
+      checking: false, recheck: false,
     };
     this.pending.set(id, pending);
     addPending(this.byThread, threadKey(thread), pending);
-    for (const repository of pending.repositories) addPending(this.byRepository, repository, pending);
     return pending;
+  }
+
+  private joinForgeScope(repository: string | undefined): ForgeWakeScope {
+    let scope = this.byRepository.get(repository);
+    if (!scope) {
+      scope = { repository, idle: new Set(), reviewCount: 0, lastWake: 0 };
+      this.byRepository.set(repository, scope);
+    }
+    scope.reviewCount++;
+    return scope;
   }
 
   private forget(pending: PendingAutoFix): void {
     this.pending.delete(pending.id);
     removePending(this.byThread, threadKey(pending.thread), pending);
-    for (const repository of pending.repositories) removePending(this.byRepository, repository, pending);
+    for (const scope of pending.forgeScopes) {
+      scope.idle.delete(pending);
+      if (--scope.reviewCount === 0) this.byRepository.delete(scope.repository);
+    }
     this.releaseHandoffSuspension(pending);
   }
 
@@ -513,11 +539,13 @@ export class ReviewAutoFixDispatcher {
       }
       pending ??= this.track(review);
       pending.checking = true;
+      for (const scope of pending.forgeScopes) scope.idle.delete(pending);
       if (landed) this.claimHandoffSuspension(pending, landed.thread, landed.reviewTurnId);
       while (this.isCurrent(pending)) {
         pending.recheck = false;
-        await this.checkReview(pending, review);
-        if (!this.isCurrent(pending) || !pending.hold || !pending.recheck) return;
+        const forgeSnapshot = this.forgeWakeSequence;
+        await this.checkReview(pending, review, forgeSnapshot);
+        if (!this.isCurrent(pending) || !pending.hold || !this.needsRecheck(pending, forgeSnapshot)) return;
         review = this.deps.getReview(id);
         if (!review) {
           this.forget(pending);
@@ -536,11 +564,16 @@ export class ReviewAutoFixDispatcher {
       if (pending && this.isCurrent(pending)) {
         pending.checking = false;
         pending.recheck = false;
+        for (const scope of pending.forgeScopes) scope.idle.add(pending);
       }
     }
   }
 
-  private async checkReview(pending: PendingAutoFix, review: ThreadReview): Promise<void> {
+  private needsRecheck(pending: PendingAutoFix, forgeSnapshot: number): boolean {
+    return pending.recheck || pending.forgeScopes.some((scope) => scope.lastWake > forgeSnapshot);
+  }
+
+  private async checkReview(pending: PendingAutoFix, review: ThreadReview, forgeSnapshot: number): Promise<void> {
     const { id } = pending;
     if (!reviewAutoFixMessage(review) || this.deps.isThreadArchived(review)) {
       this.cancelReview(pending);
@@ -588,7 +621,7 @@ export class ReviewAutoFixDispatcher {
       });
       if (!this.isCurrent(pending)) return;
       if (result.status === "busy") {
-        this.recordBusy(pending, admissionHold);
+        this.recordBusy(pending, admissionHold, forgeSnapshot);
         return;
       }
       this.deps.recordRun(current, id, { kind: "stackHold", at: this.now() });
@@ -598,7 +631,7 @@ export class ReviewAutoFixDispatcher {
     if (this.isCurrent(pending)) this.forget(pending);
   }
 
-  private recordBusy(pending: PendingAutoFix, admissionHold: string | undefined): void {
+  private recordBusy(pending: PendingAutoFix, admissionHold: string | undefined, forgeSnapshot: number): void {
     const { id, handoff } = pending;
     const afterBusy = this.deps.getReview(id);
     if (!afterBusy || !reviewAutoFixMessage(afterBusy) || this.deps.isThreadArchived(afterBusy)) {
@@ -616,6 +649,8 @@ export class ReviewAutoFixDispatcher {
     const reviewTurnStillActive = handoff !== undefined
       && !handoff.reviewTurnEnded
       && (this.deps.threadHasActiveTurn?.(afterBusy) ?? true);
-    if (handoff && !reviewTurnStillActive && !pending.recheck) this.releaseHandoffSuspension(pending);
+    if (handoff && !reviewTurnStillActive && !this.needsRecheck(pending, forgeSnapshot)) {
+      this.releaseHandoffSuspension(pending);
+    }
   }
 }

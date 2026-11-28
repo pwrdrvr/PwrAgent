@@ -54,6 +54,7 @@ describe("review auto-fix dispatcher", () => {
           lockDuringReview: fc.boolean(),
           otherTurnAfterReview: fc.constantFrom("none" as const, "completed" as const, "failed" as const, "cancelled" as const),
           flakyHoldFlip: fc.boolean(),
+          scopedForgeWake: fc.boolean(),
           outcome: fc.constantFrom("normal" as const, "settle" as const, "archive" as const, "error" as const),
           outcomeDelayTicks: fc.integer({ min: 0, max: 3 }),
         }),
@@ -61,7 +62,13 @@ describe("review auto-fix dispatcher", () => {
           const runId = ++runCounter;
           const reviewId = `rev-${runId}`;
           const reviewTurnId = `review-turn-${runId}`;
-          const review = makeReview(reviewId, true);
+          const review = {
+            ...makeReview(reviewId, true),
+            context: { workspacePath: "/repo", pullRequest: {
+              provider: "github.com", org: "example", repo: "atlas", number: 2,
+              url: "https://github.com/example/atlas/pull/2",
+            } },
+          };
           const unrelated = { ...makeReview("unrelated"), threadId: "other-thread" };
           const runs = new ReviewAutoFixRuns();
           let unrelatedLookups = 0;
@@ -78,6 +85,10 @@ describe("review auto-fix dispatcher", () => {
           let sendFailed = false;
 
           let dispatcher!: ReviewAutoFixDispatcher;
+          const wakeStack = () => {
+            if (scenario.scopedForgeWake) dispatcher.wakeForPullRequest("github.com/example/atlas#1");
+            else dispatcher.wake();
+          };
 
           const drainQueuedUser = () => {
             if (archived || dispatchSuspensions > 0 || locked || activeTurnId !== undefined || queuedUser.length === 0) return;
@@ -185,7 +196,7 @@ describe("review auto-fix dispatcher", () => {
           if (scenario.flakyHoldFlip) {
             s.scheduleFunction(async () => {
               stackHold = stackHold ? undefined : "Held by #1: restack";
-              dispatcher.wake();
+              wakeStack();
             })();
           }
           if (scenario.otherTurnAfterReview !== "none") {
@@ -233,7 +244,7 @@ describe("review auto-fix dispatcher", () => {
           }
           if (stackHold) {
             stackHold = undefined;
-            dispatcher.wake();
+            wakeStack();
           }
           await s.waitIdle();
 

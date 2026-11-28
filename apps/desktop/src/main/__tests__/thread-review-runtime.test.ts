@@ -16,6 +16,7 @@ import {
   getReviewAutoFixArming,
   readReviewAutoFixStatus,
   resetReviewAutoFixArmingForTests,
+  ReviewAutoFixDispatcher,
 } from "../thread-reviews/review-auto-fix";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -267,6 +268,46 @@ describe("review tracking runtime eligibility", () => {
         expect(submitTurnIfIdle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(THREAD));
       } finally {
         lookup.mockRestore();
+      }
+    });
+
+    it("records forge changes during a hold check without revisiting in-flight reviews", async () => {
+      const hold = "CI running";
+      const readHold = vi.fn(async () => hold);
+      install(readHold);
+      const threads = [THREAD, { ...THREAD, threadId: "second-owner" }];
+      for (const thread of threads) {
+        getReviewAutoFixArming().starting(thread, "auto-fix").accepted("review-turn");
+        onEvent(findingsOutput("review-turn", thread.threadId, thread, PR));
+      }
+      const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+      await settle();
+      expect(readHold).toHaveBeenCalledTimes(2);
+
+      const checks = Promise.withResolvers<string>();
+      readHold.mockClear();
+      readHold.mockImplementation(() => checks.promise);
+      const dispatch = vi.spyOn(ReviewAutoFixDispatcher.prototype, "dispatch");
+      try {
+        // Separate observations can arrive while the initial hold checks wait
+        // on I/O. Each review needs one recheck of the latest observation.
+        for (const number of [1, 2, 3, 4]) {
+          const pr: PrSummary = { ...PR, number, url: `https://github.com/example/atlas/pull/${number}`, state: "passing" };
+          onEvent({ backend: "claude", notification: {
+            method: "pullRequest/status/updated", params: { prKey: buildPullRequestStatusKey(pr), pr },
+          } });
+          await settle();
+        }
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(readHold).toHaveBeenCalledTimes(2);
+        checks.resolve(hold);
+        await settle();
+        expect(readHold).toHaveBeenCalledTimes(4);
+        expect(submitTurnIfIdle).not.toHaveBeenCalled();
+      } finally {
+        checks.resolve(hold);
+        await settle();
+        dispatch.mockRestore();
       }
     });
 
