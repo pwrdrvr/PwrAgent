@@ -14,6 +14,7 @@ import {
   fetchLatestCodexVersion,
   resolveCodexUpdateInvocation,
   runCodexUpdateProcess,
+  signalCodexUpdateTree,
   type CodexUserUpdateServiceOptions,
   type SpawnCodexUpdate,
 } from "../codex-user-update";
@@ -427,16 +428,49 @@ describe("review regressions", () => {
 
   it("ends a timed-out run even when the killed process never reports back", async () => {
     vi.useFakeTimers();
-    const kill = vi.fn(() => true);
+    const kill = vi.fn((_signal?: NodeJS.Signals) => true);
     const spawn: SpawnCodexUpdate = () => {
       const child = new EventEmitter() as ChildProcess;
       Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), kill });
       return child;
     };
     const result = runCodexUpdateProcess({ file: "/bin/sh", args: [], env: {} }, { env: {}, spawn, timeoutMs: 100 });
-    await vi.advanceTimersByTimeAsync(10_000);
+    // The timeout, a grace after SIGTERM, then a grace after SIGKILL.
+    await vi.advanceTimersByTimeAsync(100 + 5_000 + 5_000);
     await expect(result).resolves.toMatchObject({ exitCode: null, timedOut: true });
-    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+  });
+
+  it("starts a POSIX installer in its own process group and signals the group", async () => {
+    const options: Array<{ detached?: boolean }> = [];
+    const spawn: SpawnCodexUpdate = (_file, _args, spawnOptions) => {
+      options.push(spawnOptions);
+      const child = new EventEmitter() as ChildProcess;
+      Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
+      setTimeout(() => child.emit("close", 0, null), 0);
+      return child;
+    };
+    for (const platform of ["darwin", "win32"] as const) {
+      await runCodexUpdateProcess({ file: "/bin/sh", args: [], env: {} }, { env: {}, spawn, platform });
+    }
+    expect(options.map((entry) => entry.detached)).toEqual([true, undefined]);
+
+    const signals = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const kill = vi.fn((_signal?: NodeJS.Signals) => true);
+      const child = Object.assign(new EventEmitter(), { pid: 4242, kill }) as unknown as ChildProcess;
+      signalCodexUpdateTree(child, "SIGTERM", "linux");
+      // The piped `sh`, curl, and git share the group.
+      expect(signals).toHaveBeenCalledWith(-4242, "SIGTERM");
+      expect(kill).not.toHaveBeenCalled();
+      signals.mockImplementation(() => {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      });
+      signalCodexUpdateTree(child, "SIGKILL", "darwin");
+      expect(kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      signals.mockRestore();
+    }
   });
 
   it("does not credit the update when rediscovery selects a different Codex", async () => {

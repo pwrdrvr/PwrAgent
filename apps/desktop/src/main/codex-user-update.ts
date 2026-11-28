@@ -37,7 +37,7 @@ export const CODEX_UPDATE_TIMEOUT_MS = 15 * 60_000;
 const OUTPUT_TAIL_CHARS = 4 * 1024;
 /** After the installer exits, how long to wait for its pipes to drain. */
 const OUTPUT_DRAIN_GRACE_MS = 2_000;
-/** After a timeout's kill, how long to wait before giving up on the process. */
+/** After each timeout signal (SIGTERM, then SIGKILL), how long to wait for the installer to exit. */
 const KILL_GRACE_MS = 5_000;
 
 /**
@@ -292,14 +292,45 @@ export function appendOutputTail(tail: string, chunk: string, limit = OUTPUT_TAI
   return next.length > limit ? next.slice(next.length - limit) : next;
 }
 
+/**
+ * Signal an installer and everything it started. The POSIX installer runs in
+ * its own process group (`detached`), so the piped `sh`, curl, and git go with
+ * it; on Windows `taskkill /T` walks the tree, since killing the process only
+ * ends cmd.exe or PowerShell.
+ */
+export function signalCodexUpdateTree(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  platform: NodeJS.Platform,
+): void {
+  if (child.pid !== undefined) {
+    try {
+      if (platform === "win32") {
+        spawnProcess("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        }).once("error", () => child.kill(signal));
+      } else {
+        process.kill(-child.pid, signal);
+      }
+      return;
+    } catch {
+      // The group is gone, or taskkill could not start; signal the process.
+    }
+  }
+  child.kill(signal);
+}
+
 export async function runCodexUpdateProcess(
   invocation: CodexUpdateInvocation,
   options: {
     env: NodeJS.ProcessEnv;
     spawn?: SpawnCodexUpdate;
     timeoutMs?: number;
+    platform?: NodeJS.Platform;
   },
 ): Promise<CodexUpdateProcessResult> {
+  const platform = options.platform ?? process.platform;
   const env = buildPwrAgentChildProcessEnv(options.env, { NO_COLOR: "1" });
   for (const [key, value] of Object.entries(invocation.env)) {
     if (value === undefined) delete env[key];
@@ -310,12 +341,19 @@ export async function runCodexUpdateProcess(
     let outputTail = "";
     let timedOut = false;
     let settled = false;
+    let killed = false;
     let drainTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (result: Omit<CodexUpdateProcessResult, "outputTail" | "timedOut">): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (drainTimer) clearTimeout(drainTimer);
+      // Update can be pressed again once this settles: nothing from a
+      // timed-out run may still be installing then.
+      if (timedOut && !killed) {
+        killed = true;
+        signalCodexUpdateTree(child, "SIGKILL", platform);
+      }
       // A grandchild (the piped installer, curl, git) can hold the pipes
       // open after the process PwrAgent started has gone.
       child.stdout?.destroy();
@@ -328,6 +366,8 @@ export async function runCodexUpdateProcess(
         env,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
+        // Its own process group, so a timeout can stop everything it starts.
+        ...(platform === "win32" ? {} : { detached: true }),
         ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       });
     } catch (error) {
@@ -337,10 +377,14 @@ export async function runCodexUpdateProcess(
     }
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
-      // The kill reaches only the direct child. Do not wait on 'close' for
-      // whatever it started: a hung run must end so Update can be retried.
-      drainTimer = setTimeout(() => finish({ exitCode: null, signal: "SIGTERM" }), KILL_GRACE_MS);
+      signalCodexUpdateTree(child, "SIGTERM", platform);
+      drainTimer = setTimeout(() => {
+        killed = true;
+        signalCodexUpdateTree(child, "SIGKILL", platform);
+        // A process that survives SIGKILL is stuck in the kernel; end the run
+        // anyway so Update can be retried.
+        drainTimer = setTimeout(() => finish({ exitCode: null, signal: "SIGKILL" }), KILL_GRACE_MS);
+      }, KILL_GRACE_MS);
     }, options.timeoutMs ?? CODEX_UPDATE_TIMEOUT_MS);
     const collect = (chunk: Buffer | string): void => {
       outputTail = appendOutputTail(outputTail, chunk.toString());
@@ -450,14 +494,17 @@ export class CodexUserUpdateService {
     if (this.options.checksDisabled || this.disposed) return {};
     // A window opened later should not announce an update as if it just
     // happened. A failure or "nothing newer" stays: it still needs the operator.
+    let changed = false;
     if (
       this.run?.phase === "succeeded"
       && this.now() - this.run.updatedAt > CODEX_SUCCESS_RESULT_TTL_MS
     ) {
       this.run = undefined;
+      changed = true;
     }
     this.ensureLatestCheck();
-    await this.recomputeOffer();
+    // One window's read must not leave the others showing an old offer.
+    if (await this.recomputeOffer() || changed) this.publish();
     return this.snapshot();
   }
 
@@ -627,6 +674,7 @@ export class CodexUserUpdateService {
       env: await this.options.resolveEnv(),
       ...(this.options.spawn ? { spawn: this.options.spawn } : {}),
       ...(this.options.timeoutMs !== undefined ? { timeoutMs: this.options.timeoutMs } : {}),
+      platform: this.platform,
     });
     if (result.exitCode !== 0) {
       this.options.log?.("Codex update failed", {
