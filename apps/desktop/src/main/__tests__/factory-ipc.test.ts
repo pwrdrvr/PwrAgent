@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import type { BrowserWindow } from "electron";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  FACTORY_OPEN_THREAD_CHANNEL, FACTORY_OPEN_WINDOW_CHANNEL, FACTORY_PROJECT_READ_CHANNEL, FACTORY_PROJECTS_CHANNEL,
+  FACTORY_LANDING_CHANNEL, FACTORY_OPEN_THREAD_CHANNEL, FACTORY_OPEN_WINDOW_CHANNEL, FACTORY_PROJECT_READ_CHANNEL, FACTORY_PROJECTS_CHANNEL,
 } from "../../shared/ipc";
 import { disposeFactoryIpcHandlers, registerFactoryIpcHandlers } from "../shell/ipc/factory-ipc";
 import { registerWindowChannels, WINDOW_KIND_FACTORY, WINDOW_KIND_MAIN } from "../shell/window-channels";
@@ -102,4 +102,22 @@ it("routes only local anchored evidence from the Factory top frame, without a fa
 
   mocks.route.mockReturnValue(undefined);
   expect(() => invoke(FACTORY_OPEN_THREAD_CHANNEL, factory, reference)).toThrow("Open the main PwrAgent window");
+});
+
+it("passes a landing confirmation only from the local operator's top-level windows", async () => {
+  const local = windowFrame(WINDOW_KIND_MAIN);
+  const factory = windowFrame(WINDOW_KIND_FACTORY);
+  const remote = windowFrame(WINDOW_KIND_MAIN, true);
+  const remoteFactory = windowFrame(WINDOW_KIND_FACTORY, true);
+  const request = { action: "enqueue", approvalId: "fixture", confirm: "preview digest" };
+  expect(() => invoke(FACTORY_LANDING_CHANNEL, local, request)).toThrow("active owner");
+  const landing = vi.fn(async () => ({ status: "queued" }));
+  registerFactoryIpcHandlers({ readFactoryProject: read, listFactoryProjects: list }, undefined, landing);
+  for (const denied of [remote, remoteFactory, { ...factory, senderFrame: {} }]) {
+    expect(() => invoke(FACTORY_LANDING_CHANNEL, denied, request)).toThrow("local operator");
+  }
+  expect(landing).not.toHaveBeenCalled();
+  await expect(invoke(FACTORY_LANDING_CHANNEL, factory, request)).resolves.toEqual({ status: "queued" });
+  await expect(invoke(FACTORY_LANDING_CHANNEL, local, request)).resolves.toEqual({ status: "queued" });
+  expect(landing.mock.calls).toEqual([[request], [request]]);
 });

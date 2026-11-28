@@ -107,8 +107,10 @@ export function githubQueueAction(gate: GithubMergeQueueGate): GithubQueueAction
 }
 
 /** The queue reading an `enqueuePullRequest` answer gives. */
-export function parseGithubEnqueueResult(data: unknown): PrMergeQueueStatus | undefined {
+export function parseGithubEnqueueResult(data: unknown, strict?: boolean): PrMergeQueueStatus | undefined {
   const entry = object(object(object(data).enqueuePullRequest).mergeQueueEntry);
+  if (strict && (!["QUEUED", "AWAITING_CHECKS", "MERGEABLE", "LOCKED"].includes(String(entry.state))
+    || !Number.isFinite(Date.parse(String(entry.enqueuedAt))))) return undefined;
   return githubMergeQueueStatus({ lifecycle: "open", enabled: true, entry: entryObservation(entry) });
 }
 
@@ -132,8 +134,13 @@ export async function runGithubQueueMerge(
   gate: GithubMergeQueueGate,
   graphql: (query: string, variables: { id: string; head: string | null }) => Promise<unknown>,
   head?: string,
+  options?: { enqueueOnly: true },
 ): Promise<GithubQueueMergeResult> {
   const action = githubQueueAction(gate);
+  if (options?.enqueueOnly && (!head || gate.headSha !== head || !gate.open || !gate.required
+    || gate.checks !== "SUCCESS" || action !== "enqueue")) {
+    throw new ForgeReadError("rejected", "Protected queue admission is no longer available for this head.");
+  }
   if (action === "already_queued") return { action, ...(gate.status ? { status: gate.status } : {}) };
   const variables = { id: gate.pullRequestId, head: head ?? null };
   if (action === "auto_merge") {
@@ -142,6 +149,9 @@ export async function runGithubQueueMerge(
     }
     return { action };
   }
-  const status = parseGithubEnqueueResult(await graphql(GITHUB_ENQUEUE_MUTATION, variables));
+  const status = parseGithubEnqueueResult(await graphql(GITHUB_ENQUEUE_MUTATION, variables), options?.enqueueOnly);
+  if (options?.enqueueOnly && !isMergeQueueActive(status)) {
+    throw new ForgeReadError("invalid_response", "GitHub did not confirm queue admission.");
+  }
   return { action, ...(status ? { status } : {}) };
 }

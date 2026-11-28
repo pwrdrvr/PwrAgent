@@ -37,6 +37,14 @@ export async function handleOutpostCommand(services: Services, method: string, p
       if (!services.factoryScaling) throw new Error("Factory requires an active owner profile.");
       return services.factoryScaling(params);
     }
+    case "factory-publication": {
+      if (!services.factoryPublication) throw new Error("Factory publication requires the operator's active owner profile.");
+      return services.factoryPublication(params);
+    }
+    case "factory-landing": {
+      if (!services.factoryLanding) throw new Error("Factory landing requires the operator's active owner profile.");
+      return services.factoryLanding(params);
+    }
     case "factory-board": return services.service.readFactoryProject(params);
     case "start-thread": return registry.startThread(params as Parameters<typeof registry.startThread>[0]);
     case "register-directory": {

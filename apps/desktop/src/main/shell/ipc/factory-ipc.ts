@@ -4,6 +4,7 @@ import { parseThreadUrl } from "@pwragent/shared/contracts/thread-link";
 import type { FactoryProjectOption, FactoryProjectProjection } from "@pwragent/shared/factory-projection";
 import {
   FACTORY_ADMISSION_CHANNEL,
+  FACTORY_LANDING_CHANNEL,
   FACTORY_OPEN_THREAD_CHANNEL,
   FACTORY_OPEN_WINDOW_CHANNEL,
   FACTORY_PROJECT_READ_CHANNEL,
@@ -11,11 +12,12 @@ import {
 } from "../../../shared/ipc";
 import { showFactoryWindow } from "../factory-window";
 import { primaryMainWindowWebContents } from "../primary-main-window";
-import { isFactoryWindowWebContents, isLocalMainWindowWebContents } from "../window-channels";
+import { federationTargetForChannelSubscriber, isFactoryWindowWebContents, isLocalMainWindowWebContents } from "../window-channels";
 import { requestShowThread } from "../window-show-thread";
 
 const channels = [
   FACTORY_ADMISSION_CHANNEL,
+  FACTORY_LANDING_CHANNEL,
   FACTORY_PROJECT_READ_CHANNEL,
   FACTORY_PROJECTS_CHANNEL,
   FACTORY_OPEN_WINDOW_CHANNEL,
@@ -35,7 +37,7 @@ function requireFactoryWindow(event: IpcMainInvokeEvent): void {
 export function registerFactoryIpcHandlers(owner: {
   readFactoryProject(request: unknown): Promise<FactoryProjectProjection>;
   listFactoryProjects(): Promise<FactoryProjectOption[]>;
-}, admission?: Pick<FactoryAdmission, "command">): void {
+}, admission?: Pick<FactoryAdmission, "command">, landing?: false | ((request: unknown) => Promise<unknown>)): void {
   disposeFactoryIpcHandlers();
   ipcMain.handle(FACTORY_ADMISSION_CHANNEL, (event, request: unknown) => {
     if (!isTopFrame(event) || !isLocalMainWindowWebContents(event.sender)) {
@@ -43,6 +45,14 @@ export function registerFactoryIpcHandlers(owner: {
     }
     if (!admission) throw new Error("Factory requires an active owner profile.");
     return admission.command(request);
+  });
+  ipcMain.handle(FACTORY_LANDING_CHANNEL, (event, request: unknown) => {
+    if (!isTopFrame(event) || federationTargetForChannelSubscriber(event.sender)
+      || (!isLocalMainWindowWebContents(event.sender) && !isFactoryWindowWebContents(event.sender))) {
+      throw new Error("Factory landing is available to this profile's local operator.");
+    }
+    if (!landing) throw new Error("Factory landing requires an active owner profile.");
+    return landing(request);
   });
   ipcMain.handle(FACTORY_PROJECT_READ_CHANNEL, (event, request: unknown) => {
     if (!isTopFrame(event)

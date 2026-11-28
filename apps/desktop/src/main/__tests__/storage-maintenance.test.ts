@@ -260,6 +260,7 @@ it("budgets archive lifecycle, daily bookkeeping and row-sliced deletion separat
     // The open replay gate index adds one root page to VACUUM.
     // The Factory admission table, primary key and active admission index add three root pages.
     // The approval lookup, branch review table, primary key and two active review indexes add five.
+    // The publication and landing schema adds seven measured VACUUM frames.
     const budgetPath = new URL("./fixtures/storage-maintenance-page-budgets.json", import.meta.url);
     if (process.env.UPDATE_SQLITE_WRITE_BUDGETS) writeFileSync(budgetPath, JSON.stringify(measured, null, 2) + "\n");
     expect(measured).toEqual(JSON.parse(readFileSync(budgetPath, "utf8")));

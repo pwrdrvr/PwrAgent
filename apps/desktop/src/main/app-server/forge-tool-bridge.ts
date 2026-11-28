@@ -348,7 +348,7 @@ export class ForgeToolBridge {
    * model that cannot be read is unknown, so rules naming a model do not
    * apply, while agent and provider rules still do.
    */
-  private async resolveForgeAgentIdentity(context: AgentToolCallContext): Promise<ForgeAgentIdentity> {
+  private async resolveForgeAgentIdentity(context: Pick<AgentToolCallContext, "backend" | "threadId">): Promise<ForgeAgentIdentity> {
     const { backend, threadId } = context;
     let codexModelProvider: string | undefined;
     let codexModelProviderKnown = false;
@@ -397,6 +397,17 @@ export class ForgeToolBridge {
       ...(codexModelProvider ? { codexModelProvider } : {}),
       ...(backend === "codex" && !codexModelProviderKnown ? { codexModelProviderUnknown: true } : {}),
       ...(model ? { model } : {}),
+    };
+  }
+
+  /** The local operator's confirmation supplies consent for Ask and Auto. Settings still bind. */
+  async prepareOperatorPullRequestPolicy(threadId: string, repository: ForgeRepository): Promise<() => void> {
+    const identity = await this.resolveForgeAgentIdentity({ backend: "codex", threadId });
+    return () => {
+      const access = resolveForgeAgentToolAccess(this.resolveForgeToolPolicy(), "pull_requests", repository, identity);
+      if (access.level === "off") {
+        throw new ForgeReadError("tools_disabled", "Settings → Git → Agent forge tools does not permit opening a pull request for this project and implementation thread.");
+      }
     };
   }
 

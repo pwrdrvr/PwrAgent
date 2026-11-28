@@ -30,6 +30,8 @@ export type GithubRequest = {
   downloadArtifact?: string;
   /** Apply a profile’s enterprise account selection for Continue After. */
   enterpriseCi?: boolean;
+  /** Last synchronous check after admission and authentication, before sending a write. */
+  beforeDispatch?: () => void;
 };
 const FAILED = new Set(["failure", "failed", "timed_out", "action_required", "startup_failure"]);
 function object(value: unknown): Payload {
@@ -362,7 +364,9 @@ export class ForgeCiClient {
     const method = request.graphql ? "POST" : request.method ?? "GET";
     const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: request.accept ?? "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
     if (request.body !== undefined) headers["Content-Type"] = "application/json";
-    let response = await fetcher(url, { method, signal: requestSignal, redirect: "manual", headers, ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}) });
+    const requestBody = request.body === undefined ? undefined : JSON.stringify(request.body);
+    request.beforeDispatch?.();
+    let response = await fetcher(url, { method, signal: requestSignal, redirect: "manual", headers, ...(requestBody !== undefined ? { body: requestBody } : {}) });
     if ((raw || request.downloadArtifact) && response.status === 302) {
       const location = response.headers.get("location");
       let url: URL;

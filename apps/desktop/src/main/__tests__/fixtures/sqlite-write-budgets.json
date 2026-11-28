@@ -1,4 +1,12 @@
 {
+  "factory-publication-create-refusal": {"commits": 2, "note": "One claim and one definitive refusal with a zero-write replay after restart.", "observedWalBytes": 28840, "rowsChanged": 2, "statements": 2},
+  "factory-publication-create-recovery": {"commits": 2, "note": "A lost reply uses one claim and one eventual PR binding across concurrency, retry, and restart.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
+  "factory-publication-create": {"commits": 2, "note": "One durable claim and one immutable PR binding, with a zero-write replay after restart.", "observedWalBytes": 28840, "rowsChanged": 2, "statements": 2},
+  "factory-landing-controls": {"commits": 4, "note": "One commit per pause, resume, cancel and reset. A fenced dispatch and a cancelled resume write nothing.", "observedWalBytes": 20600, "rowsChanged": 4, "statements": 4},
+  "factory-landing-unknown": {"commits": 1, "note": "One durable intent for an unknown provider reply, with read-only recovery and duplicates.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "factory-landing-admit-and-reset": {"commits": 3, "note": "One intent, one admission acknowledgment and one explicit reset. Preview, reconciliation and duplicates write nothing.", "observedWalBytes": 12360, "rowsChanged": 3, "statements": 3},
+  "factory-publication-reuse": {"commits": 1, "note": "One durable adoption when two arm calls reuse a tracked pull request.", "observedWalBytes": 12360, "rowsChanged": 1, "statements": 1},
+  "factory-publication-manual-reconcile": {"commits": 2, "note": "One durable arm and one PR binding through missing, uncertain, restart and retry.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "factory-branch-review-recovery": {"commits": 1, "note": "Record one terminal verdict from the matching durable managed artifact after restart.", "observedWalBytes": 12392, "rowsChanged": 1, "statements": 1},
   "factory-branch-review-status": {"commits": 0, "note": "Read the exact persisted review at three ref counts with no writes.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "factory-branch-review-complete": {"commits": 8, "note": "Launch one pinned managed review and publish its existing card plus the Factory receipt.", "observedWalBytes": 152440, "rowsChanged": 8, "statements": 8},

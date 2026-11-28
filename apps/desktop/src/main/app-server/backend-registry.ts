@@ -1717,6 +1717,10 @@ export class DesktopBackendRegistry {
     return this.forgeToolBridge.gatedForgePrToolHandler("publish_stack_layer", args, context);
   }
 
+  prepareOperatorPullRequestPolicy(threadId: string, repository: Parameters<ForgeToolBridge["prepareOperatorPullRequestPolicy"]>[1]): Promise<() => void> {
+    return this.forgeToolBridge.prepareOperatorPullRequestPolicy(threadId, repository);
+  }
+
   setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
     this.forgeToolBridge.setForgeToolPolicyResolver(resolve);
   }

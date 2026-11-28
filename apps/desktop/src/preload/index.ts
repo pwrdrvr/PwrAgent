@@ -120,7 +120,7 @@ import {
 } from "../shared/native-voice";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import {
-  FACTORY_ADMISSION_CHANNEL, FACTORY_OPEN_THREAD_CHANNEL, FACTORY_OPEN_WINDOW_CHANNEL, FACTORY_PROJECT_READ_CHANNEL,
+  FACTORY_ADMISSION_CHANNEL, FACTORY_LANDING_CHANNEL, FACTORY_OPEN_THREAD_CHANNEL, FACTORY_OPEN_WINDOW_CHANNEL, FACTORY_PROJECT_READ_CHANNEL,
   FACTORY_PROJECTS_CHANNEL, USAGE_ACTIVITY_READ_CHANNEL,
 } from "../shared/ipc";
 import type { FactoryProjectOption, FactoryProjectProjection, FactoryProjectReadRequest } from "@pwragent/shared/factory-projection";
@@ -2798,6 +2798,8 @@ const desktopApi = Object.freeze({
     ),
   readUsageActivity: async (request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_READ_CHANNEL, request),
+  factoryLanding: async (request: unknown): Promise<unknown> =>
+    await ipcRenderer.invoke(FACTORY_LANDING_CHANNEL, request),
   factoryAdmission: async (request: unknown): Promise<unknown> =>
     await ipcRenderer.invoke(FACTORY_ADMISSION_CHANNEL, request),
   readFactoryProject: async (request: FactoryProjectReadRequest): Promise<FactoryProjectProjection> =>
