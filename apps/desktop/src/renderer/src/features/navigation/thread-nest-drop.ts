@@ -25,6 +25,31 @@ export function threadDragLane(source: HTMLElement): HTMLElement | undefined {
   return source.closest<HTMLElement>(".sidebar-list--dense") ?? undefined;
 }
 
+/** Opaque sticky bands that rows scroll under. */
+const LANE_BANDS = ".directory-row__header, .directory-row__thread-divider";
+
+/**
+ * Whether the lane's own rows are what the operator sees at `point`. Rows
+ * scrolled past the lane's edge are clipped away, and a project's header
+ * and its Unpinned divider stick over the rows that scroll under them, so
+ * a box measured there is not on screen. A drop decided from boxes alone (a
+ * row's midpoint, a slot's rect) asks this first; one found by
+ * `elementFromPoint` already stops at the bands.
+ */
+export function isLaneSurfaceAt(point: { x: number; y: number }, lane: HTMLElement): boolean {
+  const bounds = lane.getBoundingClientRect();
+  // An unmeasured lane (jsdom) has no edge to clip at.
+  if (
+    bounds.right > bounds.left && bounds.bottom > bounds.top
+    && (point.x < bounds.left || point.x > bounds.right || point.y < bounds.top || point.y > bounds.bottom)
+  ) {
+    return false;
+  }
+  if (typeof document.elementFromPoint !== "function") return true;
+  const hit = document.elementFromPoint(point.x, point.y);
+  return !hit?.closest(LANE_BANDS);
+}
+
 /** The drop indicator key for a nest onto `element`'s row. */
 export function nestDropKey(element: HTMLElement): string {
   return `nest:${element.dataset.threadKey ?? ""}`;

@@ -13,7 +13,14 @@ import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { beginNativeDragInteraction, endNativeDragInteraction } from "../../lib/native-drag-interaction";
 import type { DropIndicatorController } from "./drag-drop";
 import { dismissThreadDockForDrag } from "./selected-thread-dock-reserve";
-import { isInNestBand, NEST_DROP_LABEL, nestDropKey, resolveThreadNestTarget, threadDragLane } from "./thread-nest-drop";
+import {
+  isInNestBand,
+  isLaneSurfaceAt,
+  NEST_DROP_LABEL,
+  nestDropKey,
+  resolveThreadNestTarget,
+  threadDragLane,
+} from "./thread-nest-drop";
 import { createThreadRowPointerDragPreview, type ThreadRowPointerDragPreview } from "./thread-row-drag-preview";
 
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
@@ -144,9 +151,12 @@ function resolveThreadPinPointerDropTarget(
   // The Keep at top slot is a box of its own between rows, never over one,
   // so only a drop inside it means "keep". The line above the first ordinary
   // pin stays that row's "before" target: the top of the ordinary pins.
+  // Its box counts only where it is on screen: scrolled under the header
+  // or past the lane's edge, it is not.
   if (
     session.keepAtTopTargetElement
     && getPointInsideElement(session.keepAtTopTargetElement, session.lastPoint)
+    && (!session.scrollElement || isLaneSurfaceAt(session.lastPoint, session.scrollElement))
   ) {
     return { element: session.keepAtTopTargetElement, kind: "keepAtTop" };
   }

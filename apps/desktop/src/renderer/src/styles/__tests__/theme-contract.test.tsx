@@ -628,6 +628,14 @@ describe("Tangerine Terminal theme contract", () => {
       Number(/\bz-index:\s*(\d+);/.exec(extractRuleBody(css, rule))?.[1]);
     expect(zIndex(".directory-row__thread-divider")).toBeLessThan(zIndex(".directory-row__header"));
     expect(zIndex(".directory-row__thread-divider")).toBeGreaterThan(zIndex(".thread-row__subthread-toggle"));
+    // A target row partly under the stuck divider or the header keeps its
+    // insertion line and nest ring there: the bands paint over them.
+    for (const indicator of [
+      ".thread-row-shell.is-drop-target-before::before,\n.thread-row-shell.is-drop-target-after::after",
+      ".thread-row-shell.is-drop-target-inside::after",
+    ]) {
+      expect(zIndex(indicator)).toBeLessThan(zIndex(".directory-row__thread-divider"));
+    }
   });
 
   it("sticks the Unpinned divider to the lane's bottom edge while the pins run past", () => {

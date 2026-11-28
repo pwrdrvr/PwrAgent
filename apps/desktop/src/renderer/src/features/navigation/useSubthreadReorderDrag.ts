@@ -9,6 +9,7 @@ import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "
 import {
   canNestThread,
   isInNestBand,
+  isLaneSurfaceAt,
   nestDropTarget,
   resolveThreadNestTarget,
   threadDragLane,
@@ -91,7 +92,10 @@ export function useSubthreadReorderDrag(params: {
         && (nest.element.dataset.nestedDepth !== "1" || isInNestBand(nest.element, point.y))) {
         return nest;
       }
-      if (!reachesGaps) return undefined;
+      // The gaps come from the rows' boxes, which go on being measured where
+      // the tray is out of sight: past the lane's edge, or under the project
+      // header or a stuck Unpinned divider.
+      if (!reachesGaps || (lane && !isLaneSurfaceAt(point, lane))) return undefined;
       const rows = siblings();
       const keys = rows.map((element) => element.dataset.threadKey ?? "");
       const before = rows.findIndex((element) => {
