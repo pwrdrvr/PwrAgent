@@ -51,6 +51,7 @@ function runtime(change: string, boundary: string) {
     } },
   });
   Object.assign(registry, {
+    factoryBuilderStarts: new Map(),
     compactionRecoveryStops: new Map(), compactionRecoveryAdmissions: new Map(),
     threadInterruption: { interruptTurn: interrupted },
     threadGoals: new ThreadGoalControl({
