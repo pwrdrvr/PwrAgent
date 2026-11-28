@@ -22,8 +22,23 @@ function verticalClip(parent: HTMLElement | null) {
 
 function isFullyPainted(element: HTMLElement, bounds: DOMRect, clip: ReturnType<typeof verticalClip>): boolean {
   return bounds.width > 0 && bounds.height > 0
-    && getComputedStyle(element).visibility === "visible"
+    && element.checkVisibility({ opacityProperty: true, visibilityProperty: true })
     && bounds.top >= clip.top - pixelTolerance && bounds.bottom <= clip.bottom + pixelTolerance;
+}
+
+function hitsNewTerminal(panel: HTMLElement): boolean {
+  const rail = requiredElement(panel, ".thread-terminal-panel__rail");
+  const button = requiredElement(rail, '[aria-label="New terminal"]');
+  const scrollTop = rail.scrollTop;
+  // Probe at the top of the rail where the grip and button can compete for a
+  // press. Keep the scroll position reached by the modeled tab selection.
+  try {
+    rail.scrollTo({ top: 0, behavior: "instant" });
+    const { left, right, top } = button.getBoundingClientRect();
+    return button.contains(document.elementFromPoint((left + right) / 2, top + 1));
+  } finally {
+    rail.scrollTo({ top: scrollTop, behavior: "instant" });
+  }
 }
 
 export function measureTerminalLayout(ptyRows: ReadonlyMap<string, number>) {
@@ -40,7 +55,11 @@ export function measureTerminalLayout(ptyRows: ReadonlyMap<string, number>) {
   if (!first || !last || !first.height) throw new Error("xterm did not draw a row grid");
 
   const panelBounds = panel.getBoundingClientRect();
-  const alert = pane.querySelector('[role="alert"]');
+  const alert = pane.querySelector<HTMLElement>('[role="alert"]');
+  const alertBounds = alert?.getBoundingClientRect();
+  const paintedAlertHeight = alert && alertBounds && isFullyPainted(alert, alertBounds, verticalClip(alert.parentElement))
+    ? alertBounds.height
+    : 0;
   const ended = pane.querySelector<HTMLElement>(".thread-terminal-panel__ended");
   const grip = requiredElement(panel, '[role="separator"]');
   const gripBounds = grip.getBoundingClientRect();
@@ -50,15 +69,13 @@ export function measureTerminalLayout(ptyRows: ReadonlyMap<string, number>) {
     x: Math.round(gripBounds.left + gripBounds.width / 4),
     y: Math.round(gripBounds.top + gripBounds.height / 2),
   };
-  const newTerminal = requiredElement(panel, '[aria-label="New terminal"]');
-  const button = newTerminal.getBoundingClientRect();
   const endedPainted = ended && isFullyPainted(ended, ended.getBoundingClientRect(), verticalClip(ended.parentElement));
 
   return {
     sessionId,
     // O1: above the first row there is room only for padding and a visible error.
-    topGap: first.top - panelBounds.top - (alert?.getBoundingClientRect().height ?? 0),
-    hasError: Boolean(alert),
+    topGap: first.top - panelBounds.top - paintedAlertHeight,
+    errorRow: alert ? (paintedAlertHeight > 0 ? "painted" : "unpainted") : "absent",
     // O2: every grid row and the ended bar must fit the paintable area.
     gridRows: rows.length,
     paintedRows: rows.filter((row, index) => isFullyPainted(row, rowBounds[index]!, rowClip)).length,
@@ -70,7 +87,7 @@ export function measureTerminalLayout(ptyRows: ReadonlyMap<string, number>) {
     gripPoint,
     gripClearance: first.top - gripBounds.bottom,
     gripHit: document.elementFromPoint(gripPoint.x, gripPoint.y) === grip,
-    newTerminalHit: newTerminal.contains(document.elementFromPoint((button.left + button.right) / 2, button.top + 1)),
+    newTerminalHit: hitsNewTerminal(panel),
     // O5: the last size sent to the bridge is independent of the DOM grid.
     ptyRows: ptyRows.get(sessionId),
     // O4/O6: use the pre-input painted height to predict the resize.

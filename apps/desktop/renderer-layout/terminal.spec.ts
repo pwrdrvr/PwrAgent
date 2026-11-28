@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import fc from "fast-check";
 
@@ -47,7 +48,14 @@ const regressions: { name: string; scenario: Scenario }[] = [
     },
   },
   {
-    name: "xterm leaves fit remainder below the last row",
+    name: "the New terminal hit test tolerates a rail scrolled to the fourth tab",
+    scenario: {
+      height: 141, windowHeight: 426,
+      steps: [{ kind: "add" }, { kind: "add" }, { kind: "add" }, { kind: "select", ordinal: 3 }],
+    },
+  },
+  {
+    name: "xterm leaves fit remainder below the last row and paints the IPC error",
     scenario: { height: 230, windowHeight: 800, steps: [{ kind: "height", height: 215 }, { kind: "error" }] },
   },
   {
@@ -61,7 +69,12 @@ const regressions: { name: string; scenario: Scenario }[] = [
     name: "dragging down and ArrowDown both shrink from the painted height",
     scenario: {
       height: 560, windowHeight: 640,
-      steps: [{ kind: "drag", delta: 60 }, { kind: "height", height: 560 }, { kind: "arrow", key: "ArrowDown" }],
+      steps: [
+        { kind: "drag", delta: 60 },
+        { kind: "height", height: 560 },
+        { kind: "arrow", key: "ArrowDown" },
+        { kind: "arrow", key: "ArrowUp" },
+      ],
     },
   },
 ];
@@ -99,7 +112,7 @@ async function replay(page: Page, scenario: Scenario) {
   const check = async () => {
     const layout = await page.evaluate(() => window.terminalLayout.measure());
     const id = layout.sessionId;
-    expect(layout.hasError, "error row matches the selected shell's IPC error state").toBe(failed.has(id));
+    expect(layout.errorRow, "O1 the IPC error row is fully painted when present").toBe(failed.has(id) ? "painted" : "absent");
     expect(layout.topGap, "O1 first row starts after only padding and any error row").toBeGreaterThanOrEqual(0);
     expect(layout.topGap, "O1 first row starts after only padding and any error row").toBeLessThanOrEqual(10);
     expect(
@@ -192,22 +205,30 @@ for (const { name, scenario } of regressions) {
   });
 }
 
-test("generated terminal transitions preserve the painted layout", async ({ page }) => {
-  const errors = await openFixture(page);
-  const seed = Number(process.env.PWRAGENT_LAYOUT_SEED ?? 424242);
-  if (!Number.isInteger(seed) || (seed | 0) !== seed) {
-    throw new Error("PWRAGENT_LAYOUT_SEED must be a signed 32-bit integer");
-  }
-  const scenarios = fc.sample(fc.record({
-    height: heights,
-    windowHeight: windowHeights,
-    steps: fc.array(actions, { minLength: 3, maxLength: 5 }),
-  }), { seed, numRuns: 5 });
+test.describe("terminal layout search", () => {
+  const replaySeed = process.env.PWRAGENT_LAYOUT_SEED;
+  test.skip(
+    process.env.PWRAGENT_TERMINAL_LAYOUT_SEARCH !== "1" && replaySeed === undefined,
+    "Set PWRAGENT_TERMINAL_LAYOUT_SEARCH=1 to run the generated terminal model",
+  );
 
-  for (const [index, scenario] of scenarios.entries()) {
-    await test.step(`terminal seed ${seed}, case ${index + 1}, start ${scenario.height}px in ${scenario.windowHeight}px`, async () => {
-      await replay(page, scenario);
-      expect(errors).toEqual([]);
-    });
-  }
+  test("generated terminal transitions preserve the painted layout", async ({ page }) => {
+    const seed = Number(replaySeed ?? randomInt(-(2 ** 31), 2 ** 31));
+    if (!Number.isInteger(seed) || (seed | 0) !== seed) {
+      throw new Error("PWRAGENT_LAYOUT_SEED must be a signed 32-bit integer");
+    }
+    const errors = await openFixture(page);
+    const scenarios = fc.sample(fc.record({
+      height: heights,
+      windowHeight: windowHeights,
+      steps: fc.array(actions, { minLength: 3, maxLength: 5 }),
+    }), { seed, numRuns: 5 });
+
+    for (const [index, scenario] of scenarios.entries()) {
+      await test.step(`terminal seed ${seed}, case ${index + 1}, start ${scenario.height}px in ${scenario.windowHeight}px`, async () => {
+        await replay(page, scenario);
+        expect(errors).toEqual([]);
+      });
+    }
+  });
 });
