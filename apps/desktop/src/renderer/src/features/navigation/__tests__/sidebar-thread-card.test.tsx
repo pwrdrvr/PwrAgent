@@ -387,6 +387,21 @@ describe("sidebar thread card", () => {
       expect(card()).toHaveTextContent("Thread b");
     });
 
+    // Found in review: the settled row used the focus path, which showed a
+    // card the operator had just dismissed with no hover delay at all.
+    it("opens a card dismissed on the way only after the hover delay", () => {
+      renderSidebar({ threads: [thread("a", { updatedAt: 3 }), thread("b", { updatedAt: 2 })] });
+      hoverOpen("a");
+      startAt();
+      cross(rowTitle("a"), rowTitle("b"), 200, 200);
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(card()).toBeNull();
+      act(() => vi.advanceTimersByTime(POINTER_AIM_SETTLE_MS));
+      expect(card()).toBeNull();
+      act(() => vi.advanceTimersByTime(PROJECT_CARD_HOVER_DELAY_MS));
+      expect(card()).toHaveTextContent("Thread b");
+    });
+
     it("gives the card to the crossed row after the swap rest when the pointer turns away", () => {
       renderSidebar({ threads: [thread("a", { updatedAt: 3 }), thread("b", { updatedAt: 2 })] });
       hoverOpen("a");

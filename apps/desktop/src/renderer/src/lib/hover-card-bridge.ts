@@ -135,6 +135,14 @@ export class HoverCardBridge {
     this.delayed = card;
   }
 
+  /**
+   * Whether `card` is the visible card now. Unlike a component's own render
+   * state, this changes at once when another card takes over.
+   */
+  isShowing(card: BridgedHoverCard): boolean {
+    return this.visible === card;
+  }
+
   hasPinnedCard(): boolean {
     return this.visible?.isPinned?.() === true;
   }

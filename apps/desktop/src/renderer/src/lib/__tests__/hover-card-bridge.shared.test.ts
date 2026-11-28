@@ -125,6 +125,16 @@ describe("HoverCardBridge shared card", () => {
     expect(s.hidden()).toBe(false);
   });
 
+  // Rule: the bridge knows at once when another card took over, so a
+  // shared card's pending move can tell it is no longer the visible card.
+  it("stops reporting a card as showing once another takes over", () => {
+    const s = sharedCard();
+    expect(s.bridge.isShowing(s.card)).toBe(true);
+    s.bridge.takeOver({ hide: () => undefined });
+    expect(s.bridge.isShowing(s.card)).toBe(false);
+    expect(s.hidden()).toBe(true);
+  });
+
   // Rule: a pointer that has rested since its last sample is not heading
   // for the card, however its last few samples pointed.
   it("stops counting a resting pointer as heading for the card", () => {

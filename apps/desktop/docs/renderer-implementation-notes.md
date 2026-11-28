@@ -78,9 +78,10 @@ says when to read this document. Relative links were updated for this location.
     is a swap too. While the pointer is on any of its triggers the card
     stays put; it moves only once the pointer rests on one. The host waits on
     its own timer, because the tooltip's delay re-anchors a visible card at
-    once. A card that falls back over the rows does not bridge. Its buttons stay out of the Tab order and the chip's description;
-    the chip keeps Delete and its menu for the keyboard. The card stops React
-    propagation of presses, since its portal sits in the row's React tree.
+    once. A card that falls back over the rows does not bridge. Its buttons
+    stay out of the Tab order and the chip's description; the chip keeps
+    Delete and its menu for the keyboard. The card stops React propagation
+    of presses, since its portal sits in the row's React tree.
     A card that opens next to its trigger over other hover targets also
     passes `interactive.bridge`: a transparent strip of the card fills the
     10px gap (`tooltipBridgeRect`), so the pointer crosses into the card

@@ -96,7 +96,10 @@ export type SidebarThreadCardHandle = {
   enter: (target: HTMLElement, threadKey: string) => void;
   /** Keyboard focus reached a thread row: no hover delay. */
   focus: (target: HTMLElement, threadKey: string) => void;
-  /** The pointer stopped on a row it crossed toward the card: it has rested, so no further wait. */
+  /**
+   * The pointer stopped on a row it crossed toward the card: it has rested,
+   * so the card moves there without a further wait while it is up.
+   */
   rest: (target: HTMLElement, threadKey: string) => void;
   /** The pointer left a thread row. */
   leave: (target: HTMLElement) => void;
@@ -243,7 +246,8 @@ export const SidebarThreadCardHost = forwardRef<
         swapTimerRef.current = window.setTimeout(() => {
           swapTimerRef.current = undefined;
           const next = target.isConnected ? content(threadKey, target) : null;
-          if (!next || !visibleRef.current) return;
+          // Render state lags a card that took over this frame; the bridge does not.
+          if (!next || !visibleRef.current || !sidebarPrCardBridge.isShowing(card)) return;
           aboutRow();
           show(target, next);
           sidebarPrCardBridge.keep(card);
@@ -264,7 +268,9 @@ export const SidebarThreadCardHost = forwardRef<
     return {
       enter: (target, threadKey) => open(target, threadKey, true),
       focus: (target, threadKey) => open(target, threadKey, false),
-      rest: (target, threadKey) => open(target, threadKey, false),
+      // Only a card still up skips the delay: one closed meanwhile (Escape,
+      // blur) opens again like any other hover.
+      rest: (target, threadKey) => open(target, threadKey, !visibleRef.current),
       leave: (target) => {
         cancelSwap();
         if (visibleRef.current && cardIsBesideSidebar(getElement(), target)) {

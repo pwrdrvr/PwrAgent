@@ -154,7 +154,8 @@ export const ProjectHeaderCardHost = forwardRef<
         // Up for another header: it stays there until the pointer rests here.
         swapTimerRef.current = window.setTimeout(() => {
           swapTimerRef.current = undefined;
-          if (!target.isConnected || !visibleRef.current) return;
+          // Render state lags a card that took over this frame; the bridge does not.
+          if (!target.isConnected || !visibleRef.current || !sidebarPrCardBridge.isShowing(card)) return;
           aboutTrigger(target);
           show(target, content());
           sidebarPrCardBridge.keep(card);
