@@ -2,6 +2,7 @@ import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/con
 import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import type { DecisionModelListing, DecisionProviderId, DecisionProvidersReadiness } from "@pwragent/shared/decision-models";
+import type { FactoryProjectProjection, FactoryProjectReadRequest } from "@pwragent/shared/factory-projection";
 import type {
   ReadWorktreeReflinkCapabilitiesRequest,
   ReadWorktreeReflinkCapabilitiesResponse,
@@ -852,6 +853,7 @@ import type {
 } from "../../../shared/app-metadata";
 
 export type DesktopApi = Partial<NativeVoiceApi> & {
+  readFactoryProject?: (request: FactoryProjectReadRequest) => Promise<FactoryProjectProjection>;
   readThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
   setThreadGoal?: (threadId: string, objective: string, confirmedObjective?: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;
   pauseThreadGoal?: (threadId: string) => Promise<import("@pwragent/shared/contracts/thread-goal").ThreadGoalState>;

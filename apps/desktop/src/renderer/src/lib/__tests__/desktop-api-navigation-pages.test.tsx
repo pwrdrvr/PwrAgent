@@ -56,3 +56,19 @@ it("lets a spy on the view replace the underlying read", async () => {
   expect((await getDesktopApi()!.getNavigationQueryPage!(request)).entries).toEqual([]);
   expect(spy).toHaveBeenCalledOnce();
 });
+
+it("exposes the optional Factory project read from preload through the renderer API", async () => {
+  const input = { projectKey: "directory:/fixture", repository: "Fixture" };
+  const projection = {
+    ...input, repository: { host: "github.com", owner: "Owner", name: "Fixture" },
+    authority: { source: "local_owner_git", observedAt: 1 }, inventory: "unobserved", pullRequests: [], truncated: false,
+  } as const;
+  const readFactoryProject = vi.fn<NonNullable<DesktopApi["readFactoryProject"]>>()
+    .mockResolvedValue({ ...projection, pullRequests: [] });
+  const underlying: Partial<DesktopApi> = { readFactoryProject };
+  expose(underlying);
+  expect(await getDesktopApi()?.readFactoryProject?.(input)).toEqual(projection);
+  expect(readFactoryProject).toHaveBeenCalledExactlyOnceWith(input);
+  expose({});
+  expect(getDesktopApi()?.readFactoryProject).toBeUndefined();
+});

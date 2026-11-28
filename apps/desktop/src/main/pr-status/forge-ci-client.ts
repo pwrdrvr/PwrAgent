@@ -24,6 +24,8 @@ export type GithubRequest = {
   accept?: string;
   raw?: boolean;
   graphql?: boolean;
+  /** Allow a missing `repository.selected` pull request in a partial GraphQL response. */
+  allowMissingSelectedPullRequest?: boolean;
   /** Archive path to write the ZIP response to. */
   downloadArtifact?: string;
   /** Apply a profile’s enterprise account selection for Continue After. */
@@ -421,8 +423,16 @@ export class ForgeCiClient {
     if (!body) return null;
     const parsed = JSON.parse(body) as unknown;
     if (request.graphql) {
-      const errors = (parsed as { errors?: Array<{ message?: unknown }> }).errors;
+      const { data, errors } = parsed as {
+        data?: { repository?: { selected?: unknown } };
+        errors?: Array<{ message?: unknown; type?: unknown; path?: unknown }>;
+      };
       if (Array.isArray(errors) && errors.length) {
+        if (request.allowMissingSelectedPullRequest && data?.repository?.selected === null
+          && errors.every((entry) => entry?.type === "NOT_FOUND" && Array.isArray(entry.path)
+            && entry.path.length === 2 && entry.path[0] === "repository" && entry.path[1] === "selected")) {
+          return { data };
+        }
         const error = new ForgeReadError("rejected", `GitHub GraphQL refused the request: ${redactForgeLog(String(errors[0]?.message ?? "unknown error")).slice(0, 600)}`);
         throw Object.assign(error, { providerReported: true });
       }

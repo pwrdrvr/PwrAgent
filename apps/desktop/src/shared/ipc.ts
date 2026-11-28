@@ -1100,6 +1100,7 @@ export const NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL = "navigation:mark-directory
 export const NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL = "navigation:release-attention-view";
 
 export const USAGE_ACTIVITY_READ_CHANNEL = "usage-activity:readUsageActivity";
+export const FACTORY_PROJECT_READ_CHANNEL = "factory:readProject";
 
 /** Stored pricing totals for a thread and every sub-thread under it. */
 export const THREAD_FAMILY_PRICING_READ_CHANNEL = "pricing:readThreadFamilyPricing";

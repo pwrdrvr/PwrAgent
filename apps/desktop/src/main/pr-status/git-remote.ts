@@ -47,6 +47,18 @@ export function parseGitHubRemote(remoteUrl: string): GitHubRepoRef | undefined 
   return repo && !repo.owner.includes("/") ? repo : undefined;
 }
 
+/** Resolve a selected fetch URL without joining an older discovery sample. */
+export async function resolveGitHubFetchUrl(
+  url: string, resolve: SshResolver = defaultResolveSshHostname,
+): Promise<GitHubRepoRef | undefined> {
+  const repo = parseGitHubRemote(url);
+  const host = readSshHost(url);
+  if (!repo || !host) return repo;
+  if (!/^[\w][\w.-]*$/.test(host)) return undefined;
+  const hostname = await resolve(host);
+  return hostname ? { ...repo, host: hostname.toLowerCase() } : undefined;
+}
+
 export function parseForgeRemote(remoteUrl: string): GitHubRepoRef | undefined {
   const url = remoteUrl.trim();
   // A drive-qualified local remote must not be mistaken for an SCP host.
