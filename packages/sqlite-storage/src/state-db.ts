@@ -3172,6 +3172,22 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS factory_admission_active
         ON factory_admission(active) WHERE active = 1;
+      CREATE UNIQUE INDEX IF NOT EXISTS factory_admission_approval
+        ON factory_admission(json_extract(row_json, '$.id'));
+      CREATE TABLE IF NOT EXISTS factory_branch_reviews (
+        id TEXT PRIMARY KEY NOT NULL,
+        approval_id TEXT NOT NULL,
+        worktree TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        merge_base_oid TEXT NOT NULL,
+        reviewer_thread_id TEXT,
+        turn_id TEXT,
+        result TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS factory_branch_review_active_approval
+        ON factory_branch_reviews(approval_id) WHERE result IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS factory_branch_review_active_worktree
+        ON factory_branch_reviews(worktree) WHERE result IS NULL;
     `);
     db.exec(THREAD_REVIEW_SCHEMA);
     db.exec(OPERATOR_REQUEST_SCHEMA);

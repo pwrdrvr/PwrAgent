@@ -11,6 +11,12 @@ export class SqliteFactoryAdmissionStore implements FactoryAdmissionStore {
     return row ? JSON.parse(row.row_json) as FactoryAdmissionRow : undefined;
   }
 
+  readByApprovalId(id: string): FactoryAdmissionRow | undefined {
+    const row = this.state.raw.prepare("SELECT row_json FROM factory_admission WHERE json_extract(row_json, '$.id') = ?")
+      .get(id) as { row_json: string } | undefined;
+    return row ? JSON.parse(row.row_json) as FactoryAdmissionRow : undefined;
+  }
+
   insert(row: FactoryAdmissionRow): boolean {
     return this.durable(() => this.state.raw.prepare(`
       INSERT INTO factory_admission (project_key, issue_id, active, revision, row_json)

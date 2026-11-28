@@ -12,7 +12,7 @@ import { isGitObjectId } from "@pwragent/shared/git-object-id";
 import type { ForgeCiClient } from "../pr-status/forge-ci-client";
 import type { GitHubRepoRef } from "../pr-status/git-remote";
 import { hasWorkflowRunsStillRunning } from "../pr-status/pr-derivations";
-import { readFactoryBranch } from "./factory-branch-evidence";
+import { isFactoryBranchName, isFactoryIntegrationRef, readFactoryBranch } from "./factory-branch-evidence";
 
 const HOST = "github.com";
 const CHECK_LIMIT = 64;
@@ -98,14 +98,13 @@ function assessment(value: unknown) {
 
 type SelectedBranch = FactoryBranchSelection & { workItem: FactoryWorkItem };
 
-function readBranchSelection(value: unknown): SelectedBranch | undefined {
+export function readFactoryBranchSelection(value: unknown): SelectedBranch | undefined {
   if (value === undefined) return undefined;
   const branchSelection = record(value);
   const workItem = parseFactoryWorkItem(branchSelection);
   const branch = text(branchSelection.branch, 255);
   const baseRef = text(branchSelection.baseRef, 255);
-  if (!branch || branch.startsWith("refs/")
-    || !baseRef || !/^refs\/(?:heads\/.+|remotes\/[^/]+\/.+)$/.test(baseRef)) requestError();
+  if (!branch || !isFactoryBranchName(branch) || !baseRef || !isFactoryIntegrationRef(baseRef)) requestError();
   const worktree = text(branchSelection.worktree, 4096);
   if (branchSelection.worktree !== undefined && (!worktree || !path.isAbsolute(worktree))) requestError();
   const rawIds = branchSelection.reviewIds ?? [];
@@ -121,7 +120,7 @@ function readRequest(value: unknown): FactoryProjectReadRequest & { candidate?: 
   const limit = input.limit ?? FACTORY_PROJECT_PAGE_LIMIT;
   if (!projectKey?.startsWith("directory:") || !repository || !/^[a-z0-9_.-]+$/i.test(repository)
     || !positiveInt(limit, FACTORY_PROJECT_PAGE_LIMIT)) requestError();
-  const candidate = readBranchSelection(input.candidate);
+  const candidate = readFactoryBranchSelection(input.candidate);
   if (input.selection === undefined) return { projectKey, repository, limit, candidate };
   const selection = record(input.selection);
   const repositoryId = text(selection.repositoryId, 256);

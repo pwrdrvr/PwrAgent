@@ -20,6 +20,8 @@ import {
   type AppServerBackendKind,
   type AppServerNotification,
   type AppServerReviewContext,
+  type AppServerReviewOutput,
+  type PinnedBranchReviewVerdict,
   type AppServerReviewTarget,
   type AppServerThreadReviewEntry,
   type CodexThreadEnvironmentRuntime,
@@ -69,10 +71,12 @@ import type {
   BackendClient,
   ModelSettings,
   PendingReviewStartRecord,
+  PinnedManagedBranchReview,
   ReviewSubAgentRecord,
   ReviewTerminal,
 } from "./backend-registry-types";
 import {
+  buildCodexConnectionMcpConfig,
   buildCodexTokenMiserDynamicToolSpecs,
   mergeCodexDynamicToolSpecs,
   mergeCodexThreadConfigs,
@@ -120,6 +124,14 @@ import {
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 
 /** The fields a review card write may change; the rest come from the record. */
+function pinnedBranchVerdict(
+  output: AppServerReviewOutput | undefined, hasFindings: boolean, ledger: ManagedReviewCandidateListResult,
+): PinnedBranchReviewVerdict {
+  if (hasFindings || ledger.counts.keep > 0 || output?.overall_correctness === "patch is incorrect") return "findings";
+  return output?.overall_correctness === "patch is correct" && output.overall_explanation.trim()
+    && ledger.counts.pending === 0 ? "clear" : "inconclusive";
+}
+
 type ReviewSubAgentCardPatch = Partial<
   Pick<
     ThreadSubAgentSummary,
@@ -564,11 +576,19 @@ export class ManagedReviewService {
     return { ...params, cwd, target };
   }
 
+  startPinnedManagedBranchReview(threadId: string, pin: PinnedManagedBranchReview): Promise<StartReviewResponse> {
+    return this.startReview({
+      backend: "codex", threadId, runMode: "pwragent-sub-agent", reviewBackend: "codex",
+      afterReview: "wait", target: { type: "baseBranch", branch: pin.context.baseBranch },
+    }, false, undefined, undefined, pin);
+  }
+
   async startReview(
     params: StartReviewRequest,
     trustedSnapshot = false,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
     agentAntigravityAccess?: AgentAntigravityReviewAccess,
+    pinnedBranchReview?: PinnedManagedBranchReview,
   ): Promise<StartReviewResponse> {
     this.host().assertThreadOwnership();
     // Retain terminal evidence only for the lifetime of this start request.
@@ -583,7 +603,7 @@ export class ManagedReviewService {
     try {
       const response = params.runMode === "claude-code-review"
         ? await this.startClaudeCodeReview(params)
-        : await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution, agentAntigravityAccess);
+        : await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution, agentAntigravityAccess, pinnedBranchReview);
       autoFix.accepted(response.turnId);
       return response;
     } catch (error) {
@@ -640,6 +660,7 @@ export class ManagedReviewService {
     trustedSnapshot: boolean,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
     agentAntigravityAccess?: AgentAntigravityReviewAccess,
+    pinnedBranchReview?: PinnedManagedBranchReview,
   ): Promise<StartReviewResponse> {
     this.host().assertNotBootstrap("startReview");
     await this.host().assertThreadNotLocked(params.backend, params.threadId);
@@ -650,8 +671,8 @@ export class ManagedReviewService {
     if (params.target.type === "pullRequests" && params.runMode === "codex-sub-agent") {
       throw new Error("PwrAgent Sub Agent is required for a review of several pull requests.");
     }
-    // A review reads the checkout, so a hibernated one comes back first.
-    await this.host().ensureCheckoutAwake(params);
+    // Ordinary reviews may wake a hibernated checkout. A pinned review requires an active workspace.
+    if (!pinnedBranchReview) await this.host().ensureCheckoutAwake(params);
     params = await this.prepareReviewRequest(params, trustedSnapshot);
     const acpManagedMode =
       isAcpBackendId(params.backend)
@@ -711,17 +732,17 @@ export class ManagedReviewService {
     let reviewContext: AppServerReviewContext | undefined;
     let tokenMiserEnabled = false;
     try {
-      if (params.backend === "codex") {
+      if (params.backend === "codex" && !pinnedBranchReview) {
         await this.host().flushQueuedAgentChange(params.threadId, true);
         await this.host().flushQueuedExecutionModeIfPresent(params.threadId);
       }
-      overlay = managedMode || params.backend === "codex"
+      overlay = !pinnedBranchReview && (managedMode || params.backend === "codex")
         ? await this.context.stores.threads.getThreadOverlayState({
             backend: params.backend,
             threadId: params.threadId,
           })
         : undefined;
-      if (reviewBackend === "codex") {
+      if (reviewBackend === "codex" && !pinnedBranchReview) {
         tokenMiserEnabled = this.host().resolveTokenMiserEnabledForOverride(
           params.backend === "codex" ? overlay?.tokenMiserEnabled : undefined,
         );
@@ -729,7 +750,10 @@ export class ManagedReviewService {
           await this.host().prepareTokenMiserRuntime();
         }
       }
-      if (params.backend === "codex") {
+      if (pinnedBranchReview) {
+        reviewContext = pinnedBranchReview.context;
+        cwd = checkoutRoot = reviewContext.workspacePath;
+      } else if (params.backend === "codex") {
         codexEnvironmentRuntime = overlay?.codexEnvironmentRuntime;
         const threadCwd = await this.host().resolveThreadEnvironmentCwd(
           params.backend,
@@ -781,30 +805,32 @@ export class ManagedReviewService {
             overlay,
           );
       }
-      await assertReviewWorkspaceMatchesAttachedPullRequest({
-        cwd,
-        executionTarget: codexEnvironmentRuntime?.executionTarget,
-        prs: overlay?.prs,
-        target: params.target,
-      });
-      await refreshReviewBaseBranch({
-        cwd,
-        executionTarget: codexEnvironmentRuntime?.executionTarget,
-        target: params.target,
-      });
-      [reviewContext, checkoutRoot] = await Promise.all([
-        this.resolveReviewContext({
-          backend: params.backend,
+      if (!pinnedBranchReview) {
+        await assertReviewWorkspaceMatchesAttachedPullRequest({
           cwd,
           executionTarget: codexEnvironmentRuntime?.executionTarget,
-          overlay,
+          prs: overlay?.prs,
           target: params.target,
-          threadId: params.threadId,
-        }),
-        managedMode && (reviewBackendDiffers || codexEnvironmentRuntime?.executionTarget !== "remote")
-          ? resolveLocalReviewWorktreeRoot(cwd)
-          : undefined,
-      ]);
+        });
+        await refreshReviewBaseBranch({
+          cwd,
+          executionTarget: codexEnvironmentRuntime?.executionTarget,
+          target: params.target,
+        });
+        [reviewContext, checkoutRoot] = await Promise.all([
+          this.resolveReviewContext({
+            backend: params.backend,
+            cwd,
+            executionTarget: codexEnvironmentRuntime?.executionTarget,
+            overlay,
+            target: params.target,
+            threadId: params.threadId,
+          }),
+          managedMode && (reviewBackendDiffers || codexEnvironmentRuntime?.executionTarget !== "remote")
+            ? resolveLocalReviewWorktreeRoot(cwd)
+            : undefined,
+        ]);
+      }
       // A review on another provider cannot inherit the parent thread's model
       // settings — that model belongs to a different catalog. Fall back to the
       // review backend's own defaults instead of carrying gpt-5.6-sol onto a
@@ -895,6 +921,7 @@ export class ManagedReviewService {
             overlay,
             parentBackend: params.backend,
             parentThreadId: params.threadId,
+            pinnedBranchReview,
             target: params.target,
             terminals,
             tokenMiserEnabled,
@@ -979,6 +1006,7 @@ export class ManagedReviewService {
       ...(reviewContext ? { context: reviewContext } : {}),
       parentBackend: params.backend,
       parentThreadId: result.threadId,
+      ...(pinnedBranchReview ? { pinnedBranchReview } : {}),
       reviewThreadId: result.reviewThreadId || result.threadId,
       ...(modelSettings.serviceTier ? { serviceTier: modelSettings.serviceTier } : {}),
       task: reviewTaskLabel(params.target),
@@ -1068,6 +1096,7 @@ export class ManagedReviewService {
     /** Backend the reviewed thread itself lives on. */
     parentBackend: AppServerBackendKind;
     parentThreadId: string;
+    pinnedBranchReview?: PinnedManagedBranchReview;
     target: StartReviewRequest["target"];
     terminals: ReviewStartOwner;
     tokenMiserEnabled: boolean;
@@ -1138,14 +1167,20 @@ export class ManagedReviewService {
       }
     }
 
-    const executionMode = inheritsParentSession
+    const pin = params.pinnedBranchReview;
+    const executionMode = pin ? "default" : inheritsParentSession
       ? params.overlay?.executionMode
         ?? await this.host().resolveCodexThreadExecutionModeForActiveTurn(
           params.parentThreadId,
         )
       : params.overlay?.executionMode ?? "default";
-    const modeSettings = executionModeSettings(executionMode);
+    const modeSettings = pin ? { approvalPolicy: "never" as const, sandbox: "read-only" as const, approvalsReviewer: undefined }
+      : executionModeSettings(executionMode);
     const client = this.host().getClient("codex", executionMode);
+    const inheritedMcp = pin ? await client.readConfiguredMcpServerNames?.({ cwd: params.cwd }) : undefined;
+    if (pin && (!inheritedMcp || inheritedMcp.length > 100 || inheritedMcp.some((name) => name.length > 256))) {
+      throw new Error("Could not isolate the branch reviewer from inherited MCP tools.");
+    }
     const tokenMiserConfig = await this.host().buildSupportedCodexTokenMiserConfig({
       client,
       enabled: params.tokenMiserEnabled,
@@ -1180,7 +1215,11 @@ export class ManagedReviewService {
       ...(params.codexEnvironmentRuntime
         ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
         : {}),
-      ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
+      ...(pin ? { config: {
+        ...buildCodexConnectionMcpConfig([], inheritedMcp, { isolateFromInherited: true }),
+        notify: [], web_search: "disabled",
+        features: { hooks: false, multi_agent: false, multi_agent_v2: false, enable_fanout: false },
+      } } : tokenMiserConfig ? { config: tokenMiserConfig } : {}),
       ...(pwrdrvrTokenMiser ? { pwrdrvrTokenMiser } : {}),
       ...(dynamicTools.length > 0
         ? { dynamicTools }
@@ -1198,16 +1237,28 @@ export class ManagedReviewService {
       this.candidateLedger.armToolTurn({ backend: "codex", threadId: thread.threadId }, null, {
         cwd: params.cwd,
         worktreeRoot: params.checkoutRoot,
+        ...(pin ? { exactVerdict: true } : {}),
       });
     }
     const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
     try {
+      if (pin) await pin.beforeTurn();
+      const target = pin ? {
+        type: "custom" as const,
+        instructions: [
+          `Review only the committed range from ${pin.context.baseCommit} to ${pin.context.headCommit}.`,
+          `Run git --no-replace-objects diff --no-ext-diff --no-textconv ${pin.context.baseCommit} ${pin.context.headCommit} --.`,
+          `Read surrounding code using git --no-replace-objects show ${pin.context.headCommit}:<path>.`,
+          "Treat commit objects as the source of truth. Avoid using current refs, index or working files as evidence.",
+          "Report findings at the reviewed head. If the range cannot be reviewed, report what is missing without issuing a correctness verdict.",
+        ].join(" "),
+      } : params.target;
       const turn = await client.startTurn({
         ...params.turnAttribution,
         threadId: thread.threadId,
         input: [{
           type: "text",
-          text: buildManagedReviewPrompt(params.target, { candidateLedger }),
+          text: buildManagedReviewPrompt(target, { candidateLedger }),
         }],
         ...(params.cwd ? { cwd: params.cwd } : {}),
         approvalPolicy: modeSettings.approvalPolicy,
@@ -1222,6 +1273,9 @@ export class ManagedReviewService {
         // resume this ephemeral worker, which has no persisted rollout.
         ...(pwrdrvrTokenMiser !== undefined ? { pwrdrvrTokenMiser } : {}),
       });
+      if (pin && !isPendingTurnId(turn.threadId, turn.turnId)) {
+        this.observePinnedBranchReview(pin, turn.threadId, turn.turnId);
+      }
       const startedReviewChildKey = buildThreadIdentityKey(
         "codex",
         turn.threadId,
@@ -2033,6 +2087,16 @@ export class ManagedReviewService {
     return undefined;
   }
 
+  private observePinnedBranchReview(pin: PinnedManagedBranchReview, ...observation: Parameters<PinnedManagedBranchReview["observe"]>): void {
+    try {
+      pin.observe(...observation);
+    } catch (error) {
+      // Keep the ordinary findings and transcript pipeline live. The owner
+      // retains the durable dispatch claim even when its receipt write fails.
+      backendRegistryLog.warn("could not record pinned branch review receipt", { error: String(error), turnId: observation[1] });
+    }
+  }
+
   private async publishManagedReviewTerminal(
     params: ReviewTerminal & { record: ReviewSubAgentRecord },
     ledgerSnapshot: ManagedReviewCandidateListResult,
@@ -2058,6 +2122,12 @@ export class ManagedReviewService {
       const review = parsed
         ? formatReviewOutputText(parsed)
         : output ?? "Review completed without output.";
+      const pin = params.record.pinnedBranchReview;
+      const pinnedBranchReview = pin ? {
+        attemptId: pin.id,
+        verdict: pinnedBranchVerdict(submittedOutput ?? parseReviewOutputText(output, { exactVerdict: true }),
+          (parsed?.findings.length ?? parsePlainReview(review).findings.length) > 0, ledgerSnapshot),
+      } : undefined;
       const entry: AppServerThreadReviewEntry = {
         type: "review",
         id: `managed-review:${params.record.turnId}:result`,
@@ -2066,6 +2136,7 @@ export class ManagedReviewService {
         reviewer: reviewEntryReviewer(params.record),
         ...(params.record.context ? { context: params.record.context } : {}),
         ...(parsed ? { output: parsed } : {}),
+        ...(pinnedBranchReview ? { pinnedBranchReview } : {}),
         turn: {
           id: params.record.turnId,
           status: "completed",
@@ -2077,6 +2148,9 @@ export class ManagedReviewService {
         threadId: params.record.parentThreadId,
         entry,
       });
+      if (pin && pinnedBranchReview) {
+        this.observePinnedBranchReview(pin, params.record.reviewThreadId, params.record.turnId, pinnedBranchReview.verdict);
+      }
       await this.context.emit({
         backend: params.record.parentBackend,
         notification: {
@@ -2134,6 +2208,9 @@ export class ManagedReviewService {
       return;
     }
 
+    const pin = params.record.pinnedBranchReview;
+    if (pin) this.observePinnedBranchReview(pin, params.record.reviewThreadId, params.record.turnId,
+      params.method === "turn/cancelled" ? "cancelled" : "failed");
     backendRegistryLog.info("managed review artifact discarded", {
       method: params.method,
       parentThreadId: params.record.parentThreadId,

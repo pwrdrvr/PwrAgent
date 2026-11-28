@@ -7,11 +7,11 @@ import { promisify } from "node:util";
 import { onTestFinished } from "vitest";
 
 const exec = promisify(execFile);
-const command = "factory-admission";
 const cli = fileURLToPath(new URL("../../../../../../packages/pwragent/bin/pwragent.js", import.meta.url));
 
 /** Exercise the CLI's JSON file and local socket against a fixture-owned command handler. */
 export async function factoryCli<Result>(
+  command: "factory-admission" | "factory-review",
   handle: (params: Record<string, unknown>) => Promise<Result>,
 ) {
   if (process.platform === "win32") return handle;

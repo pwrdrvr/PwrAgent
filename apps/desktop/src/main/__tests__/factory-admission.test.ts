@@ -239,7 +239,7 @@ it("keeps prior issue-key approvals recoverable without starting new work on the
 
 it("keeps old Linear UUID storage and dispatch receipts accessible through both CLI input forms", async () => {
   const h = await setup();
-  const run = await factoryCli(h.run);
+  const run = await factoryCli("factory-admission", h.run);
   const { row: armed } = await run(h.approve());
   expect(h.dropStoredTracker(subject.issueId).changes).toBe(1);
   h.restart();
@@ -261,7 +261,7 @@ it("keeps old Linear UUID storage and dispatch receipts accessible through both 
 
 it("deduplicates each CLI tracking subject while isolating GitHub repository and kind and Jira site", async () => {
   const h = await setup();
-  const run = await factoryCli(h.run);
+  const run = await factoryCli("factory-admission", h.run);
   const { issueId: _issueId, ...approval } = h.approve();
   const items = [
     { provider: "github", kind: "issue", repositoryId: "R_one", number: 42 },

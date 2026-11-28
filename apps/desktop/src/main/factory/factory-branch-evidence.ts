@@ -11,9 +11,19 @@ import { resolveGitHubFetchUrl } from "../pr-status/git-remote";
 
 type ReviewLookup = (id: string) => ThreadReview | undefined;
 
-async function git(cwd: string, args: string[]): Promise<string | undefined> {
+export function isFactoryBranchName(branch: string): boolean {
+  return !!branch && !branch.startsWith("refs/");
+}
+
+export function isFactoryIntegrationRef(ref: string): boolean {
+  return /^refs\/(?:heads\/.+|remotes\/[^/]+\/.+)$/.test(ref);
+}
+
+async function git(cwd: string, args: string[], maxBuffer = 32_768): Promise<string | undefined> {
+  // Owner observations address the selected checkout, not a caller's Git index or object store.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
   return (await runGitCommand(cwd, args, {
-    env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0" }, timeout: 3_000, maxBuffer: 32_768,
+    env: { ...env, GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0", GIT_NO_REPLACE_OBJECTS: "1" }, timeout: 3_000, maxBuffer,
   }).catch(() => undefined))?.stdout.trim();
 }
 
@@ -83,7 +93,7 @@ function trackingSource(config: string, ref: string) {
   return negatives.get(remote)?.some((pattern) => refspecMatch(pattern, source) !== undefined) ? undefined : match;
 }
 
-async function readBaseRef(root: string, ref: string, repository: string) {
+export async function readFactoryIntegrationTarget(root: string, ref: string, repository: string) {
   const tip = await readRef(root, ref);
   if (!tip) return undefined;
   if (ref.startsWith("refs/heads/") && tip.ref.startsWith("refs/heads/")) {
@@ -97,6 +107,51 @@ async function readBaseRef(root: string, ref: string, repository: string) {
   if (!remote || `${remote.host}/${remote.owner}/${remote.repo}`.toLowerCase() !== repository.toLowerCase()) return undefined;
   return { oid: tip.oid, branch };
 }
+
+export type FactoryCleanCandidate =
+  | { state: "clean"; headOid: string; baseOid: string; baseBranch: string }
+  | { state: "dirty" | "unverified" };
+
+/** Sample the approved linked worktree. Ref drift during the clean check fails closed. */
+export async function readFactoryCleanCandidate(
+  projectPath: string, repository: string, selection: Pick<FactoryBranchSelection, "branch" | "baseRef">, worktreePath: string,
+): Promise<FactoryCleanCandidate> {
+  const [project, worktree] = await Promise.all([checkout(projectPath), checkout(worktreePath)]);
+  if (!project || !worktree || project.common !== worktree.common || project.path === worktree.path) return { state: "unverified" };
+  const branchRef = `refs/heads/${selection.branch}`;
+  const repositoryKey = `github.com/${repository}`;
+  const sample = async () => {
+    const [projectOrigin, worktreeOrigin, branch, head, base] = await Promise.all([
+      readFactoryOrigin(project.path),
+      readFactoryOrigin(worktree.path),
+      git(worktree.path, ["symbolic-ref", "--quiet", "HEAD"]),
+      readRef(worktree.path, branchRef),
+      readFactoryIntegrationTarget(project.path, selection.baseRef, repositoryKey),
+    ]);
+    const originMatches = [projectOrigin, worktreeOrigin].every((remote) =>
+      remote && `${remote.host}/${remote.owner}/${remote.repo}`.toLowerCase() === repositoryKey.toLowerCase());
+    return originMatches && branch === branchRef && head && base && head.oid.length === base.oid.length
+      ? { headOid: head.oid, baseOid: base.oid, baseBranch: base.branch } : undefined;
+  };
+  const before = await sample();
+  if (!before) return { state: "unverified" };
+  const state = await readWorktreeState(worktree.path);
+  if (state !== "clean") return { state };
+  const after = await sample();
+  return after?.headOid === before.headOid && after.baseOid === before.baseOid && after.baseBranch === before.baseBranch
+    ? { state: "clean", ...after } : { state: "unverified" };
+}
+
+async function readWorktreeState(worktree: string): Promise<"dirty" | "unverified" | "clean"> {
+  const [status, index] = await Promise.all([
+    git(worktree, ["-c", "core.fsmonitor=false", "status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=none"]),
+    git(worktree, ["ls-files", "-v", "-z"], 2 * 1024 * 1024),
+  ]);
+  if (status) return "dirty";
+  // Git status skips paths marked assume-unchanged or skip-worktree.
+  return status === undefined || index === undefined || /(?:^|\0)[a-zS] /.test(index) ? "unverified" : "clean";
+}
+
 
 async function checkoutIdentity(directory: string): Promise<string | undefined> {
   if (!isAbsolute(directory)) return undefined;
@@ -127,10 +182,9 @@ async function reviewReceipt(
   };
 }
 
-/** Read the selected branch and recorded review subjects from their local authorities. */
-export async function readFactoryBranch(
-  projectPath: string, repository: string, selection: FactoryBranchSelection & { workItem: FactoryWorkItem }, readReview: ReviewLookup, now: () => number,
-): Promise<{ candidate: FactoryBranchProjection; baseBranch?: string }> {
+export async function readFactoryBranchRevision(
+  projectPath: string, repository: string, selection: FactoryBranchSelection,
+) {
   const project = await checkout(projectPath);
   if (!project) throw new Error("The registered Factory project checkout could not be verified.");
   const worktree = selection.worktree ? await checkout(selection.worktree) : undefined;
@@ -138,12 +192,37 @@ export async function readFactoryBranch(
   const branchRef = `refs/heads/${selection.branch}`;
   const [head, base, checkedOut] = await Promise.all([
     readRef(project.path, branchRef),
-    readBaseRef(project.path, selection.baseRef, repository),
+    readFactoryIntegrationTarget(project.path, selection.baseRef, repository),
     worktree ? git(worktree.path, ["symbolic-ref", "--quiet", "HEAD"]) : undefined,
   ]);
   const headOid = head?.oid;
   const baseOid = base?.oid;
   const active = checkedOut === branchRef && headOid !== undefined && baseOid !== undefined;
+  return { project, worktree, headOid, baseOid, baseBranch: base?.branch, active };
+}
+
+async function readMergeBase(root: string, headOid: string, baseOid: string) {
+  const result = await git(root, ["merge-base", "--all", headOid, baseOid]);
+  return result && isGitObjectId(result) ? result : undefined;
+}
+
+/** A review only reads committed objects from the admitted worktree. */
+export async function verifyFactoryReviewRange(
+  worktree: string, headOid: string, baseOid: string,
+): Promise<string | undefined> {
+  const [head, state, mergeBase] = await Promise.all([
+    git(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    readWorktreeState(worktree),
+    readMergeBase(worktree, headOid, baseOid),
+  ]);
+  return head === headOid && state === "clean" && mergeBase !== headOid ? mergeBase : undefined;
+}
+
+/** Read the selected branch and recorded review subjects from their local authorities. */
+export async function readFactoryBranch(
+  projectPath: string, repository: string, selection: FactoryBranchSelection & { workItem: FactoryWorkItem }, readReview: ReviewLookup, now: () => number,
+): Promise<{ candidate: FactoryBranchProjection; baseBranch?: string }> {
+  const { project, worktree, headOid, baseOid, active, baseBranch } = await readFactoryBranchRevision(projectPath, repository, selection);
   const reviewIds = selection.reviewIds ?? [];
   const receipts: FactoryReceiptProjection[] = [];
   if (headOid && reviewIds.length) {
@@ -178,5 +257,5 @@ export async function readFactoryBranch(
       headSha: headOid, baseSha: baseOid, ...selection.assessment, evidence: [],
     };
   }
-  return { candidate: result, baseBranch: base?.branch };
+  return { candidate: result, baseBranch };
 }

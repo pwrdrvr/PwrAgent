@@ -1211,6 +1211,8 @@ export type AppServerThreadPlanEntry = {
   turn?: AppServerThreadTurnMetadata;
 };
 
+export type PinnedBranchReviewVerdict = "clear" | "findings" | "inconclusive";
+
 export type AppServerThreadReviewEntry = {
   type: "review";
   id: string;
@@ -1235,6 +1237,8 @@ export type AppServerThreadReviewEntry = {
    */
   context?: AppServerReviewContext;
   output?: AppServerReviewOutput;
+  /** Owner proof paired with the terminal artifact for restart recovery. */
+  pinnedBranchReview?: { attemptId: string; verdict: PinnedBranchReviewVerdict };
   turn?: AppServerThreadTurnMetadata;
 };
 
