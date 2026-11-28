@@ -109,14 +109,21 @@ Install the browser once with
 Run `pnpm --filter @pwragent/desktop test:renderer-layout`.
 The required Linux `Test` check includes this Playwright project on product
 changes. Vite serves the real renderer components and stylesheet to headless
-Chromium. The project runs without Electron or a desktop bridge.
+Chromium. The project runs without Electron. The terminal fixture supplies an
+in-memory IPC bridge that records the PTY grid and emits terminal events.
 
-The suite shares one page across five generated fast-check layouts, one for
-each sidebar lens, and three fixed regressions. It checks that sidebar lanes
-fit, lead PR numbers and Minimal's rollups render, and controls fit within their
-surfaces and clipping ancestors. A failure identifies the example or the
-generated seed and case. Replay a generated case by setting
-`PWRAGENT_LAYOUT_SEED` to the reported seed when running the suite.
+- The sidebar model shares one page across five generated fast-check layouts,
+  one for each sidebar lens, and three fixed regressions. It checks that lanes
+  fit, lead PR numbers and Minimal's rollups render, and controls fit within
+  their surfaces and clipping ancestors.
+- The thread terminal model runs four fixed regressions and five generated
+  sequences of at most five transitions. It measures xterm rows and the ended
+  bar against their clipping bounds, checks grip hit targets and resize
+  distances, and compares the painted grid with the PTY size after fitting.
+
+A failure identifies the example or the generated seed and case. Set
+`PWRAGENT_LAYOUT_SEED` to the reported seed to replay generated cases. The
+thread terminal model uses seed `424242` by default.
 
 ## Code Formatting & Linting
 
