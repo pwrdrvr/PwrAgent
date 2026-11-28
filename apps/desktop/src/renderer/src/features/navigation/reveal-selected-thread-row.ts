@@ -114,7 +114,12 @@ function measure(row: HTMLElement): Placement | undefined {
     visibleTop = Math.max(visibleTop, headerBox.bottom);
     stuckTop = view.top + headerBox.height;
   }
-  const divider = stickyDividerAbove(row);
+  // One subtree search finds the project's divider; the row sits on one
+  // side of it.
+  const projectDivider = dividerOf(row);
+  const dividerFollows = projectDivider !== undefined
+    && (projectDivider.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  const divider = dividerFollows ? projectDivider : undefined;
   if (divider) {
     const dividerBox = divider.getBoundingClientRect();
     visibleTop = Math.max(visibleTop, dividerBox.bottom);
@@ -122,7 +127,7 @@ function measure(row: HTMLElement): Placement | undefined {
   }
   let visibleBottom = view.bottom;
   let stuckBottom = view.bottom;
-  const below = stickyDividerBelow(row);
+  const below = dividerFollows ? undefined : projectDivider;
   if (below) {
     const belowBox = below.getBoundingClientRect();
     visibleBottom = Math.min(visibleBottom, belowBox.top);
@@ -134,21 +139,7 @@ function measure(row: HTMLElement): Placement | undefined {
 // A project's unpinned rows follow its Unpinned divider, which sticks under
 // the header and covers them too. Pinned rows sit above it, and it sticks to
 // the bottom of the list over them while they run past.
-function stickyDividerAbove(row: HTMLElement): HTMLElement | undefined {
-  const divider = projectDivider(row);
-  return divider && divider.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING
-    ? divider
-    : undefined;
-}
-
-function stickyDividerBelow(row: HTMLElement): HTMLElement | undefined {
-  const divider = projectDivider(row);
-  return divider && divider.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING
-    ? divider
-    : undefined;
-}
-
-function projectDivider(row: HTMLElement): HTMLElement | undefined {
+function dividerOf(row: HTMLElement): HTMLElement | undefined {
   return row.closest(".directory-row__threads")
     ?.querySelector<HTMLElement>(STICKY_DIVIDER) ?? undefined;
 }
