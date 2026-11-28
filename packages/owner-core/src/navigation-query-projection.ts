@@ -64,7 +64,9 @@ import { DIRECTORY_GIT_PROOF_MAX_KEYS, DIRECTORY_GIT_PROOF_MAX_KEY_LENGTH, readN
 import {
   navigationAttentionIdentity,
   type NavigationAttentionOrder,
+  type NavigationAttentionRowEdit,
 } from "./navigation-attention-order";
+import { attentionPageKey, NavigationAttentionPageRows, type AttentionGitInputs, type AttentionPageRow } from "./navigation-attention-page";
 
 const MAX_ROW_NESTED_RECORDS = 16;
 
@@ -128,8 +130,19 @@ type CertifiedSnapshot = {
   acceleration: { projection?: ProjectionIndex };
   bytes: number;
   counts?: NavigationCounts;
+  attentionDelta?: NavigationAttentionDelta;
   onWork?: NavigationProjectionWork;
 };
+
+type NavigationAttentionDelta = {
+  from: symbol;
+  rows: ReadonlyMap<string, NavigationAttentionRowEdit>;
+};
+
+/** Only immediate, structurally stable successors certify a sparse Attention read. */
+export function navigationAttentionDelta(index: NavigationQueryIndex): NavigationAttentionDelta | undefined {
+  return snapshots.get(index)?.attentionDelta;
+}
 
 // Only detached, deeply frozen snapshots enter this table. A mutable provider
 // array (or a caller reusing its index object after a mutation) never does.
@@ -262,7 +275,8 @@ export function createNavigationQuerySnapshot(index: NavigationQueryIndex, onWor
   const shared = prefix && prefix.length <= copy.threads.length
     && prefix.every((row, position) => row === copy.threads[position]) ? prefix : copy.threads;
   const token = prepared?.token ?? Symbol("navigation-index");
-  snapshots.set(copy, { shell, sharedThreads: shared, rowOwners, token, lensOrder: prepared?.lensOrder ?? token, acceleration, bytes, onWork });
+  snapshots.set(copy, { shell, sharedThreads: shared, rowOwners, token, lensOrder: prepared?.lensOrder ?? token,
+    acceleration, bytes, onWork, counts: prepared?.counts });
   return copy;
 }
 
@@ -320,10 +334,16 @@ export function replaceNavigationQueryRows(index: NavigationQueryIndex, replacem
   const projection = prepared;
   let ownersChanged = false;
   let sameLensOrder = true;
+  let attentionRows = sameKeys && index.observedAt !== undefined && observedAt > index.observedAt
+    ? new Map<string, NavigationAttentionRowEdit>() : undefined;
   const counts = { ...(previous.counts ?? countsForThreads(index.threads)) };
   for (const position of replacements.keys()) {
     const old = index.threads[position]!;
     const row = detached[position]!;
+    if (attentionRows) {
+      if (attentionGeometryMatches(old, row)) attentionRows.set(navigationAttentionIdentity(row), { row, position });
+      else attentionRows = undefined;
+    }
     ownersChanged ||= row.parentThreadInstanceId !== old.parentThreadInstanceId;
     sameLensOrder &&= preservesBrowsingLensOrder(old, row);
     const candidateKey = JSON.stringify([null, row.id]);
@@ -363,7 +383,8 @@ export function replaceNavigationQueryRows(index: NavigationQueryIndex, replacem
     inputRequestThreadKeys: sameKeys ? index.inputRequestThreadKeys : detachSnapshotKeys(inputRequestThreadKeys) });
   const token = Symbol("navigation-index");
   snapshots.set(next, { ...previous, token, lensOrder: sameLensOrder ? previous.lensOrder : token, sharedThreads: detached,
-    acceleration: { projection }, counts: compactThreadCounts(counts), rowOwners: ownersChanged ? snapshotRowOwners(next) : previous.rowOwners });
+    acceleration: { projection }, counts: compactThreadCounts(counts), rowOwners: ownersChanged ? snapshotRowOwners(next) : previous.rowOwners,
+    attentionDelta: attentionRows && { from: previous.token, rows: attentionRows } });
   return next;
 }
 
@@ -426,11 +447,7 @@ function navigationIdentity(thread: NavigationThreadSummary): NavigationIdentity
 }
 
 function identityKey(identity: NavigationIdentity): string {
-  return [
-    identity.ownerInstanceId ?? "local",
-    identity.backend,
-    identity.threadId,
-  ].join("\u0000");
+  return attentionPageKey(identity);
 }
 
 function threadKey(thread: NavigationThreadSummary): string {
@@ -1234,6 +1251,14 @@ function preservesBrowsingLensOrder(old: NavigationThreadSummary, row: Navigatio
     && isDeepStrictEqual(old.linkedDirectories, row.linkedDirectories);
 }
 
+function attentionGeometryMatches(old: NavigationThreadSummary, row: NavigationThreadSummary): boolean {
+  return old.id === row.id && old.source === row.source && isOrdinaryThread(old) === isOrdinaryThread(row)
+    && old.parentThreadId === row.parentThreadId && old.parentThreadBackend === row.parentThreadBackend
+    && old.parentThreadInstanceId === row.parentThreadInstanceId && old.projectKey === row.projectKey
+    && isDeepStrictEqual(old.federation, row.federation) && isDeepStrictEqual(old.handoffOrigin, row.handoffOrigin)
+    && isDeepStrictEqual(old.linkedDirectories, row.linkedDirectories);
+}
+
 function compareUpdated(left: NavigationThreadSummary, right: NavigationThreadSummary): number {
   return (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
     || threadKey(left).localeCompare(threadKey(right));
@@ -1362,10 +1387,7 @@ function selectQueryThreads(params: {
     const rootOf = params.lensRootOf;
     const threads = ordinaryThreads
       .filter((thread) => {
-        if (query.lens === "attention") {
-          if (!isActive(thread) && !thread.inbox.inInbox) return false;
-          if (query.attention && !navigationThreadInAttentionScope(thread, query.attention)) return false;
-        }
+        if (query.lens === "attention" && !matchesAttentionScope(thread, query)) return false;
         // A subtree follows its root, so a pinned thread's children render
         // in its tray in the Pinned group and never orphaned in the list.
         if (rootOf && (rootOf(thread).pinnedRank !== undefined) !== (query.roots === "pinned")) return false;
@@ -1472,6 +1494,11 @@ function selectQueryThreads(params: {
     if (thread) addWithAncestry(thread);
   }
   return [...selected.values()];
+}
+
+function matchesAttentionScope(thread: NavigationThreadSummary, query: Extract<NavigationQuery, { kind: "lens" }>): boolean {
+  return (isActive(thread) || thread.inbox.inInbox)
+    && (!query.attention || navigationThreadInAttentionScope(thread, query.attention));
 }
 
 function buildModelInventory(threads: readonly NavigationThreadSummary[]): NavigationModelInventoryRow[] {
@@ -1732,6 +1759,11 @@ function collectionDirectoryGitProof(params: {
       if (paths.size > 64) return undefined;
     }
   }
+  return finishDirectoryGitProof(index, dirs, paths);
+}
+
+function finishDirectoryGitProof(index: NavigationQueryIndex,
+  dirs: Map<NavigationDirectorySummary, "descriptor" | "repository">, paths: ReadonlySet<string>): NavigationDirectoryGitProof | undefined {
   // Mirror both path lookups in withRepositoryIdentities, even for a
   // checkout whose first origin may be added after this page is served.
   if (paths.size) {
@@ -1756,6 +1788,83 @@ function collectionDirectoryGitProof(params: {
   }
   directories.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   return Object.freeze({ version: 1, directories: Object.freeze(directories) });
+}
+
+function attentionGitInputs(thread: NavigationThreadSummary, checkout?: NavigationDirectorySummary): AttentionGitInputs | undefined {
+  const paths = new Set<string>();
+  for (const link of thread.federation ? [] : thread.linkedDirectories) {
+    const descriptor = classifyDirectory(link);
+    if (descriptor.kind !== "directory") continue;
+    paths.add(link.path);
+    if (descriptor.path) paths.add(descriptor.path);
+    if (paths.size > 64) return undefined;
+  }
+  return { paths, links: thread.federation ? 0 : thread.linkedDirectories.length, checkouts: new Set(checkout ? [checkout] : []) };
+}
+
+function* attentionRowInputs(threads: readonly NavigationThreadSummary[]): Iterable<NavigationAttentionRowEdit> {
+  for (const [position, row] of threads.entries()) yield { row, position };
+}
+
+/** Retained Attention pages keep their selected rank order and project only
+ * changed records. The full projector remains the fallback for other queries. */
+export function projectRetainedAttention(params: {
+  index: NavigationQueryIndex;
+  request: NavigationQueryRequest;
+  order?: NavigationAttentionOrder;
+  deferPullRequests: boolean;
+  previous?: { rows: NavigationAttentionPageRows; changed: ReadonlyMap<string, NavigationAttentionRowEdit> };
+  onMembership?: (rows: number) => void;
+}): { rows: NavigationAttentionPageRows; materialization: NavigationQueryMaterialization; directoryGitProof?: NavigationDirectoryGitProof } | undefined {
+  const { index, request, order, previous } = params;
+  const query = request.query;
+  if (query.kind !== "lens" || query.lens !== "attention" || query.roots || request.consumer !== "main-sidebar") return undefined;
+  const snapshot = snapshots.get(index);
+  const projection = snapshot?.acceleration.projection ?? buildProjectionIndex(index);
+  if (projection.threadsByIdentity.size !== index.threads.length) return undefined;
+  const retained = previous?.rows.fork();
+  const initial: AttentionPageRow[] = [];
+  const filter = query.filter?.trim().toLowerCase();
+  const inputs = previous ? previous.changed.values() : attentionRowInputs(index.threads);
+  params.onMembership?.(previous?.changed.size ?? index.threads.length);
+  for (const { row: thread, position: inputOrder } of inputs) {
+    const key = threadKey(thread);
+    if (!isOrdinaryThread(thread) || !matchesAttentionScope(thread, query)
+      || (filter && !thread.title.toLowerCase().includes(filter)
+        && !thread.linkedDirectories.some((directory) => directory.path.toLowerCase().includes(filter)))) {
+      retained?.set(key, undefined);
+      continue;
+    }
+    const parent = parentIdentity(thread, projection.parentCandidates);
+    const parentOwner = thread.parentThreadInstanceId ?? parent?.ownerInstanceId;
+    const checkoutProject = checkoutProjectForThread(thread, projection.checkoutProjects);
+    const deferred = params.deferPullRequests && !thread.federation && Boolean(thread.prs?.length);
+    const row: AttentionPageRow = {
+      parent, deferred, updatedAt: thread.updatedAt ?? 0, inputOrder,
+      rank: order?.members.get(navigationAttentionIdentity(thread))?.rank,
+      git: attentionGitInputs(thread, checkoutProject),
+      row: projectNavigationRow({
+        childCount: projection.childCountByParent.get(key) ?? 0,
+        viewerChildCount: request.inventory === "viewer" && navigationIdentity(thread).ownerInstanceId
+          ? projection.viewerChildCountByParent.get(key) ?? 0 : undefined,
+        needsInput: threadNeedsInput(thread, index), repositories: projection.repositories, checkoutProject,
+        thread: parentOwner && !thread.parentThreadInstanceId ? { ...thread, parentThreadInstanceId: parentOwner } : thread,
+        omitPullRequests: deferred,
+      }),
+    };
+    if (retained) retained.set(key, row);
+    else initial.push(row);
+  }
+  const rows = retained ?? NavigationAttentionPageRows.from(initial);
+  const git = snapshot && index.coverage?.state === "complete"
+    && (request.inventory !== "viewer" || snapshot.rowOwners?.length === 0) ? rows.gitInputs : undefined;
+  const directoryGitProof = git && finishDirectoryGitProof(index,
+    new Map([...git.checkouts].map((dir) => [dir, "repository"])), git.paths);
+  const counts = snapshot ? (snapshot.counts ??= countsForThreads(index.threads)) : countsForThreads(index.threads);
+  return { rows, directoryGitProof,
+    materialization: { coverage: index.coverage ?? { state: "complete" },
+      counts: { ...counts }, directories: [], entries: [],
+      queryKey: navigationQueryKey(request) } };
 }
 
 /** Per-generation provenance for private sidebar materializations. Weak keys

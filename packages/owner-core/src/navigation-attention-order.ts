@@ -14,6 +14,8 @@ type Member = {
   observedAt?: number;
 };
 
+export type NavigationAttentionRowEdit = { row: NavigationThreadSummary; position: number };
+
 export type NavigationAttentionOrder = {
   members: Map<string, Member>;
   nextRank: number;
@@ -30,7 +32,7 @@ export type NavigationAttentionOrder = {
   listedAt?: number;
 };
 
-export function observeNavigationAttentionTurn(params: {
+type AttentionTurn = {
   previous: NavigationAttentionOrder;
   key: string;
   active: boolean;
@@ -38,31 +40,39 @@ export function observeNavigationAttentionTurn(params: {
   promoteOnTurnEnd: boolean;
   /** This boundary's observation clock value. */
   observedAt?: number;
-}): NavigationAttentionOrder {
+};
+
+export function navigationAttentionTurnMember(params: AttentionTurn): Member | undefined {
   // Optimistic starts identify admission, not a second provider turn.
   const turnId = params.turnId?.startsWith("pending:") ? undefined : params.turnId;
   const previous = params.previous.members.get(params.key);
   const observedTurnIds = previous?.observedTurnIds ?? (previous?.eventTurnId ? [previous.eventTurnId] : []);
-  if (turnId && turnId !== previous?.eventTurnId && observedTurnIds.includes(turnId)) return params.previous;
-  if (previous?.active === params.active && (!turnId || previous.eventTurnId === turnId)) return params.previous;
+  if (turnId && turnId !== previous?.eventTurnId && observedTurnIds.includes(turnId)) return undefined;
+  if (previous?.active === params.active && (!turnId || previous.eventTurnId === turnId)) return undefined;
   // An old completion cannot finish a newer live turn.
   if (!params.active && previous?.active && previous.eventTurnId && turnId
-    && previous.eventTurnId !== turnId) return params.previous;
+    && previous.eventTurnId !== turnId) return undefined;
   const newTurn = Boolean(turnId && previous?.eventTurnId !== turnId);
   const move = !previous || (params.active ? !previous.active || (newTurn && Boolean(previous.eventTurnId))
     : (!previous.active && newTurn) || params.promoteOnTurnEnd);
   const rank = move ? params.previous.nextRank : previous.rank;
-  const members = new Map(params.previous.members);
-  members.set(params.key, { active: params.active, rank, updatedAt: previous?.updatedAt ?? 0,
+  return { active: params.active, rank, updatedAt: previous?.updatedAt ?? 0,
     observedTurnIds: turnId && !observedTurnIds.includes(turnId) ? [...observedTurnIds, turnId] : observedTurnIds,
     eventTurnId: params.active ? turnId : turnId ?? previous?.eventTurnId, eventTracked: true, awaitingBaseline: true,
-    ...(params.observedAt !== undefined ? { observedAt: params.observedAt } : {}) });
+    ...(params.observedAt !== undefined ? { observedAt: params.observedAt } : {}) };
+}
+
+export function observeNavigationAttentionTurn(params: AttentionTurn): NavigationAttentionOrder {
+  const member = navigationAttentionTurnMember(params);
+  if (!member) return params.previous;
+  const members = new Map(params.previous.members);
+  members.set(params.key, member);
   let removed = params.previous.removed;
   if (removed?.has(params.key)) {
     removed = new Map(removed);
     removed.delete(params.key);
   }
-  return { members, nextRank: params.previous.nextRank + Number(move), ...(removed?.size ? { removed } : {}),
+  return { members, nextRank: Math.max(params.previous.nextRank, member.rank + 1), ...(removed?.size ? { removed } : {}),
     ...(params.previous.listedAt !== undefined ? { listedAt: params.previous.listedAt } : {}) };
 }
 
@@ -104,6 +114,65 @@ function isLive(thread: NavigationThreadSummary): boolean {
     || thread.hasBackgroundTasks === true;
 }
 
+function eligibleForRank(thread: NavigationThreadSummary): boolean {
+  return !thread.codexNativeSubAgent && (isLive(thread) || thread.inbox.inInbox);
+}
+
+function compareRankInputs(left: NavigationThreadSummary, right: NavigationThreadSummary): number {
+  return (left.updatedAt ?? 0) - (right.updatedAt ?? 0)
+    || navigationAttentionIdentity(right).localeCompare(navigationAttentionIdentity(left));
+}
+
+function listedMember(thread: NavigationThreadSummary, previous: Member | undefined, promoteOnTurnEnd: boolean,
+  nextRank: number, observedAt: number | undefined): Member {
+  // Worker activity keeps membership, but ordering still follows parent turns.
+  const observedActive = thread.threadStatus === "active";
+  const active = previous?.awaitingBaseline ? previous.active : observedActive;
+  const updatedAt = thread.updatedAt ?? 0;
+  const started = active && previous?.active === false;
+  const finished = !active && (previous?.active === true
+    || (previous?.active === false && !previous.eventTracked && updatedAt > previous.updatedAt));
+  const rank = !previous || started || (finished && promoteOnTurnEnd) ? nextRank : previous.rank;
+  const awaitingBaseline = previous?.awaitingBaseline && observedActive !== active;
+  const memberObservedAt = awaitingBaseline ? previous?.observedAt : observedAt ?? previous?.observedAt;
+  return { active, rank, updatedAt,
+    ...(previous?.eventTurnId ? { eventTurnId: previous.eventTurnId } : {}),
+    ...(previous?.observedTurnIds ? { observedTurnIds: previous.observedTurnIds } : {}),
+    ...(previous?.eventTracked ? { eventTracked: true } : {}),
+    ...(awaitingBaseline ? { awaitingBaseline: true } : {}),
+    ...(memberObservedAt !== undefined ? { observedAt: memberObservedAt } : {}),
+  };
+}
+
+/** The new listing is newer than the view's boundaries and has the same inventory.
+ * Unchanged rows would keep their rank and eligibility in a full reconciliation. */
+export function reconcileNavigationAttentionDelta(params: {
+  order: NavigationAttentionOrder;
+  rows: ReadonlyMap<string, NavigationAttentionRowEdit>;
+  promoteOnTurnEnd: boolean;
+  observedAt: number;
+}): { members: Map<string, Member | undefined>; nextRank: number } {
+  let nextRank = params.order.nextRank;
+  const members = new Map<string, Member | undefined>();
+  for (const [key, { row: thread }] of [...params.rows].sort(([, left], [, right]) =>
+    compareRankInputs(left.row, right.row) || left.position - right.position)) {
+    const previous = params.order.members.get(key);
+    const member = eligibleForRank(thread)
+      ? listedMember(thread, previous, params.promoteOnTurnEnd, nextRank, params.observedAt)
+      : !thread.codexNativeSubAgent && previous?.awaitingBaseline && previous.active ? previous : undefined;
+    if (member?.rank === nextRank) nextRank++;
+    members.set(key, member);
+  }
+  return { members, nextRank };
+}
+
+/** Count the retained member record with room for any observation timestamp. */
+export function navigationAttentionMemberBytes(key: string, member: Member | undefined): number {
+  if (!member) return 0;
+  const { observedAt, ...fields } = member;
+  return Buffer.byteLength(JSON.stringify([key, fields])) + (observedAt === undefined ? 1 : 32);
+}
+
 /**
  * Reconcile owner metadata, never a visible page; incomplete coverage cannot remove unseen members.
  *
@@ -120,6 +189,7 @@ export function reconcileNavigationAttentionOrder(params: {
   promoteOnTurnEnd: boolean;
   complete?: boolean;
   observedAt?: number;
+  onListed?: (key: string) => void;
 }): NavigationAttentionOrder {
   const { observedAt } = params;
   const follows = (at: number | undefined): boolean => observedAt !== undefined && at !== undefined && at > observedAt;
@@ -147,33 +217,15 @@ export function reconcileNavigationAttentionOrder(params: {
   }
   let nextRank = params.previous?.nextRank ?? 1;
   const eligible = params.threads
-    .filter((thread) => !thread.codexNativeSubAgent && decides(navigationAttentionIdentity(thread))
-      && (isLive(thread) || thread.inbox.inInbox))
-    .sort((left, right) => (left.updatedAt ?? 0) - (right.updatedAt ?? 0)
-      || navigationAttentionIdentity(right).localeCompare(navigationAttentionIdentity(left)));
+    .filter((thread) => eligibleForRank(thread) && decides(navigationAttentionIdentity(thread)))
+    .sort(compareRankInputs);
   for (const thread of eligible) {
     const key = navigationAttentionIdentity(thread);
     const previous = params.previous?.members.get(key);
-    // Worker activity keeps membership, but ordering still follows parent turns.
-    const observedActive = thread.threadStatus === "active";
-    const active = previous?.awaitingBaseline ? previous.active : observedActive;
-    const updatedAt = thread.updatedAt ?? 0;
-    const started = active && previous?.active === false;
-    const finished = !active && (previous?.active === true
-      || (previous?.active === false && !previous.eventTracked && updatedAt > previous.updatedAt));
-    const rank = !previous || started || (finished && params.promoteOnTurnEnd)
-      ? nextRank++
-      : previous.rank;
-    const awaitingBaseline = previous?.awaitingBaseline && observedActive !== active;
-    // A boundary still awaiting agreement keeps its own observation.
-    const memberObservedAt = awaitingBaseline ? previous?.observedAt : observedAt ?? previous?.observedAt;
-    members.set(key, { active, rank, updatedAt,
-      ...(previous?.eventTurnId ? { eventTurnId: previous.eventTurnId } : {}),
-      ...(previous?.observedTurnIds ? { observedTurnIds: previous.observedTurnIds } : {}),
-      ...(previous?.eventTracked ? { eventTracked: true } : {}),
-      ...(awaitingBaseline ? { awaitingBaseline: true } : {}),
-      ...(memberObservedAt !== undefined ? { observedAt: memberObservedAt } : {}),
-    });
+    const member = listedMember(thread, previous, params.promoteOnTurnEnd, nextRank, observedAt);
+    if (member.rank === nextRank) nextRank++;
+    if (!member.awaitingBaseline) params.onListed?.(key);
+    members.set(key, member);
   }
   // A member this listing took out stays out for any older listing.
   if (observedAt !== undefined) {
@@ -184,14 +236,4 @@ export function reconcileNavigationAttentionOrder(params: {
   const listedAt = params.complete !== false && observedAt !== undefined
     && !follows(params.previous?.listedAt) ? observedAt : params.previous?.listedAt;
   return { members, nextRank, ...(removed.size ? { removed } : {}), ...(listedAt !== undefined ? { listedAt } : {}) };
-}
-
-/** Serialized-equivalent backing, counted separately from page generations. */
-export function navigationAttentionOrderBytes(order: NavigationAttentionOrder): number {
-  return Buffer.byteLength(JSON.stringify({
-    members: [...order.members],
-    nextRank: order.nextRank,
-    removed: [...order.removed ?? []],
-    listedAt: order.listedAt,
-  }), "utf8");
 }

@@ -13,27 +13,32 @@ import {
   projectNavigationQuery,
   navigationQuerySnapshotRowOwners,
   projectNavigationPullRequests,
+  projectRetainedAttention,
+  navigationAttentionDelta,
   navigationQuerySnapshotToken,
   type NavigationEntrySources,
   type NavigationQueryIndex,
   type NavigationQueryMaterialization,
 } from "./navigation-query-projection";
 import {
-  navigationAttentionOrderBytes,
+  navigationAttentionMemberBytes,
   navigationAttentionOrderFollows,
   navigationAttentionIdentity,
-  observeNavigationAttentionTurn,
+  navigationAttentionTurnMember,
   reconcileNavigationAttentionOrder,
-  removeNavigationAttentionMember,
+  reconcileNavigationAttentionDelta,
   type NavigationAttentionOrder,
+  type NavigationAttentionRowEdit,
 } from "./navigation-attention-order";
 import { currentNavigationObservation, nextNavigationObservation } from "./navigation-observation-clock";
+import type { NavigationAttentionPageRows } from "./navigation-attention-page";
 
 const NAVIGATION_QUERY_CURSOR_IDLE_MS = 60_000;
 const NAVIGATION_QUERY_MAX_GENERATIONS = 8;
 const NAVIGATION_QUERY_MAX_RETAINED_BYTES = 32 * 1024 * 1024;
 const NAVIGATION_ATTENTION_MAX_VIEWS = 64;
 const NAVIGATION_ATTENTION_MAX_BYTES = 8 * 1024 * 1024;
+const COMPLETE_ATTENTION_CACHE_BYTES = 2 * 1024 * 1024;
 
 export type NavigationQueryErrorCode =
   | "navigation_busy"
@@ -72,7 +77,31 @@ type NavigationQueryGeneration = {
   /** Membership and attachment presence, independent of read-time PR projection. */
   sourceRevision?: string;
   pullRequests?: Map<number, ReturnType<typeof projectNavigationPullRequests>>;
+  attentionRows?: NavigationAttentionPageRows;
+  attentionRevision?: symbol;
 };
+
+type AttentionView = {
+  order: NavigationAttentionOrder;
+  bytes: number;
+  memberBytes: number;
+  removedBytes: number;
+  promoteOnTurnEnd: boolean;
+  backend: NavigationQueryRequest["backend"];
+  remoteMembers: Set<string>;
+  indexToken?: symbol;
+  revision: symbol;
+  previousRevision?: symbol;
+  listed: Set<string>;
+  pending: Set<string>;
+  latestBoundary: number;
+  observedAt: number;
+  overtaken?: boolean;
+  failed?: boolean;
+};
+
+type CompleteAttentionProjection = Pick<NavigationQueryGeneration,
+  "scopeKey" | "attentionViewId" | "lastAccessedAt" | "attentionRows" | "attentionRevision" | "projectionRequest" | "retainedBytes">;
 
 export type NavigationPullRequestProjection = {
   read: (threads: NavigationIdentity[]) => Promise<PrSummary[][]>;
@@ -81,6 +110,7 @@ export type NavigationPullRequestProjection = {
 type PullRequestObservation = readonly [number, ReturnType<typeof projectNavigationPullRequests>];
 
 function pullRequestPositions(generation: NavigationQueryGeneration, start: number, count: number): number[] {
+  if (generation.attentionRows) return generation.attentionRows.deferredPositions(start, count);
   const positions = generation.materialization.pullRequestPositions ?? [];
   let low = 0;
   let high = positions.length;
@@ -96,11 +126,19 @@ function pullRequestPositions(generation: NavigationQueryGeneration, start: numb
 
 async function readPullRequestPositions(generation: NavigationQueryGeneration, positions: number[], load: NavigationPullRequestProjection["read"]): Promise<PullRequestObservation[]> {
   if (!positions.length) return [];
-  const results = await load(positions.map((position) => generation.materialization.entries[position]!.row.ref));
+  const results = await load(positions.map((position) => entryAt(generation, position)!.row.ref));
   return positions.map((position, index) => [
     position,
-    projectNavigationPullRequests(results[index], generation.materialization.entries[position]!.row.stackLeadPrKey),
+    projectNavigationPullRequests(results[index], entryAt(generation, position)!.row.stackLeadPrKey),
   ] as const);
+}
+
+function entryAt(generation: NavigationQueryGeneration, position: number) {
+  return generation.attentionRows ? generation.attentionRows.at(position) : generation.materialization.entries[position];
+}
+
+function hasDeferredPullRequests(generation: NavigationQueryGeneration): boolean {
+  return generation.attentionRows?.hasDeferred ?? Boolean(generation.materialization.pullRequestPositions);
 }
 
 function withPullRequestPositions(generation: NavigationQueryGeneration, rows: PullRequestObservation[]): NavigationQueryGeneration {
@@ -139,6 +177,10 @@ type NavigationQueryCursor = {
 
 function serializedBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function attentionRemovalBytes(key: string): number {
+  return serializedBytes(key) + 24;
 }
 
 function encodeCursor(cursor: NavigationQueryCursor): string {
@@ -341,7 +383,7 @@ function fingerprintEntries(entries: NavigationQueryMaterialization["entries"], 
 /** Stream canonical fields, substituting the ordered entry digest on live sidebar reads.
  * Admission always counts the full serialized payload, including those entries. */
 export function fingerprintNavigationMaterialization(materialization: NavigationQueryMaterialization, viewerRowOwners?: readonly string[],
-  directoryGitProof?: NavigationQueryPage["directoryGitProof"], entryDigest?: { hash: string; bytes: number }): {
+  directoryGitProof?: NavigationQueryPage["directoryGitProof"], entryDigest?: { hash: string; bytes: number; length?: number }): {
   revision: string; retainedBytes: number; viewerRowOwners?: readonly string[]; directoryGitProof?: NavigationQueryPage["directoryGitProof"];
 } {
   const hash = createHash("sha256");
@@ -363,7 +405,7 @@ export function fingerprintNavigationMaterialization(materialization: Navigation
     append(JSON.stringify(key));
     append(":");
     if (key === "entries" && entryDigest) {
-      append(JSON.stringify([materialization.entries.length, entryDigest.hash]), entryDigest.bytes);
+      append(JSON.stringify([entryDigest.length ?? materialization.entries.length, entryDigest.hash]), entryDigest.bytes);
     } else if (Array.isArray(value)) {
       append("[");
       for (let index = 0; index < value.length; index += 1) {
@@ -424,23 +466,17 @@ export class NavigationQueryStore {
   private readonly attentionLifetimes = new Map<string, { closedAt?: number }>();
   private readonly generations = new Map<string, NavigationQueryGeneration>();
   private readonly currentGenerationByScopeAndQuery = new Map<string, string>();
-  private readonly attentionViews = new Map<string, {
-    order: NavigationAttentionOrder;
-    bytes: number;
-    promoteOnTurnEnd: boolean;
-    backend: NavigationQueryRequest["backend"];
-    remoteMembers: Set<string>;
-    indexToken?: symbol;
-    observedAt?: number;
-    overtaken?: boolean;
-    failed?: boolean;
-  }>();
+  private readonly attentionViews = new Map<string, AttentionView>();
+  // A complete page has no cursor authority. Keep only its bounded projection
+  // so a small active scope can still apply the next status batch.
+  private readonly completeAttention = new Map<string, CompleteAttentionProjection>();
 
   constructor(
     private readonly options: {
       now?: () => number;
       onCursorHit?: () => void;
       onOvertakenRead?: () => void;
+      onAttentionWork?: (stage: "rank" | "membership" | "remote-membership", rows: number) => void;
     } = {},
   ) {}
 
@@ -468,6 +504,7 @@ export class NavigationQueryStore {
     const pageSize = params.request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS;
     let generation: NavigationQueryGeneration;
     let newCurrentKey: string | undefined;
+    let attentionCacheKey: string | undefined;
     let offset = 0;
     let projectedPullRequests: PullRequestObservation[] = [];
     let firstPage: NavigationQueryPage | undefined;
@@ -518,8 +555,10 @@ export class NavigationQueryStore {
         }
       }
       if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
-      const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index, index.observedAt ?? readStartedAt);
+      const attentionView = this.reconcileAttentionView(params.scopeKey, params.request, index, index.observedAt ?? readStartedAt);
+      const attentionOrder = attentionView?.order;
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
+      attentionCacheKey = currentKey;
       const currentId = this.currentGenerationByScopeAndQuery.get(currentKey);
       const retained = currentId ? this.generations.get(currentId) : undefined;
       const incremental = params.incremental === true;
@@ -528,29 +567,48 @@ export class NavigationQueryStore {
       // Attention order advances separately. A Star Map with live PR
       // membership has already replaced its certified index above.
       const snapshotToken = attentionOrder ? undefined : navigationQuerySnapshotToken(index);
+      const attentionRevision = attentionView?.revision ?? snapshotToken;
       const projectionRequest = (snapshotToken || incremental) ? createHash("sha256").update(JSON.stringify([
         params.request.query, params.request.backend, params.request.inventory, params.request.consumer, deferPullRequests,
       ])).digest("base64url") : undefined;
       if (snapshotToken && current?.snapshotToken === snapshotToken && current.projectionRequest === projectionRequest
-        && !current.materialization.pullRequestPositions) {
+        && !hasDeferredPullRequests(current)) {
         generation = current;
       } else {
         const sources: NavigationEntrySources | undefined = incremental ? { entries: new WeakMap() } : undefined;
         const previous = current?.projectionRequest === projectionRequest ? current : undefined;
-        const { directoryGitProof: gitProof, ...materialization } = projectNavigationQuery({
-          index, request: params.request, attentionOrder, includeDirectoryGitProof: true, deferPullRequests,
-          entrySources: sources, previousSources: previous?.acceleration?.sources,
-        });
+        const delta = navigationAttentionDelta(index);
+        const from = attentionView ? attentionView.previousRevision : delta?.from;
+        const complete = this.completeAttention.get(currentKey);
+        const priorAttention = complete && complete.projectionRequest === projectionRequest
+          && (complete.attentionRevision === attentionRevision || complete.attentionRevision === from) ? complete : previous;
+        const changed = priorAttention?.attentionRows && attentionRevision && priorAttention.attentionRevision === attentionRevision
+          ? new Map<string, NavigationAttentionRowEdit>()
+          : from && priorAttention?.attentionRevision === from ? delta?.rows : undefined;
+        const onWork = this.options.onAttentionWork;
+        const attention = incremental ? projectRetainedAttention({ index, request: params.request, order: attentionOrder,
+          deferPullRequests, previous: priorAttention?.attentionRows && changed ? { rows: priorAttention.attentionRows, changed } : undefined,
+          onMembership: onWork && ((rows) => onWork("membership", rows)),
+        }) : undefined;
+        const { directoryGitProof: gitProof, ...materialization } = attention
+          ? { ...attention.materialization, directoryGitProof: attention.directoryGitProof }
+          : projectNavigationQuery({
+            index, request: params.request, attentionOrder, includeDirectoryGitProof: true, deferPullRequests,
+            entrySources: sources, previousSources: previous?.acceleration?.sources,
+          });
         const owners = params.request.inventory === "viewer" && params.request.consumer === "main-sidebar"
           ? navigationQuerySnapshotRowOwners(index) : undefined;
         const digest = sources && materialization.entries.length ? fingerprintEntries(materialization.entries, previous) : undefined;
         const acceleration = sources?.geometry && digest ? { sources, tree: digest.tree } : undefined;
-        const { revision, retainedBytes, viewerRowOwners, directoryGitProof } = fingerprintNavigationMaterialization(materialization, owners, gitProof, digest);
-        if (current?.completeRevision === revision && !materialization.pullRequestPositions) {
+        const { revision, retainedBytes, viewerRowOwners, directoryGitProof } = fingerprintNavigationMaterialization(
+          materialization, owners, gitProof, attention?.rows.digest ?? digest);
+        if (current?.completeRevision === revision && !materialization.pullRequestPositions && !attention?.rows.hasDeferred) {
           generation = current;
           if (generation.projectionRequest !== projectionRequest) generation.acceleration = undefined;
           generation.snapshotToken = snapshotToken;
           generation.projectionRequest = projectionRequest;
+          generation.attentionRows = attention?.rows;
+          generation.attentionRevision = attentionRevision;
         } else {
           generation = {
             incremental, acceleration,
@@ -566,6 +624,8 @@ export class NavigationQueryStore {
             attentionViewId: params.request.attentionView?.id,
             snapshotToken,
             projectionRequest,
+            attentionRows: attention?.rows,
+            attentionRevision,
           };
           if (retainedBytes > NAVIGATION_QUERY_MAX_RETAINED_BYTES) {
             throw new NavigationQueryError("navigation_busy", "Navigation query exceeds the process retained-memory budget.");
@@ -574,7 +634,7 @@ export class NavigationQueryStore {
         }
       }
       if (params.request.anchor) offset = this.anchorOffset(generation, params.request, index);
-      if (generation.materialization.pullRequestPositions) {
+      if (hasDeferredPullRequests(generation)) {
         generation.sourceRevision = generation.completeRevision;
         const revision = generation.sourceRevision;
         const prepared = await this.preparePullRequestGeneration({
@@ -611,6 +671,9 @@ export class NavigationQueryStore {
         };
         this.finishPage(unchanged, generation);
         generation.lastAccessedAt = now;
+        if (attentionCacheKey && this.completeAttention.has(attentionCacheKey)) {
+          this.rememberCompleteAttention(attentionCacheKey, generation);
+        }
         return pageForReader(unchanged, generation);
       }
     }
@@ -618,6 +681,7 @@ export class NavigationQueryStore {
     const range = params.request.retainedRange;
     if (range && range.revision === generation.completeRevision && range.ownerEpoch === this.ownerEpoch) {
       const size = generation.materialization.modelGroups?.length
+        ?? generation.attentionRows?.length
         ?? (generation.materialization.directories.length || generation.materialization.entries.length);
       if (range.start + range.count > size) {
         throw new NavigationQueryError("navigation_invalid_request", "Retained range exceeds its matching generation.");
@@ -632,10 +696,13 @@ export class NavigationQueryStore {
         this.retainGeneration(generation);
         this.currentGenerationByScopeAndQuery.set(newCurrentKey, generation.generation);
       }
+      if (attentionCacheKey && this.completeAttention.has(attentionCacheKey)) {
+        this.rememberCompleteAttention(attentionCacheKey, generation);
+      }
       return pageForReader(page, generation);
     }
 
-    if (params.request.cursor && generation.materialization.pullRequestPositions) {
+    if (params.request.cursor && hasDeferredPullRequests(generation)) {
       if (!params.pullRequests) throw new NavigationQueryError("navigation_invalid_request", "Navigation cursor needs its owner's attachment projection.");
       const positions = pullRequestPositions(generation, offset, pageSize).filter((position) => !generation.pullRequests?.has(position));
       projectedPullRequests = await readPullRequestPositions(generation, positions, params.pullRequests.read);
@@ -665,13 +732,33 @@ export class NavigationQueryStore {
     if (newCurrentKey && page.nextCursor) {
       this.currentGenerationByScopeAndQuery.set(newCurrentKey, generation.generation);
     }
+    if (attentionCacheKey && generation.attentionRows) {
+      if (!offset && page.complete) this.rememberCompleteAttention(attentionCacheKey, generation);
+      else if (!offset) this.completeAttention.delete(attentionCacheKey);
+    }
     return pageForReader(page, generation);
+  }
+
+  private rememberCompleteAttention(key: string, generation: NavigationQueryGeneration): void {
+    this.completeAttention.delete(key);
+    if (!generation.attentionRows || generation.attentionRows.length > NAVIGATION_QUERY_MAX_PAGE_ROWS
+      || generation.retainedBytes > COMPLETE_ATTENTION_CACHE_BYTES) return;
+    const { scopeKey, attentionViewId, lastAccessedAt, attentionRows, attentionRevision, projectionRequest, retainedBytes } = generation;
+    this.completeAttention.set(key, { scopeKey, attentionViewId, lastAccessedAt, attentionRows, attentionRevision, projectionRequest, retainedBytes });
+    let bytes = 0;
+    for (const entry of this.completeAttention.values()) bytes += entry.retainedBytes;
+    for (const [key, entry] of this.completeAttention) {
+      if (bytes <= COMPLETE_ATTENTION_CACHE_BYTES && this.completeAttention.size <= NAVIGATION_QUERY_MAX_GENERATIONS) break;
+      bytes -= entry.retainedBytes;
+      this.completeAttention.delete(key);
+    }
   }
 
   private anchorOffset(generation: NavigationQueryGeneration, request: NavigationQueryRequest, index?: NavigationQueryIndex): number {
     const anchor = request.anchor!;
     const offset = anchor.kind === "directory"
       ? generation.materialization.directories.findIndex((directory) => directory.key === anchor.key)
+      : generation.attentionRows ? generation.attentionRows.position(anchor.ref)
       : generation.materialization.entries.findIndex(({ row }) => row.ref.backend === anchor.ref.backend
         && row.ref.threadId === anchor.ref.threadId && row.ref.ownerInstanceId === anchor.ref.ownerInstanceId);
     if (offset >= 0) return offset;
@@ -693,7 +780,8 @@ export class NavigationQueryStore {
       const proof = range?.ownerEpoch === this.ownerEpoch && range.revision === current.completeRevision
         ? pullRequestPositions(generation, range.start, range.count)
         : request.completeBaselineRevision === current.completeRevision
-          ? generation.materialization.pullRequestPositions : undefined;
+          ? generation.attentionRows ? generation.attentionRows.allDeferredPositions(NAVIGATION_QUERY_MAX_PAGE_ROWS)
+            : generation.materialization.pullRequestPositions : undefined;
       // A revision can acknowledge prior observations only. Never turn an
       // arbitrary retained range into permission to validate the inventory.
       if (proof && proof.length === current.pullRequests.size && proof.length <= NAVIGATION_QUERY_MAX_PAGE_ROWS
@@ -719,6 +807,9 @@ export class NavigationQueryStore {
       if (!this.generations.has(generationId)) this.currentGenerationByScopeAndQuery.delete(key);
     }
     this.attentionViews.delete(JSON.stringify([scopeKey, viewId]));
+    for (const [key, projection] of this.completeAttention) {
+      if (projection.scopeKey === scopeKey && projection.attentionViewId === viewId) this.completeAttention.delete(key);
+    }
   }
 
   /**
@@ -732,45 +823,96 @@ export class NavigationQueryStore {
     request: NavigationQueryRequest,
     index: NavigationQueryIndex,
     observedAt: number,
-  ): NavigationAttentionOrder | undefined {
+  ): AttentionView | undefined {
     if (!request.attentionView) return undefined;
     const { id, promoteOnTurnEnd } = request.attentionView;
     const key = JSON.stringify([scopeKey, id]);
     const previous = this.attentionViews.get(key);
     if (previous?.failed) throw new NavigationQueryError("navigation_busy", "Attention metadata exceeded its budget. Close this view and open a new one.");
     const indexToken = navigationQuerySnapshotToken(index);
-    if (indexToken && previous?.indexToken === indexToken && previous.observedAt === observedAt
-      && previous.promoteOnTurnEnd === promoteOnTurnEnd && previous.backend === request.backend) {
+    const sameView = previous && previous.promoteOnTurnEnd === promoteOnTurnEnd && previous.backend === request.backend;
+    if (indexToken && sameView && previous.indexToken === indexToken && previous.observedAt === observedAt && !previous.pending.size) {
       if (previous.overtaken) this.options.onOvertakenRead?.();
-      return previous.order;
+      return previous;
     }
     if (!previous && this.attentionViews.size >= NAVIGATION_ATTENTION_MAX_VIEWS) {
       throw new NavigationQueryError("navigation_busy", "Attention view budget is occupied.");
     }
+    const complete = !index.coverage || index.coverage.state === "complete";
+    const delta = navigationAttentionDelta(index);
+    const budget = NAVIGATION_ATTENTION_MAX_BYTES - this.attentionBytes() + (previous?.bytes ?? 0);
+    if (sameView && delta && previous.indexToken === delta.from && previous.observedAt < observedAt
+      && !previous.overtaken && previous.latestBoundary <= observedAt
+      && [...previous.pending].every((id) => delta.rows.has(id))) {
+      this.options.onAttentionWork?.("rank", delta.rows.size);
+      const patch = reconcileNavigationAttentionDelta({ order: previous.order, rows: delta.rows, promoteOnTurnEnd, observedAt });
+      let memberBytes = previous.memberBytes;
+      let removedBytes = 0;
+      const removed = new Map<string, number>();
+      for (const [id, member] of patch.members) {
+        const old = previous.order.members.get(id);
+        memberBytes += navigationAttentionMemberBytes(id, member) - navigationAttentionMemberBytes(id, old);
+        if (old && !member) {
+          removed.set(id, observedAt);
+          removedBytes += attentionRemovalBytes(id);
+        }
+      }
+      const bytes = previous.bytes + memberBytes - previous.memberBytes + removedBytes - previous.removedBytes;
+      if (bytes > budget) throw new NavigationQueryError("navigation_busy", "Attention metadata exceeds its retained budget.");
+      for (const [id, member] of patch.members) {
+        if (member) previous.order.members.set(id, member);
+        else previous.order.members.delete(id);
+        if (member && !member.awaitingBaseline) previous.listed.add(id);
+        else previous.listed.delete(id);
+      }
+      previous.order.removed = removed;
+      previous.order.nextRank = patch.nextRank;
+      if (complete) previous.order.listedAt = observedAt;
+      // Each agreeing, unchanged member logically shares the listing stamp.
+      // Materialize those stamps only before a full (possibly stale) listing.
+      previous.previousRevision = previous.revision;
+      previous.revision = Symbol("attention-view");
+      previous.indexToken = indexToken;
+      previous.observedAt = observedAt;
+      previous.memberBytes = memberBytes;
+      previous.removedBytes = removedBytes;
+      previous.bytes = bytes;
+      previous.pending.clear();
+      return previous;
+    }
+
+    if (previous) {
+      for (const id of previous.listed) previous.order.members.get(id)!.observedAt = previous.observedAt;
+    }
+    const listed = new Set<string>();
+    this.options.onAttentionWork?.("rank", index.threads.length);
     const order = reconcileNavigationAttentionOrder({
-      previous: previous?.order,
-      threads: index.threads,
-      complete: !index.coverage || index.coverage.state === "complete",
-      promoteOnTurnEnd,
-      observedAt,
+      previous: previous?.order, threads: index.threads, complete, promoteOnTurnEnd, observedAt,
+      onListed: (id) => listed.add(id),
     });
     const overtaken = previous && navigationAttentionOrderFollows(previous.order, observedAt);
-    if (overtaken) {
-      // Runs inside the pool's owner-read trace, so it is recorded on that load.
-      this.options.onOvertakenRead?.();
+    if (overtaken) this.options.onOvertakenRead?.();
+    const remoteMembers = complete ? new Set<string>() : new Set(previous?.remoteMembers);
+    this.options.onAttentionWork?.("remote-membership", index.threads.length);
+    for (const thread of index.threads) {
+      if (thread.federation?.ref.target.scope === "remote") remoteMembers.add(navigationAttentionIdentity(thread));
     }
-    const remoteMembers = index.coverage && index.coverage.state !== "complete" ? new Set(previous?.remoteMembers) : new Set<string>();
-    for (const thread of index.threads) if (thread.federation?.ref.target.scope === "remote") remoteMembers.add(navigationAttentionIdentity(thread));
-    const bytes = navigationAttentionOrderBytes(order) + serializedBytes([...remoteMembers]);
-    let retainedBytes = bytes;
-    for (const [otherKey, view] of this.attentionViews) {
-      if (otherKey !== key) retainedBytes += view.bytes;
-    }
-    if (retainedBytes > NAVIGATION_ATTENTION_MAX_BYTES) {
-      throw new NavigationQueryError("navigation_busy", "Attention metadata exceeds its retained budget.");
-    }
-    this.attentionViews.set(key, { order, bytes, promoteOnTurnEnd, backend: request.backend, remoteMembers, indexToken, observedAt, overtaken });
-    return order;
+    let memberBytes = 0;
+    for (const [id, member] of order.members) memberBytes += navigationAttentionMemberBytes(id, member);
+    let removedBytes = 0;
+    for (const id of order.removed?.keys() ?? []) removedBytes += attentionRemovalBytes(id);
+    const bytes = 128 + memberBytes + removedBytes + serializedBytes([...remoteMembers]);
+    if (bytes > budget) throw new NavigationQueryError("navigation_busy", "Attention metadata exceeds its retained budget.");
+    const view: AttentionView = { order, bytes, memberBytes, removedBytes, promoteOnTurnEnd, backend: request.backend,
+      remoteMembers, indexToken, observedAt, overtaken, listed, pending: new Set(), latestBoundary: 0, revision: Symbol("attention-view") };
+    this.attentionViews.set(key, view);
+    return view;
+  }
+
+  private attentionBytes(): number {
+    let bytes = 0;
+    for (const view of this.attentionViews.values()) bytes += view.bytes;
+    return bytes;
   }
 
   /** Boundary events maintain session ranks even while the viewer browses another lens. */
@@ -789,30 +931,35 @@ export class NavigationQueryStore {
     const key = JSON.stringify([owner, event.backend, params.threadId]);
     if (owner && ![...this.attentionViews.values()].some((view) => view.remoteMembers.has(key))) return;
     const observedAt = nextNavigationObservation();
-    let retainedBytes = [...this.attentionViews.values()].reduce((sum, view) => sum + view.bytes, 0);
+    let retainedBytes = this.attentionBytes();
     for (const view of this.attentionViews.values()) {
       if (view.failed || (view.backend && view.backend !== "all" && view.backend !== event.backend)
         || (owner && !view.remoteMembers.has(key))) continue;
-      const member = view.order.members.get(key);
-      let order = view.order;
-      if (remove || (seen && !member?.active)) {
-        // Recorded for a non-member too: a listing older than this boundary
-        // may still list the thread as eligible.
-        order = removeNavigationAttentionMember({ previous: order, key, observedAt });
-      } else if (active !== undefined) {
-        order = observeNavigationAttentionTurn({ previous: order, key, active,
-          turnId: params.turnId ?? params.turn?.id, promoteOnTurnEnd: view.promoteOnTurnEnd, observedAt });
-      }
-      if (order === view.order) continue;
-      const bytes = navigationAttentionOrderBytes(order) + serializedBytes([...view.remoteMembers]);
+      const old = view.order.members.get(key);
+      const removed = remove || (seen && !old?.active);
+      const member = !removed && active !== undefined ? navigationAttentionTurnMember({ previous: view.order, key, active,
+        turnId: params.turnId ?? params.turn?.id, promoteOnTurnEnd: view.promoteOnTurnEnd, observedAt }) : undefined;
+      if (!removed && !member) continue;
+      const memberBytes = view.memberBytes + navigationAttentionMemberBytes(key, member) - navigationAttentionMemberBytes(key, old);
+      const removedBytes = view.removedBytes + (Number(removed) - Number(Boolean(view.order.removed?.has(key)))) * attentionRemovalBytes(key);
+      const bytes = view.bytes + memberBytes - view.memberBytes + removedBytes - view.removedBytes;
       if (retainedBytes - view.bytes + bytes > NAVIGATION_ATTENTION_MAX_BYTES) {
         view.failed = true;
         continue;
       }
+      if (member) {
+        view.order.members.set(key, member);
+        view.order.nextRank = Math.max(view.order.nextRank, member.rank + 1);
+      } else view.order.members.delete(key);
+      if (removed) (view.order.removed ??= new Map()).set(key, observedAt);
+      else view.order.removed?.delete(key);
       retainedBytes += bytes - view.bytes;
-      view.order = order;
       view.bytes = bytes;
-      view.indexToken = undefined;
+      view.memberBytes = memberBytes;
+      view.removedBytes = removedBytes;
+      view.listed.delete(key);
+      view.pending.add(key);
+      view.latestBoundary = observedAt;
     }
   }
 
@@ -827,7 +974,8 @@ export class NavigationQueryStore {
     const collectionKind = materialization.modelGroups ? "models"
       : materialization.collectionKind === "directories" || materialization.directories.length > 0 ? "directories" : "entries";
     const collection = materialization.modelGroups ?? (collectionKind === "directories" ? materialization.directories : materialization.entries);
-    if (params.offset > collection.length) {
+    const length = params.generation.attentionRows?.length ?? collection.length;
+    if (params.offset > length) {
       throw new NavigationQueryError(
         "navigation_invalid_request",
         "Navigation cursor offset is outside its generation.",
@@ -846,18 +994,18 @@ export class NavigationQueryStore {
     let bytes = serializedBytes(page);
     let nextOffset = params.offset;
     for (
-      ; nextOffset < collection.length
+      ; nextOffset < length
         && nextOffset - params.offset < params.pageSize;
       nextOffset += 1
     ) {
-      const entry = collectionKind === "entries" ? materialization.entries[nextOffset] : undefined;
+      const entry = collectionKind === "entries" ? entryAt(params.generation, nextOffset) : undefined;
       const prs = params.generation.pullRequests?.get(nextOffset) ?? params.projectedPullRequests?.get(nextOffset);
-      const item = entry && prs ? { ...entry, row: { ...entry.row, ...prs } } : collection[nextOffset]!;
+      const item = entry && prs ? { ...entry, row: { ...entry.row, ...prs } } : entry ?? collection[nextOffset]!;
       // The empty collection's brackets have already been charged. Each
       // candidate adds one row and, after the first, one separating comma.
       const candidateBytes = bytes + serializedBytes(item) + Number(nextOffset > params.offset);
       const candidateNextOffset = nextOffset + 1;
-      const cursorBytes = candidateNextOffset < collection.length
+      const cursorBytes = candidateNextOffset < length
         ? serializedBytes({ nextCursor: encodeCursor({
           generation: params.generation.generation,
           offset: candidateNextOffset,
@@ -883,7 +1031,7 @@ export class NavigationQueryStore {
         page.entries.push(item as NavigationQueryPage["entries"][number]);
       }
     }
-    page.complete = nextOffset >= collection.length;
+    page.complete = nextOffset >= length;
     if (!page.complete) {
       page.nextCursor = encodeCursor({
         generation: params.generation.generation,
@@ -982,6 +1130,9 @@ export class NavigationQueryStore {
   }
 
   private expireIdle(now: number): void {
+    for (const [key, projection] of this.completeAttention) {
+      if (now - projection.lastAccessedAt > NAVIGATION_QUERY_CURSOR_IDLE_MS) this.completeAttention.delete(key);
+    }
     for (const [key, lifetime] of this.attentionLifetimes) {
       if (lifetime.closedAt !== undefined && now - lifetime.closedAt > NAVIGATION_QUERY_CURSOR_IDLE_MS) this.attentionLifetimes.delete(key);
     }
