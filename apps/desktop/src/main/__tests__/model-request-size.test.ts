@@ -1044,33 +1044,83 @@ it.runIf(Boolean(comparisonPath))("compares Desktop first turns and follow-ups w
 
 // The byte at the 32 KiB chain cutoff starts a new, uniquely numbered rule.
 // Keep it non-whitespace so a harness-added newline cannot mimic another byte.
+const projectRuleBytes = 256;
 function projectInstructionFile(scope: "root" | "child") {
   const prose = "Keep this example record in its assigned project directory. ";
   return Array.from({ length: 80 }, (_, index) => {
     const label = `Fixture ${scope} rule ${String(index).padStart(3, "0")}. `;
-    return (label + prose.repeat(5)).slice(0, 254) + (index === 79 ? ".." : ".\n");
+    return (label + prose.repeat(5)).slice(0, projectRuleBytes - 2) + (index === 79 ? ".." : ".\n");
   }).join("");
 }
 
-function projectInstructionBytes(body: RequestBody, text: string) {
-  // Providers place project rules in different roles, sometimes inside an
-  // existing message. Decode JSON escaping before measuring the file itself.
-  const label = text.slice(0, text.indexOf(".") + 1);
-  const lengths: number[] = [];
-  function inspect(value: unknown) {
-    if (typeof value === "string") {
-      for (const tail of value.split(label).slice(1)) {
-        let length = label.length;
-        while (length < text.length && tail[length - label.length] === text[length]) length++;
-        lengths.push(length);
-      }
-    } else if (value && typeof value === "object") {
-      Object.values(value).forEach(inspect);
-    }
+// Read the text payloads of Responses, Messages, and Gemini in block order.
+// Block metadata and tool declarations do not contribute instruction bytes.
+function contentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(contentText).join("");
+  if (value && typeof value === "object") {
+    if ("text" in value) return contentText(value.text);
+    if ("content" in value) return contentText(value.content);
+    if ("parts" in value) return contentText(value.parts);
   }
-  inspect(body);
-  return lengths;
+  return "";
 }
+
+function firstProjectRequest(requests: Sample[]) {
+  const first = requests.find(({ body }) => {
+    const messages = body.input ?? body.messages ?? body.contents ?? [];
+    // Antigravity also sends the original prompt to its native title model.
+    if (isTitleHelperRequest(body) || contentText(body.systemInstruction).startsWith("You are a conversation title generator.")) return false;
+    return messages.some((message) =>
+      message && typeof message === "object" && "role" in message && message.role === "user"
+      && contentText(message).includes(initialPrompt));
+  });
+  expect(first, "first conversation request carrying the fixture prompt").toBeDefined();
+  return first!.body;
+}
+
+function deliveredProjectRules(body: RequestBody, files: { root: string; child: string }) {
+  const content = contentText([body.instructions, body.system, body.systemInstruction,
+    body.input, body.messages, body.contents]);
+  const delivered = { root: "", child: "" };
+  for (const match of content.matchAll(/Fixture (root|child) rule (\d{3})\./g)) {
+    const scope = match[1] as keyof typeof files;
+    const offset = Number(match[2]) * projectRuleBytes;
+    const rule = files[scope].slice(offset, offset + projectRuleBytes);
+    expect(rule.startsWith(match[0]), `unexpected fixture label: ${match[0]}`).toBe(true);
+    let length = match[0].length;
+    while (length < rule.length && content[match.index + length] === rule[length]) length++;
+    delivered[scope] += rule.slice(0, length);
+  }
+  return delivered;
+}
+
+it("measures the first conversation even when only a larger continuation carries the rules", () => {
+  const messages = [{ role: "user", content: initialPrompt }];
+  const first = { messages };
+  const later = { messages, system: projectInstructionFile("root") };
+  const bodies = [
+    { messages, system: "# Thread title guidelines" },
+    { messages, systemInstruction: { parts: [{ text: "You are a conversation title generator." }] } },
+    first, later,
+  ];
+  const samples = bodies.map((body) => ({ body, route: "/v1/messages", bytes: jsonBytes(body) }));
+  expect(firstProjectRequest(samples) === first).toBe(true);
+});
+
+it("counts project rules split across content blocks", () => {
+  const root = projectInstructionFile("root");
+  const half = root.length / 2;
+  const body = { system: [{ text: root.slice(0, half) }, { text: "Other context." }, { text: root.slice(half) }] };
+  const files = { root, child: projectInstructionFile("child") };
+  expect(deliveredProjectRules(body, files).root === root).toBe(true);
+  // A split inside a label is packaging too. A duplicate or a truncated
+  // final rule, on the other hand, must remain visible in the measurement.
+  const split = half + 5;
+  const partial = root.slice(half, half + 100);
+  const duplicate = { system: [{ text: root.slice(0, split) }, { text: root.slice(split) }, { text: partial }] };
+  expect(deliveredProjectRules(duplicate, files).root === root + partial).toBe(true);
+});
 
 it.runIf(Boolean(artifactPath || (codexExecutable && antigravityExecutable)))(
   "measures nested project instructions in the first model request", async () => {
@@ -1079,6 +1129,8 @@ it.runIf(Boolean(artifactPath || (codexExecutable && antigravityExecutable)))(
     const cwd = path.join(project, "child");
     const root = projectInstructionFile("root");
     const child = projectInstructionFile("child");
+    expect(Buffer.byteLength(root)).toBe(20 * 1024);
+    expect(Buffer.byteLength(child)).toBe(20 * 1024);
     const rows = [
       "### Nested project instructions on the first model request", "",
       "| Backend | Project files | Root bytes | Child bytes |", "| --- | --- | ---: | ---: |",
@@ -1097,20 +1149,14 @@ it.runIf(Boolean(artifactPath || (codexExecutable && antigravityExecutable)))(
           for (const dir of [project, cwd]) await symlink("AGENTS.md", path.join(dir, "CLAUDE.md"));
         }
         const [capture] = await captureModelRequests(provider, codexExecutable, antigravityExecutable, { projectInstructionsCwd: cwd });
-        const primary = capture!.requests.find(({ bytes }) => bytes === capture!.metrics.primaryBytes)!;
-        const rootBytes = projectInstructionBytes(primary.body, root);
-        const childBytes = projectInstructionBytes(primary.body, child);
+        const first = firstProjectRequest(capture!.requests);
+        const delivered = deliveredProjectRules(first, { root, child });
         const files = claudeAliases ? "AGENTS.md + CLAUDE.md symlinks" : "AGENTS.md";
-        rows.push(`| ${provider} | ${files} | ${rootBytes.join(" + ") || 0} | ${childBytes.join(" + ") || 0} |`);
+        rows.push(`| ${provider} | ${files} | ${Buffer.byteLength(delivered.root)} | ${Buffer.byteLength(delivered.child)} |`);
         const childLimit = provider === "codex" || provider === kimi ? 12 * 1024 : 20 * 1024;
-        expect.soft(rootBytes, `${provider} ${files} root`).toEqual([20 * 1024]);
-        expect.soft(childBytes, `${provider} ${files} child`).toEqual([childLimit]);
-        // A matching prefix alone would miss a provider appending a tail or a
-        // second partial copy. Check every rule label in the primary request.
-        const labels = /Fixture (?:root|child) rule \d{3}/g;
-        expect.soft(JSON.stringify(primary.body).match(labels)?.sort()).toEqual(
-          (root + child.slice(0, childLimit)).match(labels)!.sort(),
-        );
+        // Compare content as well as size to catch missing, repeated or reordered rules.
+        expect.soft(delivered.root === root, `${provider} ${files} root rules`).toBe(true);
+        expect.soft(delivered.child === child.slice(0, childLimit), `${provider} ${files} child rules`).toBe(true);
       }
       if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, rows.join("\n") + "\n");
     } finally {
