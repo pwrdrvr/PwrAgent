@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -287,6 +287,24 @@ it.skipIf(process.platform === "win32")("shares healthy checkout config after a 
   await expect(Promise.all(checkouts.map(read))).resolves.toEqual(expected);
   // The first checkout's local error cannot consume the healthy group's sample.
   expect(runner.mock.calls.filter(([cwd, [verb]]) => checkouts.includes(cwd) && verb === "config")).toHaveLength(1);
+});
+
+it.skipIf(process.platform === "win32")("shares registered siblings after a moved checkout cannot seed the clone", async () => {
+  const { root, checkouts: [moved, ...siblings] } = await ordinaryWorktrees(3);
+  const unregistered = path.join(root, "moved-without-repair");
+  await rename(moved, unregistered);
+  const expected = parseForgeRemote((await git.runGitCommand(unregistered, ["remote", "get-url", "origin"])).stdout);
+  expect(expected).toEqual(parseForgeRemote(origin));
+
+  const runner = vi.spyOn(git, "runGitCommand");
+  onTestFinished(() => { runner.mockRestore(); });
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  const read = (cwd: string) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig });
+  await expect(read(unregistered)).resolves.toEqual(expected);
+  await expect(Promise.all(siblings.map(read))).resolves.toEqual(siblings.map(() => expected));
+  // The stale backlink prevents this checkout from seeding reuse. It still
+  // gets its own Git answer, and a registered sibling can seed the group.
+  expect(runner.mock.calls.filter(([cwd, [verb]]) => siblings.includes(cwd) && verb === "config")).toHaveLength(1);
 });
 
 it.skipIf(process.platform === "win32")("retries a canceled packaged Git system config probe for the next inventory reader", async () => {

@@ -148,15 +148,32 @@ async function sampleConfig(cwd: string, checkout: LinkedCheckout, inputs: Inven
   }
 }
 
+type InventoryConfigGroup = {
+  seed: string;
+  sample: SharedPrMetadataRead<Awaited<ReturnType<typeof sampleConfig>> | false>;
+  checkoutObservations: number;
+  pendingCheckouts: Set<Promise<unknown>>;
+  checking?: { startedAfterObservation: number; result: SharedPrMetadataRead<number | undefined> };
+};
+
+function startConfigGroup(
+  cwd: string, commonDir: string, inputs: InventoryInputs, system: SystemConfigObservation, proved?: LinkedCheckout,
+): InventoryConfigGroup {
+  return {
+    seed: cwd, checkoutObservations: 0, pendingCheckouts: new Set(),
+    sample: new SharedPrMetadataRead(async (shared) => {
+      const checkout = proved ?? await observeLinkedPrCheckout(cwd, shared);
+      // Distinguish a rejected group hint from a Git config sample that
+      // failed or could not be shared for this whole repository.
+      if (checkout?.commonDir !== commonDir) return false;
+      return await sampleConfig(cwd, checkout, inputs, system, shared);
+    }),
+  };
+}
+
 export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader | undefined {
   if (process.platform === "win32") return undefined;
-  const groups = new Map<string, {
-    seed: string;
-    sample: SharedPrMetadataRead<Awaited<ReturnType<typeof sampleConfig>>>;
-    checkoutObservations: number;
-    pendingCheckouts: Set<Promise<unknown>>;
-    checking?: { startedAfterObservation: number; result: SharedPrMetadataRead<number | undefined> };
-  }>();
+  const groups = new Map<string, InventoryConfigGroup>();
   let inputs: ReturnType<typeof currentInputs>;
   let initialized = false;
   let systemRead: SharedPrMetadataRead<SystemConfigObservation> | undefined;
@@ -189,27 +206,37 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
     if (batchInputs.discoverSystemConfig && !system) return undefined;
     let group = groups.get(commonDir);
     if (!group) {
-      group = {
-        seed: cwd, checkoutObservations: 0, pendingCheckouts: new Set(),
-        sample: new SharedPrMetadataRead(async (shared) => {
-          const checkout = await observeLinkedPrCheckout(cwd, shared);
-          if (checkout?.commonDir !== commonDir) return undefined;
-          return await sampleConfig(cwd, checkout, batchInputs, system, shared);
-        }),
-      };
+      group = startConfigGroup(cwd, commonDir, batchInputs, system);
       groups.set(commonDir, group);
     }
-    const sample = await group.sample.read(demand);
-    const verify = sample?.unchanged;
+    let sample = await group.sample.read(demand);
+    let proved: LinkedCheckout | undefined;
+    if (sample === false) {
+      if (group.seed === cwd) return undefined;
+      // The first registered sibling replaces the unproved seed. Every
+      // contender proves its checkout once and can reuse that evidence.
+      proved = await observeLinkedPrCheckout(cwd, demand);
+      if (proved?.commonDir !== commonDir) return undefined;
+      const replacement = groups.get(commonDir);
+      if (replacement && replacement !== group) {
+        group = replacement;
+      } else {
+        group = startConfigGroup(cwd, commonDir, batchInputs, system, proved);
+        groups.set(commonDir, group);
+      }
+      sample = await group.sample.read(demand);
+    }
+    if (!sample) return undefined;
+    const verify = sample.unchanged;
     if (group.seed === cwd) {
-      return sample && verify ? {
+      return verify ? {
         ...sample.exact,
         remoteNamesStillMatch: async (reader) => await verify(reader, false) !== undefined,
-      } : sample?.exact;
+      } : sample.exact;
     }
-    if (!sample || !verify) return undefined;
+    if (!verify) return undefined;
     const current = group;
-    const pending = observeLinkedPrCheckout(cwd, demand).then((checkout) => checkout?.commonDir === commonDir
+    const pending = (proved ? Promise.resolve(proved) : observeLinkedPrCheckout(cwd, demand)).then((checkout) => checkout?.commonDir === commonDir
       ? { checkout, observation: ++current.checkoutObservations, sampleOrder: nextRemoteSampleOrder() } : undefined);
     current.pendingCheckouts.add(pending);
     const observed = await pending.finally(() => { current.pendingCheckouts.delete(pending); });
