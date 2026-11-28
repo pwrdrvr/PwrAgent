@@ -150,6 +150,61 @@ it("matches the full SQLite join after a pinned child disappears and returns acr
     ({ kind, id: "b", on: i !== 6 })), true);
 });
 
+it.each(["provider rejection", "scope closure"] as const)("releases the raw cold seed on %s before joining again", async (outcome) => {
+  const rows: NavigationThreadSummary[] = [{ id: "saved", source: "codex", title: "Saved", titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: false } }];
+  const listingStarted = Promise.withResolvers<void>();
+  const listing = Promise.withResolvers<void>();
+  const failed = Promise.withResolvers<unknown>();
+  const published = Promise.withResolvers<void>();
+  const error = new Error("Provider listing rejected");
+  let seedRetained = false;
+  const join = vi.fn<ConstructorParameters<typeof LiveNavigationIndex>[0]["join"]>(async (_rows, coverage, mode, seedCurrent) => {
+    seedRetained = mode === "saved" && seedCurrent?.() === true;
+    return { threads: rows, directories: [], coverage };
+  });
+  const source: ConstructorParameters<typeof LiveNavigationIndex>[0] & { releaseSeedJoin(): void } = {
+    backend: "all", version: () => "0", changedKeys: () => undefined,
+    list: async (_scope, saved) => {
+      if (saved) return { rows, coverage: { state: "checking" }, verifyAfterSeed: true };
+      listingStarted.resolve();
+      await listing.promise;
+      return { rows, coverage: { state: "complete" } };
+    },
+    join, releaseSeedJoin: () => { seedRetained = false; },
+    cached: () => rows[0], sqlite: async () => rows, projectRows: async () => rows,
+    directories: async () => ({ directories: [] }), inputKeys: () => new Set(),
+    failed: failed.resolve, notify: published.resolve,
+  };
+  const live = new LiveNavigationIndex(source);
+  try {
+    const first = await live.read();
+    expect(first.coverage?.state).toBe("checking");
+    expect(first.threads.map(({ id }) => id)).toEqual(["saved"]);
+    expect(seedRetained).toBe(true);
+    if (outcome === "scope closure") {
+      live.close();
+    } else {
+      await listingStarted.promise;
+      expect(await live.read()).toBe(first);
+      listing.reject(error);
+      expect(await failed.promise).toBe(error);
+    }
+    // Neither exit reaches the verified join that normally consumes the seed.
+    expect(join).toHaveBeenCalledTimes(1);
+    expect(seedRetained).toBe(false);
+    if (outcome === "provider rejection") {
+      source.list = async () => ({ rows, coverage: { state: "complete" } });
+      expect(await live.read()).toBe(first);
+      await published.promise;
+      expect((await live.read()).coverage?.state).toBe("complete");
+    }
+  } finally {
+    listing.resolve();
+    live.close();
+  }
+});
+
 it("keeps the last page during a SQLite gap and applies a newer event over a delayed source listing", async () => {
   const f = fixture();
   const old = await f.live.read();

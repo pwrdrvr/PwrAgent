@@ -1384,6 +1384,7 @@ function liveOwnerIndex(registry: DesktopBackendRegistry, backend: AppServerBack
       return { ...directories, threads: applySidebarStackRows(registry, backend, threads), coverage,
         inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys() };
     }),
+    releaseSeedJoin: () => { seedJoin = undefined; },
     decorate: (rows) => applySidebarStackRows(registry, backend, rows),
     forget: (id) => { measureRow(id, 0); checkouts.delete(id); },
     dependents: (id) => handoffChildren.get(id),

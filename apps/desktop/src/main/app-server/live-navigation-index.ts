@@ -54,6 +54,7 @@ type Source = {
   cached(backend: AppServerBackendKind, id: string): AppServerThreadSummary | undefined;
   join(rows: ProviderRow[], coverage: NavigationQueryIndex["coverage"], checkouts: "saved" | "reuse" | "refresh",
     seedCurrent?: () => boolean): Promise<NavigationQueryIndex>;
+  releaseSeedJoin?(): void;
   decorate?(rows: NavigationThreadSummary[]): NavigationThreadSummary[];
   forget?(key: string): void;
   dependents?(key: string): Iterable<string> | undefined;
@@ -151,6 +152,8 @@ export class LiveNavigationIndex {
 
   close(): void {
     this.disposed = true;
+    this.seedVerification = undefined;
+    this.source.releaseSeedJoin?.();
     if (this.scheduled) clearImmediate(this.scheduled);
   }
 
@@ -352,6 +355,9 @@ export class LiveNavigationIndex {
       this.needsRetry = true;
       throw error;
     }).finally(() => {
+      // Only a successful initial publication with verification still queued
+      // can keep its seed. Verification consumes the marker before listing.
+      if (this.needsRetry || !this.seedVerification) this.source.releaseSeedJoin?.();
       this.pending = undefined;
       this.background = undefined;
       this.reconciling = false;
