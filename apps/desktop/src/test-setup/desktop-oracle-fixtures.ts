@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, realpath, symlink } from "node:fs/promises";
+import { mkdir, readFile, realpath, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,11 +9,10 @@ import type { OracleFixture, PortableOutpostFixture } from "./oracle-fixture-con
 
 const headlessBuilder = fileURLToPath(new URL("../../scripts/build-headless.mjs", import.meta.url));
 const outpostManifest = fileURLToPath(new URL("../../../../packages/pwragent/package.json", import.meta.url));
-const packagedOutput = fileURLToPath(new URL("../../../../packages/pwragent/dist", import.meta.url));
 const testDirectory = fileURLToPath(new URL("../main/__tests__/", import.meta.url));
 type HeadlessBuilder = typeof import("../../scripts/build-headless.mjs");
 
-async function buildPortableOutpostFixture(root: string, emit: (directory: string) => Promise<void>): Promise<PortableOutpostFixture> {
+async function buildPortableOutpostFixture(root: string, buildHeadless: HeadlessBuilder["buildHeadless"]): Promise<PortableOutpostFixture> {
   const directory = path.join(root, "dist");
   const resolvePackage = createRequire(outpostManifest);
   const { dependencies } = JSON.parse(await readFile(outpostManifest, "utf8"));
@@ -28,7 +27,7 @@ async function buildPortableOutpostFixture(root: string, emit: (directory: strin
     await symlink(target, link, "junction");
     externalTargets[name] = await realpath(manifest);
   }
-  await emit(directory);
+  await buildHeadless({ outputDirectory: directory, portable: true, sourcemap: false, logLevel: "warning" });
   return { root, directory, externalTargets };
 }
 
@@ -86,17 +85,11 @@ export default async function setup(project: TestProject): Promise<() => Promise
           return buildHeadlessDriverFixture(root, (await loadBuilder()).buildHeadless);
         }, output => project.provide("headlessDriver", output), rerun);
       }
-      if (files.has(consumer("headless-portable-chunks.oracle.test.ts"))) {
-        // Global setup already built the packaged output for the initial run.
-        // Watch workers need freshly emitted chunks from the current source.
-        await prepareOwned("portableOutpost", "portable Outpost", (root) => buildPortableOutpostFixture(root, async (directory) => {
-          if (rerun) {
-            const { buildHeadless } = await loadBuilder();
-            await buildHeadless({ outputDirectory: directory, portable: true, sourcemap: false, logLevel: "warning" });
-          } else {
-            await cp(packagedOutput, directory, { recursive: true });
-          }
-        }), output => project.provide("portableOutpost", output), rerun);
+      if (files.has(consumer("headless-portable-chunks.oracle.test.ts")) || files.has(consumer("claude-session-reader.test.ts"))) {
+        await prepareOwned("portableOutpost", "portable Outpost", async (root) => {
+          const { buildHeadless } = await loadBuilder();
+          return await buildPortableOutpostFixture(root, buildHeadless);
+        }, output => project.provide("portableOutpost", output), rerun);
       }
       if (files.has(consumer("production-entry-host.oracle.test.ts"))) {
         project.provide("desktopEntryHasFileKey", await prepareFixture("desktop entry", async () => {
