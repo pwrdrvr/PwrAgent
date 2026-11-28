@@ -14818,14 +14818,7 @@ function useComposerController(props: ComposerProps) {
     return (
       <fieldset
         ref={reviewConfigRef}
-        className={[
-          "composer__review-config",
-          reviewConfig?.reviewTodo ? "composer__review-config--from-todo" : "",
-          // Two names for one animation, so each arrival restarts it.
-          reviewConfig?.reviewTodo && reviewPanelArrival > 0
-            ? `is-arriving-${reviewPanelArrival % 2 === 0 ? "even" : "odd"}`
-            : "",
-        ].filter(Boolean).join(" ")}
+        className="composer__review-config"
         aria-label="Review target"
         onKeyDown={handleReviewConfigKeyDown}
       >
@@ -17842,6 +17835,7 @@ function useComposerController(props: ComposerProps) {
   }
 
   function renderComposerView(): ReactNode {
+    const reviewFromTodo = isReviewComposerOpen && Boolean(reviewConfig?.reviewTodo);
     return (
       <>
         <form
@@ -17932,8 +17926,18 @@ function useComposerController(props: ComposerProps) {
 
         </fieldset>
         {/* One box: the input, the folders the draft mentions, and the
-            control row. */}
-        <div className="composer__box">
+            control row. The review panel stands in for the input, so a
+            to-do card's accent edge and arrival belong to the box. */}
+        <div
+          className={[
+            "composer__box",
+            reviewFromTodo ? "composer__box--review-from-todo" : "",
+            // Two names for one animation, so each arrival restarts it.
+            reviewFromTodo && reviewPanelArrival > 0
+              ? `is-arriving-${reviewPanelArrival % 2 === 0 ? "even" : "odd"}`
+              : "",
+          ].filter(Boolean).join(" ")}
+        >
         <fieldset className="composer__pending-controls" disabled={preparingSend}>
         <div className="composer__input-wrap" ref={inputWrapRef}>
           {isReviewComposerOpen ? (
