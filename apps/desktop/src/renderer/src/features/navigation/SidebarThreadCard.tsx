@@ -410,6 +410,10 @@ export function useSidebarThreadCardTriggers(
         return;
       }
       forgetCrossed();
+      // Arriving straight on one of its chips (a fast move, or back from the
+      // chip's own card) asks about the chip; the row's card waits until the
+      // pointer moves off the chip onto the row.
+      if (inNestedCardTrigger(event.target)) return;
       enterRow(shell);
     };
     const onMouseOut = (event: MouseEvent): void => {

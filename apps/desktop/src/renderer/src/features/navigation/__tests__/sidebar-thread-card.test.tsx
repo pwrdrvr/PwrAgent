@@ -1158,3 +1158,161 @@ describe("sidebar thread card", () => {
     },
   );
 });
+
+// Model: wherever the pointer comes to rest in the sidebar, the card shown is
+// that spot's card (a row's thread card, a chip's PR card, the card it is
+// on, or none outside), and at most one card is ever up. The rendered
+// sidebar, its rows, PR chips and the shared hover-card bridge are real.
+describe("sidebar hover cards, modeled", () => {
+  type Spot =
+    | { kind: "outside" }
+    | { kind: "row"; id: string }
+    | { kind: "chip"; id: string }
+    | { kind: "card" };
+  type Step = { kind: "go"; to: Spot } | { kind: "wait"; ms: number } | { kind: "settle" };
+
+  const IDS = ["a", "b", "c"] as const;
+  const PR_NUMBER: Record<string, number> = { a: 100, b: 101, c: 102 };
+  /** Longer than every delay, rest and grace the cards use. */
+  const SETTLE_MS = 2_000;
+
+  const id = fc.constantFrom(...IDS);
+  const spot: fc.Arbitrary<Spot> = fc.oneof(
+    { weight: 1, arbitrary: fc.constant({ kind: "outside" as const }) },
+    { weight: 3, arbitrary: id.map((value) => ({ kind: "row" as const, id: value })) },
+    { weight: 3, arbitrary: id.map((value) => ({ kind: "chip" as const, id: value })) },
+    { weight: 2, arbitrary: fc.constant({ kind: "card" as const }) },
+  );
+  const step: fc.Arbitrary<Step> = fc.oneof(
+    { weight: 4, arbitrary: spot.map((to) => ({ kind: "go" as const, to })) },
+    {
+      weight: 3,
+      arbitrary: fc.constantFrom(40, 100, 140, 160, 260, 400, 700).map((ms) => ({ kind: "wait" as const, ms })),
+    },
+    { weight: 1, arbitrary: fc.constant({ kind: "settle" as const }) },
+  );
+  const steps = fc.array(step, { minLength: 1, maxLength: 16, size: "max" });
+
+  /**
+   * Time passes a frame at a time, each in its own `act`, as a browser runs
+   * each timer as its own task and React's effects between them. One long
+   * `act` defers every effect to its end, a schedule no browser produces.
+   */
+  function advance(ms: number): void {
+    for (let left = ms; left > 0; left -= 16) {
+      act(() => vi.advanceTimersByTime(Math.min(16, left)));
+    }
+  }
+
+  function shownCards(): HTMLElement[] {
+    return [...document.querySelectorAll<HTMLElement>(".pr-status-card")];
+  }
+
+  function describeCards(): string[] {
+    return shownCards().map((shown) => (shown.classList.contains("sidebar-thread-card")
+      ? `thread ${IDS.find((value) => shown.textContent?.includes(`Thread ${value}`)) ?? "?"}`
+      : `pr ${Object.values(PR_NUMBER).find((value) => shown.textContent?.includes(`#${value}`)) ?? "?"}`));
+  }
+
+  function replay(plan: Step[]): void {
+    const view = renderSidebar({
+      threads: IDS.map((value, index) => thread(value, { updatedAt: 10 - index, prs: [pr(PR_NUMBER[value]!)] })),
+    });
+    try {
+      let at: Element = document.body;
+      let spotNow: Spot = { kind: "outside" };
+      // The card the pointer entered, while it stays on that card.
+      let enteredCard: string | undefined;
+      const elementFor = (to: Spot): Element | null => {
+        if (to.kind === "outside") return document.body;
+        if (to.kind === "row") return rowTitle(to.id);
+        if (to.kind === "chip") return row(to.id).querySelector("[data-pr-chip]");
+        return shownCards()[0] ?? null;
+      };
+      const check = (label: string): void => {
+        advance(SETTLE_MS);
+        const expected = spotNow.kind === "outside" ? []
+          : spotNow.kind === "row" ? [`thread ${spotNow.id}`]
+            : spotNow.kind === "chip" ? [`pr ${PR_NUMBER[spotNow.id]}`]
+              : [enteredCard!];
+        expect({ label, cards: describeCards() }).toEqual({ label, cards: expected });
+      };
+      plan.forEach((next, index) => {
+        if (next.kind === "wait") {
+          advance(next.ms);
+        } else if (next.kind === "settle") {
+          check(`settle at step ${index}`);
+        } else {
+          const to = elementFor(next.to);
+          // Replay guard: a card can be entered only while one is up.
+          if (!to || to === at) return;
+          if (next.to.kind === "card") enteredCard = describeCards()[0];
+          move(at, to);
+          at = to;
+          spotNow = next.to;
+        }
+        expect(shownCards().length, `one card at most after step ${index}`).toBeLessThanOrEqual(1);
+      });
+      check("final");
+    } finally {
+      view.unmount();
+    }
+  }
+
+  // The operator's report: the PR card opened from the chip, then the pointer
+  // went back onto the row and stayed; the row's card never came.
+  it("shows the row's card after its PR chip's card once the pointer rests on the row", () => {
+    replay([
+      { kind: "go", to: { kind: "row", id: "a" } },
+      { kind: "go", to: { kind: "chip", id: "a" } },
+      { kind: "wait", ms: 400 },
+      { kind: "go", to: { kind: "row", id: "a" } },
+    ]);
+  });
+
+  // Found by the model: arriving in the row straight onto the chip whose
+  // card is up (a fast move, or back from that card) started the row's card,
+  // which took over while the pointer rested on the chip.
+  it("keeps the chip's card when the pointer comes straight back onto the chip", () => {
+    replay([
+      { kind: "go", to: { kind: "chip", id: "a" } },
+      { kind: "settle" },
+      { kind: "go", to: { kind: "outside" } },
+      { kind: "go", to: { kind: "chip", id: "a" } },
+      { kind: "wait", ms: 40 },
+    ]);
+  });
+
+  // Found by the model on the pre-fix code: from one row's PR chip straight
+  // onto the next row's chip, the pointer resting there got no card at all.
+  it("shows the next row's PR card when the pointer moves chip to chip", () => {
+    replay([
+      { kind: "go", to: { kind: "chip", id: "a" } },
+      { kind: "wait", ms: 260 },
+      { kind: "go", to: { kind: "chip", id: "b" } },
+      { kind: "wait", ms: 40 },
+    ]);
+  });
+
+  // Found by the model with the row's pending card left running after the
+  // pointer moved onto a chip: through another row onto its chip, the
+  // pointer resting there ended with no card at all.
+  it("shows a chip's PR card after the pointer crossed its row to reach it", () => {
+    replay([
+      { kind: "go", to: { kind: "chip", id: "a" } },
+      { kind: "wait", ms: 700 },
+      { kind: "go", to: { kind: "row", id: "c" } },
+      { kind: "go", to: { kind: "chip", id: "c" } },
+      { kind: "wait", ms: 40 },
+    ]);
+  });
+
+  it("shows the card for wherever the pointer rests", () => {
+    fc.assert(fc.property(steps, (plan) => replay(plan)), {
+      // A mounted sidebar keeps five generated runs (see
+      // docs/property-model-oracle-testing.md). Raise this locally to
+      // search wider; 2000 runs passed when the cases above were pinned.
+      numRuns: 5,
+    });
+  });
+});
