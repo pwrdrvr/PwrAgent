@@ -145,6 +145,12 @@ export function initializeScheduledThreadActionService(
       agentNotificationLimits: () => getDesktopSettingsService().resolveAgentNotificationLimits(),
     });
     notificationCenter = center;
+    // A peer's window that asked before the center existed was refused;
+    // this tells it to read again.
+    void Promise.resolve(registry.publishLocalEvent({
+      backend: "codex",
+      notification: { method: "agentNotifications/updated", params: {} },
+    })).catch(() => undefined);
     registry.setScheduledThreadActionCreator((request, options) =>
       nextService.create(request, options),
     );

@@ -306,6 +306,46 @@ describe("FederatedAgentNotifications", () => {
     expect((await snapshotOf(h.notices, undefined)).unread).toHaveLength(40);
   });
 
+  it("never brings back or re-announces a notice dismissed while a read was out", async () => {
+    const owner = new FakeOwner();
+    owner.unread.push(item("seen"));
+    let hold: (() => void) | undefined;
+    let held = false;
+    const notified: string[] = [];
+    const notices = new FederatedAgentNotifications({
+      local: async () => ({ ok: true, snapshot: { unread: [], scheduled: [], earlier: [] } }),
+      remote: async (_target, request) => {
+        // A read takes a snapshot when it starts and answers later.
+        const answer = request.action === "snapshot" ? { ok: true as const, snapshot: owner.snapshot() } : owner.manage(request);
+        if (held && request.action === "snapshot") await new Promise<void>((resolve) => { hold = resolve; });
+        return answer;
+      },
+      peers: () => [{ target: target("peer-a"), label: "Label peer-a" }],
+      watch: () => undefined,
+      nativeNotificationsEnabled: () => true,
+      notifyNative: ({ key }) => { notified.push(key); },
+      clearNative: () => undefined,
+      showThread: () => undefined,
+      changed: () => undefined,
+    });
+    notices.syncPeers();
+    await settle();
+    owner.unread.push(item("new"));
+    held = true;
+    notices.onRemoteEvent(updated("peer-a"));
+    await settle();
+    expect(hold).toBeDefined();
+
+    // The operator dismisses the new notice while that read is out.
+    held = false;
+    await notices.manage({ action: "dismiss", id: "new", federationTarget: target("peer-a") }, undefined);
+    hold!();
+    await settle();
+
+    expect((await snapshotOf(notices, undefined)).unread.map(keyOf)).toEqual(["peer-a:seen"]);
+    expect(notified).toEqual([]);
+  });
+
   it("keeps a peer's last notices through a failed read", async () => {
     const h = harness();
     h.owners.get("peer-a")!.unread.push(item("kept"));

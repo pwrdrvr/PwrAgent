@@ -38,6 +38,8 @@ type OwnerState = {
   announced: Set<string> | undefined;
   reading?: Promise<void>;
   stale: boolean;
+  /** Bumped by every stored snapshot, so a read that began earlier is not stored over a newer one. */
+  generation: number;
 };
 
 /**
@@ -74,7 +76,7 @@ export class FederatedAgentNotifications {
         owner.peer = peer;
         continue;
       }
-      this.owners.set(peer.target.instanceId, { peer, snapshot: EMPTY, announced: undefined, stale: false });
+      this.owners.set(peer.target.instanceId, { peer, snapshot: EMPTY, announced: undefined, stale: false, generation: 0 });
       added.push(peer.target.instanceId);
     }
     this.deps.watch([...connected]);
@@ -114,8 +116,9 @@ export class FederatedAgentNotifications {
   async snapshot(window: FederationRemoteTarget | undefined): Promise<ManageAgentNotificationsResponse> {
     if (window) return { ok: true, snapshot: this.owners.get(window.instanceId)?.snapshot ?? EMPTY };
     const local = await this.deps.local({ action: "snapshot" });
-    if (!local.ok) return local;
-    return { ok: true, snapshot: this.merged(local.snapshot) };
+    // Peers' notices still show while this machine's are not available yet.
+    if (!local.ok && this.owners.size === 0) return local;
+    return { ok: true, snapshot: this.merged(local.ok ? local.snapshot : EMPTY) };
   }
 
   async manage(
@@ -128,10 +131,8 @@ export class FederatedAgentNotifications {
     if (request.action === "snapshot") return await this.snapshot(window);
     if (request.action === "dismiss_all") {
       const owners = window ? [window.instanceId] : [...this.owners.keys()];
-      if (!window) {
-        const local = await this.deps.local(request);
-        if (!local.ok) return local;
-      }
+      // This machine's notices and each peer's are dismissed independently.
+      const local = window ? undefined : await this.deps.local(request);
       await Promise.all(owners.map(async (instanceId) => {
         const owner = this.owners.get(instanceId);
         if (!owner || owner.snapshot.unread.length === 0) return;
@@ -146,6 +147,7 @@ export class FederatedAgentNotifications {
         }
       }));
       this.deps.changed();
+      if (local && !local.ok) return local;
       return await this.snapshot(window);
     }
     // A peer's window acts only on its own peer's notices.
@@ -169,6 +171,7 @@ export class FederatedAgentNotifications {
   }
 
   private async read(owner: OwnerState): Promise<void> {
+    const generation = owner.generation;
     let response: ManageAgentNotificationsResponse;
     try {
       response = await this.deps.remote(owner.peer.target, { action: "snapshot" });
@@ -185,6 +188,13 @@ export class FederatedAgentNotifications {
       return;
     }
     if (this.owners.get(owner.peer.target.instanceId) !== owner) return;
+    if (owner.generation !== generation) {
+      // A dismiss or cancel stored a newer snapshot while this read was out.
+      // Storing this one would bring a dismissed notice back and announce it
+      // again; read once more instead.
+      owner.stale = true;
+      return;
+    }
     this.apply(owner, response);
     this.deps.changed();
   }
@@ -201,6 +211,7 @@ export class FederatedAgentNotifications {
     };
     const unread = new Set(snapshot.unread.map((item) => item.id));
     const announced = owner.announced;
+    owner.generation++;
     owner.snapshot = snapshot;
     owner.announced = unread;
     if (!announced) return;

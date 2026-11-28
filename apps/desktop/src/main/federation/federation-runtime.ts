@@ -2985,12 +2985,18 @@ export class DesktopFederationRuntime {
     target: FederationRemoteTarget,
     request: ManageAgentNotificationsRequest,
   ): Promise<ManageAgentNotificationsResponse> {
-    const unavailable = this.todoQueueUnavailableInstance(target, "agent_notifications");
+    // Reading needs thread_detail and changing needs turn_control, as the
+    // owner's router requires. A peer that grants neither is not asked.
+    const grant = request.action === "snapshot" ? "thread_detail" : "turn_control";
+    const unsupported = this.todoQueueUnavailableInstance(target, "agent_notifications");
+    const unavailable = unsupported ?? this.todoQueueUnavailableInstance(target, grant);
     if (unavailable) {
       if (request.action === "snapshot") return { ok: true, snapshot: { unread: [], scheduled: [], earlier: [] } };
       return { ok: false, error: { code: "unavailable", message: unavailable.reason === "disconnected"
         ? `${unavailable.label} is disconnected.`
-        : `${unavailable.label} does not share agent notices. Update that PwrAgent instance.` } };
+        : unsupported
+          ? `${unavailable.label} does not share agent notices. Update that PwrAgent instance.`
+          : `${unavailable.label} does not allow this machine to change its notices.` } };
     }
     const { federationTarget: _target, ...owned } = request as ManageAgentNotificationsRequest & { federationTarget?: unknown };
     return await this.rpcFor(target).request({

@@ -143,11 +143,13 @@ test("a peer's agent notice reaches a connected machine, and dismissing it there
     const ownerNotice = owner.window.locator(".app-notice-toast").filter({ hasText: "Review the 2.4 changelog" });
     await expect(ownerNotice).toBeVisible();
 
-    // The connected machine shows it, naming the owner, while its own thread stays open.
+    // The connected machine shows it while its own thread stays open. The
+    // card's thread chip shows the thread's live title once this machine
+    // knows the peer's thread, so only the list below names the owner.
     const notice = page.locator(".app-notice-toast").filter({ hasText: "Review the 2.4 changelog" });
     await expect(notice).toBeVisible({ timeout: 15_000 });
     await expect(notice).toContainText("the changelog draft is ready");
-    await expect(notice).toContainText(`Release notes draft on ${OWNER_LABEL}`);
+    await expect(notice).toContainText("Release notes draft");
     const bell = page.getByTestId("agent-notifications-button").first();
     await expect(bell).toHaveAccessibleName("Notifications, 1 unread");
     await page.screenshot({ path: testInfo.outputPath("federated-notice-viewer.png") });
@@ -157,6 +159,7 @@ test("a peer's agent notice reaches a connected machine, and dismissing it there
     await expect(bell).toHaveAccessibleName("Notifications, 1 unread, 1 scheduled", { timeout: 15_000 });
     await bell.click();
     const popover = page.getByTestId("agent-notifications-popover");
+    await expect(popover.getByRole("region", { name: "Unread" })).toContainText(`Release notes draft on ${OWNER_LABEL}`);
     await expect(popover.getByRole("region", { name: "Scheduled" })).toContainText(`Release notes draft on ${OWNER_LABEL}`);
     await page.screenshot({ path: testInfo.outputPath("federated-notice-viewer-list.png") });
     await popover.getByRole("button", { name: "Cancel Check the nightly benchmark", exact: true }).click();
