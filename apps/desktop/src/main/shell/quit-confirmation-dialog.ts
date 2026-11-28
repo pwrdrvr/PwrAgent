@@ -101,7 +101,7 @@ export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> =
     sidebar: "#f7f4ef",
     surface: "#ffffff",
     rowActive: "#fff5e9",
-    panelHover: "#f4f0e8",
+    panelHover: "#f2eee6",
     border: "rgba(0, 0, 0, 0.08)",
     textPrimary: "#1a1612",
     textSecondary: "#524a40",
@@ -112,9 +112,9 @@ export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> =
     // colors, and each is at its AA-clearing value: against the darkest
     // background each can land on they measure 4.55:1, 4.57:1, and 4.64:1
     // against the 4.5:1 floor.
-    textMuted: "#736c64",
-    accent: "#b74c00",
-    accentBright: "#994c00",
+    textMuted: "#716a62",
+    accent: "#b54a00",
+    accentBright: "#984b00",
     buttonText: "#ffffff",
     danger: "#8a1f12",
     dangerText: "#8a1f12",

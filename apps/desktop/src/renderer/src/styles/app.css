@@ -336,7 +336,7 @@
   --brand-mark-plate: #ffffff;
   --theme-swatch-tangerine-light-app: #ffffff;
   --theme-swatch-tangerine-light-sidebar: #f7f4ef;
-  --theme-swatch-tangerine-light-accent: #b74c00;
+  --theme-swatch-tangerine-light-accent: #b54a00;
   --theme-swatch-tangerine-light-text: #1a1612;
   --theme-swatch-catppuccin-mocha-app: #1e1e2e;
   --theme-swatch-catppuccin-mocha-sidebar: #181825;
@@ -399,7 +399,7 @@
    on a light surface is darker:
 
      dark   #ff8a1f -> #ffa33d -> #ffb35c   (emphasis = lightness)
-     light  #b74c00 -> #b34a00 -> #a35200   (emphasis = depth)
+     light  #b54a00 -> #b14900 -> #984b00   (emphasis = depth)
 
    The original light palette flipped --accent-strong but left --accent-bright
    travelling the dark-theme direction, which left ~100 `color: var(--accent-
@@ -416,23 +416,29 @@
    "Darkest background" includes ACCENT-TINTED surfaces, not just the flat
    --bg-* tokens. 34 rules pair `background: var(--accent-soft)` (12% accent)
    with `color: var(--accent-bright)`, and that composite is darker than
-   --bg-panel-hover: over a hovered row it lands at #eddccc. --accent-bright
-   is therefore floored against the tint (4.64:1 there) rather than against
-   the flat surface (5.45:1), which is why it sits darker than a
+   --bg-panel-hover: over a hovered row it lands at #ebdaca. --accent-bright
+   is therefore floored against the tint (4.61:1 there) rather than against
+   the flat surface (5.43:1), which is why it sits darker than a
    flat-surface-only reading would suggest.
+
+   HOVER STEP. --bg-panel-hover sits 1.055:1 off the sidebar. It was #f4f0e8
+   at 1.036:1, too close for a hovered thread row to read, and moved to
+   #f2eee6. Every token measured on it moved by the least OKLCH lightness
+   that kept its worst case where it was (or at 4.55:1 for text), so the
+   figures here and in the list below are against the new hover.
 
    NOT COVERED — pre-existing light-theme debt this pass did NOT fix. Do not
    read the block below as uniformly AA-clean:
-     --accent on --accent-soft            3.88-4.39  (7 rules: 6 onboarding
+     --accent on --accent-soft            3.91-4.4   (7 rules: 6 onboarding
                                           wizard + .launchpad-pending__status.
                                           Darkening --accent to fix it would
                                           cost the brand mark more than it is
                                           worth — move those rules to
                                           --accent-bright instead.)
-     --status-warning  #a86b00            3.87       (16 `color:` rules)
-     --info-teal       #0e9b95            3.01       (1 rule)
-     --text-subtle     rgba(26,22,18,.42) 2.38       (3 rules)
-     --status-ok       #2e7d3c            4.49       (2 rules, marginal)
+     --status-warning  #a66900            3.91       (16 `color:` rules)
+     --info-teal       #089993            3.03       (1 rule)
+     --text-subtle     rgba(26,22,18,.43) 2.71       (3 rules)
+     --status-ok       #2c7b3b            4.53       (2 rules, marginal)
 
    apps/desktop/e2e/a11y.spec.ts gates light as well as dark, but it only
    proves the surfaces it drives — the onboarding wizard is not one of them.
@@ -451,7 +457,7 @@
   --bg-sidebar: #f7f4ef;
   --bg-panel: #fdfcfa;
   --bg-panel-elevated: #ffffff;
-  --bg-panel-hover: #f4f0e8;
+  --bg-panel-hover: #f2eee6;
   --bg-row-active: #fff5e9;
   --bg-input: #ffffff;
 
@@ -466,10 +472,10 @@
      47% to 42% lightness. The old value cleared AA only against pure
      white (4.34:1) and missed on every tinted surface it actually paints
      on — 4.23:1 on --bg-panel (the six .context-grid dt thread-info
-     labels), 3.96:1 on the sidebar, 3.82:1 on a hovered row. Now 4.55:1
-     at worst. */
-  --text-muted: #736c64;
-  --text-subtle: rgba(26, 22, 18, 0.42);
+     labels), 3.96:1 on the sidebar, 3.82:1 on a hovered row. Now 4.61:1
+     at worst, on the hover. */
+  --text-muted: #716a62;
+  --text-subtle: rgba(26, 22, 18, 0.43);
 
   /* Accent — darker Tangerine variants for contrast on white. The three
      derived accent-soft / -border / -shadow are color-mix() of --accent
@@ -479,16 +485,14 @@
      Hue and saturation are held at the original values (25deg / 30deg,
      fully saturated) so this stays the same tangerine; only lightness
      moves. See the ramp-direction note in the block comment above.
-     Worst-case ratios: accent 4.57:1 and strong 4.74:1 against
-     --bg-panel-hover, the darkest flat surface (strong's value is
-     unchanged — it already cleared AA and still lands between the other
-     two). --accent-bright is floored against the --accent-soft tint
-     instead, at 4.64:1, because that is where 34 of its rules put it;
-     on flat surfaces it reads 5.45:1. White --accent-on /
-     --button-text on an --accent fill is 5.19:1. */
-  --accent: #b74c00;
-  --accent-strong: #b34a00;
-  --accent-bright: #994c00;
+     Worst-case ratios: accent 4.60:1 and strong 4.75:1 against
+     --bg-panel-hover, the darkest flat surface. --accent-bright is floored
+     against the --accent-soft tint instead, at 4.61:1, because that is
+     where 34 of its rules put it; on flat surfaces it reads 5.43:1. White
+     --accent-on / --button-text on an --accent fill is 5.32:1. */
+  --accent: #b54a00;
+  --accent-strong: #b14900;
+  --accent-bright: #984b00;
   /* Light foreground on the darker light-theme accent fill. */
   --accent-on: #ffffff;
   --focus-ring: var(--accent);
@@ -528,10 +532,10 @@
   --info-text: #1a4f8a;
 
   /* Status indicators — darker for visibility on light. */
-  --status-ok: #2e7d3c;
-  --status-warning: #a86b00;
+  --status-ok: #2c7b3b;
+  --status-warning: #a66900;
   --status-suspended: #6b6660;
-  --status-error: #a8472a;
+  --status-error: #a64528;
   --context-moon-umbra: var(--text-primary);
   --usage-series-1: var(--accent);
   --usage-series-2: #2f64a8;
@@ -543,10 +547,10 @@
   /* A verdict is a figure the operator reads, not an 8px pip, and
      --status-warning is 4.0:1 on the rail card here. This amber is 5.0:1.
      The other savings tokens follow their base tokens into this theme. */
-  --savings-over: #945c00;
+  --savings-over: #925a00;
   /* The same amber for any warning read as text: 4.7:1 on the warning chip,
      where --status-warning is 3.8:1. */
-  --status-warning-text: #945c00;
+  --status-warning-text: #925a00;
 
   /* Button text on accent flips: white reads better on the darker
      light-theme accent (vs. near-black on the brighter dark-theme one). */
@@ -589,7 +593,7 @@
   --danger-base: #8a1f12;
 
   /* One-off accent colors — darker variants for light surface. */
-  --info-teal: #0e9b95;
+  --info-teal: #089993;
   --brand-purple: #6a4ba8;
   --danger-text-light: #b03517;
 }

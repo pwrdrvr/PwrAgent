@@ -3784,9 +3784,19 @@ describe("color theme contract", () => {
     // the surface under it draws nothing, which is how both Solarized
     // themes first shipped. A hover one step off the surface draws nothing
     // either: Catppuccin Latte's thread rows hovered at 1.02:1 in the
-    // sidebar. Every other theme's hover steps at least 1.048:1.
+    // sidebar, and Tangerine light's at 1.036:1. Every other theme's hover
+    // steps at least 1.048:1.
     const HOVER_STEP_FLOOR = 1.04;
-    for (const [name, theme] of Object.entries(themes)) {
+    const root = extractRootTokens(css);
+    const hovered = {
+      "tangerine-dark": root,
+      "tangerine-light": {
+        ...root,
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+      },
+      ...themes,
+    };
+    for (const [name, theme] of Object.entries(hovered)) {
       const surface = (token: string): string => paint(theme, theme[token], "#000000");
       expect(
         contrastRatio(surface("bg-panel-hover"), surface("bg-panel")),
