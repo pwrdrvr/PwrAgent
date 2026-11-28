@@ -7,8 +7,9 @@ import { LiveNavigationIndex } from "../app-server/live-navigation-index";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
 
-// Raise MBT_RUNS locally to search; CI keeps the run count small.
-const RUNS = Number(process.env.MBT_RUNS ?? 5);
+// Raise MBT_RUNS locally to search; CI keeps the run count small. The pinned
+// examples count toward numRuns, so the default leaves five generated cases.
+const RUNS = Number(process.env.MBT_RUNS ?? 9);
 
 type Command =
   | { kind: "rename"; n: number }
@@ -150,7 +151,8 @@ it("every settled read shows the owner's latest name for a started thread", asyn
                 : cmd.method === "turn/started"
                   ? { method: cmd.method, params: { threadId: id, turn: { id: "turn-1", status: "inProgress" } } }
                   : { method: cmd.method, params: { threadId: id } };
-          live.event({ backend: "codex", notification } as Parameters<typeof live.event>[0]);
+          // Through the registry, which observes some of these before the index does.
+          await registry.publishLocalEvent({ backend: "codex", notification } as Parameters<typeof registry.publishLocalEvent>[0]);
         } else {
           await check(label);
         }
@@ -170,5 +172,8 @@ it("every settled read shows the owner's latest name for a started thread", asyn
     [[true, [{ kind: "materialize" }, { kind: "rename", n: 1 }]]],
     // The unnamed listing's preview, also `derived`, retired a generated title.
     [[true, [{ kind: "generated", n: 1 }, { kind: "materialize" }, { kind: "read" }, { kind: "rename", n: 1 }]]],
+    // A listing that held only the pending start's placeholder, which carries
+    // the rename, retired it before thread/list listed the thread unnamed.
+    [[true, [{ kind: "rename", n: 1 }, { kind: "read" }, { kind: "materialize" }, { kind: "nav", method: "thread/started" }]]],
   ] });
 });

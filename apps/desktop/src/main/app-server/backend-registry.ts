@@ -4759,7 +4759,9 @@ export class DesktopBackendRegistry {
         // Point reads omit checkout and runtime facts supplied by discovery.
         // Keep those facts and take the activity watermark and acknowledged title.
         const { title, titleSource } = projectOwnerThreadTitle(native, await this.overlayStore.getThreadMetadata?.(ref));
-        summary = this.withObservedThreadName({ ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt }, false);
+        // Only Codex has a listing that can trail this read; other backends
+        // answer it from the store their rename wrote.
+        summary = this.withObservedThreadName({ ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt }, ref.backend !== "codex");
       }
     }
     if (!summary) return undefined;
@@ -19121,6 +19123,9 @@ export class DesktopBackendRegistry {
       allThreads,
       params,
     );
+    // A pending start's placeholder carries the owner's own rename, so only a
+    // row the provider listed can acknowledge it.
+    const providerListedThreadIds = new Set(allThreads.map((thread) => thread.id));
 
     const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
     const overlaysByThreadId = await readOverlays.call(this.overlayStore, {
@@ -19217,7 +19222,7 @@ export class DesktopBackendRegistry {
 
     const statusReconciledThreads = enrichedThreads
       .map((thread) => this.reconcileCodexThreadListStatus(thread))
-      .map((thread) => this.withObservedThreadName(thread));
+      .map((thread) => this.withObservedThreadName(thread, providerListedThreadIds.has(thread.id)));
     const normalizedFilter = params.filter?.trim().toLowerCase();
     const filteredThreads = normalizedFilter && observedFilterThreadIds.size > 0
       ? statusReconciledThreads.filter(
