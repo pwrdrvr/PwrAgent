@@ -919,6 +919,7 @@ type NavigationThreadInputs = {
   hasProvider?: (key: string) => boolean;
   handoffDependency?: (child: string, dependency: string) => void;
   managedMembership?: (keys: ReadonlySet<string>) => void;
+  inboxClock?: { now: number; observeSnooze(until: number): void };
 };
 
 type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
@@ -1009,6 +1010,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const external = this.stateDb.raw.pragma("data_version", { simple: true });
     const local = sqliteOwnerNavigationChangeVersion(this.stateDb.raw);
     return `${external}:${local}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
+  }
+
+  /** The cold join proof covers every local and external write, including
+   * join dependencies normally refreshed by events such as Auto-fix claims. */
+  readNavigationSeedJoinVersion(): string | undefined {
+    const db = this.stateDb.raw;
+    if (db.inTransaction) return undefined;
+    const external = db.pragma("data_version", { simple: true });
+    const { changes } = db.prepare("SELECT total_changes() AS changes").get() as { changes: number };
+    return `${external}:${changes}`;
   }
 
   readViewerNavigationSourceVersion(): string {
@@ -1277,6 +1288,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       const overlay = normalizeThreadOverlayState(
         Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as ThreadOverlayState,
       );
+      if (overlay.snoozedUntil) params.inboxClock?.observeSnooze(overlay.snoozedUntil);
       if (params.worktreeRepositoryAliases?.size && overlay.extraLinkedDirectories.length) {
         const identity = (value: string) => navigationPathIdentity(value, process.platform === "win32");
         overlay.extraLinkedDirectories = overlay.extraLinkedDirectories.map((directory) => {
@@ -1331,6 +1343,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
     });
     const threads = materializeNavigationThreads({ threads: withContext, overlayByThreadKey: overlays, workspaceRoots: params.workspaceRoots,
+      now: params.inboxClock?.now,
       firstSnapshot: !baseline && !backendState?.lastSnapshotHash,
       previousKnownThreadKeys: previousKnownThreadKeys ?? [] }).map((thread) => {
         const key = buildThreadIdentityKey(thread.source, thread.id);

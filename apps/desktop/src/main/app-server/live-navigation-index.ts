@@ -64,7 +64,9 @@ type Source = {
   status?(row: ProviderRow): ProviderRow["threadStatus"];
   refresh?(backend: AppServerBackendKind, id: string, activity: boolean, workers: boolean): Promise<AppServerThreadSummary | undefined> | undefined;
   cached(backend: AppServerBackendKind, id: string): AppServerThreadSummary | undefined;
-  join(rows: ProviderRow[], coverage: NavigationQueryIndex["coverage"], checkouts: "saved" | "reuse" | "refresh"): Promise<NavigationQueryIndex>;
+  join(rows: ProviderRow[], coverage: NavigationQueryIndex["coverage"], checkouts: "saved" | "reuse" | "refresh",
+    seedCurrent?: () => boolean): Promise<NavigationQueryIndex>;
+  releaseSeedJoin?(): void;
   decorate?(rows: NavigationThreadSummary[]): NavigationThreadSummary[];
   forget?(key: string): void;
   dependents?(key: string): Iterable<string> | undefined;
@@ -121,6 +123,7 @@ export class LiveNavigationIndex {
   private viewerEpoch = 0;
   private viewerGapEpoch = -1;
   private seedCoverage?: NavigationQueryIndex["coverage"];
+  private seedVerification?: AppServerBackendScope | "checkout";
   private visibilityChanged = true;
   private lastDiscovery = 0;
   // The mounted remote cache is one source per host. Concurrent callers can
@@ -161,6 +164,8 @@ export class LiveNavigationIndex {
 
   close(): void {
     this.disposed = true;
+    this.seedVerification = undefined;
+    this.source.releaseSeedJoin?.();
     if (this.scheduled) clearImmediate(this.scheduled);
   }
 
@@ -213,6 +218,9 @@ export class LiveNavigationIndex {
     }
     if (n.method === "navigation/sidebarEnrichment/updated" || n.method === "pullRequest/status/updated"
       || !navigationQueryEventRequiresRefresh(n.method, n.params)) return;
+    // A discovery notice can repeat the seed's pending scope. The gap set
+    // alone cannot distinguish that notice from the scheduled verification.
+    this.seedVerification = undefined;
     this.visibilityChanged ||= navigationInvalidationMayChangeMembership(n.method);
     if (n.method === "navigation/providerThreads/refreshed") {
       const provider = (n.params as { backend?: AppServerBackendKind }).backend;
@@ -359,6 +367,9 @@ export class LiveNavigationIndex {
       this.needsRetry = true;
       throw error;
     }).finally(() => {
+      // Only a successful initial publication with verification still queued
+      // can keep its seed. Verification consumes the marker before listing.
+      if (this.needsRetry || !this.seedVerification) this.source.releaseSeedJoin?.();
       this.pending = undefined;
       this.background = undefined;
       this.reconciling = false;
@@ -375,6 +386,8 @@ export class LiveNavigationIndex {
     this.observeVersion();
     const gaps = [...this.gaps];
     this.gaps.clear();
+    const seedVerification = this.seedVerification;
+    this.seedVerification = undefined;
     this.reconciling = !index || Boolean(gaps.length);
     const visibility = this.reconciling || this.visibilityChanged ? this.source.visibility?.(observedAt) : undefined;
     this.visibilityChanged = false;
@@ -434,15 +447,26 @@ export class LiveNavigationIndex {
         }
         for (const row of listing.rows) this.providers.set(key(row), compact(row));
         coverage = listing.coverage;
-        if (!prior && listing.verifyAfterSeed) this.gaps.add(this.source.backend);
-        else if (!prior && listing.checkoutsAfterSeed) this.gaps.add("checkout");
+        if (!prior) {
+          const verify = listing.verifyAfterSeed ? this.source.backend : listing.checkoutsAfterSeed ? "checkout" : undefined;
+          if (verify) {
+            if (!gaps.length && !this.gaps.size && !this.changes.size) this.seedVerification = verify;
+            this.gaps.add(verify);
+          }
+        }
       }
       if (this.source.retentionChanged) {
         this.providerBytes = 0;
         for (const row of this.providers.values()) this.providerBytes += jsonBytes(row);
       }
+      const seed = this.seedVerification;
+      const seedCurrent = !prior && seed
+        ? () => !this.disposed && !this.changes.size && this.seedVerification === seed && this.gaps.size === 1
+        : seedVerification && gaps.length === 1 && gaps[0] === seedVerification && coverage?.state === "complete"
+          ? () => !this.disposed && !this.changes.size && !this.gaps.size : undefined;
       const joined = await this.source.join([...this.providers.values()], coverage, !prior ? "saved"
-        : gaps.every((scope) => scope === "overlay" || (scope === "saved" && !(this.source.backend === "all" || this.source.backend === "codex"))) ? "reuse" : "refresh");
+        : gaps.every((scope) => scope === "overlay" || (scope === "saved" && !(this.source.backend === "all" || this.source.backend === "codex"))) ? "reuse" : "refresh",
+        seedCurrent);
       if (this.disposed) throw new Error("Navigation source was replaced.");
       if (!prior && coverage && coverage.state !== "checking") {
         if (!this.gaps.size && this.source.verifySeedDirectories?.(joined)) this.gaps.add("geometry");
