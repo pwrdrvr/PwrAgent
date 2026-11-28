@@ -15,6 +15,7 @@ import { GITHUB_ASYNC_MERGE_REQUIRED, runGithubAsyncMerge } from "./github-async
 import { describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
 import {
   GITHUB_MERGE_QUEUE_GATE_QUERY,
+  type GithubMergeQueueGate,
   parseGithubMergeQueueGate,
   runGithubQueueMerge,
 } from "./github-merge-queue";
@@ -61,6 +62,10 @@ type GithubMergeOptions = {
   assertCanMerge?: (url: string) => void;
   checkStackOrder?: boolean;
   deadlineAt?: number;
+  /** An explicit operator confirmation backed by a revision-bound Factory plan. */
+  confirmedQueue?: {
+    refresh: (signal?: AbortSignal) => Promise<{ gate: GithubMergeQueueGate; beforeEnqueue: () => void }>;
+  };
   /**
    * The open lower layers of the PR's GitHub stack that the operator saw and
    * chose to merge with it. GitHub's asynchronous merge lands them all; any
@@ -388,11 +393,11 @@ export class GithubPrFetcher {
   ): Promise<ThreadPullRequestMergeResult> {
     let checked: GithubStackMergeCheck | undefined;
     let mergeTarget = params.pullRequest;
-    if (params.checkStackOrder) {
+    if (params.checkStackOrder || params.confirmedQueue) {
       try {
         checked = await this.checkStackOrder(reference, params, run, signal);
       } catch (error) {
-        if (!(error instanceof ForgeReadError) || error.code !== "pull_request_redirected") throw error;
+        if (params.confirmedQueue || !(error instanceof ForgeReadError) || error.code !== "pull_request_redirected") throw error;
         const result = await run(["pr", "view", reference.url, "--json", "url", "--jq", ".url"]);
         const canonical = parsePullRequestReferenceUrl(result.stdout.trim());
         if (!canonical || canonical.kind !== "github" || canonical.provider !== reference.provider
@@ -405,6 +410,23 @@ export class GithubPrFetcher {
     }
     const checkedBase = checked?.base;
     const label = `#${reference.number}`;
+    if (params.confirmedQueue) {
+      if (checked?.nativeStack) {
+        throw new ForgeReadError("rejected", "Use the approved GitHub stack action after checking all affected layers.");
+      }
+      const { gate, beforeEnqueue } = await params.confirmedQueue.refresh(signal);
+      if (!checked || checked.headSha !== gate.headSha) {
+        throw new ForgeReadError("rejected", "The pull request head changed during the stack preflight.");
+      }
+      assertStackMergeBaseUnchanged(checked.base, gate.baseRef);
+      const graphql = this.queueGraphql(reference, run, true);
+      await runGithubQueueMerge(gate, async (query, variables) => {
+        params.assertCanMerge?.(reference.url);
+        beforeEnqueue();
+        return graphql(query, ["-f", `id=${variables.id}`, "-f", `head=${variables.head}`]);
+      }, checked.headSha, { enqueueOnly: true });
+      return { queued: true, summary: `GitHub admitted ${label} to the protected merge queue` };
+    }
     // GitHub's own stacks merge only through its asynchronous merge, which
     // also takes a required merge queue.
     if (checked?.nativeStack) return await this.mergeAsynchronously(reference, params, run, checked.headSha, checked.nativeStack);
@@ -580,7 +602,18 @@ export class GithubPrFetcher {
     const catalogs = cwd ? (await readStackClones([cwd], { signal })).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : []) : [];
     const repository = { provider: "github" as const, host: reference.provider, owner: reference.org, repo: reference.repo };
     const transport = stackTransport;
-    return await checkGithubStackMerge(repository, reference.number, catalogs, this.githubGet(reference, run, signal), async (query, variables) => {
+    const githubGet = this.githubGet(reference, run, signal);
+    let remaining = 8;
+    const assertBudget = () => {
+      if (params.confirmedQueue && remaining-- <= 0) {
+        throw new ForgeReadError("unavailable", "The protected queue stack preflight exceeded eight provider reads. Inspect the stack in GitHub.");
+      }
+    };
+    return await checkGithubStackMerge(repository, reference.number, catalogs, async (route) => {
+      assertBudget();
+      return githubGet(route);
+    }, async (query, variables) => {
+      assertBudget();
       if (transport) {
         return (await transport.requestGithubForOperatorMergePreflight(repository, {
           graphql: true, path: "", body: { query, variables },
@@ -609,16 +642,7 @@ export class GithubPrFetcher {
     run: (args: string[], timeout?: number) => Promise<{ stdout: string }>,
     checkedBase?: string,
   ): Promise<{ summary: string; queued: true } | undefined> {
-    const host = ["--hostname", reference.provider];
-    const graphql = async (query: string, fields: string[]) => {
-      try {
-        const result = await run(["api", "graphql", ...host, "-f", `query=${query}`, ...fields]);
-        return (JSON.parse(result.stdout) as { data?: unknown }).data;
-      } catch (error) {
-        const detail = ghFailureLine(ghErrorDetail(error));
-        throw new Error(`gh api graphql failed: ${detail}${mergeScopeHint(detail)}`, { cause: error });
-      }
-    };
+    const graphql = this.queueGraphql(reference, run);
     let gate;
     try {
       gate = parseGithubMergeQueueGate(await graphql(GITHUB_MERGE_QUEUE_GATE_QUERY, [
@@ -648,6 +672,23 @@ export class GithubPrFetcher {
     return {
       queued: true,
       summary: `Added ${label} to the merge queue · ${describeMergeQueueState(result.status) ?? "queued"}`,
+    };
+  }
+
+  private queueGraphql(
+    reference: PullRequestReferenceIdentity, run: (args: string[]) => Promise<{ stdout: string }>, strict = false,
+  ) {
+    const host = ["--hostname", reference.provider];
+    return async (query: string, fields: string[]) => {
+      try {
+        const result = await run(["api", "graphql", ...host, "-f", `query=${query}`, ...fields]);
+        const parsed = JSON.parse(result.stdout) as { data?: unknown; errors?: unknown[] };
+        if (strict && parsed.errors?.length) throw new Error("GitHub returned a GraphQL error.");
+        return parsed.data;
+      } catch (error) {
+        const detail = ghFailureLine(ghErrorDetail(error));
+        throw new Error(`gh api graphql failed: ${detail}${mergeScopeHint(detail)}`, { cause: error });
+      }
     };
   }
 

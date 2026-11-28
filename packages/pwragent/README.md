@@ -61,6 +61,8 @@ same parameter object as the desktop owner contracts:
 | `factory-admission` | `action`, `projectKey`, `workItem`, and the action fields below |
 | `factory-review` | `action`, `projectKey`, `workItem`, `branch`, `baseRef`, `baseOid`, `headOid` |
 | `factory-scaling` | `action`, `projectKey`, `repository`, `approvalId`, `candidate`, and the record fields below |
+| `factory-publication` | `action`, `approvalId`, and the publication fields below |
+| `factory-landing` | `action`, `approvalId`, and the check or confirmation fields below |
 | `factory-board` | `projectKey` from `register-directory`, `repository` matching the registered GitHub origin, optional `limit`, `candidate` and `selection` |
 | `show` | `backend`, `threadId` |
 | `submit` | `SubmitDurableTurnRequest`: immutable client request ID, creation time, payload hash and request |
@@ -564,3 +566,137 @@ replay and replacement made zero SQLite commits. Each accepted new report
 replaces one bounded artifact. The tests also cover a missing integration ref
 with a same-named tag, a hidden index edit, a different owner, and a failed
 receipt replayed after replacement.
+
+### Prepare and reconcile Factory publication
+
+Run `pwragent factory-publication --params-file /request.json` on the
+operator's active Outpost owner profile. Select the same registered project,
+completed approval, work item, and clean linked worktree used for the branch
+review and scaling audit. The head branch and target must already exist in the
+same GitHub.com repository at the selected commits.
+
+```json
+{
+  "action": "prepare",
+  "approvalId": "24617983-8584-4b8c-bca0-d3ee242e70ea",
+  "projectKey": "directory:/projects/PwrAgent",
+  "repository": "pwrdrvr/PwrAgent",
+  "workItem": {"provider": "linear", "id": "521ed3a0-6f45-45fd-b8ec-fa070a530661"},
+  "branch": "factory/pilot",
+  "baseRef": "refs/remotes/origin/main",
+  "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "baseOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "notReadyLabel": "hold-for-operator",
+  "policy": {
+    "risk": {"level": "routine", "reference": "Operator reviewed the change and repository publication policy."},
+    "visual": {"decision": "not_required", "reference": "This change has no user-visible behavior."},
+    "acceptOperatorAttestedScaling": true
+  }
+}
+```
+
+Use the immutable tracker reference from the approval. The command accepts a
+Linear UUID, a GitHub issue or pull request with its repository node ID and
+number, or a Jira site ID and issue ID. The legacy `issueId` field accepts a
+Linear UUID in place of `workItem`. A GitHub pull request work item pins the
+existing PR. For other work items, `pullRequestNumber` optionally pins an
+existing PR in the selected repository. The optional `notReadyLabel` names
+the hold label this repository uses. A draft or matching label is reported
+as observed. Whether CI runs on those PRs depends on the repository workflow.
+
+The operator records the risk decision and the visual acceptance decision.
+Use `accepted` with the evidence reference when visual acceptance applies.
+Pending visual acceptance and unverified or high-consequence risk block this
+pilot. A current clear managed branch review and a passing scaling
+attestation are required. The operator inspects the scaling proof and
+explicitly accepts its provenance. CI, PR readiness, and model assessments
+supply no operator approvals.
+
+Inspect the plan returned by `prepare`. To record the local intent, send the
+same request with `action` set to `arm` and `confirm` set to its `planId`.
+The owner rechecks the plan before storing it. A matching existing PR is
+reused as-is. By default, when there is no existing PR, the result is
+`manual_required` and the operator opens it on GitHub.
+
+To authorize opening one PR from the already-pushed branch, include
+`"creation": {"title":"The PR title","body":"The PR description","draft":true}`
+in `prepare`. Choose `draft` explicitly. The `open_pr` preview includes the
+repository and exact reviewed head and base, the PR content, and the window
+between the final GitHub observation and PR creation. GitHub receives branch
+names, so a branch can move in that window and the PR may open against
+different commits. Opening the PR can trigger CI, including for a draft.
+After reviewing this effect, the operator sends the same request with
+`action` set to `arm` and its `planId` as `confirm`. The command uses the
+owner profile's GitHub sign-in and applies its Agent forge tools settings
+and the implementation thread's project rule. The confirmation covers this
+PR opening only. A matching PR is reused without changing it. A missing
+explicitly selected or tracked PR blocks the request.
+
+After manual publication, a lost reply, or a restart, send
+`{"action":"reconcile","approvalId":"<approval UUID>"}`. The owner checks the
+live head and target and reuses only a matching first-party PR. If the forge
+can't confirm the result, the command reports `uncertain`. It distinguishes
+missing refs or PRs, moved revisions, and conflicting PR identities. An armed
+plan stays tied to one approval and one revision pair. A durable claim
+prevents another creation on that branch in the owner profile. A lost reply
+keeps that claim even when GitHub currently shows no PR. Reconcile again if
+the PR later becomes visible. A recorded PR remains pinned by its provider
+ID and number.
+
+To replace a stale plan, include its `planId` as `previousPlanId` in a new
+`prepare` and then confirm the new plan. Keep the same repository, head
+branch, and target branch. Update the branch review and scaling evidence for
+any changed commits. If GitHub opened a PR during drift, reconcile its
+identity first and use the replacement plan to adopt that PR at its current
+reviewed revision. A definitive provider refusal also allows an explicitly
+confirmed replacement after a fresh check. An unresolved possible creation
+continues to block replacement. A PR created against a different revision
+must be explicitly adopted before it is eligible for a landing preview.
+An active landing pause, cancellation or queue attempt also prevents
+replacement. Resume or reset through the landing command when eligible.
+An uncertain queue request keeps its original publication for reconciliation.
+
+### Evaluate and confirm Factory queue admission
+
+Use `pwragent factory-landing --params-file /request.json` on the same active
+owner after publication has recorded a PR number and node ID. The approval
+supplies the work item, repository, PR, head, target branch, and base commit.
+
+```json
+{
+  "action": "prepare",
+  "approvalId": "24617983-8584-4b8c-bca0-d3ee242e70ea",
+  "requiredChecks": ["integration / test"]
+}
+```
+
+Name the required contexts that must actually run on the GitHub test merge
+commit. The preview requires the test commit's parents to be the published
+base and head, each named context to be required by GitHub and report explicit
+success, and the head rollup to be successful for queue admission. Other
+reported required integration checks must also pass. Head-only CI,
+missing or skipped contexts, abbreviated evidence, drafts, the configured
+publication hold label (ignoring case), and project or Continue After holds
+block the handoff. The owner also checks independent branch review, passing
+scaling, and the publication policy on that exact revision.
+
+Inspect the PR identity, revision pair, test commit, checks, and account in the
+preview. To authorize queue admission, send the same request with `action` set
+to `enqueue` and `confirm` set to the returned `planId`. The owner rechecks
+the evidence and stack order, then asks GitHub's protected queue to admit the
+PR with its expected head. GitHub checks the merge group against its live
+target before landing. Its enqueue API accepts an expected head, and the
+target tip is verified immediately before the request. Configure the required
+workflows to run on the merge group. A branch without a protected queue
+returns a manual handoff with the exact PR and revisions for the operator's
+protected merge action. The Factory confirmation authorizes only queue admission.
+
+Run `{"action":"reconcile","approvalId":"<approval UUID>"}` after a lost reply
+or to check progress. Observations distinguish queued, merged, closed,
+removed, and unknown. Factory records an intent before calling GitHub and
+never replays an unknown request. A locally acknowledged admission followed
+by a GitHub removal can be reset using `action: "reset"` and the attempt ID as
+`confirm`. Reset invalidates older previews and requires a fresh confirmation.
+Use `pause` or `cancel` to invalidate a preview before dispatch. `resume`
+releases a pause. To reset a cancellation, confirm its returned reset ID.
+Once a request may have reached GitHub, inspect or remove the entry there.

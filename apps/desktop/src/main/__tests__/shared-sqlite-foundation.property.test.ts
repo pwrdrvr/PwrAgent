@@ -68,12 +68,14 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // automation turn, and PR watch indexes, plus pricing summary deltas and scheduled
   // action projections, app update notices, targeted managed membership,
   // subthread lookup indexes, pin mount tokens, lifetime automation cost,
-  // transcript accounting indexes, pending ACP compaction storage, and Factory admission and review.
+  // transcript accounting indexes, pending ACP compaction storage, and Factory workflow tables.
   // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
     && row.tbl_name !== "factory_admission"
     && row.tbl_name !== "factory_branch_reviews"
+    && row.tbl_name !== "factory_publications"
+    && row.tbl_name !== "factory_landings"
     && row.tbl_name !== "openai_decision_versions"
     && row.tbl_name !== "thread_compaction_recovery_guards"
     && row.tbl_name !== "thread_automatic_wake_guards"

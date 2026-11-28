@@ -3188,7 +3188,27 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
         ON factory_branch_reviews(approval_id) WHERE result IS NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS factory_branch_review_active_worktree
         ON factory_branch_reviews(worktree) WHERE result IS NULL;
+      CREATE TABLE IF NOT EXISTS factory_publications (
+        approval_id TEXT PRIMARY KEY NOT NULL,
+        plan_id TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        pr_number INTEGER,
+        pr_id TEXT UNIQUE,
+        CHECK ((pr_number IS NULL) = (pr_id IS NULL))
+      );
+      CREATE TABLE IF NOT EXISTS factory_landings (
+        approval_id TEXT PRIMARY KEY NOT NULL,
+        revision INTEGER NOT NULL,
+        state_json TEXT NOT NULL
+      );
     `);
+    if (!tableColumnExists(db, "factory_publications", "creation_state")) {
+      db.exec(`ALTER TABLE factory_publications ADD COLUMN creation_state TEXT NOT NULL DEFAULT 'none'
+        CHECK (creation_state IN ('none', 'pending', 'returned', 'fenced', 'refused'))`);
+    }
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS factory_publication_creation_branch ON factory_publications (
+        json_extract(plan_json, '$.repositoryId'), json_extract(plan_json, '$.selection.branch')
+      ) WHERE creation_state IN ('pending', 'returned', 'fenced')`);
     db.exec(THREAD_REVIEW_SCHEMA);
     db.exec(OPERATOR_REQUEST_SCHEMA);
     db.exec(OPERATOR_REQUEST_SCOPE_INDEXES);
@@ -4762,6 +4782,7 @@ function tableColumnExists(
     | "automation_pruned_run_costs"
     | "automation_runs"
     | "automations"
+    | "factory_publications"
     | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
@@ -4874,6 +4895,7 @@ function readTableInfo(
     | "automation_pruned_run_costs"
     | "automation_runs"
     | "automations"
+    | "factory_publications"
     | "openai_decision_versions"
     | "pr_lookup_cache"
     | "pr_status_cache"
@@ -4907,6 +4929,8 @@ function readTableInfo(
       }>;
     case "automations":
       return db.prepare("PRAGMA table_info(automations)").all() as Array<{ name: string }>;
+    case "factory_publications":
+      return db.prepare("PRAGMA table_info(factory_publications)").all() as Array<{ name: string }>;
     case "pr_lookup_cache":
       return db.prepare("PRAGMA table_info(pr_lookup_cache)").all() as Array<{
         name: string;

@@ -367,8 +367,11 @@ const prPollingFocusCleanupSenderIds = new Set<number>();
 const transcriptPrCleanupSenderIds = new Set<number>();
 
 
-export function registerAppServerIpcHandlers(factoryAdmission?: Pick<FactoryAdmission, "command">): void {
-  registerFactoryIpcHandlers(appServerService, factoryAdmission);
+export function registerAppServerIpcHandlers(
+  factoryAdmission?: Pick<FactoryAdmission, "command">,
+  factoryLanding?: Parameters<typeof registerFactoryIpcHandlers>[2],
+): void {
+  registerFactoryIpcHandlers(appServerService, factoryAdmission, factoryLanding);
   ipcMain.removeHandler(AGENT_PRESETS_CHANNEL);
   ipcMain.handle(AGENT_PRESETS_CHANNEL, (event, request: ManageAgentPresetsRequest) => {
     if (isFederationWindowWebContents(event.sender)) {

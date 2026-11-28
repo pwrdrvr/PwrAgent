@@ -113,6 +113,19 @@ function queuedNote(baseRef: string | undefined, autoMerge: boolean): string {
 
 const QUEUE_NEXT_STEP = "Nothing has merged yet. watch_thread_pull_request with notifyOn [\"merged\"] wakes this thread when the queue lands the PR, or if the queue removes it.";
 
+/** The attachment-free GitHub create path, also used for an operator-confirmed Factory plan. */
+export function createGithubPullRequest(
+  request: ForgeCiClient["requestGithub"], repository: ForgeRepository,
+  params: { title: string; head: string; base: string; body?: string; draft?: boolean },
+  options?: { signal?: AbortSignal; beforeDispatch?: () => void },
+) {
+  const { title, head, base, body = "", draft = false } = params;
+  return request(repository, {
+    method: "POST", path: `repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/pulls`,
+    body: { title, head, base, body, draft }, beforeDispatch: options?.beforeDispatch,
+  }, options?.signal);
+}
+
 export class GithubPrToolClient {
   constructor(private readonly options: {
     ci: Pick<ForgeCiClient, "requestGithub" | "withGithubAdmission">;
@@ -392,7 +405,9 @@ export class GithubPrToolClient {
           number = numberFromUrl(created.url, "pull");
           warning = created.warning;
         } else {
-          const created = object(await call("POST", "/pulls", { title: args.title, head, base, body: args.body ?? "", draft: args.draft === true }));
+          providerRequests++;
+          const created = object(await createGithubPullRequest((...params) => this.options.ci.requestGithub(...params), r,
+            { title: args.title!, head, base, body: args.body, draft: args.draft }, { signal: ctx.signal }));
           number = positive(created.number, "pull request number");
         }
         await applyLabelsAndReviewers(number, true);

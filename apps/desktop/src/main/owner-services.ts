@@ -1,6 +1,5 @@
 import { createOwnerFactoryBranchReview } from "./factory/factory-branch-review-runtime";
 import { createOwnerFactoryAdmission } from "./factory/factory-admission-runtime";
-import type { createOwnerFactoryScaling } from "./factory/factory-scaling-runtime";
 import path from "node:path";
 import type { ApprovedLabCheckout } from "./resource-checkouts/pwrsuitelab-checkout-adapter";
 import { createResourceCheckoutToolHandler } from "./agent-tools/pwragent-resource-checkout-agent-tools";
@@ -107,6 +106,18 @@ import { appServerService } from "./app-server/desktop-app-server-service";
 import { startOwnerQueues } from "./owner-queue-services";
 import { changesOperatorQueueMounts } from "./operator-requests/operator-request-mount-change";
 import { disposeOperatorRequestService } from "./operator-requests/operator-request-runtime";
+
+// These owner commands load their validation and forge dependencies on first use.
+function lazyFactoryCommand<T>(load: () => Promise<(params: unknown) => Promise<T>>) {
+  let command: ReturnType<typeof load> | undefined;
+  return async (params: unknown) => {
+    command ??= load().catch((error: unknown) => {
+      command = undefined;
+      throw error;
+    });
+    return (await command)(params);
+  };
+}
 
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
 const RUNNING_TURNS_STOP_TIMEOUT_MS = 2_000;
@@ -498,11 +509,29 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     leaseHeld: () => federationLease.snapshot().leaseHeld,
   };
   const factoryAdmission = resourceCheckouts && createOwnerFactoryAdmission({ ...factoryOwner, checkouts: resourceCheckouts });
-  let scalingCommand: ReturnType<typeof createOwnerFactoryScaling> | undefined;
-  const factoryScaling = resourceCheckouts && (async (params: unknown) => {
-    const runtime = await import("./factory/factory-scaling-runtime");
-    scalingCommand ??= runtime.createOwnerFactoryScaling(factoryOwner);
-    return scalingCommand(params);
+  const factoryScaling = resourceCheckouts && lazyFactoryCommand(async () => {
+    const { createOwnerFactoryScaling } = await import("./factory/factory-scaling-runtime");
+    return createOwnerFactoryScaling(factoryOwner);
+  });
+  const factoryOperator = bootMode === "active-profile" && !host.runtimePolicy?.factoryBuilderWorkspaceRoot;
+  const factoryPublication = factoryOperator && lazyFactoryCommand(async () => {
+    const { createOwnerFactoryPublication } = await import("./factory/factory-publication");
+    return createOwnerFactoryPublication({
+      ...factoryOwner,
+      prepareCreatePolicy: (threadId, repository) => registry.prepareOperatorPullRequestPolicy(threadId, repository),
+      github: async (...args) => {
+        if (!settings.isForgeEnabled("github")) throw new Error("GitHub reads are disabled.");
+        return service.getForgeCiClient().requestGithub(...args);
+      },
+    });
+  });
+  const factoryLanding = factoryOperator && lazyFactoryCommand(async () => {
+    const { createOwnerFactoryLanding } = await import("./factory/factory-landing");
+    return createOwnerFactoryLanding({
+      ...factoryOwner,
+      githubEnabled: () => settings.isForgeEnabled("github"),
+      github: (...args) => service.getForgeCiClient().requestGithubForOperatorMergePreflight(...args),
+    });
   });
   const factoryBranchReview = bootMode === "active-profile" && createOwnerFactoryBranchReview(
     registry, federationRuntime, () => federationLease.snapshot().leaseHeld,
@@ -975,7 +1004,7 @@ wireOwnerRendererEvents();
   return {
     registry, service, config, settings, federationRuntime, messagingRuntime,
     mcpGateway, scheduledActions, automations, leaseManager, federationLease, messagingLease,
-    queues, resourceCheckouts, factoryAdmission, factoryBranchReview, factoryScaling,
+    queues, resourceCheckouts, factoryAdmission, factoryBranchReview, factoryScaling, factoryPublication, factoryLanding,
     prewarm: prewarmInitialThreadList,
     onConfigPatchWritten: async (patch: DesktopSettingsConfigPatch, previousProviderDefaults?: Record<string, DesktopProviderModelDefaults>) => {
       if (previousProviderDefaults) {

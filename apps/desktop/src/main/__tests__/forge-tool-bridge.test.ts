@@ -100,6 +100,26 @@ describe("ForgeToolBridge", () => {
   });
 
   describe("policy gate", () => {
+    it("uses the live pull request settings and applicable project rule after operator confirmation", async () => {
+      const policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
+      const { bridge, pendingServerRequests } = createBridge({ handlers: { forgeToolPolicyResolver: () => policy } });
+      const check = await bridge.prepareOperatorPullRequestPolicy(callContext.threadId, repository);
+      for (const level of ["ask", "auto", "allow"] as const) {
+        policy.access.pull_requests = level;
+        expect(check).not.toThrow();
+      }
+      policy.rules = [{ repository: "github.com/fixture/project", agent: { backend: "codex" }, access: { pull_requests: "off" } }];
+      expect(check).toThrow("does not permit opening");
+      policy.rules = [{ repository: "github.com/fixture/project", agent: { backend: "claude" }, access: { pull_requests: "off" } }];
+      expect(check).not.toThrow();
+      policy.access.pull_requests = "off";
+      expect(check).toThrow("does not permit opening");
+      policy.access.pull_requests = "allow";
+      policy.enabled = false;
+      expect(check).toThrow("does not permit opening");
+      expect(pendingServerRequests.size).toBe(0);
+    });
+
     it("forwards a read exactly when the family is on and Read is not Off", async () => {
       await fc.assert(fc.asyncProperty(
         fc.boolean(),
