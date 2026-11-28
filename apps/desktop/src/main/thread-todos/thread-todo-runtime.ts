@@ -436,6 +436,7 @@ export function installThreadTodoRuntime(params: {
     if (event.notification.method === "navigation/providerThreads/refreshed") {
       // Discovery and authentication recovery can make persisted owners
       // available without changing a card. The inventory spans backends.
+      reviewAutoFixDispatcher.wake();
       params.broadcast({ at: Date.now() });
       return;
     }
@@ -455,8 +456,11 @@ export function installThreadTodoRuntime(params: {
     }
     const status = event.notification.method === "thread/status/changed" ? event.notification.params.status : undefined;
     const queueStatus = event.notification.method === "thread/turnQueue/updated" ? event.notification.params.status : undefined;
-    if (event.notification.method === "pullRequest/status/updated"
-      || event.notification.method === "thread/stackHold/updated") {
+    if (event.notification.method === "pullRequest/status/updated") {
+      reviewAutoFixDispatcher.wakeForPullRequest(event.notification.params.prKey, event.navigationPullRequestKeyAliases);
+    } else if (event.notification.method === "thread/stackHold/updated") {
+      // A stack operation can unblock another thread, and the event carries
+      // no PR or repository identity.
       reviewAutoFixDispatcher.wake();
     } else if (!handledTerminalTurn && (event.notification.method === "thread/lock/updated"
       || (status && typeof status === "object" && "type" in status && status.type === "idle")

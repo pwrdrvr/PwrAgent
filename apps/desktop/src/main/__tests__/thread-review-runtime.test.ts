@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { StateDb } from "../state/state-db";
@@ -200,15 +201,74 @@ describe("review tracking runtime eligibility", () => {
    * turn, sends nothing.
    */
   describe("auto-fix", () => {
-    const findingsOutput = (turnId: string, id: string) => ({ backend: THREAD.backend, notification: {
-      method: "item/completed" as const, params: { threadId: THREAD.threadId, turnId, item: {
-        id, type: "exitedReviewMode", review: "",
-        data: { reviewOutput: claudeReviewOutput({ findings: [
-          { file: "src/a.ts", line: 3, summary: "Minor naming.", failureScenario: "Confuses readers." },
-          { file: "src/b.ts", line: 9, summary: "Drops a write.", failureScenario: "Loses data." },
-        ] }, "/repo") },
-      } },
-    } }) as AgentEvent;
+    const findingsOutput = (turnId: string, id: string, thread = THREAD, pullRequest?: typeof PR) => ({
+      backend: thread.backend,
+      notification: {
+        method: "item/completed",
+        params: { threadId: thread.threadId, turnId, item: {
+          id, type: "exitedReviewMode", review: "",
+          data: {
+            ...(pullRequest ? { context: { workspacePath: "/repo", pullRequest } } : {}),
+            reviewOutput: claudeReviewOutput({ findings: [
+              { file: "src/a.ts", line: 3, summary: "Minor naming.", failureScenario: "Confuses readers." },
+              { file: "src/b.ts", line: 9, summary: "Drops a write.", failureScenario: "Loses data." },
+            ] }, "/repo"),
+          },
+        } },
+      },
+    }) as AgentEvent;
+
+    it("bounds SQLite review reads for unrelated turn and forge events", async () => {
+      let hold: string | undefined = "CI running";
+      const readHold = vi.fn(async () => hold);
+      install(readHold);
+      const second = { ...THREAD, threadId: "second-owner" };
+      const otherPr = { ...PR, repo: "other", url: "https://github.com/example/other/pull/7" };
+      for (const [thread, pr] of [[THREAD, PR], [second, otherPr]] as const) {
+        getReviewAutoFixArming().starting(thread, "auto-fix").accepted("review-turn");
+        onEvent(findingsOutput("review-turn", thread.threadId, thread, pr));
+      }
+      const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+      await settle();
+      expect(readHold).toHaveBeenCalledTimes(2);
+      const terminal: AgentEvent["notification"] = { method: "turn/completed", params: {
+        threadId: THREAD.threadId, turnId: "unrelated-turn", turn: { id: "unrelated-turn", status: "completed", output: [] },
+      } };
+      const pr: PrSummary = { ...PR, repo: "new-repo", number: 6, url: "https://github.com/example/new-repo/pull/6", state: "passing" };
+      const forge: AgentEvent["notification"] = { method: "pullRequest/status/updated", params: {
+        prKey: buildPullRequestStatusKey(pr), pr,
+      } };
+      const lowerLayerUpdated: AgentEvent = {
+        backend: "claude", notification: forge, navigationPullRequestKeyAliases: ["github.com/example/atlas#6"],
+      };
+      const lookup = vi.spyOn(getThreadReviewService(), "get");
+      const checkWork = async (event: AgentEvent, reviewLookups: number, stackChecks: number) => {
+        lookup.mockClear();
+        readHold.mockClear();
+        onEvent(event);
+        await settle();
+        expect({ reviewLookups: lookup.mock.calls.length, stackChecks: readHold.mock.calls.length })
+          .toEqual({ reviewLookups, stackChecks });
+      };
+      try {
+        // A terminal event only revisits its own backend and thread.
+        await checkWork({ backend: "claude", notification: terminal }, 0, 0);
+        await checkWork({ backend: "codex", notification: terminal }, 2, 1);
+        // A PR event can unblock a different thread, even after a repository rename.
+        await checkWork({ backend: "claude", notification: forge }, 0, 0);
+        await checkWork(lowerLayerUpdated, 2, 1);
+        // A stack operation with no repository identity can affect either review.
+        await checkWork({ backend: "claude", notification: {
+          method: "thread/stackHold/updated", params: { threadId: "lower-layer", opId: "restack", held: false },
+        } }, 4, 2);
+        hold = undefined;
+        await checkWork(lowerLayerUpdated, 2, 2);
+        await checkWork(lowerLayerUpdated, 0, 0);
+        expect(submitTurnIfIdle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(THREAD));
+      } finally {
+        lookup.mockRestore();
+      }
+    });
 
     it("sends the thread's agent the open findings when an armed review lands", async () => {
       install();
@@ -255,7 +315,9 @@ describe("review tracking runtime eligibility", () => {
       await vi.waitFor(() => expect(readHold).toHaveBeenCalledTimes(3));
       expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("queued");
       hold = undefined;
-      observe();
+      onEvent({ backend: THREAD.backend, notification: {
+        method: "navigation/providerThreads/refreshed", params: { failedProviders: 0 },
+      } });
       await vi.waitFor(() => expect(readHold).toHaveBeenCalledTimes(5));
       observe();
       expect(submitTurnIfIdle).toHaveBeenCalledTimes(2);

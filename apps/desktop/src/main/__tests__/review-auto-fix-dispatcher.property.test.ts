@@ -62,7 +62,10 @@ describe("review auto-fix dispatcher", () => {
           const reviewId = `rev-${runId}`;
           const reviewTurnId = `review-turn-${runId}`;
           const review = makeReview(reviewId, true);
+          const unrelated = { ...makeReview("unrelated"), threadId: "other-thread" };
           const runs = new ReviewAutoFixRuns();
+          let unrelatedLookups = 0;
+          let unrelatedTerminalLookups = 0;
 
           let activeTurnId: string | undefined = reviewTurnId;
           let stackHold: string | undefined = scenario.initialStackHold ? "Held by #1: CI running" : undefined;
@@ -90,9 +93,16 @@ describe("review auto-fix dispatcher", () => {
           };
 
           dispatcher = new ReviewAutoFixDispatcher({
-            getReview: (id) => (id === reviewId ? review : undefined),
-            isThreadArchived: () => archived,
-            readStackHold: async () => await s.schedule(Promise.resolve().then(() => stackHold), "readStackHold"),
+            getReview: (id) => {
+              if (id === reviewId) return review;
+              if (id !== unrelated.id) return undefined;
+              unrelatedLookups++;
+              return unrelated;
+            },
+            isThreadArchived: (thread) => thread.threadId === THREAD.threadId && archived,
+            readStackHold: async (candidate) => candidate.id === unrelated.id
+              ? "Other stack is held"
+              : await s.schedule(Promise.resolve().then(() => stackHold), "readStackHold"),
             threadHasActiveTurn: () => activeTurnId !== undefined,
             suspendDispatch: () => {
               dispatchSuspensions++;
@@ -144,6 +154,8 @@ describe("review auto-fix dispatcher", () => {
             now: () => 1,
           });
 
+          await dispatcher.dispatch(unrelated.id);
+
           // 1. Review artifact lands while review turn is still active.
           s.scheduleFunction(async () => {
             dispatcher.onReviewLanded(reviewId, THREAD, reviewTurnId);
@@ -160,7 +172,10 @@ describe("review auto-fix dispatcher", () => {
           s.scheduleFunction(async () => {
             activeTurnId = undefined;
             drainQueuedUser();
+            // A terminal event must do no review reads on another thread.
+            const before = unrelatedLookups;
             dispatcher.onTurnEnded(THREAD, new Set([reviewTurnId]));
+            unrelatedTerminalLookups += unrelatedLookups - before;
             if (scenario.emitIdle && !scenario.idleBeforeCompleted) {
               dispatcher.wake(THREAD);
             }
@@ -222,6 +237,7 @@ describe("review auto-fix dispatcher", () => {
           }
           await s.waitIdle();
 
+          expect(unrelatedTerminalLookups).toBe(0);
           // No dispatch suspension ever leaks.
           expect(dispatchSuspensions).toBe(0);
           // Auto-fix never runs while a stack hold is active.
@@ -544,5 +560,31 @@ describe("review auto-fix dispatcher", () => {
     await Promise.resolve();
     expect(submitCalls).toBe(1);
     expect(runs.of(THREAD)[review.id]).toBeUndefined();
+  });
+
+  it("releases a handoff on disposal while a stack check is in flight", async () => {
+    const review = makeReview("rev-dispose");
+    let finishCheck!: (hold: string | undefined) => void;
+    const check = new Promise<string | undefined>((resolve) => { finishCheck = resolve; });
+    let releases = 0;
+    let admissionAttempts = 0;
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => false,
+      readStackHold: () => check,
+      suspendDispatch: () => () => { releases++; },
+      submitTurn: async () => {},
+      submitTurnIfIdle: async () => {
+        admissionAttempts++;
+        return { status: "started" };
+      },
+      recordRun: () => {},
+    });
+    dispatcher.onReviewLanded(review.id, THREAD, "review-turn");
+    dispatcher.dispose();
+    finishCheck(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    dispatcher.wake();
+    expect({ releases, admissionAttempts }).toEqual({ releases: 1, admissionAttempts: 0 });
   });
 });
