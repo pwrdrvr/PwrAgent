@@ -213,15 +213,25 @@ export type AgentNotificationsSnapshot = {
   earlier: AgentNotificationItem[];
 };
 
+/** One notice a window shows: its id, and the peer that owns it, if any. */
+export type AgentNoticeRef = { id: string; federationTarget?: FederationRemoteTarget };
+
 /**
  * What a window asks of the notices it shows. A dismiss or cancel names the
- * peer that owns the notice; without one it is this machine's.
+ * peer that owns the notice; without one it is this machine's. Dismiss all
+ * names the notices the window listed, so one that arrives meanwhile stays
+ * unread; an owner that predates `ids` dismisses every unread notice.
  */
 export type ManageAgentNotificationsRequest =
   | { action: "snapshot" }
   | { action: "dismiss"; id: string; federationTarget?: FederationRemoteTarget }
-  | { action: "dismiss_all" }
+  | { action: "dismiss_all"; ids?: AgentNoticeRef[] }
   | { action: "cancel"; id: string; federationTarget?: FederationRemoteTarget };
+
+/** The notices a window lists, for dismiss all. */
+export function agentNoticeIds(items: readonly AgentNotificationItem[]): AgentNoticeRef[] {
+  return items.map((item) => item.federationTarget ? { id: item.id, federationTarget: item.federationTarget } : { id: item.id });
+}
 
 export type ManageAgentNotificationsResponse =
   | { ok: true; snapshot: AgentNotificationsSnapshot }

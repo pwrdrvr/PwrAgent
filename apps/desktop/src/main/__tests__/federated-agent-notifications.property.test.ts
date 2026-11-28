@@ -2,11 +2,12 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
-import type {
-  AgentNotificationItem,
-  AgentNotificationsSnapshot,
-  ManageAgentNotificationsRequest,
-  ManageAgentNotificationsResponse,
+import {
+  agentNoticeIds,
+  type AgentNotificationItem,
+  type AgentNotificationsSnapshot,
+  type ManageAgentNotificationsRequest,
+  type ManageAgentNotificationsResponse,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import { FederatedAgentNotifications } from "../scheduled-actions/federated-agent-notifications";
 
@@ -38,7 +39,10 @@ class FakeOwner {
 
   manage(request: ManageAgentNotificationsRequest): ManageAgentNotificationsResponse {
     if (request.action === "dismiss") this.unread = this.unread.filter((entry) => entry.id !== request.id);
-    if (request.action === "dismiss_all") this.unread = [];
+    if (request.action === "dismiss_all") {
+      const listed = request.ids ? new Set(request.ids.map((ref) => ref.id)) : undefined;
+      this.unread = listed ? this.unread.filter((entry) => !listed.has(entry.id)) : [];
+    }
     if (request.action === "cancel") {
       if (!this.scheduled.some((entry) => entry.id === request.id)) {
         return { ok: false, error: { code: "not_found", message: "gone" } };
@@ -93,6 +97,45 @@ function updated(peer: string): AgentEvent {
 }
 
 /** The fakes answer at once, so reads settle within a few microtasks. */
+/**
+ * A viewer whose peer answers each request when it arrives, in the order
+ * sent, and holds every reply until the test releases it, in any order.
+ */
+function heldReplies(owner: FakeOwner) {
+  const held: Array<{ action: string; release: () => void }> = [];
+  const notified: string[] = [];
+  const cleared: string[] = [];
+  const remoteRequests: ManageAgentNotificationsRequest[] = [];
+  let connected = true;
+  const notices = new FederatedAgentNotifications({
+    local: async () => ({ ok: true, snapshot: { unread: [], scheduled: [], earlier: [] } }),
+    remote: async (_target, request) => {
+      remoteRequests.push(request);
+      const answer = owner.manage(request);
+      await new Promise<void>((resolve) => { held.push({ action: request.action, release: resolve }); });
+      return answer;
+    },
+    peers: () => connected ? [{ target: target("peer-a"), label: "Label peer-a" }] : [],
+    watch: () => undefined,
+    nativeNotificationsEnabled: () => true,
+    notifyNative: ({ key }) => { notified.push(key); },
+    clearNative: (key) => { cleared.push(key); },
+    showThread: () => undefined,
+    changed: () => undefined,
+  });
+  return {
+    notices, notified, cleared, remoteRequests,
+    disconnect: () => { connected = false; notices.syncPeers(); },
+    /** Releases the oldest held reply to this action. */
+    release: async (action: string) => {
+      const index = held.findIndex((entry) => entry.action === action);
+      if (index < 0) throw new Error(`no ${action} reply is held`);
+      held.splice(index, 1)[0]!.release();
+      await settle();
+    },
+  };
+}
+
 async function settle(): Promise<void> {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
@@ -344,6 +387,85 @@ describe("FederatedAgentNotifications", () => {
 
     expect((await snapshotOf(notices, undefined)).unread.map(keyOf)).toEqual(["peer-a:seen"]);
     expect(notified).toEqual([]);
+  });
+
+  // Found by federated-agent-notifications.model.test.ts: replies come back
+  // in any order. A cancel reply older than a read that already announced a
+  // new notice dropped it, and the next read announced it a second time.
+  it("keeps the newest snapshot when an older reply lands last", async () => {
+    const owner = new FakeOwner();
+    owner.scheduled.push(item("later", true));
+    const h = heldReplies(owner);
+    h.notices.syncPeers();
+    await h.release("snapshot");
+
+    void h.notices.manage({ action: "cancel", id: "later", federationTarget: target("peer-a") }, undefined);
+    owner.unread.push(item("now"));
+    h.notices.onRemoteEvent(updated("peer-a"));
+    await settle();
+    await h.release("snapshot");
+    await h.release("cancel");
+    h.notices.onRemoteEvent(updated("peer-a"));
+    await settle();
+    await h.release("snapshot");
+
+    expect(h.notified).toEqual(["agent-notification:peer-a:now"]);
+    expect((await snapshotOf(h.notices, target("peer-a"))).unread.map(keyOf)).toEqual(["peer-a:now"]);
+  });
+
+  // Found by the model: a dismiss reply that lands after the viewer dropped
+  // the peer announced a notice on the dropped peer, and nothing withdrew it.
+  it("raises no banner for a reply that lands after the peer was dropped", async () => {
+    const owner = new FakeOwner();
+    owner.unread.push(item("seen"));
+    const h = heldReplies(owner);
+    h.notices.syncPeers();
+    await h.release("snapshot");
+
+    owner.unread.push(item("new"));
+    void h.notices.manage({ action: "dismiss", id: "seen", federationTarget: target("peer-a") }, undefined).catch(() => undefined);
+    await settle();
+    h.disconnect();
+    await h.release("dismiss");
+
+    expect(h.notified).toEqual([]);
+  });
+
+  // Found by the model: dismiss all asked the owner to dismiss every unread
+  // notice, so one delivered while the request was out was dismissed unseen.
+  it("dismisses only the notices the window listed, each on its owner", async () => {
+    const owner = new FakeOwner();
+    owner.unread.push(item("listed"));
+    const local: ManageAgentNotificationsRequest[] = [];
+    const remote: ManageAgentNotificationsRequest[] = [];
+    const notices = new FederatedAgentNotifications({
+      local: async (request) => {
+        local.push(request);
+        return { ok: true, snapshot: { unread: [], scheduled: [], earlier: [] } };
+      },
+      remote: async (_target, request) => {
+        remote.push(request);
+        return owner.manage(request);
+      },
+      peers: () => [{ target: target("peer-a"), label: "Label peer-a" }],
+      watch: () => undefined,
+      nativeNotificationsEnabled: () => true,
+      notifyNative: () => undefined,
+      clearNative: () => undefined,
+      showThread: () => undefined,
+      changed: () => undefined,
+    });
+    notices.syncPeers();
+    await settle();
+    const shown = (await snapshotOf(notices, undefined)).unread;
+    // A notice arrives after the window listed its notices.
+    owner.unread.push(item("arrived"));
+
+    await notices.manage({ action: "dismiss_all", ids: agentNoticeIds([...shown, item("mine")]) }, undefined);
+
+    expect(owner.unread.map((entry) => entry.id)).toEqual(["arrived"]);
+    expect(remote.filter((request) => request.action === "dismiss_all")).toEqual([{ action: "dismiss_all", ids: [{ id: "listed" }] }]);
+    expect(local.filter((request) => request.action === "dismiss_all")).toEqual([{ action: "dismiss_all", ids: [{ id: "mine" }] }]);
   });
 
   it("keeps a peer's last notices through a failed read", async () => {

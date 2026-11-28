@@ -523,6 +523,17 @@ describe("agent notification center", () => {
     ]);
     expect(world.center.snapshot()).toMatchObject({ unread: [], scheduled: [{ id: "sooner" }, { id: "later" }] });
   });
+
+  // Found by federated-agent-notifications.model.test.ts: dismiss all from a
+  // window dismissed a notice delivered after the window listed its notices.
+  it("dismisses all of a listed set and leaves a notice delivered since", async () => {
+    const world = centerWorld();
+    await world.center.deliver(world.notice("listed"));
+    await world.center.deliver(world.notice("arrived"));
+    expect(await world.center.dismissAll(["listed", "unknown"])).toBe(1);
+    expect(world.center.snapshot().unread.map((item) => item.id)).toEqual(["arrived"]);
+    expect(world.cleared).toEqual(["agent-notification:listed"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -303,6 +303,10 @@ read from it, and it never calls them.
 | `agentNotifications.snapshot` | `thread_detail` | Unread, scheduled and earlier notices, with each thread's title |
 | `agentNotifications.manage` | `turn_control` | Dismiss, dismiss all, or cancel a waiting notice |
 
+Dismiss all names the notices the window listed (`ids`), so a notice
+delivered while the request is out stays unread. An owner that predates
+`ids` dismisses every unread notice.
+
 `agentNotifications/updated` travels in its own threadless
 `agent_notifications` event class, so a viewer follows an owner's notices
 without following its threads. The owner sends it when a notice is
@@ -311,7 +315,13 @@ delivered, dismissed, scheduled, cancelled or fails.
 The viewer's main process (`FederatedAgentNotifications`) keeps the last
 snapshot of each connected peer that advertises the capability, reads it
 again on each event and on a stream restart, and keeps it through a failed
-read. It tags each notice with its owner, and dismiss and cancel go to that
+read. Every reply carries the peer's whole snapshot. Requests reach the
+peer in the order they were sent, on the one connection to it, but replies
+can return in any order, so each request is numbered when it is sent and a
+reply older than the stored one is dropped. So is a reply for a peer the
+viewer has since dropped. `federated-agent-notifications.model.test.ts`
+runs the real owner and viewer over a transport that reorders replies and
+events. It tags each notice with its owner, and dismiss and cancel go to that
 owner. A peer's window acts only on its own peer's notices. The viewer
 raises its own native notification, key
 `agent-notification:<instance>:<id>`, for each notice that arrives while it

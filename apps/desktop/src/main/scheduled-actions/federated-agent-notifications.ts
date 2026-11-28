@@ -38,8 +38,10 @@ type OwnerState = {
   announced: Set<string> | undefined;
   reading?: Promise<void>;
   stale: boolean;
-  /** Bumped by every stored snapshot, so a read that began earlier is not stored over a newer one. */
-  generation: number;
+  /** Requests sent to this peer, numbered in order. */
+  sent: number;
+  /** The newest request whose reply is stored. */
+  applied: number;
 };
 
 /**
@@ -52,6 +54,12 @@ type OwnerState = {
  * shows that peer's. This machine raises one native notification per new
  * notice, under the same eligibility as its own. Notices unread when a peer
  * connects are listed, not announced.
+ *
+ * Every read, dismiss and cancel reply carries the peer's whole snapshot.
+ * Requests reach the peer in the order they were sent, on the one connection
+ * to it, but replies can come back in any order. Each request is numbered
+ * when it is sent, and a reply older than the one stored is dropped: storing
+ * it would bring back a dismissed notice, or announce one twice.
  */
 export class FederatedAgentNotifications {
   private readonly owners = new Map<string, OwnerState>();
@@ -76,7 +84,7 @@ export class FederatedAgentNotifications {
         owner.peer = peer;
         continue;
       }
-      this.owners.set(peer.target.instanceId, { peer, snapshot: EMPTY, announced: undefined, stale: false, generation: 0 });
+      this.owners.set(peer.target.instanceId, { peer, snapshot: EMPTY, announced: undefined, stale: false, sent: 0, applied: 0 });
       added.push(peer.target.instanceId);
     }
     this.deps.watch([...connected]);
@@ -131,13 +139,19 @@ export class FederatedAgentNotifications {
     if (request.action === "snapshot") return await this.snapshot(window);
     if (request.action === "dismiss_all") {
       const owners = window ? [window.instanceId] : [...this.owners.keys()];
-      // This machine's notices and each peer's are dismissed independently.
-      const local = window ? undefined : await this.deps.local(request);
+      // Only the notices the window listed, each on its own owner. This
+      // machine's notices and each peer's are dismissed independently.
+      const listed = Array.isArray(request.ids) ? request.ids : undefined;
+      const local = window ? undefined : await this.deps.local(listed
+        ? { action: "dismiss_all", ids: listed.filter((ref) => !ref.federationTarget) }
+        : request);
       await Promise.all(owners.map(async (instanceId) => {
         const owner = this.owners.get(instanceId);
-        if (!owner || owner.snapshot.unread.length === 0) return;
+        const ids = listed?.filter((ref) => ref.federationTarget?.instanceId === instanceId).map((ref) => ({ id: ref.id }));
+        if (!owner || (ids ? ids.length === 0 : owner.snapshot.unread.length === 0)) return;
         try {
-          this.apply(owner, await this.deps.remote(owner.peer.target, request));
+          const { seq, response } = await this.ask(owner, ids ? { action: "dismiss_all", ids } : { action: "dismiss_all" });
+          this.apply(owner, response, seq);
         } catch (error) {
           // One unreachable peer keeps its notices; the others are dismissed.
           this.deps.warn?.("peer agent notices not dismissed", {
@@ -163,18 +177,27 @@ export class FederatedAgentNotifications {
     if (!owner) {
       return { ok: false, error: { code: "unavailable", message: "That machine is not connected." } };
     }
-    const response = await this.deps.remote(owner.peer.target, { ...request, federationTarget: undefined });
+    const { seq, response } = await this.ask(owner, { ...request, federationTarget: undefined });
     if (!response.ok) return response;
-    this.apply(owner, response);
+    this.apply(owner, response, seq);
     this.deps.changed();
     return await this.snapshot(window);
   }
 
+  /** Sends one request to a peer, numbered in the order requests leave. */
+  private async ask(
+    owner: OwnerState,
+    request: ManageAgentNotificationsRequest,
+  ): Promise<{ seq: number; response: ManageAgentNotificationsResponse }> {
+    const seq = ++owner.sent;
+    return { seq, response: await this.deps.remote(owner.peer.target, request) };
+  }
+
   private async read(owner: OwnerState): Promise<void> {
-    const generation = owner.generation;
+    let seq: number;
     let response: ManageAgentNotificationsResponse;
     try {
-      response = await this.deps.remote(owner.peer.target, { action: "snapshot" });
+      ({ seq, response } = await this.ask(owner, { action: "snapshot" }));
     } catch (error) {
       // Keep the last snapshot through an outage; the reconnect reads again.
       this.deps.warn?.("peer agent notices unavailable", {
@@ -187,21 +210,18 @@ export class FederatedAgentNotifications {
       this.deps.warn?.("peer agent notices refused", { instanceId: owner.peer.target.instanceId, code: response.error.code });
       return;
     }
-    if (this.owners.get(owner.peer.target.instanceId) !== owner) return;
-    if (owner.generation !== generation) {
-      // A dismiss or cancel stored a newer snapshot while this read was out.
-      // Storing this one would bring a dismissed notice back and announce it
-      // again; read once more instead.
-      owner.stale = true;
-      return;
-    }
-    this.apply(owner, response);
-    this.deps.changed();
+    if (this.apply(owner, response, seq)) this.deps.changed();
   }
 
-  /** Stores a peer's snapshot and announces the notices it newly holds unread. */
-  private apply(owner: OwnerState, response: ManageAgentNotificationsResponse): void {
-    if (!response.ok) return;
+  /**
+   * Stores a peer's snapshot and announces the notices it newly holds
+   * unread. A reply to an older request than the stored one is dropped; the
+   * stored snapshot is newer. So is a reply for a peer this viewer has since
+   * dropped: its banners were withdrawn, and nothing would withdraw new ones.
+   */
+  private apply(owner: OwnerState, response: ManageAgentNotificationsResponse, seq: number): boolean {
+    if (!response.ok || seq <= owner.applied || this.owners.get(owner.peer.target.instanceId) !== owner) return false;
+    owner.applied = seq;
     const { target, label } = owner.peer;
     const tag = (item: AgentNotificationItem): AgentNotificationItem => ({ ...item, federationTarget: target, ownerLabel: label });
     const snapshot: AgentNotificationsSnapshot = {
@@ -211,10 +231,9 @@ export class FederatedAgentNotifications {
     };
     const unread = new Set(snapshot.unread.map((item) => item.id));
     const announced = owner.announced;
-    owner.generation++;
     owner.snapshot = snapshot;
     owner.announced = unread;
-    if (!announced) return;
+    if (!announced) return true;
     for (const id of announced) {
       if (!unread.has(id)) this.deps.clearNative(nativeKey(target.instanceId, id));
     }
@@ -232,6 +251,7 @@ export class FederatedAgentNotifications {
         },
       });
     }
+    return true;
   }
 
   private merged(local: AgentNotificationsSnapshot): AgentNotificationsSnapshot {

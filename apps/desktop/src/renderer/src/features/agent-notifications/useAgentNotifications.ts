@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import type {
-  AgentNotificationItem,
-  AgentNotificationsSnapshot,
-  ManageAgentNotificationsRequest,
+import {
+  agentNoticeIds,
+  type AgentNotificationItem,
+  type AgentNotificationsSnapshot,
+  type ManageAgentNotificationsRequest,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { openExternalUrl } from "../../lib/open-external-url";
@@ -112,7 +113,10 @@ export function useAgentNotifications(
   const dismiss = useCallback((item: AgentNotificationItem) => {
     void run({ action: "dismiss", id: item.id, ...owner(item) });
   }, [run]);
-  const dismissAll = useCallback(() => { void run({ action: "dismiss_all" }); }, [run]);
+  // Only what this window listed: a notice that arrives meanwhile stays unread.
+  const dismissAll = useCallback(() => {
+    void run({ action: "dismiss_all", ids: agentNoticeIds(snapshot.unread) });
+  }, [run, snapshot.unread]);
   const cancel = useCallback((item: AgentNotificationItem) => {
     void run({ action: "cancel", id: item.id, ...owner(item) });
   }, [run]);

@@ -82,10 +82,14 @@ export class AgentNotificationCenter {
     return true;
   }
 
-  async dismissAll(): Promise<number> {
-    const items = [...this.unread.values()];
-    for (const item of items) this.deps.clearNative(nativeKey(item.id));
-    this.unread.clear();
+  /** Dismisses the listed notices, or every unread one when none are listed. */
+  async dismissAll(ids?: readonly string[]): Promise<number> {
+    const listed = ids ? new Set(ids) : undefined;
+    const items = [...this.unread.values()].filter((item) => !listed || listed.has(item.id));
+    for (const item of items) {
+      this.unread.delete(item.id);
+      this.deps.clearNative(nativeKey(item.id));
+    }
     const last = items.at(-1);
     if (last) await this.deps.publishChanged({ backend: last.backend, threadId: last.threadId });
     return items.length;
