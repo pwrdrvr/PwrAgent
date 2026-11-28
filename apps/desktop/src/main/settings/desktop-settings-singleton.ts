@@ -10,6 +10,7 @@ import {
   MemoryDesktopSecretStore,
 } from "./desktop-secret-store";
 import { ensureManagedCodexRuntime, retainManagedCodexCommand } from "../codex-managed-runtime";
+import { ensureOpenAiCodexRuntime, retainOpenAiCodexCommand } from "../codex-openai-runtime";
 import { resolveActiveManagedGrokCommand } from "../acp/grok-managed-runtime";
 import { SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
 import {
@@ -78,9 +79,14 @@ export function initializeDesktopSettingsService(): DesktopSettingsService {
       // keep managed downloads opt-in until the downstream signing lane is
       // configured and publishing signed Apple/Windows assets.
       defaultManagedGrokBuilds: app.isPackaged !== true,
-      retainCachedCodexCommand: async (command) => await retainManagedCodexCommand(command, {
-        requirePlatformSignature: app.isPackaged === true,
-      }),
+      retainCachedCodexCommand: async (command) => {
+        await retainManagedCodexCommand(command, {
+          requirePlatformSignature: app.isPackaged === true,
+        });
+        await retainOpenAiCodexCommand(command);
+      },
+      ensureOpenAiCodexRuntime: async ({ checkMode, signal }) =>
+        await ensureOpenAiCodexRuntime({ checkMode, ...(signal ? { signal } : {}) }),
       ensureManagedCodexRuntime: async ({
         channel,
         checkMode,

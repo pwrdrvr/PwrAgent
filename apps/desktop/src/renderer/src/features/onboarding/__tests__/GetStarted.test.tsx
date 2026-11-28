@@ -262,8 +262,8 @@ describe("Get started", () => {
     const codex = agentRow("Codex");
     await waitFor(() => expect(within(codex).getByText("Not installed")).toBeInTheDocument());
     expect(within(codex).queryByText(/install\.sh/)).not.toBeInTheDocument();
-    // PwrAgent's own build is the first offer; the terminal commands stay a
-    // click away for anyone who prefers to install Codex themselves.
+    // Installing OpenAI's Codex is the first offer; the terminal commands stay
+    // a click away for anyone who prefers to install Codex themselves.
     expect(within(codex).getByRole("button", { name: "Install Codex" })).toBeInTheDocument();
     fireEvent.click(within(codex).getByRole("button", { name: "Install it yourself instead" }));
     expect(within(codex).getByText("curl -fsSL https://chatgpt.com/codex/install.sh | sh")).toBeInTheDocument();
@@ -272,19 +272,24 @@ describe("Get started", () => {
     await waitFor(() => expect(desktopApi.copyText).toHaveBeenCalledWith("npm install -g @openai/codex"));
   });
 
-  it("installs PwrAgent's Codex build on one click when no Codex is found, then checks again", async () => {
+  it("installs OpenAI's Codex on one click when no Codex is found, then checks again", async () => {
     const desktopApi = api();
     const settings = settingsState(false);
     renderGetStarted({ desktopApi, settings });
     const codex = agentRow("Codex");
     await waitFor(() => expect(within(codex).getByText("Not installed")).toBeInTheDocument());
-    expect(within(codex).getByText("PwrAgent can download and verify its own Codex build for you.")).toBeInTheDocument();
-    expect(settings.writeConfig).not.toHaveBeenCalled();
+    expect(within(codex).getByText("PwrAgent can install OpenAI’s Codex for you and keep it up to date.")).toBeInTheDocument();
     const discover = desktopApi.refreshCodexDiscovery as unknown as ReturnType<typeof vi.fn>;
-    const discoveries = discover.mock.calls.length;
+    expect(discover).not.toHaveBeenCalledWith(expect.objectContaining({ installOpenAiCodex: true }));
     fireEvent.click(within(codex).getByRole("button", { name: "Install Codex" }));
-    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ models: { codex: { managedBuilds: true } } }));
-    await waitFor(() => expect(discover.mock.calls.length).toBeGreaterThan(discoveries));
+    await waitFor(() => expect(discover).toHaveBeenCalledWith({
+      discoveryIntent: "setup-user-action",
+      installOpenAiCodex: true,
+    }));
+    // The install answers before the page checks every agent again.
+    await waitFor(() => expect(discover.mock.calls.at(-1)?.[0]).toEqual({ discoveryIntent: "setup-user-action" }));
+    // PwrAgent's own build stays opt-in: the install never turns it on.
+    expect(settings.writeConfig).not.toHaveBeenCalled();
   });
 
   it("signs in to this computer's Codex only on a click, and can cancel and try again", async () => {

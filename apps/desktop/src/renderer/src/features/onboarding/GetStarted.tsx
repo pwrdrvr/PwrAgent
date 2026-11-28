@@ -17,6 +17,7 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { mergeRecentProjectDiscoveries } from "@pwragent/shared/recent-project-discovery";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ipcErrorMessage } from "../../lib/open-path-failure";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";
@@ -619,7 +620,7 @@ type AgentsModel = {
   codexInstall: CodexInstallModel;
 };
 
-/** PwrAgent installing its own verified Codex build from this page. */
+/** PwrAgent installing OpenAI’s Codex from this page. */
 type CodexInstallModel = {
   offer?: CodexInstallOffer;
   installing: boolean;
@@ -813,7 +814,6 @@ function useGetStartedAgents(params: {
     snapshot,
     discovering: codexDiscovering,
     desktopApi,
-    settingsRef,
     refresh,
   });
   const rows = useMemo((): AgentRow[] => AGENTS.map((definition) => {
@@ -862,23 +862,22 @@ function useGetStartedAgents(params: {
 }
 
 /**
- * Install PwrAgent's verified Codex build for a user with no working Codex,
- * as T3 Code does, instead of sending them to a terminal. Turning the build
- * on downloads, verifies and activates it before the write returns; the
- * discovery that follows makes it the Codex this page signs in with. If the
- * build is already on and a first install failed, discovery retries it.
+ * Install OpenAI's Codex for a user with no working Codex, as T3 Code does,
+ * instead of sending them to a terminal. The request downloads, verifies and
+ * places the latest release under the PwrAgent root before it returns; the
+ * discovery it runs makes that the Codex this page signs in with, and PwrAgent
+ * keeps it current from then on. A user-installed Codex that works still wins.
  */
 function useCodexInstall(params: {
   snapshot: DesktopSettingsSnapshot | undefined;
   discovering: boolean;
   desktopApi?: DesktopApi;
-  settingsRef: { current: DesktopSettingsState };
   refresh: () => Promise<void>;
 }): CodexInstallModel {
-  const { snapshot, discovering, desktopApi, settingsRef, refresh } = params;
+  const { snapshot, discovering, desktopApi, refresh } = params;
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string>();
-  const progress = useManagedRuntimeProgress(desktopApi, "codex");
+  const progress = useManagedRuntimeProgress(desktopApi, "openai-codex");
   const offer = codexInstallOffer({
     snapshot,
     discovering,
@@ -888,22 +887,21 @@ function useCodexInstall(params: {
     setInstalling(true);
     setError(undefined);
     try {
-      const codex = settingsRef.current.snapshot?.models.codex;
-      const managedOn = codex?.managedBuildsRequiredBy !== undefined || codex?.managedBuilds?.value === true;
-      if (!managedOn) {
-        const saved = await settingsRef.current.writeConfig({ models: { codex: { managedBuilds: true } } });
-        if (!saved) {
-          setError("PwrAgent couldn't install its Codex build. Try again, or install Codex yourself.");
-          return;
-        }
+      if (!desktopApi?.refreshCodexDiscovery) {
+        setError("PwrAgent couldn't install Codex. Install it yourself instead.");
+        return;
       }
+      await desktopApi.refreshCodexDiscovery({
+        discoveryIntent: "setup-user-action",
+        installOpenAiCodex: true,
+      });
       await refresh();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(ipcErrorMessage(caught));
     } finally {
       setInstalling(false);
     }
-  }, [refresh, settingsRef]);
+  }, [desktopApi, refresh]);
   return {
     offer,
     installing,
@@ -1128,9 +1126,9 @@ function AgentRowView(props: {
   const detail = codexWaiting
     ? "Finish signing in on the page that opened. PwrAgent checks again when you come back."
     : codexInstallOffer?.reason === "missing" && state.kind === "not-installed"
-      ? "PwrAgent can download and verify its own Codex build for you."
+      ? "PwrAgent can install OpenAI’s Codex for you and keep it up to date."
       : codexInstallOffer?.reason === "broken" && state.kind === "not-installed"
-        ? "The Codex on this computer doesn't start. PwrAgent can install its own verified build."
+        ? "The Codex on this computer doesn't start. PwrAgent can install OpenAI’s Codex for you."
         : "detail" in state ? state.detail : undefined;
   const showCodexInstallPanel = definition.id === "codex"
     && (codexInstallOffer !== undefined || codexProgress !== undefined || codexInstall.error !== undefined);
@@ -1222,8 +1220,8 @@ function CodexInstallPanel(props: {
         <>
           <p className="get-started__agent-note">
             Codex {offer.version} is too old for the newest models, which need
-            Codex {offer.minimumVersion} or later. PwrAgent can install its own
-            verified build and keep it current.
+            Codex {offer.minimumVersion} or later. PwrAgent can install
+            OpenAI’s latest Codex and keep it up to date.
           </p>
           <div className="get-started__row-actions">
             <button
@@ -1232,7 +1230,7 @@ function CodexInstallPanel(props: {
               disabled={props.installing}
               onClick={() => void install.install()}
             >
-              {props.installing ? "Installing…" : "Use PwrAgent's Codex"}
+              {props.installing ? "Installing…" : "Install latest Codex"}
             </button>
           </div>
         </>

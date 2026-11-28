@@ -103,6 +103,12 @@ import { readFile, realpath } from "node:fs/promises";
 import { accessSync, constants, statSync } from "node:fs";
 import { readManagedCodexTrackTags, retainManagedCodexCommand } from "../codex-managed-runtime";
 import { managedCodexTagForCommand } from "../codex-build-channel";
+import {
+  applyOpenAiCodexFallback,
+  openAiCodexVersionForCommand,
+  type OpenAiCodexCheckMode,
+  type OpenAiCodexRuntime,
+} from "../codex-openai-runtime";
 import { buildCodexVersionAdvisory } from "./codex-version-advisory";
 import path from "node:path";
 import {
@@ -394,6 +400,14 @@ type DesktopSettingsServiceOptions = {
     signal?: AbortSignal;
     waitForUpdate?: boolean;
   }) => Promise<ManagedCodexRuntime>;
+  /**
+   * OpenAI's own Codex, installed by PwrAgent for an operator who has no
+   * working one. Absent in tests that do not exercise it.
+   */
+  ensureOpenAiCodexRuntime?: (options: {
+    checkMode: OpenAiCodexCheckMode;
+    signal?: AbortSignal;
+  }) => Promise<OpenAiCodexRuntime | undefined>;
   resolveActiveManagedGrokCommand?: () => string | undefined;
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
@@ -750,6 +764,8 @@ export class DesktopSettingsService {
   private terminalSpawnEnv?: NodeJS.ProcessEnv;
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private managedCodexRuntime?: ManagedCodexRuntime;
+  /** The PwrAgent-installed OpenAI Codex, while discovery selects it. */
+  private openAiCodexRuntime?: OpenAiCodexRuntime;
   private sessionCodexCommand?: ResolvedCodexCommandCandidate;
   private sessionCodexSelectionGeneration = 0;
   private sessionCodexRetention: Promise<void> = Promise.resolve();
@@ -2428,7 +2444,8 @@ export class DesktopSettingsService {
       source: discovery.selectedSource,
       managedByPwrAgent:
         managed !== undefined
-        || (command !== undefined && managedCodexTagForCommand(command) !== undefined),
+        || (command !== undefined && managedCodexTagForCommand(command) !== undefined)
+        || openAiCodexVersionForCommand(command) !== undefined,
       resolvePath: async (target) => {
         // Keyed on the version too, so an upgrade or reinstall at the same
         // path is looked at again. A failed lookup is not remembered: the
@@ -3444,11 +3461,22 @@ export class DesktopSettingsService {
 
   async refreshCodexDiscovery(
     permit: ProviderDiscoveryPermit,
+    options: { installOpenAiCodex?: boolean } = {},
   ): Promise<DesktopSettingsSnapshot> {
     assertProviderDiscoveryPermit(permit, [
       "settings-user-action",
       "setup-user-action",
     ]);
+    if (options.installOpenAiCodex) {
+      // The operator asked for OpenAI's Codex. Install or update it before
+      // discovery runs, so the discovery below can select it; a failure
+      // reaches the caller instead of a selection that silently lacks it.
+      if (!this.options.ensureOpenAiCodexRuntime) {
+        throw new Error("PwrAgent can't install Codex on this computer.");
+      }
+      const installed = await this.options.ensureOpenAiCodexRuntime({ checkMode: "force" });
+      if (!installed) throw new Error("PwrAgent couldn't install Codex.");
+    }
     // Explicit Settings/setup discovery retains its existing opt-in switch
     // behavior; only automatic background startup discovery is pinned.
     this.sessionCodexSelectionGeneration += 1;
@@ -3561,6 +3589,8 @@ export class DesktopSettingsService {
       durationMs: Math.round(performance.now() - executableStartedAt),
       candidateCount: discovery.candidates.length,
     });
+    const effective = await this.applyInstalledOpenAiCodex(discovery);
+    if (signal.aborted) return;
     const profilesStartedAt = performance.now();
     this.codexProfiles = normalizeCodexProfilesSnapshot(
       discoverCodexAuthProfiles({
@@ -3568,9 +3598,9 @@ export class DesktopSettingsService {
         env: this.env,
       }),
     );
-    const selected = discovery.candidates.find((candidate) => candidate.selected);
+    const selected = effective.candidates.find((candidate) => candidate.selected);
     this.configStore.recordProviderDiscovery("codex", {
-      candidates: discovery.candidates.map((candidate) => ({
+      candidates: effective.candidates.map((candidate) => ({
         command: candidate.command,
         source: candidate.source,
         ...(candidate.version ? { version: candidate.version } : {}),
@@ -3581,16 +3611,48 @@ export class DesktopSettingsService {
             }
           : {}),
       })),
-      ...(discovery.error ? { error: discovery.error } : {}),
-      ...(discovery.selectedCommand
-        ? { selectedCommand: discovery.selectedCommand }
+      ...(effective.error ? { error: effective.error } : {}),
+      ...(effective.selectedCommand
+        ? { selectedCommand: effective.selectedCommand }
         : {}),
       ...(selected?.version ? { selectedVersion: selected.version } : {}),
     });
-    if (discovery.selectedCommand) this.rejectedStartupCachedCommand = false;
+    if (effective.selectedCommand) this.rejectedStartupCachedCommand = false;
     settingsLog.info("Codex discovery profile snapshot completed", {
       durationMs: Math.round(performance.now() - profilesStartedAt),
     });
+  }
+
+  /**
+   * Discovery's answer with the PwrAgent-installed OpenAI Codex filling in when
+   * no user-installed Codex works. Only an install discovery actually selects
+   * is marked in use and checked for updates: one a working PATH Codex
+   * outranks stays on disk untouched rather than downloading releases nobody
+   * runs.
+   */
+  private async applyInstalledOpenAiCodex(
+    discovery: DesktopCodexDiscoverySnapshot,
+  ): Promise<DesktopCodexDiscoverySnapshot> {
+    const ensure = this.options.ensureOpenAiCodexRuntime;
+    if (!ensure) return discovery;
+    try {
+      const installed = await ensure({ checkMode: "read" });
+      const effective = applyOpenAiCodexFallback(discovery, installed);
+      if (!installed || effective.selectedCommand !== installed.command) {
+        this.openAiCodexRuntime = undefined;
+        return effective;
+      }
+      // Marks this version in use, prunes the others, and starts the daily
+      // update check. The selection stays on this version for the session.
+      this.openAiCodexRuntime = await ensure({ checkMode: "ttl" }) ?? installed;
+      return applyOpenAiCodexFallback(discovery, this.openAiCodexRuntime);
+    } catch (error) {
+      settingsLog.warn("OpenAI Codex install could not be read", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.openAiCodexRuntime = undefined;
+      return discovery;
+    }
   }
 
   async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
@@ -3650,9 +3712,11 @@ export class DesktopSettingsService {
       };
     }
     const configuredCommand = this.resolveCodexCommandPreference();
-    const cached = this.codexDiscoveryCoordinator.peek?.(configuredCommand)
+    const observed = this.codexDiscoveryCoordinator.peek?.(configuredCommand)
       ?? (this.rejectedStartupCachedCommand ? undefined
         : codexDiscoveryFromProvider(this.configStore.read("providers").codex));
+    const cached = observed
+      && applyOpenAiCodexFallback(observed, this.openAiCodexRuntime);
     const selected = cached?.candidates.find((candidate) => candidate.selected);
     if (
       !selected

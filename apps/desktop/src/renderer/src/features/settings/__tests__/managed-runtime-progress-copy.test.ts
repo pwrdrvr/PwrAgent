@@ -108,6 +108,14 @@ describe("managed runtime progress copy", () => {
     ).toMatchObject({ tone: "error", eyebrow: "Download failed" });
   });
 
+  it("describes OpenAI's Codex by what PwrAgent checks: npm, the published SHA-256, a version probe", () => {
+    const openAi = (phase: ManagedRuntimeProgress["phase"]) =>
+      managedRuntimeProgressCopy(progress({ runtime: "openai-codex", phase, tag: "0.172.0" }), false).message;
+    expect(openAi("checking")).toBe("Asking npm for OpenAI’s latest Codex release…");
+    expect(openAi("verifying")).toBe("Checking the archive against OpenAI’s published SHA-256…");
+    expect(openAi("activating")).toBe("Starting the new Codex to confirm its version…");
+  });
+
   it("says a finished Codex build is waiting for idle when a switch is pending", () => {
     expect(
       managedRuntimeProgressCopy(progress({ phase: "ready", tag: "v2" }), true),

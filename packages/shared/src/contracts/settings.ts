@@ -2414,6 +2414,11 @@ export type ClearDesktopSettingsSecretRequest = {
 
 export type RefreshDesktopCodexDiscoveryRequest = {
   discoveryIntent: "settings-user-action" | "setup-user-action";
+  /**
+   * Install or update OpenAI's Codex under the PwrAgent root before
+   * discovering, so a machine with no working Codex selects it.
+   */
+  installOpenAiCodex?: boolean;
 };
 
 export type SetCodexModelProviderApiKeyRequest = {
