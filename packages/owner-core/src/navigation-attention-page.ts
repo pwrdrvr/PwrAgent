@@ -1,29 +1,38 @@
 import { createHash } from "node:crypto";
-import type { NavigationDirectorySummary, NavigationIdentity, NavigationQueryEntry, NavigationRow } from "@pwragent/shared/contracts/navigation";
+import type { NavigationIdentity, NavigationQueryEntry, NavigationRow } from "@pwragent/shared/contracts/navigation";
 import { DIRECTORY_GIT_PROOF_MAX_KEYS } from "@pwragent/shared/navigation-metadata-dependencies";
 
 export type AttentionGitInputs = {
   links: number;
   paths: ReadonlySet<string>;
-  checkouts: ReadonlySet<NavigationDirectorySummary>;
+  checkouts: ReadonlyMap<string, string>;
 };
 
-const emptyGitInputs: AttentionGitInputs = { links: 0, paths: new Set(), checkouts: new Set() };
+const emptyGitInputs: AttentionGitInputs = { links: 0, paths: new Set(), checkouts: new Map() };
+
+function gitCollectionBytes(git: AttentionGitInputs): number {
+  // Aggregate nodes share string values but keep their own collection slots.
+  return git === emptyGitInputs ? 0 : 128 + 40 * git.paths.size + 48 * git.checkouts.size;
+}
 
 function combineGitInputs(size: number, inputs: (AttentionGitInputs | undefined)[]): AttentionGitInputs | undefined {
   if (size > 512) return undefined;
   const paths = new Set<string>();
-  const checkouts = new Set<NavigationDirectorySummary>();
+  const checkouts = new Map<string, string>();
   let links = 0;
   for (const input of inputs) {
     if (!input) return undefined;
     links += input.links;
     if (links > 512) return undefined;
     for (const path of input.paths) paths.add(path);
-    for (const checkout of input.checkouts) checkouts.add(checkout);
+    for (const [key, revision] of input.checkouts) {
+      const previous = checkouts.get(key);
+      if (previous !== undefined && previous !== revision) return undefined;
+      checkouts.set(key, revision);
+    }
     if (paths.size > 64 || checkouts.size > DIRECTORY_GIT_PROOF_MAX_KEYS) return undefined;
   }
-  return { links, paths, checkouts };
+  return links || paths.size || checkouts.size ? { links, paths, checkouts } : emptyGitInputs;
 }
 
 // The priority depends only on identity. The same ordered content therefore
@@ -43,12 +52,13 @@ type Compare<T> = (left: T, right: T) => number;
 
 function node<T extends Item>(item: T, left?: Tree<T>, right?: Tree<T>): Tree<T> {
   const size = 1 + (left?.size ?? 0) + (right?.size ?? 0);
+  const git = item.digest ? combineGitInputs(size, [left ? left.git : emptyGitInputs, item.git, right ? right.git : emptyGitInputs]) : undefined;
   return {
     item, left, right, size,
     deferred: Number(item.deferred ?? false) + (left?.deferred ?? 0) + (right?.deferred ?? 0),
-    bytes: (item.bytes ?? 0) + (left?.bytes ?? 0) + (right?.bytes ?? 0),
+    bytes: (item.bytes ?? 0) + (left?.bytes ?? 0) + (right?.bytes ?? 0) + (git ? gitCollectionBytes(git) : 0),
     hash: item.digest && createHash("sha256").update(left?.hash ?? "-").update(item.digest).update(right?.hash ?? "-").digest("base64url"),
-    git: item.digest ? combineGitInputs(size, [left ? left.git : emptyGitInputs, item.git, right ? right.git : emptyGitInputs]) : undefined,
+    git,
   };
 }
 
@@ -167,8 +177,10 @@ export function attentionPageKey(ref: NavigationIdentity): string {
 function rankedRow(value: AttentionPageRow): RankedRow {
   const key = attentionPageKey(value.row.ref);
   const json = JSON.stringify([value.row, value.rank, value.parent, value.deferred]);
+  const git = value.git;
+  const proofBytes = git ? gitCollectionBytes(git) + Buffer.byteLength(JSON.stringify([[...git.paths], [...git.checkouts]])) : 0;
   return { ...value, key, priority: createHash("sha256").update(key).digest().readUInt32BE(),
-    digest: createHash("sha256").update(json).digest("base64url"), bytes: Buffer.byteLength(json) + 256 };
+    digest: createHash("sha256").update(json).digest("base64url"), bytes: Buffer.byteLength(json) + 256 + proofBytes };
 }
 
 /** Immutable order and identity indexes. Cursor generations share untouched
@@ -188,8 +200,9 @@ export class NavigationAttentionPageRows {
   get length(): number { return this.ranks?.size ?? 0; }
   get hasDeferred(): boolean { return Boolean(this.ranks?.deferred); }
   get gitInputs(): AttentionGitInputs | undefined { return this.ranks ? this.ranks.git : emptyGitInputs; }
+  get backingBytes(): number { return this.ranks?.bytes ?? 0; }
   get digest(): { hash: string; bytes: number; length: number } {
-    return { hash: this.ranks?.hash ?? "", bytes: this.ranks?.bytes ?? 0, length: this.length };
+    return { hash: this.ranks?.hash ?? "", bytes: this.backingBytes, length: this.length };
   }
 
   fork(): NavigationAttentionPageRows {

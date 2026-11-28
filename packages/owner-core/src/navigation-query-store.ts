@@ -607,8 +607,16 @@ export class NavigationQueryStore {
           if (generation.projectionRequest !== projectionRequest) generation.acceleration = undefined;
           generation.snapshotToken = snapshotToken;
           generation.projectionRequest = projectionRequest;
+          const priorAttentionBytes = generation.attentionRows?.backingBytes;
+          const nextAttentionBytes = attention?.rows.backingBytes;
           generation.attentionRows = attention?.rows;
           generation.attentionRevision = attentionRevision;
+          // Proof inputs can change privately while the wire revision stays
+          // equal. Admit the new backing under the same cursor generation.
+          if (priorAttentionBytes !== undefined && nextAttentionBytes !== undefined && priorAttentionBytes !== nextAttentionBytes) {
+            generation.retainedBytes += nextAttentionBytes - priorAttentionBytes;
+            this.retainGeneration(generation);
+          }
         } else {
           generation = {
             incremental, acceleration,

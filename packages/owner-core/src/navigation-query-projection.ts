@@ -1763,7 +1763,8 @@ function collectionDirectoryGitProof(params: {
 }
 
 function finishDirectoryGitProof(index: NavigationQueryIndex,
-  dirs: Map<NavigationDirectorySummary, "descriptor" | "repository">, paths: ReadonlySet<string>): NavigationDirectoryGitProof | undefined {
+  dirs: Map<NavigationDirectorySummary, "descriptor" | "repository">, paths: ReadonlySet<string>,
+  checkouts?: ReadonlyMap<string, string>): NavigationDirectoryGitProof | undefined {
   // Mirror both path lookups in withRepositoryIdentities, even for a
   // checkout whose first origin may be added after this page is served.
   if (paths.size) {
@@ -1773,13 +1774,19 @@ function finishDirectoryGitProof(index: NavigationQueryIndex,
       if (dirs.size > DIRECTORY_GIT_PROOF_MAX_KEYS) return undefined;
     }
   }
-  const directories: Array<readonly [string, string]> = [];
+  const entries = new Map(checkouts);
   for (const [dir, part] of dirs) {
     if (!dir.key || dir.key.length > DIRECTORY_GIT_PROOF_MAX_KEY_LENGTH) return undefined;
     const revisions = navigationDirectoryGitRevisions(dir.gitStatus);
     if (!revisions) return undefined;
-    directories.push(Object.freeze([dir.key, revisions[part]] as const));
-    const source = index.worktreeRepositorySources?.[dir.key];
+    const previous = entries.get(dir.key);
+    if (previous !== undefined && previous !== revisions[part]) return undefined;
+    entries.set(dir.key, revisions[part]);
+  }
+  const directories: Array<readonly [string, string]> = [];
+  for (const [key, revision] of entries) {
+    directories.push(Object.freeze([key, revision] as const));
+    const source = index.worktreeRepositorySources?.[key];
     if (source) {
       if (!source.repositoryRevision || source.key.length > DIRECTORY_GIT_PROOF_MAX_KEY_LENGTH) return undefined;
       directories.push(Object.freeze([source.key, source.repositoryRevision] as const));
@@ -1790,7 +1797,8 @@ function finishDirectoryGitProof(index: NavigationQueryIndex,
   return Object.freeze({ version: 1, directories: Object.freeze(directories) });
 }
 
-function attentionGitInputs(thread: NavigationThreadSummary, checkout?: NavigationDirectorySummary): AttentionGitInputs | undefined {
+function attentionGitInputs(thread: NavigationThreadSummary, checkout: NavigationDirectorySummary | undefined,
+  revisions: Map<NavigationDirectorySummary, string | undefined>): AttentionGitInputs | undefined {
   const paths = new Set<string>();
   for (const link of thread.federation ? [] : thread.linkedDirectories) {
     const descriptor = classifyDirectory(link);
@@ -1799,7 +1807,15 @@ function attentionGitInputs(thread: NavigationThreadSummary, checkout?: Navigati
     if (descriptor.path) paths.add(descriptor.path);
     if (paths.size > 64) return undefined;
   }
-  return { paths, links: thread.federation ? 0 : thread.linkedDirectories.length, checkouts: new Set(checkout ? [checkout] : []) };
+  const checkouts = new Map<string, string>();
+  if (checkout) {
+    if (!checkout.key || checkout.key.length > DIRECTORY_GIT_PROOF_MAX_KEY_LENGTH) return undefined;
+    if (!revisions.has(checkout)) revisions.set(checkout, navigationDirectoryGitRevisions(checkout.gitStatus)?.repository);
+    const revision = revisions.get(checkout);
+    if (revision === undefined) return undefined;
+    checkouts.set(checkout.key, revision);
+  }
+  return { paths, links: thread.federation ? 0 : thread.linkedDirectories.length, checkouts };
 }
 
 function* attentionRowInputs(threads: readonly NavigationThreadSummary[]): Iterable<NavigationAttentionRowEdit> {
@@ -1820,6 +1836,11 @@ export function projectRetainedAttention(params: {
   const query = request.query;
   if (query.kind !== "lens" || query.lens !== "attention" || query.roots || request.consumer !== "main-sidebar") return undefined;
   const snapshot = snapshots.get(index);
+  const needsGitProof = Boolean(snapshot && index.coverage?.state === "complete"
+    && (request.inventory !== "viewer" || snapshot.rowOwners?.length === 0));
+  // Share hash work while projecting this observation. Only the key and
+  // repository revision enter a retained page.
+  const checkoutRevisions = new Map<NavigationDirectorySummary, string | undefined>();
   const projection = snapshot?.acceleration.projection ?? buildProjectionIndex(index);
   if (projection.threadsByIdentity.size !== index.threads.length) return undefined;
   const retained = previous?.rows.fork();
@@ -1842,7 +1863,7 @@ export function projectRetainedAttention(params: {
     const row: AttentionPageRow = {
       parent, deferred, updatedAt: thread.updatedAt ?? 0, inputOrder,
       rank: order?.members.get(navigationAttentionIdentity(thread))?.rank,
-      git: attentionGitInputs(thread, checkoutProject),
+      git: needsGitProof ? attentionGitInputs(thread, checkoutProject, checkoutRevisions) : undefined,
       row: projectNavigationRow({
         childCount: projection.childCountByParent.get(key) ?? 0,
         viewerChildCount: request.inventory === "viewer" && navigationIdentity(thread).ownerInstanceId
@@ -1856,10 +1877,8 @@ export function projectRetainedAttention(params: {
     else initial.push(row);
   }
   const rows = retained ?? NavigationAttentionPageRows.from(initial);
-  const git = snapshot && index.coverage?.state === "complete"
-    && (request.inventory !== "viewer" || snapshot.rowOwners?.length === 0) ? rows.gitInputs : undefined;
-  const directoryGitProof = git && finishDirectoryGitProof(index,
-    new Map([...git.checkouts].map((dir) => [dir, "repository"])), git.paths);
+  const git = needsGitProof ? rows.gitInputs : undefined;
+  const directoryGitProof = git && finishDirectoryGitProof(index, new Map(), git.paths, git.checkouts);
   const counts = snapshot ? (snapshot.counts ??= countsForThreads(index.threads)) : countsForThreads(index.threads);
   return { rows, directoryGitProof,
     materialization: { coverage: index.coverage ?? { state: "complete" },

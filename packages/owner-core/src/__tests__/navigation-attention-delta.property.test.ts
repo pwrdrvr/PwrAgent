@@ -3,7 +3,14 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { NavigationAttentionScope, NavigationQueryPage, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { expect, it, vi } from "vitest";
 import { nextNavigationObservation } from "../navigation-observation-clock";
-import { createNavigationQuerySnapshot, replaceNavigationQueryRows, type NavigationQueryIndex } from "../navigation-query-projection";
+import {
+  createNavigationQuerySnapshot,
+  navigationDirectoryGitRevisions,
+  projectNavigationQuery,
+  projectRetainedAttention,
+  replaceNavigationQueryRows,
+  type NavigationQueryIndex,
+} from "../navigation-query-projection";
 import { NavigationQueryStore } from "../navigation-query-store";
 
 it("does not filter the inventory after eight status changes to a retained Attention page", async () => {
@@ -51,6 +58,47 @@ const visible = (page: NavigationQueryPage) => ({
   entries: page.entries, counts: page.counts, coverage: page.coverage, complete: page.complete,
   directories: page.directories, directoryGitProof: page.directoryGitProof, rangeStart: page.rangeStart,
   cursor: Boolean(page.nextCursor),
+});
+
+it("retains a grouped checkout revision without retaining its thread inventory", () => {
+  const check = (members: number) => {
+    const visibleThread = summary("visible", 1, true, false);
+    const key = "directory:/workspace";
+    const index = createNavigationQuerySnapshot({
+      threads: [visibleThread, ...Array.from({ length: members }, (_, i) => summary(`outside-attention-${i}`, i, false, false))],
+      directories: [{ key, kind: "directory", label: "Workspace", path: "/workspace", checkoutPaths: ["/worktree"],
+        needsAttentionCount: 0, threadKeys: ["codex:visible", ...Array.from({ length: members }, (_, i) => `codex:outside-attention-${i}`)] }],
+      coverage: { state: "complete" },
+    });
+    const request = viewRequest("window", true, "active");
+    const projection = projectRetainedAttention({ index, request, deferPullRequests: false })!;
+    const oracle = projectNavigationQuery({ index, request, includeDirectoryGitProof: true });
+    expect(projection.directoryGitProof).toEqual(oracle.directoryGitProof);
+    expect(projection.rows.length).toBe(1);
+    const revision = navigationDirectoryGitRevisions(index.directories[0]?.gitStatus)!.repository;
+    expect([...projection.rows.gitInputs!.checkouts]).toEqual([[key, revision]]);
+    return projection.rows.backingBytes;
+  };
+  const twoMembers = check(2);
+  fc.assert(fc.property(fc.integer({ min: 3, max: 120 }), (members) => {
+    expect(check(members)).toBe(twoMembers);
+  }), { numRuns: 5 });
+});
+
+it("charges extra proof paths even when their link previews and wire revisions agree", () => {
+  const projection = (extra: string) => {
+    const paths = Array.from({ length: 16 }, (_, i) => `/workspace-${i}`);
+    paths.push("/workspace-hidden-" + extra);
+    const linkedDirectories = paths.map((path) => ({ id: path, path, label: path, kind: "local" as const }));
+    const index = createNavigationQuerySnapshot({ coverage: { state: "complete" }, directories: [],
+      threads: [{ ...summary("visible", 1, true, false), linkedDirectories }] });
+    return projectRetainedAttention({ index, request: viewRequest("window", true, "active"), deferPullRequests: false })!.rows;
+  };
+  const short = projection("a");
+  const long = projection("é".repeat(100));
+  expect(long.at(0)).toEqual(short.at(0));
+  expect(long.digest.hash).toBe(short.digest.hash);
+  expect(long.backingBytes - short.backingBytes).toBeGreaterThanOrEqual(199);
 });
 
 it("keeps child placement on old cursors while a parent leaves the active scope", async () => {
