@@ -46,7 +46,7 @@ import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
-import { DIRECT_SPEND_HISTORY, ROLLED_UP_SPEND_HISTORY, ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
+import { DIRECT_GAP_CEILING, DIRECT_SPEND_HISTORY, ROLLED_UP_GAP_CEILING, ROLLED_UP_SPEND_HISTORY, ensureThreadPricingSummaryDeltas } from "./thread-pricing-summary-schema";
 import { ensureThreadManagedMembershipSchema, reclaimEmptyLegacyMembershipIndex } from "./thread-managed-membership";
 
 export const CURRENT_STATE_DB_USER_VERSION = 88;
@@ -3952,10 +3952,10 @@ function ensureThreadAccountingReadIndexes(db: BetterSqlite3.Database): void {
   // index specific to turn rows and the repair indexes specific to unpriced
   // rows so normal priced root writes do not maintain any of these indexes.
   db.exec(`
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gap_thread
-  ON thread_usage_lines(backend, thread_id) WHERE ${DIRECT_SPEND_HISTORY};
-CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_gap_parent
-  ON thread_usage_lines(backend, parent_thread_id) WHERE parent_thread_id IS NOT NULL AND ${ROLLED_UP_SPEND_HISTORY};
+CREATE INDEX IF NOT EXISTS idx_thread_usage_gap_ceiling_thread
+  ON thread_usage_lines(backend, thread_id, ${DIRECT_GAP_CEILING}) WHERE ${DIRECT_SPEND_HISTORY};
+CREATE INDEX IF NOT EXISTS idx_thread_usage_gap_ceiling_parent
+  ON thread_usage_lines(backend, parent_thread_id, ${ROLLED_UP_GAP_CEILING}) WHERE parent_thread_id IS NOT NULL AND ${ROLLED_UP_SPEND_HISTORY};
 CREATE INDEX IF NOT EXISTS idx_thread_usage_lines_child_turn
   ON thread_usage_lines(backend, parent_thread_id, turn_id)
   WHERE scope = 'turn' AND status != 'superseded' AND parent_thread_id IS NOT NULL;

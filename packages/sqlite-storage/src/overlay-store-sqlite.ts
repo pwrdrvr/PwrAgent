@@ -43,7 +43,7 @@ import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata"
 import { prepareSqliteRead } from "./sqlite-prepared-read";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteChangedThreadKeys, sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
-import { DIRECT_SPEND_HISTORY, ROLLED_UP_SPEND_HISTORY } from "./thread-pricing-summary-schema";
+import { DIRECT_GAP_CEILING, DIRECT_SPEND_HISTORY, ROLLED_UP_GAP_CEILING, ROLLED_UP_SPEND_HISTORY } from "./thread-pricing-summary-schema";
 import { forgetThreadSpend, projectedThreadSpend, type SpendGateLines } from "./thread-spend-projection";
 import { PricingPageCards, PricingPageLiveRows, PricingPagePrices, type PricingPageAccounting, type PricingPageOverlay } from "./pricing-page-overlay";
 import type { PricingGateSelection } from "@pwragent/shared/thread-pricing-display";
@@ -204,6 +204,7 @@ import {
 import { buildDirectorySummaries, hasPersistableLaunchpadState, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import {
   estimateTokenUsageCost,
+  listTokenUsagePricingRates,
   resolveTokenUsagePriceUnavailableReason,
 } from "@pwragent/shared/token-usage-pricing";
 import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "@pwragent/shared/openrouter-assumed-pricing";
@@ -251,6 +252,16 @@ type ThreadPricingReadParams = {
   /** A publication also delivers older turn prices repaired by its reads. */
   onRepriced?: (line: ThreadUsageLineRecord) => void;
 };
+
+// Gaps always use standard reference prices. Compute a bound across dates,
+// models and input bands. Each independently rounded nonnegative component
+// costs at most twice its unrounded price, even for fractional rates.
+const standardRates = listTokenUsagePricingRates().filter(rate => rate.serviceTier === "standard");
+const gapMicrosPerComponentToken = 2 * (
+  Math.max(...standardRates.map(rate => rate.inputMicrosPerMillion))
+  + Math.max(...standardRates.map(rate => rate.cachedInputMicrosPerMillion))
+  + 2 * Math.max(...standardRates.map(rate => rate.outputMicrosPerMillion))
+) / 1_000_000;
 
 type ThreadSpendRead = ThreadPricingReadParams & {
   localModelIds: readonly string[];
@@ -3875,17 +3886,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       SELECT SUM(CASE WHEN UPPER(currency) = 'USD' THEN total_cost_micros ELSE 0 END) AS micros,
              SUM(unpriced_usage_line_count) AS unpriced,
              MIN(ledger_delta_ready) AS ready,
-             EXISTS (
-               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_gap_thread
+             (SELECT COALESCE(` + DIRECT_GAP_CEILING + `, -1) FROM thread_usage_lines INDEXED BY idx_thread_usage_gap_ceiling_thread
                WHERE backend = @backend AND thread_id = @threadId AND ` + DIRECT_SPEND_HISTORY + `
-               UNION ALL
-               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_gap_parent
+               ORDER BY ` + DIRECT_GAP_CEILING + ` DESC NULLS FIRST LIMIT 1) AS direct_ceiling,
+             (SELECT COALESCE(` + ROLLED_UP_GAP_CEILING + `, -1) FROM thread_usage_lines INDEXED BY idx_thread_usage_gap_ceiling_parent
                WHERE backend = @backend AND parent_thread_id = @threadId AND parent_thread_id IS NOT NULL AND ` + ROLLED_UP_SPEND_HISTORY + `
-             ) AS needs_history
+               ORDER BY ` + ROLLED_UP_GAP_CEILING + ` DESC NULLS FIRST LIMIT 1) AS parent_ceiling
         FROM thread_pricing_summaries INDEXED BY idx_thread_pricing_summaries_thread
        WHERE backend = @backend AND thread_id = @threadId
     `).get({ backend: params.backend, threadId: params.threadId }) as {
-      micros: number | null; unpriced: number | null; needs_history: number; ready: number | null;
+      micros: number | null; unpriced: number | null; direct_ceiling: number | null; parent_ceiling: number | null; ready: number | null;
     };
     let summary = readSummary();
     if (summary.unpriced && this.firstUnpricedBatchHasModel(params)) {
@@ -3895,14 +3905,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (pending) await pending;
       summary = readSummary();
     }
-    if (!summary.needs_history && !params.localModelIds.length && !params.liveLines.length && !params.liveGates?.size) return summary.micros ?? 0;
-    // For an alert, adding every live gate to the durable total is an upper
-    // bound: overlaying by ID can only replace an existing nonnegative charge.
-    // Below the threshold there is no alert amount to publish. Exact callers
-    // and possible crossings take the normal replacement and gap projection.
-    if (!summary.needs_history && summary.ready === 1 && !params.localModelIds.length && !params.liveLines.length
-      && params.thresholdMicros !== undefined && params.liveGates?.positiveUsdMicros !== undefined
-      && (summary.micros ?? 0) + params.liveGates.positiveUsdMicros < params.thresholdMicros) return null;
+    if (summary.direct_ceiling !== -1 && summary.parent_ceiling !== -1 && !params.localModelIds.length && !params.liveLines.length) {
+      const ceiling = Math.max(summary.direct_ceiling ?? 0, summary.parent_ceiling ?? 0);
+      const stored = summary.micros ?? 0;
+      if (!ceiling && !params.liveGates?.size) return stored;
+      const live = params.liveGates?.size ? params.liveGates.positiveUsdMicros : 0;
+      // Replacing a stored nonnegative charge can only lower this gross sum.
+      // A possible crossing still needs the exact historical gaps and overlays.
+      if (summary.ready === 1 && live !== undefined && params.thresholdMicros !== undefined
+        && stored + live + ceiling * gapMicrosPerComponentToken < params.thresholdMicros) return null;
+    }
     // Never retain uncommitted caller state. Our own read transaction keeps
     // the spend checkpoint, changed rows, worker replacements and summary on
     // the same snapshot when another owner is writing this profile.

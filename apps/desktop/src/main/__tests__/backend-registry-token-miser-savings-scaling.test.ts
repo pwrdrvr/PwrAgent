@@ -398,22 +398,30 @@ describe("Token Miser savings scaling", () => {
         published.push(pricing.lines.map(line => line.turnId ?? ""));
       }
     });
-    const turnId = "next";
-    await registry.publishLocalEvent({ backend: thread.backend, notification: { method: "turn/started",
-      params: { threadId: THREAD_ID, turnId, turn: { id: turnId, status: "inProgress" } } } });
-    await registry.publishLocalEvent({ backend: thread.backend, notification: { method: "thread/tokenUsage/updated",
-      params: { threadId: THREAD_ID, turnId, model, tokenUsage: { last: tokens, total: tokens } } } });
-    await registry.publishLocalEvent({ backend: thread.backend, notification: { method: "turn/completed",
-      params: { threadId: THREAD_ID, turnId, turn: { id: turnId, status: "completed", output: [] } } } });
-
-    expect(published).toEqual([[turnId]]);
-    expect(usageReads.usageRows).toBeLessThanOrEqual(2);
+    // The second cumulative snapshot exceeds its own turn, so it can anchor a gap.
+    // Both completions must stay bounded before anyone opens Pricing.
+    for (const [i, turnId] of ["next", "following"].entries()) {
+      const total = i === 0 ? tokens : { inputTokens: 200, cachedInputTokens: 20, outputTokens: 10, totalTokens: 210 };
+      const before = usageReads.usageRows;
+      await registry.publishLocalEvent({ backend: thread.backend, notification: { method: "turn/started",
+        params: { threadId: THREAD_ID, turnId, turn: { id: turnId, status: "inProgress" } } } });
+      await registry.publishLocalEvent({ backend: thread.backend, notification: { method: "thread/tokenUsage/updated",
+        params: { threadId: THREAD_ID, turnId, model, tokenUsage: { last: tokens, total } } } });
+      await registry.publishLocalEvent({ backend: thread.backend, notification: { method: "turn/completed",
+        params: { threadId: THREAD_ID, turnId, turn: { id: turnId, status: "completed", output: [] } } } });
+      expect(usageReads.usageRows - before).toBeLessThanOrEqual(2);
+    }
+    expect(published).toEqual([["next"], ["following"]]);
+    // A LIMIT can hide a SQLite sort that visits every cumulative anchor.
+    const summarySql = vi.mocked(stateDb.raw.prepare).mock.calls.find(([sql]) => sql.includes("AS direct_ceiling"))![0];
+    const plan = stateDb.raw.prepare("EXPLAIN QUERY PLAN " + summarySql).all(thread) as { detail: string }[];
+    expect(plan.map(row => row.detail).join("\n")).not.toMatch(/TEMP B-TREE/);
     expect(replayReads).toMatchObject({ metadataRows: 2, metadataKeys: 2, payloadQueries: 1 });
     await tokenMiserStore.flushAll();
     for (const [i, entry] of entries.entries()) {
       const actual = persisted.readMetadata(entry.objectId) as TokenMiserObjectMetadata;
-      expect(actual.parentRequestsObservedAfterGate).toBe(i < 2 ? 3 : 2);
-      expect(actual.cachedReplayCount ?? 0).toBe((entry.cachedReplayCount ?? 0) + Number(i < 2));
+      expect(actual.parentRequestsObservedAfterGate).toBe(i < 2 ? 4 : 2);
+      expect(actual.cachedReplayCount ?? 0).toBe((entry.cachedReplayCount ?? 0) + (i < 2 ? 2 : 0));
     }
   });
 
@@ -471,9 +479,15 @@ describe("Token Miser savings scaling", () => {
   });
 
   it("counts a native child's charge summarized only on its parent before ruling out a spend alert", async () => {
-    const hidden = gateLine({ index: 0, inputTokens: 1000, monitorId: "parent-charge" });
+    const hidden = { ...gateLine({ index: 0, inputTokens: 1000, monitorId: "parent-charge" }), totalCostMicros: 12_000_000 };
     const thread = { backend: "codex" as const, threadId: hidden.threadId };
-    const own = { ...parentLine({ ...thread, id: "own", turnId: "own" }), priceStatus: "priced" as const, totalCostMicros: 1 };
+    // Mix a numeric gap ceiling with the child exception in the same index.
+    // An earlier configured provider rate is unknown, so the gap adds no dollars.
+    const own: ThreadUsageLineRecord = {
+      ...parentLine({ ...thread, id: "own", turnId: "own", model: GATE_MODEL }),
+      priceStatus: "priced", pricingBasis: "configured-provider", totalCostMicros: 1,
+      cumulativeUncachedInputTokens: 0, cumulativeCachedInputTokens: 0, cumulativeOutputTokens: 101,
+    };
     await store.upsertThreadUsageLine({ line: own });
     await store.upsertThreadUsageLine({ line: { ...hidden, provider: "anthropic", pricingBasis: "provider-reported" } });
     const held = { ...own, usageLineId: "held", totalCostMicros: 2 };
