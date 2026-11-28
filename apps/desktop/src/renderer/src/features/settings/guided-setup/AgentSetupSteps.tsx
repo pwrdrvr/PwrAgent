@@ -808,6 +808,19 @@ function CodexSignIn(props: {
       ? { kind: "ok", email: authProfile.accountEmail }
       : { kind: "idle" };
   const login = useCodexProfileLogin(props.desktopApi, profileName, initial);
+  // The review reads the settings snapshot; re-read it once this sign-in
+  // lands so the review does not call a just-signed-in Codex signed out.
+  const refreshRef = useRef(props.settings.refresh);
+  refreshRef.current = props.settings.refresh;
+  // Only a sign-in that lands here: a snapshot that already knew is current.
+  const signedIn = login.state.kind === "ok";
+  const wasSignedInRef = useRef(signedIn);
+  useEffect(() => {
+    if (signedIn && !wasSignedInRef.current) {
+      void refreshRef.current().catch(() => undefined);
+    }
+    wasSignedInRef.current = signedIn;
+  }, [signedIn]);
   return (
     <div className="guided-setup__profile-list">
       <CodexLoginRow

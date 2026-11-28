@@ -155,7 +155,7 @@ export const loginArb: fc.Arbitrary<CodexLoginObservation | undefined> = maybe(f
   fc.constant<CodexLoginObservation>({ kind: "signed-out" }),
   fc.constant<CodexLoginObservation>({ kind: "starting" }),
   fc.constant<CodexLoginObservation>({ kind: "waiting" }),
-  fc.constant<CodexLoginObservation>({ kind: "checking" }),
+  fc.boolean().map((signIn): CodexLoginObservation => ({ kind: "checking", signIn })),
   fc.constant<CodexLoginObservation>({ kind: "ok", email: "someone@example.com" }),
   fc.constant<CodexLoginObservation>({ kind: "error", detail: "codex login exited 1" }),
 ));

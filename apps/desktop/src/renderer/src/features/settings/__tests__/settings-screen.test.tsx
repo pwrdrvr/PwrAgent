@@ -11072,6 +11072,24 @@ describe("SettingsScreen", () => {
       .toBe("invalid");
   });
 
+  it("shows a failed PwrAgent Codex download in the nav, as Setup does", async () => {
+    // The nav read Codex without the download's progress, so it stayed a
+    // grey Not found while the Codex screen said Install failed.
+    const snapshot = createSnapshot();
+    snapshot.models.codex.discovery = { candidates: [] };
+    const readManagedRuntimeProgress = vi.fn(async () => [
+      { runtime: "codex", phase: "failed", error: "download failed" },
+    ]);
+    render(
+      <SettingsScreen initialSection="general" settings={createSettingsState(snapshot)}
+        desktopApi={{ readManagedRuntimeProgress } as unknown as DesktopApi} />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: /Expand AI Providers/ }));
+    const codexButton = await within(nav).findByRole("button", { name: /^Codex.*install failed/ });
+    expect(codexButton.querySelector(".settings-nav__subdot--warn")).not.toBeNull();
+  });
+
   it("updates Claude's nav status from cached installation and authentication without probing", () => {
     const listBackends = vi.fn();
     const settings = createSettingsState();

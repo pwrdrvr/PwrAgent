@@ -113,6 +113,9 @@ export function CodexSetupChecklist(props: {
 
   const url = rowLoginUrl(login.state);
   const busy = props.busy === true || checking;
+  // A plain status check has nothing to offer while it runs; only a sign-in
+  // started here has a browser to re-open.
+  const plainCheck = login.state.kind === "checking" && login.state.signIn !== true;
   const accountWorking = login.state.kind === "starting"
     || login.state.kind === "waiting"
     || login.state.kind === "checking";
@@ -129,6 +132,7 @@ export function CodexSetupChecklist(props: {
       status={status}
       checkedAt={checkedAt}
       checking={checking}
+      busy={busy}
       checkError={checkError}
       onCheck={() => void check()}
       onChange={{
@@ -182,7 +186,7 @@ export function CodexSetupChecklist(props: {
             </button>
           </div>
         ) : undefined,
-        account: accountWorking ? (
+        account: plainCheck ? undefined : accountWorking ? (
           <>
             <div className="settings-inline-actions">
               <button
@@ -436,6 +440,7 @@ export function AcpSetupChecklist(props: {
       status={status}
       checkedAt={entry?.lastDiscoveredAt}
       checking={props.checking}
+      busy={busy}
       checkError={props.checkError}
       onCheck={props.enabled ? props.onCheck : undefined}
       checkInStep={status.action === "check" || status.action === "terminal-sign-in"}
@@ -449,7 +454,11 @@ export function AcpSetupChecklist(props: {
               disabled={busy}
               onClick={() => {
                 setEnabling(true);
-                void props.onEnable?.().finally(() => setEnabling(false));
+                // The check that follows reports its own failure; a failed
+                // save leaves the agent off, which Setup already shows.
+                void props.onEnable?.()
+                  .catch(() => undefined)
+                  .finally(() => setEnabling(false));
               }}
             >
               {enabling ? "Turning on…" : "Turn on"}

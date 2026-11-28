@@ -532,7 +532,8 @@ export type CodexLoginObservation =
   | { kind: "signed-out"; detail?: string }
   | { kind: "starting" }
   | { kind: "waiting"; detail?: string }
-  | { kind: "checking" }
+  /** `signIn`: the check follows a sign-in started from this screen. */
+  | { kind: "checking"; signIn?: boolean }
   | { kind: "ok"; email?: string; planType?: string }
   | { kind: "error"; detail: string };
 
@@ -669,7 +670,15 @@ export function codexSetupStatus(params: {
     : undefined;
   const login = params.login ?? { kind: "idle" };
   let account: HarnessSetupStep;
-  if (login.kind === "starting" || login.kind === "waiting" || login.kind === "checking") {
+  if (login.kind === "checking" && login.signIn !== true) {
+    // A status check with no sign-in running: nothing opened a browser.
+    account = {
+      id: "account",
+      state: "working",
+      label: "Checking",
+      detail: "Asking Codex whether this profile is signed in.",
+    };
+  } else if (login.kind === "starting" || login.kind === "waiting" || login.kind === "checking") {
     account = {
       id: "account",
       state: "working",
@@ -758,6 +767,9 @@ export function codexSetupStatus(params: {
   }
 
   const steps = [runtime, account, ready];
+  if (account.state === "working" && account.action === undefined) {
+    return status({ label: "Checking…", tone: "muted", dot: "off", reviewLabel: "Checking" }, steps);
+  }
   if (account.state === "working") {
     return status({ label: "Signing in…", tone: "warn", dot: "off", reviewLabel: "Signing in" }, steps);
   }

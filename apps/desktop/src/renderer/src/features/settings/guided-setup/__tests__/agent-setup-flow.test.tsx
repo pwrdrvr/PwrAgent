@@ -127,6 +127,39 @@ describe("guided agent setup", () => {
     if (blocked) expect(within(dialog).getByText("Action required")).toBeVisible();
   });
 
+  it("re-reads settings after a Codex sign-in, so the review sees it", async () => {
+    // The review reads the settings snapshot. Without a re-read, Codex
+    // signed in on the step before still read as signed out there.
+    const api = fakeApi();
+    api.startCodexAuthProfileLogin.mockImplementation(async () => ({ authenticated: true }));
+    api.checkCodexAuthProfileStatus.mockImplementation(async () => ({ authenticated: true }));
+    const state = settings();
+    state.snapshot!.models.codex.discovery = {
+      selectedCommand: "/opt/homebrew/bin/codex",
+      candidates: [{
+        command: "/opt/homebrew/bin/codex", source: "path", executable: true, selected: true, version: "0.159.0",
+      }],
+    } as DesktopSettingsSnapshot["models"]["codex"]["discovery"];
+    await act(async () => {
+      render(
+        <AgentSetupFlow
+          settings={state}
+          desktopApi={api as unknown as DesktopApi}
+          initialAcpEntries={[]}
+          onClose={() => undefined}
+        />,
+      );
+    });
+    const dialog = screen.getByRole("dialog", { name: "Set up an agent" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: /^Codex/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Continue/ }));
+    expect(state.refresh).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Log in" }));
+    });
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+  });
+
   // Found on disk is not the same as able to start a thread: an agent that
   // has never answered a check is reported as such, not as Ready.
   it("does not count an installed agent that has never answered as ready", async () => {

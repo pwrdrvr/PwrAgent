@@ -20,6 +20,7 @@ import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";
 import { describeGitCommandState } from "./CommandToolsSettings";
 import { claudeProviderStatus } from "./claude-provider-status";
 import { acpSetupStatus, codexSetupStatus } from "./harness-setup-status";
+import { useManagedRuntimeProgress } from "./ManagedRuntimeProgress";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { GuidedSetupDialog } from "./guided-setup/GuidedSetupDialog";
@@ -542,6 +543,8 @@ export function SettingsScreen(props: {
     [],
   );
   const desktopApi = props.desktopApi;
+  // Reads main's cached download state; starts nothing.
+  const managedCodexProgress = useManagedRuntimeProgress(desktopApi, "codex");
   const enabledForges = FORGE_KINDS.filter((kind) =>
     snapshot?.applications[FORGE_PRODUCTS[kind].cli]?.enabled.value === true,
   ).join(",");
@@ -609,6 +612,7 @@ export function SettingsScreen(props: {
         ? codexSetupStatus({
             codex: snapshot.models.codex,
             backend: props.cachedBackends?.find((backend) => backend.kind === "codex"),
+            managedProgress: managedCodexProgress,
           })
         : undefined;
       const claude = claudeProviderStatus(

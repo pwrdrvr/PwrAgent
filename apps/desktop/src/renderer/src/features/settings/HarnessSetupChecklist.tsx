@@ -39,6 +39,8 @@ export function HarnessSetupChecklist(props: {
    *  whose action is the check itself. */
   checkInStep?: boolean;
   checking?: boolean;
+  /** Something else on the screen is running; the recheck waits for it. */
+  busy?: boolean;
   checkError?: string;
   now?: number;
 }) {
@@ -118,7 +120,7 @@ export function HarnessSetupChecklist(props: {
             <button
               type="button"
               className="button button--secondary"
-              disabled={props.checking}
+              disabled={props.checking || props.busy}
               onClick={props.onCheck}
             >
               {props.checking ? "Checking…" : "Check again"}

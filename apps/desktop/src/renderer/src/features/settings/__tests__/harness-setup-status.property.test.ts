@@ -189,6 +189,35 @@ describe("harness setup status", () => {
       expect(status).toMatchObject({ label: "Sign-in required", dot: "warn", ready: false, action: "sign-in" });
     });
 
+    it("a status check with no sign-in running says nothing about a browser", () => {
+      // Check again on a signed-out profile runs `codex login status`; it
+      // opened no browser, so Setup must not say it is waiting for one.
+      const codex = {
+        path: { value: "", source: "default" },
+        discovery: {
+          selectedCommand: "/opt/homebrew/bin/codex",
+          candidates: [{
+            command: "/opt/homebrew/bin/codex", source: "path", executable: true, selected: true, version: "0.159.0",
+          }],
+        },
+        profiles: {
+          profileRoot: "/Users/me/.codex/profiles",
+          effectiveCodexHome: "/Users/me/.codex",
+          profiles: [{
+            name: "", displayName: "System default", codexHome: "/Users/me/.codex", source: "default",
+            exists: true, selected: true, hasAuthFile: false, hasConfigFile: false,
+          }],
+        },
+      } as unknown as CodexSnapshot;
+      const plain = codexSetupStatus({ codex, login: { kind: "checking", signIn: false } });
+      expect(plain.label).toBe("Checking…");
+      expect(plain.steps[1]).toMatchObject({ state: "working", label: "Checking" });
+      expect(plain.steps[1]!.detail).not.toMatch(/browser/i);
+
+      const afterSignIn = codexSetupStatus({ codex, login: { kind: "checking", signIn: true } });
+      expect(afterSignIn.label).toBe("Signing in…");
+    });
+
     it("a fresh machine's missing ~/.codex reads as not signed in, not a missing profile", () => {
       // Seen on the macOS E2E VM: Codex had never run, so the System default
       // folder did not exist yet, and Setup said the folder "is gone".

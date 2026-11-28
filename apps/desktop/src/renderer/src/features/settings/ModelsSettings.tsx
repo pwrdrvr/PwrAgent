@@ -250,10 +250,6 @@ export function ModelsSettings(props: {
   );
   const claude = backends.find((backend) => backend.kind === "claude");
   const claudeStatus = claudeProviderStatus(claude?.claude);
-  const codexStatus = codexSetupStatus({
-    codex: props.snapshot.models.codex,
-    backend: backends.find((backend) => backend.kind === "codex"),
-  });
   const decision = resolveDecisionModelSettings(
     props.snapshot.models.decisionModels,
   );
@@ -268,6 +264,11 @@ export function ModelsSettings(props: {
   const audioTranscriptionEnabled = props.snapshot.models.audioTranscriptionEnabled?.value ?? true;
   const envForced = codex.path.source === "env";
   const managedCodexProgress = useManagedRuntimeProgress(props.desktopApi, "codex");
+  const codexStatus = codexSetupStatus({
+    codex,
+    backend: backends.find((backend) => backend.kind === "codex"),
+    managedProgress: managedCodexProgress,
+  });
   const managedCodexRuntime = props.snapshot.runtime.tokenMiser?.managedCodex;
   const managedCodexRequiredBy = codex.managedBuildsRequiredBy;
   const managedCodexOn =
