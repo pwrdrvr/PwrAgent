@@ -493,9 +493,11 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
   const directoryPinSlotRef = useRef<HTMLDivElement>(null);
   const [directoryPinSlotOpen, setDirectoryPinSlotOpen] = useState(false);
   useEffect(() => () => directoryDragDisposeRef.current?.(), []);
-  // The Unpinned disclosure is also a thread-pin drop target.
-  // Suppress the click browsers synthesize immediately after a drop so
-  // pinning a thread never also minimizes the section.
+  // The Unpinned disclosure is no thread-pin drop target: a release over it
+  // drops nothing, stuck or in place (`app.css` keeps it hit-testable during
+  // a drag so the rows it covers cannot take the drop). Its click is still
+  // ignored for a moment after any drop, so the click a browser synthesizes
+  // on release never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
   // The Unpinned disclosure sticks just under its project's sticky
   // header, so a long project's divider stays one click away. CSS cannot read

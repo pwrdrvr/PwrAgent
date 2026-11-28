@@ -12026,8 +12026,21 @@ button.stack-display__thread,
   background: var(--bg-sidebar);
 }
 
-.directory-row__thread-divider:hover:not(:disabled) {
+:root:not([data-native-drag-active]) .directory-row__thread-divider:hover:not(:disabled) {
   color: var(--text-secondary);
+}
+
+/* The drag guard above (`:root[data-native-drag-active] .sidebar button`)
+   makes every sidebar button transparent to hit testing while a card is
+   held. This one is an opaque band stuck over rows, under the header or on
+   the lane's bottom edge, so a transparent divider let a release over it
+   land on the row hidden behind it: a pin moved beside a pin the operator
+   could not see, with its insertion line drawn under the band. It stays
+   hit-testable, and the divider is no drop target, so a release over it
+   does nothing, as it does where the divider rests in place. It does not
+   light on hover while a card is held, so it never reads as a target. */
+:root[data-native-drag-active] .sidebar .directory-row__thread-divider {
+  pointer-events: auto !important;
 }
 
 /* Inside its box, as `.directory-row__summary` does: the band now reaches
