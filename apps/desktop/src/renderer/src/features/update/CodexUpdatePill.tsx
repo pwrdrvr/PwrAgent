@@ -36,6 +36,12 @@ export function CodexUpdatePill(props: {
     return desktopApi?.onCodexUserUpdate?.((next) => setState(next));
   }, [desktopApi]);
 
+  // A start failure describes the state it was pressed in; a newer one from
+  // main replaces it.
+  useEffect(() => {
+    setStartError(undefined);
+  }, [state]);
+
   useEffect(() => {
     let current = true;
     void desktopApi?.readCodexUserUpdate?.()

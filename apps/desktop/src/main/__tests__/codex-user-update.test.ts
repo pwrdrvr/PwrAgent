@@ -79,7 +79,7 @@ describe("resolveCodexUpdateInvocation", () => {
       resolvedPath: "C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
       platform: "win32",
       executables: ["C:\\Program Files\\nodejs\\npm.cmd"],
-      onPath: { npm: "C:\\Program Files\\nodejs\\npm.cmd" },
+      onPath: { "npm.cmd": "C:\\Program Files\\nodejs\\npm.cmd" },
       env: { ComSpec: "C:\\Windows\\system32\\cmd.exe" },
     })).resolves.toEqual({
       file: "C:\\Windows\\system32\\cmd.exe",
@@ -378,5 +378,105 @@ describe("CodexUserUpdateService", () => {
     await expect(h.service.readState()).resolves.toEqual({});
     await expect(h.service.startUpdate()).rejects.toThrow();
     expect(fetchLatestVersion).not.toHaveBeenCalled();
+  });
+});
+
+describe("review regressions", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("finds npm.cmd on a Windows PATH rather than Node's extensionless npm script", async () => {
+    const onPath: Record<string, string> = {
+      npm: "C:\\Program Files\\nodejs\\npm",
+      "npm.cmd": "C:\\Program Files\\nodejs\\npm.cmd",
+    };
+    const invocation = await resolveCodexUpdateInvocation({
+      classification: classifyCodexInstaller({
+        command: "C:\\Users\\x\\AppData\\Roaming\\npm\\codex.cmd",
+        resolvedPath: "C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+        platform: "win32",
+      }),
+      command: "C:\\Users\\x\\AppData\\Roaming\\npm\\codex.cmd",
+      platform: "win32",
+      env: { ComSpec: "cmd.exe" },
+      isExecutable: async (candidate) => Object.values(onPath).includes(candidate),
+      resolveOnPath: async (name) => onPath[name],
+    });
+    expect(invocation?.args.at(-1)).toContain('"C:\\Program Files\\nodejs\\npm.cmd"');
+  });
+
+  it("settles a run whose grandchild keeps the pipes open after the installer exits", async () => {
+    vi.useFakeTimers();
+    const spawn: SpawnCodexUpdate = () => {
+      const child = new EventEmitter() as ChildProcess;
+      Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
+      // The process exits, but 'close' never comes while a grandchild holds stdout.
+      setTimeout(() => child.emit("exit", 0, null), 10);
+      return child;
+    };
+    const result = runCodexUpdateProcess({ file: "/bin/sh", args: [], env: {} }, { env: {}, spawn });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(result).resolves.toMatchObject({ exitCode: 0, timedOut: false });
+  });
+
+  it("ends a timed-out run even when the killed process never reports back", async () => {
+    vi.useFakeTimers();
+    const kill = vi.fn(() => true);
+    const spawn: SpawnCodexUpdate = () => {
+      const child = new EventEmitter() as ChildProcess;
+      Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), kill });
+      return child;
+    };
+    const result = runCodexUpdateProcess({ file: "/bin/sh", args: [], env: {} }, { env: {}, spawn, timeoutMs: 100 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(result).resolves.toMatchObject({ exitCode: null, timedOut: true });
+    expect(kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not credit the update when rediscovery selects a different Codex", async () => {
+    const h = harness({});
+    await readUntilOffered(h.service);
+    h.rediscover.mockImplementation(async () => {
+      h.target.current = { command: "/usr/local/bin/codex", version: "0.173.0", managedByPwrAgent: false };
+    });
+    await h.service.startUpdate();
+    const done = await h.settled();
+    expect(done.run?.phase).toBe("unchanged");
+    expect(h.restartCodex).not.toHaveBeenCalled();
+  });
+
+  it("keeps the background re-check going after a window's read checked in between", async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const answers: Array<string | undefined> = [undefined, "0.173.0", "0.174.0"];
+    const fetchLatestVersion = vi.fn(async () => answers.shift());
+    const h = harness({ overrides: { fetchLatestVersion, now: () => now } });
+    await h.service.readState();
+    await vi.advanceTimersByTimeAsync(0);
+    // A deferred first answer schedules a retry in 15 minutes; a window reads at 12.
+    now = 12 * 60_000;
+    await vi.advanceTimersByTimeAsync(12 * 60_000);
+    await h.service.readState();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchLatestVersion).toHaveBeenCalledTimes(2);
+    // The 15-minute timer finds a recent check and must schedule the next one.
+    now = 15 * 60_000;
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    now = 15 * 60_000 + 6 * 60 * 60_000;
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60_000);
+    expect(fetchLatestVersion).toHaveBeenCalledTimes(3);
+    h.service.dispose();
+  });
+
+  it("stops reporting a successful update to windows that open well after it", async () => {
+    let now = 5_000;
+    const h = harness({ versionAfter: "0.173.0", overrides: { now: () => now } });
+    await readUntilOffered(h.service);
+    await h.service.startUpdate();
+    await h.settled();
+    expect((await h.service.readState()).run?.phase).toBe("succeeded");
+    now += 61_000;
+    expect((await h.service.readState()).run).toBeUndefined();
   });
 });

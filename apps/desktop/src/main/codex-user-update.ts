@@ -29,9 +29,16 @@ export const CODEX_LATEST_CHECK_TTL_MS = 24 * 60 * 60_000;
  * answer can be.
  */
 export const CODEX_LATEST_RECHECK_INTERVAL_MS = 6 * 60 * 60_000;
+/** How long a finished successful run is still reported to a window that asks. */
+export const CODEX_SUCCESS_RESULT_TTL_MS = 60_000;
 /** Homebrew can spend minutes updating its own taps before it upgrades. */
 export const CODEX_UPDATE_TIMEOUT_MS = 15 * 60_000;
-const OUTPUT_TAIL_BYTES = 4 * 1024;
+/** UTF-16 characters of installer output kept for a failure. */
+const OUTPUT_TAIL_CHARS = 4 * 1024;
+/** After the installer exits, how long to wait for its pipes to drain. */
+const OUTPUT_DRAIN_GRACE_MS = 2_000;
+/** After a timeout's kill, how long to wait before giving up on the process. */
+const KILL_GRACE_MS = 5_000;
 
 /**
  * Fetch the newest stock Codex version, or `undefined` when the shared
@@ -101,7 +108,12 @@ function dirnameFor(platform: NodeJS.Platform, entry: string): string {
   return platform === "win32" ? path.win32.dirname(entry) : path.posix.dirname(entry);
 }
 
-/** The first candidate that is an executable file, then the name on PATH. */
+/**
+ * The first candidate that is an executable file, then the name on PATH. On
+ * Windows the `.exe` and `.cmd` names are looked up first: PATH lookup tries
+ * the bare name before PATHEXT, and Node's folder holds an extensionless `npm`
+ * shell script beside `npm.cmd` that Windows cannot run.
+ */
 async function findTool(
   lookup: ToolLookup,
   candidates: string[],
@@ -110,8 +122,13 @@ async function findTool(
   for (const candidate of candidates) {
     if (await lookup.isExecutable(candidate)) return candidate;
   }
-  const onPath = await lookup.resolveOnPath(name, lookup.env, lookup.platform);
-  if (onPath && await lookup.isExecutable(onPath)) return onPath;
+  const names = lookup.platform === "win32" && !/\.[a-z]+$/iu.test(name)
+    ? [`${name}.exe`, `${name}.cmd`]
+    : [name];
+  for (const candidate of names) {
+    const onPath = await lookup.resolveOnPath(candidate, lookup.env, lookup.platform);
+    if (onPath && await lookup.isExecutable(onPath)) return onPath;
+  }
   return undefined;
 }
 
@@ -269,8 +286,8 @@ export type SpawnCodexUpdate = (
   options: SpawnOptions,
 ) => ChildProcess;
 
-/** Keep the last `limit` bytes of everything the installer printed. */
-export function appendOutputTail(tail: string, chunk: string, limit = OUTPUT_TAIL_BYTES): string {
+/** Keep the last `limit` characters of everything the installer printed. */
+export function appendOutputTail(tail: string, chunk: string, limit = OUTPUT_TAIL_CHARS): string {
   const next = tail + chunk;
   return next.length > limit ? next.slice(next.length - limit) : next;
 }
@@ -293,10 +310,16 @@ export async function runCodexUpdateProcess(
     let outputTail = "";
     let timedOut = false;
     let settled = false;
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (result: Omit<CodexUpdateProcessResult, "outputTail" | "timedOut">): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (drainTimer) clearTimeout(drainTimer);
+      // A grandchild (the piped installer, curl, git) can hold the pipes
+      // open after the process PwrAgent started has gone.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
       resolve({ ...result, outputTail, timedOut });
     };
     let child: ChildProcess;
@@ -315,6 +338,9 @@ export async function runCodexUpdateProcess(
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
+      // The kill reaches only the direct child. Do not wait on 'close' for
+      // whatever it started: a hung run must end so Update can be retried.
+      drainTimer = setTimeout(() => finish({ exitCode: null, signal: "SIGTERM" }), KILL_GRACE_MS);
     }, options.timeoutMs ?? CODEX_UPDATE_TIMEOUT_MS);
     const collect = (chunk: Buffer | string): void => {
       outputTail = appendOutputTail(outputTail, chunk.toString());
@@ -324,6 +350,12 @@ export async function runCodexUpdateProcess(
     child.once("error", (error) => {
       outputTail = appendOutputTail(outputTail, `${error.message}\n`);
       finish({ exitCode: null, signal: null });
+    });
+    child.once("exit", (exitCode, signal) => {
+      // 'close' also waits for every holder of the pipes; give the output a
+      // moment to drain, then settle on the exit status regardless.
+      if (drainTimer) clearTimeout(drainTimer);
+      drainTimer = setTimeout(() => finish({ exitCode, signal }), OUTPUT_DRAIN_GRACE_MS);
     });
     child.once("close", (exitCode, signal) => finish({ exitCode, signal }));
   });
@@ -416,19 +448,28 @@ export class CodexUserUpdateService {
    */
   async readState(): Promise<CodexUserUpdateState> {
     if (this.options.checksDisabled || this.disposed) return {};
+    // A window opened later should not announce an update as if it just
+    // happened. A failure or "nothing newer" stays: it still needs the operator.
+    if (
+      this.run?.phase === "succeeded"
+      && this.now() - this.run.updatedAt > CODEX_SUCCESS_RESULT_TTL_MS
+    ) {
+      this.run = undefined;
+    }
     this.ensureLatestCheck();
     await this.recomputeOffer();
     return this.snapshot();
   }
 
-  private ensureLatestCheck(): void {
+  /** Starts a check unless one is running or one ran recently; returns whether it started. */
+  private ensureLatestCheck(): boolean {
     const now = this.now();
-    if (this.latestCheck) return;
+    if (this.latestCheck) return false;
     if (
       this.lastLatestAttemptAt !== undefined
       && now - this.lastLatestAttemptAt < CODEX_LATEST_RECHECK_INTERVAL_MS
     ) {
-      return;
+      return false;
     }
     this.lastLatestAttemptAt = now;
     this.latestCheck = (async () => {
@@ -446,6 +487,7 @@ export class CodexUserUpdateService {
       if (await this.recomputeOffer()) this.publish();
       this.scheduleRecheck();
     })();
+    return true;
   }
 
   private scheduleRecheck(): void {
@@ -457,7 +499,9 @@ export class CodexUserUpdateService {
     this.recheckTimer = setTimeout(() => {
       this.recheckTimer = undefined;
       if (this.disposed) return;
-      this.ensureLatestCheck();
+      // A window's read may have checked meanwhile. Keep the cadence going
+      // rather than let the background check stop for the session.
+      if (!this.ensureLatestCheck()) this.scheduleRecheck();
     }, delay);
     this.recheckTimer.unref?.();
   }
@@ -568,7 +612,7 @@ export class CodexUserUpdateService {
       updatedAt: startedAt,
     };
     this.publish();
-    void this.executeRun(invocation, offer).catch((error) => {
+    void this.executeRun(invocation, offer, target.command).catch((error) => {
       this.setRun("failed", { error: error instanceof Error ? error.message : String(error) });
     });
     return this.snapshot();
@@ -577,6 +621,7 @@ export class CodexUserUpdateService {
   private async executeRun(
     invocation: CodexUpdateInvocation,
     offer: CodexUserUpdateOffer,
+    command: string,
   ): Promise<void> {
     const result = await runCodexUpdateProcess(invocation, {
       env: await this.options.resolveEnv(),
@@ -603,7 +648,10 @@ export class CodexUserUpdateService {
     this.setRun("verifying");
     await this.options.rediscover();
     const after = await this.options.readTarget();
-    const toVersion = parseCodexVersionCore(after?.version)?.join(".");
+    // Rediscovery can select another Codex. Only the one that was updated
+    // moving forward counts; anything else is not this update's doing.
+    const sameCodex = after?.command === command;
+    const toVersion = sameCodex ? parseCodexVersionCore(after?.version)?.join(".") : undefined;
     const moved = toVersion !== undefined
       && toVersion !== offer.installedVersion
       && deriveCodexUserUpdateOffer({
