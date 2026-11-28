@@ -103,9 +103,8 @@ function readBranchSelection(value: unknown): SelectedBranch | undefined {
   const workItem = parseFactoryWorkItem(branchSelection);
   const branch = text(branchSelection.branch, 255);
   const baseRef = text(branchSelection.baseRef, 255);
-  const ref = /^[a-z0-9_][\w./-]*$/i;
-  if (!branch || !ref.test(branch) || branch.startsWith("refs/")
-    || !baseRef || !ref.test(baseRef) || !/^refs\/(?:heads\/.+|remotes\/[^/]+\/.+)$/.test(baseRef)) requestError();
+  if (!branch || branch.startsWith("refs/")
+    || !baseRef || !/^refs\/(?:heads\/.+|remotes\/[^/]+\/.+)$/.test(baseRef)) requestError();
   const worktree = text(branchSelection.worktree, 4096);
   if (branchSelection.worktree !== undefined && (!worktree || !path.isAbsolute(worktree))) requestError();
   const rawIds = branchSelection.reviewIds ?? [];

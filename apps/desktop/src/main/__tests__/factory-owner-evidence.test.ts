@@ -19,10 +19,15 @@ import { SqliteOverlayStore } from "../storage/overlay-store-sqlite";
 import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
 import { createTempStateDb, openFreshStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
-vi.mock(import("../pr-status/git-remote"), async (load) => ({
-  ...await load(),
-  resolveGitHubRepoForDirectory: vi.fn(),
-}));
+vi.mock(import("../pr-status/git-remote"), async (load) => {
+  const actual = await load();
+  return {
+    ...actual,
+    resolveGitHubRepoForDirectory: vi.fn(),
+    resolveGitHubFetchUrl: (url: string) => actual.resolveGitHubFetchUrl(url,
+      async (host) => host === "github-work" ? "github.com" : host),
+  };
+});
 vi.mock(import("../storage/desktop-runtime-storage"), async (load) => ({
   ...await load(), createThreadReviewStorage: vi.fn(),
 }));
@@ -136,6 +141,12 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
     };
     const params = { projectKey: key, repository: remote.repo, candidate };
     const { writes } = await measureSqliteWrites(async () => {
+      await runGitCommand(projectPath, ["remote", "set-url", "origin", "git@github-work:pwrdrvr/Synthetic.git"]);
+      await runGitCommand(projectPath, ["branch", "fixture+ipc", actualHead]);
+      await runGitCommand(projectPath, ["branch", "target+ipc", actualBase]);
+      const plus = await read({ ...params, candidate: { ...candidate, branch: "fixture+ipc", baseRef: "refs/heads/target+ipc" } });
+      expect(plus.candidate).toMatchObject({ headOid: actualHead, baseOid: actualBase });
+      await expect(read({ ...params, candidate: { ...candidate, branch: "fixture*ipc" } })).rejects.toThrow();
       const unpublished = await read(params);
       expect(unpublished.authority.source).toBe("local_owner_git");
       expect(unpublished.inventory).toBe("unobserved");

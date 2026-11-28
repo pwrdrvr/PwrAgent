@@ -7,7 +7,7 @@ import { factoryWorkItemKey, type FactoryWorkItem } from "@pwragent/shared/facto
 import { isGitObjectId } from "@pwragent/shared/git-object-id";
 import { runGitCommand } from "../app-server/git-executable";
 import { getProcessRuntimeIdentity, resolveActiveProfileName } from "../profile";
-import { parseGitHubRemote } from "../pr-status/git-remote";
+import { resolveGitHubFetchUrl } from "../pr-status/git-remote";
 
 type ReviewLookup = (id: string) => ThreadReview | undefined;
 
@@ -28,6 +28,7 @@ async function checkout(directory: string) {
 }
 
 async function refOid(root: string, ref: string): Promise<string | undefined> {
+  if (await git(root, ["check-ref-format", ref]) === undefined) throw new Error("Select a valid Factory Git ref.");
   const value = await git(root, ["for-each-ref", "--count=1", "--format=%(refname) %(objecttype) %(objectname)", "--", ref]);
   const [name, type, oid] = value?.split(" ") ?? [];
   return name === ref && type === "commit" && oid && isGitObjectId(oid) ? oid : undefined;
@@ -37,7 +38,7 @@ async function baseRefOid(root: string, ref: string, repository: string): Promis
   const tracking = /^refs\/remotes\/([^/]+)\//.exec(ref)?.[1];
   if (tracking) {
     const url = await git(root, ["remote", "get-url", "--", tracking]);
-    const remote = url ? parseGitHubRemote(url) : undefined;
+    const remote = url ? await resolveGitHubFetchUrl(url) : undefined;
     if (!remote || `${remote.host}/${remote.owner}/${remote.repo}`.toLowerCase() !== repository.toLowerCase()) return undefined;
   }
   return refOid(root, ref);
