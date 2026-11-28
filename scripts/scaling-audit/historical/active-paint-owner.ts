@@ -18,15 +18,19 @@ const now = () => performance.timeOrigin + performance.now();
 const input = [{ type: "text" as const, text: "Synthetic durable retry" }];
 const ref = (threadId: string) => ({ backend: "codex" as const, threadId });
 const grants = ["turn_control", "durable_turn_requests_v1"] as const;
-type Lane = "status" | "review" | "inbound" | "outbound";
+const retryCohorts = ["retry-a", "retry-b"] as const;
+type RetryCohort = typeof retryCohorts[number];
+type Lane = "status" | "review" | RetryCohort;
 export type Cadence = Record<Lane, number>;
 type Trace = {
   queries: Array<{ kind: string; start: number; end: number; rows?: number }>;
   events: Array<{ method: string; at: number; threadId?: string; pricingRows?: number }>;
   deliveries: Array<{ lane: Lane; due: number; start: number; end: number }>;
 };
+type ActiveTrace = Trace & { pendingQueries: number };
 export type CompletedTrace = Trace & {
   stoppedAt: number;
+  pendingQueriesAtStop: number;
   countedReviews: number;
   readReviewCalls: number;
   forbiddenFixes: number;
@@ -50,15 +54,19 @@ declare global {
   var __auditReplayNotification: ((notification: AppServerNotification) => Promise<void>) | undefined;
 }
 
-let active: Trace | undefined;
+let active: ActiveTrace | undefined;
 const holdChecks = new Set<string>();
 
 async function timeAuditQuery<T>(kind: string, query: () => Promise<T>, rows?: number): Promise<T> {
   const phase = active;
   if (!phase) return query();
   const start = now();
+  phase.pendingQueries++;
   try { return await query(); }
-  finally { phase.queries.push({ kind, start, end: now(), rows }); }
+  finally {
+    phase.pendingQueries--;
+    if (active === phase) phase.queries.push({ kind, start, end: now(), rows });
+  }
 }
 
 export async function auditStackHold(review: { threadId: string }, read: () => Promise<string | undefined>) {
@@ -71,8 +79,8 @@ export async function auditStackHold(review: { threadId: string }, read: () => P
 
 function loopbackOwner(id: string, peerId: string, send: (envelope: unknown) => void) {
   const runtime = new DesktopFederationRuntime();
-  // Replace transport discovery only. Both endpoints still use the production
-  // sender, router, capability check, SQLite receipt service and owner queue.
+  // Replace transport discovery only. Both endpoints run their production
+  // send and receive paths in this process and share its registry and storage.
   const router = new FederationRouter({
     localInstanceId: id,
     methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -145,7 +153,7 @@ export function installActivePaintAudit({ registry, service }: OwnerServices) {
     });
   });
 
-  const federation: Partial<Record<"inbound" | "outbound", () => Promise<void>>> = {};
+  const federation: Partial<Record<RetryCohort, () => Promise<void>>> = {};
   const verifyQueues: Array<() => boolean> = [];
   let timers: ReturnType<typeof setTimeout>[] = [];
   let failures: string[] = [];
@@ -183,13 +191,13 @@ export function installActivePaintAudit({ registry, service }: OwnerServices) {
       if (holdChecks.size !== heldThreads.length || forbiddenFixes !== 0) {
         throw new Error(`Expected ${heldThreads.length} held review threads, got ${holdChecks.size} with ${forbiddenFixes} dispatches`);
       }
-      if (cadence.inbound || cadence.outbound) {
+      if (retryCohorts.some(cohort => cadence[cohort])) {
         const ids = ["synthetic-viewer", "synthetic-peer"] as const;
         const transportErrors: unknown[] = [];
         const catchTransportError = (error: unknown) => { transportErrors.push(error); };
         const local = loopbackOwner(ids[0], ids[1], envelope => { void remote.receive(envelope).catch(catchTransportError); });
         const remote = loopbackOwner(ids[1], ids[0], envelope => { void local.receive(envelope).catch(catchTransportError); });
-        for (const [index, lane] of (["inbound", "outbound"] as const).entries()) {
+        for (const [index, lane] of retryCohorts.entries()) {
           if (!cadence[lane]) continue;
           const target = ref(federationThreads[index]);
           // Never resume the synthetic queues. The app owns them until exit.
@@ -234,14 +242,14 @@ export function installActivePaintAudit({ registry, service }: OwnerServices) {
         review: () => reviewing % 4 === 0
           ? review(reviewThreads[Math.floor(reviewing / 4) % reviewThreads.length], true, heldThreads.length > 0)
           : review(turnThread, false),
-        inbound: () => federation.inbound!(),
-        outbound: () => federation.outbound!(),
+        "retry-a": () => federation["retry-a"]!(),
+        "retry-b": () => federation["retry-b"]!(),
       };
       return { heldThreads: holdChecks.size, forbiddenFixes };
     },
     start(cadence) {
       if (active) throw new Error("Measurement already running");
-      const phase: Trace = { queries: [], events: [], deliveries: [] };
+      const phase: ActiveTrace = { queries: [], events: [], deliveries: [], pendingQueries: 0 };
       active = phase;
       failures = [];
       const startedAt = now();
@@ -266,15 +274,17 @@ export function installActivePaintAudit({ registry, service }: OwnerServices) {
       return { startedAt, startReviews };
     },
     async stop() {
-      const phase = active;
+      if (!active) throw new Error("No measurement is running");
       const stoppedAt = now();
+      const { pendingQueries: pendingQueriesAtStop, ...phase } = active;
+      // Query samples stop here even when a lane needs longer to drain.
       active = undefined;
       timers.forEach(timer => clearTimeout(timer));
       timers = [];
       await Promise.all(inFlight);
       if (!verifyQueues.every(verify => verify())) failures.push("Federation redelivery changed a held FIFO");
-      if (!phase || failures.length || forbiddenFixes) throw new Error(`Audit failed: ${failures.join(", ")}; Auto-fix dispatches: ${forbiddenFixes}`);
-      return { ...phase, stoppedAt, countedReviews, readReviewCalls, forbiddenFixes };
+      if (failures.length || forbiddenFixes) throw new Error(`Audit failed: ${failures.join(", ")}; Auto-fix dispatches: ${forbiddenFixes}`);
+      return { ...phase, stoppedAt, pendingQueriesAtStop, countedReviews, readReviewCalls, forbiddenFixes };
     },
   };
 }

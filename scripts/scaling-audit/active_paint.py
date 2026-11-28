@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 HERE = Path(__file__).resolve().parent
 REVISIONS = json.loads((HERE / "revisions.json").read_text())
 REVISIONS["integrated"] = "4b4522025eb15a9988a14289e9a32b1260c37217"
+RETRY_COHORTS = ("retry-a", "retry-b")
 
 
 def run(*command, cwd, env=None):
@@ -72,6 +73,10 @@ def stage(desktop, clean):
 
 def measure(checkout, output, args, revision):
     desktop = checkout / "apps/desktop"
+    intervals = {
+        "status": args.status_ms, "review": args.review_ms,
+        "retry-a": args.retry_a_ms, "retry-b": args.retry_b_ms,
+    }
     with ExitStack() as cleanup:
         stage(desktop, cleanup)
         home = cleanup.enter_context(TemporaryDirectory(prefix=".paint-home-", dir=checkout))
@@ -95,8 +100,7 @@ def measure(checkout, output, args, revision):
                 scenarios = args.scenarios if repeat % 2 else list(reversed(args.scenarios))
                 for scenario in scenarios:
                     case = dict(revision=revision, copies=copies, repeat=repeat, scenario=scenario, warm=args.warm,
-                                cadence={lane: getattr(args, lane + "_ms") if scenario == "active" else 0
-                                         for lane in ("status", "review", "inbound", "outbound")},
+                                cadence=intervals if scenario == "active" else dict.fromkeys(intervals, 0),
                                 held=args.held if scenario == "active" else 0, queueDepth=args.queue_depth,
                                 redeliveries=args.redeliveries, leadMs=args.lead_ms)
                     sample = output / f"{revision}-{copies}x-{repeat}-{scenario}.json"
@@ -119,7 +123,7 @@ def measure(checkout, output, args, revision):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--checkout", type=Path, help="one already installed disposable checkout")
+    parser.add_argument("--checkout", type=Path, help="one clean, already installed disposable checkout")
     parser.add_argument("--revisions", nargs="+", choices=sorted(REVISIONS), default=["v152", "latest", "integrated"])
     parser.add_argument("--copies", nargs="+", type=int, choices=[1, 2, 4], default=[1, 2, 4])
     parser.add_argument("--repeats", type=int, default=3)
@@ -127,8 +131,8 @@ def main():
     parser.add_argument("--warm", type=int, default=10)
     parser.add_argument("--status-ms", type=int, default=70)
     parser.add_argument("--review-ms", type=int, default=160)
-    parser.add_argument("--inbound-ms", type=int, default=125)
-    parser.add_argument("--outbound-ms", type=int, default=145)
+    parser.add_argument("--retry-a-ms", "--inbound-ms", type=int, default=125, help="loopback retry cohort A interval")
+    parser.add_argument("--retry-b-ms", "--outbound-ms", type=int, default=145, help="loopback retry cohort B interval")
     parser.add_argument("--held", type=int, default=64)
     parser.add_argument("--queue-depth", type=int, default=32)
     parser.add_argument("--redeliveries", type=int, default=8)
@@ -137,20 +141,25 @@ def main():
     args = parser.parse_args()
     if min(args.repeats, args.warm, args.queue_depth, args.redeliveries) < 1:
         parser.error("repeats, warm samples, queue depth and redeliveries must be positive")
-    if min(args.status_ms, args.review_ms, args.inbound_ms, args.outbound_ms, args.lead_ms) < 0 or not 0 <= args.held <= 64:
+    cadence = (args.status_ms, args.review_ms, args.retry_a_ms, args.retry_b_ms)
+    if min(*cadence, args.lead_ms) < 0 or not 0 <= args.held <= 64:
         parser.error("cadence and lead time must be nonnegative, with 0–64 held reviews")
-    if "active" in args.scenarios and not any([args.status_ms, args.review_ms, args.inbound_ms, args.outbound_ms]):
+    if "active" in args.scenarios and not any(cadence):
         parser.error("active needs at least one nonzero event cadence")
     output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=False)
     repo = HERE.parent.parent
     if args.checkout:
         checkout = args.checkout.resolve()
+        status = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=checkout)
+        if status:
+            parser.error(f"--checkout working tree is dirty: {checkout}")
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
+        output.mkdir(parents=True, exist_ok=False)
         failures = measure(checkout, output, args, commit)
         if failures:
             raise SystemExit("; ".join(failures))
         return
+    output.mkdir(parents=True, exist_ok=False)
     errors = []
     for revision in args.revisions:
         checkout = output / f".checkout-{revision}"

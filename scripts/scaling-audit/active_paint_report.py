@@ -6,7 +6,9 @@ import math
 from pathlib import Path
 from statistics import median
 
-from active_paint import REVISIONS
+from active_paint import RETRY_COHORTS, REVISIONS
+
+LEGACY_LANES = dict(zip(("inbound", "outbound"), RETRY_COHORTS))
 
 
 def p95(values):
@@ -34,10 +36,12 @@ def main():
     args = args.parse_args()
     interactions = defaultdict(list)
     queries = defaultdict(list)
+    pending_queries = defaultdict(list)
     startup = defaultdict(list)
     cadence = defaultdict(lambda: {"rate": [], "late": [], "work": [], "overlap": [0, 0]})
     phases = defaultdict(list)
-    platforms = set()
+    platform_signature = None
+    platform_label = None
     observed = set()
     scenario_settings = {}
     for folder in args.results:
@@ -49,7 +53,8 @@ def main():
                 raise ValueError(f"Replay assertions did not finish in {file}")
             options = result["options"]
             revision, copies, scenario = (options[key] for key in ("revision", "copies", "scenario"))
-            settings = tuple(options[key] for key in ("warm", "leadMs", "held", "queueDepth", "redeliveries", "cadence"))
+            intervals = {LEGACY_LANES.get(lane, lane): interval for lane, interval in options["cadence"].items()}
+            settings = (*[options[key] for key in ("warm", "leadMs", "held", "queueDepth", "redeliveries")], intervals)
             if scenario_settings.setdefault(scenario, settings) != settings:
                 raise ValueError(f"Mixed settings for the {scenario} workload in {file}")
             launch = (revision, copies, scenario, options["repeat"])
@@ -61,11 +66,18 @@ def main():
                 raise ValueError(f"Wrong inventory in {file}")
             platform = result["platform"]
             gpu = "disabled" if platform["gpuDisabled"] else "enabled"
-            platforms.add(f"{platform['arch']}, Darwin {platform['os']}, {platform['cpuCount']} vCPUs, GPU {gpu}")
+            label = f"{platform['arch']}, Darwin {platform['os']}, {platform['cpuCount']} vCPUs, GPU {gpu}"
+            if platform_signature is None:
+                platform_signature, platform_label = platform, label
+            elif platform_signature != platform:
+                raise ValueError(f"Mixed platform signatures in {file}: {platform_signature} and {platform}")
             if "lensReadyAfterInventoryMs" in result:
                 startup[launch[:3]].append(result["lensReadyAfterInventoryMs"])
             owner = result["owner"]
             start, stop = result["began"]["startedAt"], owner["stoppedAt"]
+            pending = owner.get("pendingQueriesAtStop")
+            if pending is not None:
+                pending_queries[launch[:3]].append(pending)
             events = owner["events"]
             phases[launch[:3]].append((
                 sum(event.get("pricingRows", 0) for event in events),
@@ -78,14 +90,19 @@ def main():
                     raise ValueError(f"Frame outside owner capture in {file}")
                 interactions[(*launch[:3], sample["phase"], sample["name"])].append(sample["ms"])
             for query in owner["queries"]:
+                if query["end"] > stop:
+                    if pending is not None:
+                        raise ValueError(f"Owner query completed after capture in {file}")
+                    # Older traces could include queries that finished while deliveries drained.
+                    continue
                 kind = "thread read" if query["kind"].startswith("thread:") else query["kind"]
                 queries[(*launch[:3], kind)].append(query["end"] - query["start"])
-            for lane, interval in options["cadence"].items():
+            for lane, interval in intervals.items():
                 if not interval:
                     continue
-                deliveries = [delivery for delivery in owner["deliveries"] if delivery["lane"] == lane]
+                deliveries = [delivery for delivery in owner["deliveries"] if LEGACY_LANES.get(delivery["lane"], delivery["lane"]) == lane]
                 metrics = cadence[(*launch[:3], lane, interval)]
-                per_burst = options["redeliveries"] if lane in ("inbound", "outbound") else 1
+                per_burst = options["redeliveries"] if lane in RETRY_COHORTS else 1
                 metrics["rate"].append(len(deliveries) / ((stop - start) / 1000) * per_burst)
                 metrics["late"].extend(max(0, delivery["start"] - delivery["due"]) for delivery in deliveries)
                 metrics["work"].extend(delivery["end"] - delivery["start"] for delivery in deliveries)
@@ -98,7 +115,7 @@ def main():
     if not observed:
         raise ValueError("No replay samples")
     print("# Native navigation replay\n")
-    print(f"{len(observed)} verified launches. " + " / ".join(sorted(platforms)) + ".\n")
+    print(f"{len(observed)} verified launches. {platform_label}.\n")
     table("Revision", "Commit")
     for revision in sorted({key[0] for key in observed}):
         row(revision, REVISIONS.get(revision, revision))
@@ -116,12 +133,19 @@ def main():
         for key, values in sorted(startup.items()):
             row(*key, len(values), stats(values))
     print("\n## Owner query time\n")
-    print("Elapsed time inside owner navigation queries and thread reads, including background queries.\n")
+    print("Elapsed time inside owner reads that completed by the capture cutoff.\n")
     table("Revision", "Copies", "Load", "Query", "Samples", "Median / p95 / max")
     for key, values in sorted(queries.items()):
         row(*key, len(values), stats(values))
+    if pending_queries:
+        print("\n### Queries pending at cutoff\n")
+        print("Pending totals cover launches that recorded this count.\n")
+        table("Revision", "Copies", "Load", "Recorded launches", "Pending queries")
+        for key, values in sorted(pending_queries.items()):
+            row(*key, len(values), sum(values))
     print("\n## Event cadence\n")
-    print("Federation rates count individual redeliveries. Its configured interval and timing columns describe bursts.")
+    print("Each loopback retry cohort exercises the viewer and owner paths in the measured Electron process.")
+    print("Retry rates count individual redeliveries. Their configured intervals and timing columns describe bursts.")
     print("Overlap counts input-to-frame windows intersecting at least one delivery in that lane.\n")
     table("Revision", "Copies", "Load", "Lane", "Target interval (ms)", "Median events/s", "Delivery lag ms median / p95 / max",
           "Delivery duration ms median / p95 / max", "Overlapping frames")

@@ -112,6 +112,16 @@ describe("bounded listing diagnostics", () => {
     ));
   });
 
+  it.each(["durable-turn-ownership", "durable-turn-ownership:archived-metadata"])(
+    "retains %s as the listing caller",
+    (caller) => {
+      const diagnostics = new ListingDiagnostics();
+      diagnostics.setEnabled(true);
+      diagnostics.record("provider-rpc", "start", { caller });
+      expect(diagnostics.snapshot().events[0]?.caller).toBe(caller);
+    },
+  );
+
   it("keeps async causes isolated and links reused promises without retaining them", async () => {
     const diagnostics = new ListingDiagnostics();
     diagnostics.setEnabled(true);

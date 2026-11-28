@@ -46,6 +46,7 @@ const LABELS = new Set([
   "directory-index", "directory", "children", "exact", "group-members", "model-inventory", "lens", "star-map-geometry", "messaging-threads", "messaging-projects",
   "demand", "refresh", "continuation", "rebaseline", "pins", "turn", "thread", "metadata", "federation", "messaging-bindings", "timer", "visibility", "event", "cursor-expired", "page-budget", "owner-invalidated", "provider-fallback",
   "turn-cwd", "branch-drift", "transcript-image-roots", "workspace-handoff", "thread-dependency-titles", "retained-owner-membership",
+  "durable-turn-ownership",
   "thread-list", "renderer-navigation-query", "federation-navigation-query", "owner-navigation-metadata", "navigation-snapshot", "startup-prewarm", "startup-provider-refresh", "authentication-recovery", "archive-cleanup", "thread-id-lookup", "agent-thread-inspection", "notification-context", "title-generation", "federation-thread-search",
 ]);
 /** Caller suffixes are fixed code vocabulary, not arbitrary request text. */

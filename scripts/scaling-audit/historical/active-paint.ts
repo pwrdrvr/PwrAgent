@@ -213,6 +213,7 @@ test("measures native navigation under synthetic owner event load", async () => 
       await writeFile(process.env.AUDIT_PAINT_OUTPUT!, JSON.stringify({ ...result, owner }));
     }
     expect(result.samples).toHaveLength((1 + warm) * 3);
+    expect(owner.queries.every(query => query.end <= owner.stoppedAt)).toBe(true);
     for (const [lane, interval] of Object.entries(cadence)) {
       const deliveries = owner.deliveries.filter(delivery => delivery.lane === lane);
       if (interval) expect(deliveries.length, `active ${lane} train`).toBeGreaterThan(1);

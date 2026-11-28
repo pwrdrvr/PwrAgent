@@ -68,6 +68,7 @@ Follow the [macOS VM lab skill](../macos-vm-e2e-lab/SKILL.md). Use an isolated, 
 Use the dedicated macOS E2E VM and stage the harness in a clean local commit.
 The VM job needs the pinned revisions reachable from that commit. The launcher
 installs and builds each revision in its own disposable checkout in the guest.
+Pass `--checkout` for a clean checkout with dependencies already installed.
 
 ```sh
 python3 scripts/scaling-audit/active_paint.py .local/active-paint
@@ -83,13 +84,15 @@ of a previously unopened thread. It repeats all three actions ten times after
 both measured threads have opened. These cold samples follow renderer startup
 and inventory verification.
 
-Use `--status-ms`, `--review-ms`, `--inbound-ms` and `--outbound-ms` to
+Use `--status-ms`, `--review-ms`, `--retry-a-ms` and `--retry-b-ms` to
 set each interval independently. Zero disables that lane. Use `--held` for
 the preloaded Auto-fix cohort, `--redeliveries` for the number of concurrent
 retries in each Federation burst, and `--queue-depth` for each receipt's held
 FIFO. The replay client feeds provider notifications to the installed owner.
 It holds fixes at the stack-read boundary and routes retries through two
 in-process Federation endpoints with real durable receipts and queues.
+The retry cohorts send in opposite directions between the endpoints and
+exercise both viewer and owner paths in the measured Electron process.
 The topology's backend labels are mapped to Codex so one replay client can
 serve the synthetic rows. The anonymous directory memberships, parent links
 and pin ranks stay intact.
@@ -97,7 +100,9 @@ and pin ranks stay intact.
 Read the input-to-frame, owner query and event cadence tables together.
 Frame readiness comes from a trusted click and two consecutive animation
 frames with the destination visible. Owner time covers the query body and
-thread read separately. Each lane records scheduled, actual start and finish
+thread read separately. Query timing covers reads completed by the capture
+cutoff, with still-pending reads counted separately. Use one platform and GPU
+configuration per report. Each lane records scheduled, actual start and finish
 times with one delivery in flight, so a slow burst can lower the delivered
 rate. Federation transport receipt time excludes network latency. The raw
 timestamps show which frame intervals overlap each lane.
