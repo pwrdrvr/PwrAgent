@@ -273,6 +273,7 @@ import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey }
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import { useJobMonitorWakeNotices } from "./features/notifications/useJobMonitorWakeNotices";
 import { useClaudeSignIn } from "./features/notifications/useClaudeSignIn";
+import { useNoAgentLanding } from "./features/onboarding/useNoAgentLanding";
 import { buildModelVerificationNotice } from "./features/notifications/model-verification-notice";
 import {
   buildNoStartupBackendNotice,
@@ -413,9 +414,6 @@ const LazySettingsScreen = lazy(async () => ({
   default: (await import("./features/settings/SettingsScreen")).SettingsScreen,
 }));
 
-const LazyAgentSetupPane = lazy(async () => ({
-  default: (await import("./features/onboarding/AgentSetupPane")).AgentSetupPane,
-}));
 const LazyGetStarted = lazy(async () => ({
   default: (await import("./features/onboarding/GetStarted")).GetStarted,
 }));
@@ -592,10 +590,6 @@ function DesktopAppShell(props: {
     "auto" | "replay" | null
   >(null);
   const [autoOpenSeen, setAutoOpenSeen] = useState(false);
-  // Set while startup found no agent that can start a thread. The empty main
-  // pane is then the agent setup rather than "Select a thread"; it clears
-  // when an agent answers and the window lands on its composer.
-  const [noAgentLanding, setNoAgentLanding] = useState(false);
   const startupLandingStateRef = useRef<
     "pending" | "notice-shown" | "complete"
   >("pending");
@@ -755,6 +749,13 @@ function DesktopAppShell(props: {
     readRendererFederationTarget() ? undefined : desktopApi?.signInClaude,
     openClaudeSettings,
   );
+  const noAgentLanding = useNoAgentLanding({
+    settings: props.settings,
+    desktopApi,
+    claudeSignIn: claudeSignIn.controls,
+    openSettingsSection,
+  });
+  const setNoAgentLanding = noAgentLanding.set;
   const {
     openMessagingActivityWindow,
     openMessagingSettings,
@@ -3132,6 +3133,7 @@ function DesktopAppShell(props: {
     mainView,
     navigation.loaded,
     navigation.selectedThreadKey,
+    setNoAgentLanding,
     onboardingOpen,
     openSettingsSection,
     openWorkspaceLaunchpad,
@@ -4221,21 +4223,7 @@ function DesktopAppShell(props: {
   function buildThreadViewProps() {
     return (
       {
-        ...(noAgentLanding && settings.snapshot
-          ? {
-            emptyTitle: "Get started",
-            emptyContent: (
-              <Suspense fallback={null}>
-                <LazyAgentSetupPane
-                  settings={settings}
-                  desktopApi={desktopApi}
-                  claudeSignIn={claudeSignIn.controls}
-                  onOpenProviderSettings={() => openSettingsSection("models")}
-                />
-              </Suspense>
-            ),
-          }
-          : {}),
+        ...noAgentLanding.threadViewProps,
         titleRename,
         onForkThread: navigation.forkThread,
         onCreateSubthread: navigation.createSubthread,
