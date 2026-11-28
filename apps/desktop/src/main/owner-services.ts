@@ -1,6 +1,6 @@
 import { createOwnerFactoryBranchReview } from "./factory/factory-branch-review-runtime";
 import { createOwnerFactoryAdmission } from "./factory/factory-admission-runtime";
-import { createOwnerFactoryScaling } from "./factory/factory-scaling-runtime";
+import type { createOwnerFactoryScaling } from "./factory/factory-scaling-runtime";
 import path from "node:path";
 import type { ApprovedLabCheckout } from "./resource-checkouts/pwrsuitelab-checkout-adapter";
 import { createResourceCheckoutToolHandler } from "./agent-tools/pwragent-resource-checkout-agent-tools";
@@ -498,7 +498,12 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     leaseHeld: () => federationLease.snapshot().leaseHeld,
   };
   const factoryAdmission = resourceCheckouts && createOwnerFactoryAdmission({ ...factoryOwner, checkouts: resourceCheckouts });
-  const factoryScaling = resourceCheckouts && createOwnerFactoryScaling(factoryOwner);
+  let scalingCommand: ReturnType<typeof createOwnerFactoryScaling> | undefined;
+  const factoryScaling = resourceCheckouts && (async (params: unknown) => {
+    const runtime = await import("./factory/factory-scaling-runtime");
+    scalingCommand ??= runtime.createOwnerFactoryScaling(factoryOwner);
+    return scalingCommand(params);
+  });
   const factoryBranchReview = bootMode === "active-profile" && createOwnerFactoryBranchReview(
     registry, federationRuntime, () => federationLease.snapshot().leaseHeld,
   );
