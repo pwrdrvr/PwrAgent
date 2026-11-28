@@ -8,8 +8,7 @@ import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-servi
 import type { McpGatewayCatalog } from "../mcp-connections/mcp-gateway-catalog";
 
 const turn = { backend: "acp:antigravity", threadId: "thread", turnId: "turn" } as const;
-const directTools = ["agent_memory", "call_mcp_tool", "create_monitor_delegation",
-  "get_current_turn_input_source", "handoff_task", "read_tool_guide", "search_mcp_tools"];
+const directTools = ["agent_memory", "call_mcp_tool", "get_current_turn_input_source", "search_mcp_tools"];
 const discoveryTools = ["call_pwragent_tool", "tool_search"];
 
 function definition(name: string): AgentToolDefinition {
@@ -173,7 +172,8 @@ it("returns native media and the complete structured result through the deferred
 
 it("keeps the Antigravity MCP catalog bounded as tools are added and resolves exact deferred schemas", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 70, max: 150 }), async (size) => {
-    const original = [...directTools, ...Array.from({ length: size }, (_, i) => `probe_tool_${i}`)];
+    const original = [...directTools, "handoff_task", "create_monitor_delegation", "read_tool_guide",
+      ...Array.from({ length: size }, (_, i) => `probe_tool_${i}`)];
     const router = new AgentToolRouter(original.map(definition));
     const server = new AgentToolMcpServer({
       resolveCatalogs: () => [{ id: "thread_orchestration", router }],
@@ -231,6 +231,42 @@ it("uses the live catalog and enforces the target tool's permission and session 
   } finally {
     await server.close();
   }
+});
+
+it("keeps creation on the parent and lifecycle calls on the monitor over ACP stdio", async () => {
+  const backends = ["acp:antigravity", "acp:gemini", "acp:grok", "acp:kimi", "acp:qwen"] as const;
+  await fc.assert(fc.asyncProperty(fc.constantFrom(...backends), async (backend) => {
+    const parent = new AgentToolRouter(["handoff_task", "create_monitor_delegation", "read_tool_guide"].map(definition));
+    const monitor = new AgentToolRouter(["inject_progress", "complete_monitoring"].map(definition));
+    let enabled = true;
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: (context) => [{ id: "thread_orchestration", router: context.taskMonitor ? monitor : parent }],
+      resolveCallContext: (context) => context.threadId ? { backend, threadId: context.threadId, turnId: "turn" } : undefined,
+      isToolAdvertised: (name) => name !== "create_monitor_delegation" || enabled,
+    });
+    try {
+      const caller = await server.registerClient({ backend, stdioFallback: true, threadId: "parent" });
+      const worker = await server.registerClient({ backend, stdioFallback: true, taskMonitor: true });
+      const tools = async (registration: Registration) => (await post(registration, "tools/list")).result.tools
+        .map(({ name }: { name: string }) => name).sort();
+      expect(await tools(caller)).toEqual(discoveryTools);
+      expect(await tools(worker)).toEqual(["complete_monitoring", "inject_progress"]);
+      expect(await worker.readCapabilityOrientation?.()).toBeUndefined();
+      expect(await caller.readCapabilityOrientation?.()).toContain("create_monitor_delegation");
+      enabled = false;
+      expect(await caller.readCapabilityOrientation?.()).not.toContain("create_monitor_delegation");
+      const invocation = await post(caller, "tools/call", {
+        name: "call_pwragent_tool",
+        arguments: { toolName: "create_monitor_delegation", arguments: {} },
+      });
+      expect(invocation.result.structuredContent).toMatchObject({ code: "forbidden" });
+      worker.bindThread("worker");
+      const finished = await post(worker, "tools/call", { name: "complete_monitoring", arguments: { marker: "done" } });
+      expect(finished.result.structuredContent).toMatchObject({ threadId: "worker", args: { marker: "done" } });
+    } finally {
+      await server.close();
+    }
+  }), { numRuns: backends.length, examples: backends.map((backend) => [backend]) });
 });
 
 type Registration = Awaited<ReturnType<AgentToolMcpServer["registerClient"]>>;

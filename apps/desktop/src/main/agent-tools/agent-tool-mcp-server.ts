@@ -24,8 +24,8 @@ import { agentToolFailure } from "./agent-tool-definition.js";
 import {
   ANTIGRAVITY_DIRECT_MCP_TOOLS,
   ANTIGRAVITY_MCP_CONNECTION_INSTRUCTIONS,
-  ANTIGRAVITY_TOOL_DISCOVERY,
-  ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS,
+  ACP_MCP_TOOL_DISCOVERY,
+  ACP_MCP_TOOL_DISCOVERY_INSTRUCTIONS,
   CALL_PWRAGENT_TOOL,
   readPwrAgentCallTarget,
 } from "./antigravity-mcp-catalog.js";
@@ -40,6 +40,11 @@ import {
   PWRAGENT_SKILLS_EXTENSION,
   PWRAGENT_WORKFLOW_SKILLS,
 } from "./pwragent-workflow-skills.js";
+import {
+  buildPwrAgentCapabilityOrientation,
+  CREATE_JOB_MONITOR,
+  ORIENTED_PWRAGENT_TOOLS,
+} from "./pwragent-capability-orientation.js";
 import { PWRAGENT_TOOL_SEARCH, searchPwrAgentMcpTools } from "./pwragent-tool-search.js";
 
 // The SDK's built-in request union does not yet include the skills extension.
@@ -56,7 +61,7 @@ const skillRequestSchemas = lazyModule(async () => {
   };
 });
 
-export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): string {
+export function buildPwrAgentMcpInstructions(toolNames: readonly string[], oriented = false): string {
   const has = (name: string) => toolNames.includes(name);
   return PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
     + (has("watch_thread_pull_request")
@@ -70,14 +75,16 @@ export function buildPwrAgentMcpInstructions(toolNames: readonly string[]): stri
     + (has("schedule_follow_up")
       ? " Timed waits: schedule_follow_up."
       : "")
-    + (has("create_monitor_delegation")
+    + (!oriented && has(CREATE_JOB_MONITOR)
       ? " Explicit Job Monitor or no built-in wait: create_monitor_delegation."
       : "")
     + (has("watch_thread_pull_request") || has("manage_thread_dependencies") || has("create_monitor_delegation")
       ? " Register the wait and end the turn."
       : "")
     + (has("read_tool_guide")
-      ? " Read read_tool_guide or use resources/read for skill://waiting-on-work/SKILL.md and skill://tool-guide/SKILL.md."
+      ? (oriented
+        ? " For durable wait guidance, use resources/read for skill://waiting-on-work/SKILL.md."
+        : " Read read_tool_guide or use resources/read for skill://waiting-on-work/SKILL.md and skill://tool-guide/SKILL.md.")
       : "");
 }
 
@@ -118,9 +125,11 @@ const agentToolMcpLog = getMainLogger("pwragent:agent-tool-mcp");
 export type AgentToolMcpClientContext = {
   backend: AppServerBackendKind;
   threadId?: string;
-  /** A stdio credential may reach managed connections only on a gateway-enabled Antigravity registration. */
+  /** Stdio has a restricted catalog. Only the Antigravity gateway adds selected connections. */
   stdioFallback?: boolean | "managed-connections";
   managedReview?: boolean;
+  /** The monitor gets lifecycle calls even when it starts over restricted stdio. */
+  taskMonitor?: true;
   observeJobMonitorCatalog?: boolean;
   tokenMiserEnabled?: boolean;
 };
@@ -148,6 +157,7 @@ export type AgentToolMcpRegistration = {
   readListedJobMonitorCreation?: () => boolean | undefined;
   /** The live tool description. Use catalog scope for a deferred invocation's target. */
   readTool?: (name: string, scope?: "listed" | "catalog") => Promise<AgentMcpTool | undefined>;
+  readCapabilityOrientation?: () => Promise<string | undefined>;
 };
 
 type JobMonitorCatalogListing = { scope: string; enabled?: boolean };
@@ -266,13 +276,20 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       ...(listing ? {
         readListedJobMonitorCreation: () => this.jobMonitorListings.get(token) === listing ? listing.enabled : undefined,
       } : {}),
+      readCapabilityOrientation: async () => {
+        const current = this.contextsByToken.get(token);
+        if (!current || current.managedReview) return undefined;
+        const catalog = await this.resolveMcpTools(current, ORIENTED_PWRAGENT_TOOLS);
+        return this.capabilityOrientation(current, catalog, await this.resolveAcpDiscoveryTools(current));
+      },
       readTool: async (name, scope = "listed") => {
         const current = this.contextsByToken.get(token);
         if (!current) return undefined;
-        if (scope === "listed" && usesAntigravityCatalog(current) && !ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name)) {
-          const wrapper = ANTIGRAVITY_TOOL_DISCOVERY.find((tool) => tool.name === name);
-          if (wrapper) return await this.isToolAdvertised(name, current) ? wrapper : undefined;
-          if (canDeferAntigravityTools(await this.resolveAntigravityDiscoveryTools(current))) return undefined;
+        if (scope === "listed" && usesAcpCatalogDiscovery(current)) {
+          const wrapper = ACP_MCP_TOOL_DISCOVERY.find((tool) => tool.name === name);
+          if (wrapper) return (await this.resolveAcpDiscoveryTools(current)).find((tool) => tool.name === name);
+          if (current.stdioFallback && ORIENTED_PWRAGENT_TOOLS.has(name)) return undefined;
+          if (!directAcpTool(current, name) && canDeferAcpTools(await this.resolveAcpDiscoveryTools(current))) return undefined;
         }
         return await this.resolveMcpTool(current, name);
       },
@@ -341,6 +358,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       backend: context.backend,
       ...(context.stdioFallback ? { stdioFallback: context.stdioFallback } : {}),
       ...(context.managedReview ? { managedReview: true } : {}),
+      ...(context.taskMonitor ? { taskMonitor: true as const } : {}),
       ...(context.tokenMiserEnabled ? { tokenMiserEnabled: true } : {}),
       ...(normalizedThreadId ? { threadId: normalizedThreadId } : {}),
     };
@@ -487,10 +505,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const toolCalls: Promise<unknown>[] = [];
     const clientGone = new AbortController();
     const disconnectSignal = AbortSignal.any([clientGone.signal, params.request.signal]);
-    const toolNames = (await this.resolveMcpTools(params.clientContext)).map((tool) => tool.name);
-    const isAntigravity = usesAntigravityCatalog(params.clientContext);
-    const discoveryTools = isAntigravity ? await this.resolveAntigravityDiscoveryTools(params.clientContext) : [];
-    const deferTools = canDeferAntigravityTools(discoveryTools);
+    const catalog = await this.resolveMcpTools(params.clientContext);
+    const toolNames = catalog.map((tool) => tool.name);
+    const discoveryTools = await this.resolveAcpDiscoveryTools(params.clientContext);
+    const deferTools = canDeferAcpTools(discoveryTools);
+    const oriented = Boolean(this.capabilityOrientation(params.clientContext, catalog, discoveryTools));
     const hasToolGuide = toolNames.includes("read_tool_guide");
     // The PDF-only MCP surface shares this server but has no workflow tools.
     const skills = hasToolGuide ? PWRAGENT_WORKFLOW_SKILLS : [];
@@ -507,10 +526,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         },
         instructions: params.clientContext.managedReview
           ? "PwrAgent in-memory review candidate ledger for this review turn."
-          : buildPwrAgentMcpInstructions(toolNames)
-            + (deferTools
-              ? ` ${ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS}` : "")
-            + (isAntigravity && toolNames.includes("search_mcp_tools") && toolNames.includes("call_mcp_tool")
+          : buildPwrAgentMcpInstructions(toolNames, oriented)
+            + (deferTools && !oriented
+              ? ` ${ACP_MCP_TOOL_DISCOVERY_INSTRUCTIONS}` : "")
+            + (params.clientContext.backend === "acp:antigravity" && toolNames.includes("search_mcp_tools") && toolNames.includes("call_mcp_tool")
               ? ` ${ANTIGRAVITY_MCP_CONNECTION_INSTRUCTIONS}` : ""),
       },
     );
@@ -551,11 +570,14 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
       const catalog = await this.resolveMcpTools(params.clientContext);
       // Only defer tools if the agent may invoke them through the dispatcher.
-      const tools = deferTools
-        ? [...catalog.filter(({ name }) => ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name)), ...discoveryTools]
-        : [...catalog, ...discoveryTools];
+      const tools = [
+        ...catalog.filter(({ name }) => deferTools
+          ? directAcpTool(params.clientContext, name)
+          : !params.clientContext.stdioFallback || !ORIENTED_PWRAGENT_TOOLS.has(name)),
+        ...discoveryTools,
+      ];
       if (observedListing && sessionNonce) {
-        observedListing.enabled = tools.some(({ name }) => name === "create_monitor_delegation");
+        observedListing.enabled = (deferTools ? catalog : tools).some(({ name }) => name === CREATE_JOB_MONITOR);
       }
       return { tools };
     });
@@ -686,10 +708,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       return forbiddenMcpResponse("This tool is unavailable to this ACP stdio client.");
     }
     let { name, arguments: args } = request.params;
-    if (usesAntigravityCatalog(clientContext) && (name === PWRAGENT_TOOL_SEARCH || name === CALL_PWRAGENT_TOOL)) {
+    if (usesAcpCatalogDiscovery(clientContext) && (name === PWRAGENT_TOOL_SEARCH || name === CALL_PWRAGENT_TOOL)) {
       const denial = await this.toolPermissionDenial(callContext, name, args);
       if (denial) return denial;
-      if (!await this.isToolAdvertised(name, clientContext)) {
+      if (!(await this.resolveAcpDiscoveryTools(clientContext)).some((tool) => tool.name === name)) {
         return forbiddenMcpResponse("This client may not call the requested PwrAgent discovery tool.");
       }
       if (name === PWRAGENT_TOOL_SEARCH) {
@@ -701,9 +723,15 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         if (!target) {
           return invalidMcpArguments("Provide a toolName and an arguments object.");
         }
-        if (!await this.resolveMcpTool(clientContext, target.name)) return unsupportedMcpTool();
+        if (!await this.resolveMcpTool(clientContext, target.name)) {
+          return target.name === CREATE_JOB_MONITOR && allowsStdioFallbackTool(clientContext, target.name)
+            ? forbiddenMcpResponse("Job Monitor creation is unavailable for this thread.")
+            : unsupportedMcpTool();
+        }
         ({ name, args } = target);
       }
+    } else if (clientContext.stdioFallback && ORIENTED_PWRAGENT_TOOLS.has(name)) {
+      return unsupportedMcpTool();
     }
     const catalogs = await this.options.resolveCatalogs(clientContext);
     const catalog = catalogs.find((candidate) =>
@@ -789,12 +817,26 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     return (await this.options.isToolAdvertised?.(name, context)) ?? true;
   }
 
-  private async resolveAntigravityDiscoveryTools(context: AgentToolMcpClientContext): Promise<AgentMcpTool[]> {
+  private async resolveAcpDiscoveryTools(context: AgentToolMcpClientContext): Promise<AgentMcpTool[]> {
+    if (!usesAcpCatalogDiscovery(context)) return [];
     const tools: AgentMcpTool[] = [];
-    for (const tool of ANTIGRAVITY_TOOL_DISCOVERY) {
+    for (const tool of ACP_MCP_TOOL_DISCOVERY) {
       if (await this.isToolAdvertised(tool.name, context)) tools.push(tool);
     }
-    return tools;
+    return context.stdioFallback && !canDeferAcpTools(tools) ? [] : tools;
+  }
+
+  private capabilityOrientation(
+    context: AgentToolMcpClientContext,
+    catalog: readonly AgentMcpTool[],
+    discoveryTools: readonly AgentMcpTool[],
+  ): string | undefined {
+    const search = canDeferAcpTools(discoveryTools);
+    if (context.managedReview || (context.stdioFallback && !search)) return undefined;
+    return buildPwrAgentCapabilityOrientation(
+      (name) => catalog.some((tool) => tool.name === name),
+      context.backend === "claude" ? "claude" : context.backend === "codex" ? "codex" : search ? "acp" : "acpDirect",
+    );
   }
 
   /** One tool in the full allowed catalog, without checking the others. */
@@ -809,10 +851,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     return matches[0];
   }
 
-  private async resolveMcpTools(context: AgentToolMcpClientContext): Promise<AgentMcpTool[]> {
+  private async resolveMcpTools(context: AgentToolMcpClientContext, only?: ReadonlySet<string>): Promise<AgentMcpTool[]> {
     const toolsByName = new Map<string, AgentMcpTool>();
     for (const catalog of await this.options.resolveCatalogs(context)) {
       for (const tool of catalog.router.buildMcpTools()) {
+        if (only && !only.has(tool.name)) continue;
         if (!allowsStdioFallbackTool(context, tool.name)) continue;
         if (!await this.isToolAdvertised(tool.name, context)) continue;
         if (toolsByName.has(tool.name)) {
@@ -1001,6 +1044,10 @@ function unsupportedMcpTool(): AgentMcpToolCallResponse {
 
 function allowsStdioFallbackTool(context: AgentToolMcpClientContext, name: string): boolean {
   return !context.stdioFallback || name === "agent_memory" || name === "list_reviews"
+    || (context.taskMonitor && (name === "inject_progress" || name === "complete_monitoring"))
+    || (usesAcpCatalogDiscovery(context) && (
+      ORIENTED_PWRAGENT_TOOLS.has(name) || name === PWRAGENT_TOOL_SEARCH || name === CALL_PWRAGENT_TOOL
+    ))
     || isManagedStdioGatewayTool(context, name);
 }
 
@@ -1009,13 +1056,17 @@ function isManagedStdioGatewayTool(context: AgentToolMcpClientContext, name: str
     && (name === "search_mcp_tools" || name === "call_mcp_tool" || name === "read_mcp_context");
 }
 
-function usesAntigravityCatalog(context: AgentToolMcpClientContext): boolean {
-  return context.backend === "acp:antigravity"
-    && !context.stdioFallback
-    && !context.managedReview;
+function usesAcpCatalogDiscovery(context: AgentToolMcpClientContext): boolean {
+  return context.backend.startsWith("acp:") && !context.managedReview && !context.taskMonitor;
 }
 
-function canDeferAntigravityTools(discoveryTools: readonly AgentMcpTool[]): boolean {
+function directAcpTool(context: AgentToolMcpClientContext, name: string): boolean {
+  return !ORIENTED_PWRAGENT_TOOLS.has(name)
+    && (context.backend !== "acp:antigravity" || context.stdioFallback !== undefined
+      || ANTIGRAVITY_DIRECT_MCP_TOOLS.has(name));
+}
+
+function canDeferAcpTools(discoveryTools: readonly AgentMcpTool[]): boolean {
   return discoveryTools.some(({ name }) => name === PWRAGENT_TOOL_SEARCH)
     && discoveryTools.some(({ name }) => name === CALL_PWRAGENT_TOOL);
 }
@@ -1029,6 +1080,7 @@ function boundThreadKey(
     threadId,
     context.stdioFallback ?? false,
     context.managedReview === true,
+    context.taskMonitor === true,
   ]);
 }
 

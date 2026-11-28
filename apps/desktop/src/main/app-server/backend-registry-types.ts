@@ -380,6 +380,7 @@ export type BackendClient = {
   startTurn(params: {
     threadId: string;
     agentMemoryContext?: string;
+    additionalContext?: Parameters<CodexAppServerClient["startTurn"]>[0]["additionalContext"];
     parentTurnId?: string;
     rootTurnId?: string;
     input: AppServerTurnInputItem[];

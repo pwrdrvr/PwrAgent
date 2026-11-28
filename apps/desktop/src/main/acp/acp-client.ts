@@ -205,6 +205,7 @@ export type AcpMcpServerRegistration = {
   managedReviewLedgerAvailable?: true;
   bindThread?: (threadId: string) => Promise<void> | void;
   readListedJobMonitorCreation?: () => boolean | undefined;
+  readCapabilityOrientation?: () => Promise<string | undefined>;
   /**
    * Whether the agent's permission prompt for `toolName` on the named server
    * can be answered without the operator: PwrAgent approves that call itself
@@ -234,6 +235,7 @@ export function mergeMcpServerRegistrations(
       ? { managedReviewLedgerAvailable: true }
       : {}),
     readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
+    readCapabilityOrientation: present.find((entry) => entry.readCapabilityOrientation)?.readCapabilityOrientation,
     ...(approvers.length ? {
       hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {
         for (const approves of approvers) {
@@ -296,6 +298,8 @@ export { resolveAntigravityMcpToolTarget };
  * tool in that thread with the agent's `allow_once`.
  */
 export const ACP_THREAD_TOOL_GRANT_OPTION_ID = "pwragent_allow_tool_for_thread";
+// The session retains provider system append text across load and compaction.
+const ACP_SYSTEM_CAPABILITY_RECEIPT = "//system";
 
 type AcpSessionMcpServers = {
   /** Names as the agent received them in `session/new` or `session/load`. */
@@ -304,6 +308,7 @@ type AcpSessionMcpServers = {
   registeredNames?: ReadonlySet<string>;
   hostApprovesToolCall?: AcpMcpServerRegistration["hostApprovesToolCall"];
   managedConnectionsViaGateway?: true;
+  readCapabilityOrientation?: AcpMcpServerRegistration["readCapabilityOrientation"];
 };
 
 export type AcpPromptContentBlock =
@@ -344,6 +349,7 @@ type AcpActiveTurn = {
   hasAssistantImage?: boolean;
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
+  deliveredAgentInstructions?: string | null;
   /** The prompt itself is a leading `/compact` slash command. */
   isCompactCommand?: boolean;
   compactUsage?: AcpCompactPromptUsage;
@@ -448,6 +454,7 @@ export type AcpAgentClientOptions = {
     runtimeCapabilities?: BackendAcpRuntimeCapabilities;
     sessionId?: string;
     managedReview?: boolean;
+    taskMonitor?: true;
   }) =>
     | AcpMcpServerConfig[]
     | AcpMcpServerRegistration
@@ -548,6 +555,7 @@ export class AcpAgentClient {
   private archiveRestoreSupported = false;
   private antigravitySessionListSupported = false;
   private jobMonitorCatalogRefreshSupported = false;
+  private supportsAntigravitySystemPromptAppend = false;
   private readonly normalizerOptions: AcpSessionReplayNormalizerOptions;
   private replayKit?: AcpReplayKit;
   private activeOperations = 0;
@@ -634,6 +642,9 @@ export class AcpAgentClient {
       value: result, now: this.now(), source: "initialize",
     })?.agentCapabilities;
     const rawCapabilities = asRecord(advertised?.raw);
+    const antigravity = asRecord(asRecord(rawCapabilities?._meta)?.antigravity);
+    this.supportsAntigravitySystemPromptAppend = this.options.backendId === "acp:antigravity"
+      && asRecord(antigravity?.systemPrompt)?.append === true;
     const sessionCapabilities = asRecord(rawCapabilities?.sessionCapabilities ?? rawCapabilities?.session_capabilities);
     this.antigravitySessionListSupported = Boolean(asRecord(sessionCapabilities?.list));
     this.archiveRestoreSupported = advertised?.loadSession === true;
@@ -1430,6 +1441,7 @@ export class AcpAgentClient {
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
     managedReview?: boolean;
+    taskMonitor?: true;
     /** An agent-requested review cannot prompt until the caller's mode is confirmed. */
     requiredAntigravityMode?: string;
     mcpServers?: "default" | "none";
@@ -1471,6 +1483,7 @@ export class AcpAgentClient {
             cwd,
             sessionId: params.sessionId,
             ...(params.managedReview ? { managedReview: true } : {}),
+            ...(params.taskMonitor ? { taskMonitor: true } : {}),
           });
     const additional = params.additionalMcpRegistration;
     const mcpRegistration = defaultMcpRegistration.managedConnectionsViaGateway
@@ -1480,10 +1493,14 @@ export class AcpAgentClient {
           typeof additional === "function" ? await additional() : additional,
         );
     const mcpServerWireConfigs = toAcpMcpServerWireConfigs(mcpRegistration.servers);
+    const orientation = this.supportsAntigravitySystemPromptAppend
+      ? await mcpRegistration.readCapabilityOrientation?.()
+      : undefined;
+    const sessionMeta = orientation ? withAntigravitySystemPrompt(params.sessionMeta, orientation) : params.sessionMeta;
     let result = await this.options.transport.request("session/new", {
       cwd,
       mcpServers: mcpServerWireConfigs,
-      ...(params.sessionMeta ? { _meta: params.sessionMeta } : {}),
+      ...(sessionMeta ? { _meta: sessionMeta } : {}),
     }).catch(async (error: unknown) => {
       // A failed publication must never replace the provider's error.
       await this.options.onSessionStartError?.(error).catch(() => undefined);
@@ -1557,6 +1574,7 @@ export class AcpAgentClient {
       ...(params.approvalPolicy ? { approvalPolicy: params.approvalPolicy } : {}),
       acpRuntime: combinedRuntimeState,
       ...(params.hidden ? { hidden: true } : {}),
+      ...(orientation ? { agentInstructionsDigest: ACP_SYSTEM_CAPABILITY_RECEIPT } : {}),
       ...(this.options.backendId === "acp:antigravity" ? { antigravityPrimaryCwd: cwd } : {}),
       ...(handoff ? { antigravityWorkspaceRebound: true } : {}),
       status: "idle",
@@ -2732,7 +2750,7 @@ export class AcpAgentClient {
       )
     ) {
       if (activeTurn) activeTurn.compacted = true;
-      this.recordDeliveredAgentInstructions(sessionId, undefined);
+      this.clearDeliveredPromptInstructions(sessionId);
     }
     if (isProviderTranscriptReplayUpdate(update)) {
       if (loadState) {
@@ -3441,8 +3459,8 @@ export class AcpAgentClient {
       suppressTranscriptReplay: options.suppressTranscriptReplay === true,
       restoringAntigravityMode: Boolean(mode),
     };
-    this.loadingSessions.set(protocolSessionId, loadState);
     const mcpServerWireConfigs = toAcpMcpServerWireConfigs(mcpRegistration.servers);
+    this.loadingSessions.set(protocolSessionId, loadState);
     let result: unknown;
     try {
       result = await this.options.transport.request("session/load", {
@@ -3602,6 +3620,7 @@ export class AcpAgentClient {
     this.sessionMcpServers.set(sessionId, {
       agentNames,
       ...(registration.managedConnectionsViaGateway ? { managedConnectionsViaGateway: true } : {}),
+      readCapabilityOrientation: registration.readCapabilityOrientation,
       registeredNames: new Set(registration.servers
         .map((server) => server.name)
         .filter((name) => sent.has(name))),
@@ -3744,6 +3763,7 @@ export class AcpAgentClient {
     cwd: string;
     sessionId?: string;
     managedReview?: boolean;
+    taskMonitor?: true;
   }): Promise<AcpMcpServerRegistration> {
     const registration = await this.options.mcpServers?.({
       backendId: this.options.backendId,
@@ -3751,6 +3771,7 @@ export class AcpAgentClient {
       runtimeCapabilities: this.runtimeCapabilities,
       sessionId: params.sessionId,
       ...(params.managedReview ? { managedReview: true } : {}),
+      ...(params.taskMonitor ? { taskMonitor: true } : {}),
     });
     return Array.isArray(registration)
       ? { servers: registration }
@@ -3825,12 +3846,11 @@ export class AcpAgentClient {
       const isCompactCommand =
         params.isCompactCommand === true
         || isAcpCompactPromptBlocks(params.prompt, storedSession?.availableCommands);
+      const [lastPersona, lastOrientation, systemCapability] = (storedSession?.agentInstructionsDigest ?? "").split("/");
       const instructions = isCompactCommand ? undefined : params.agentInstructions;
-      const digest = instructions === undefined
-        ? undefined
-        : agentInstructionsDigest(params.protocolSessionId, instructions);
-      const sendInstructions = instructions !== undefined
-        && digest !== storedSession?.agentInstructionsDigest;
+      const personaDigest = instructions === undefined ? lastPersona
+        : agentInstructionsDigest(params.protocolSessionId, instructions) ?? "";
+      const sendInstructions = instructions !== undefined && personaDigest !== lastPersona;
       const memory = !isCompactCommand && params.readAgentMemory
         ? await params.readAgentMemory()
         : undefined;
@@ -3840,6 +3860,11 @@ export class AcpAgentClient {
       } else if (this.agentToolCatalogIsStale(params.sessionId)) {
         await this.refreshAgentToolCatalog(params.sessionId);
       }
+      const orientation = isCompactCommand || systemCapability === "system"
+        ? undefined
+        : await this.sessionMcpServers.get(params.sessionId)?.readCapabilityOrientation?.();
+      const orientationDigest = orientation ? agentInstructionsDigest(params.protocolSessionId, orientation) : lastOrientation;
+      const sendOrientation = Boolean(orientation && orientationDigest !== lastOrientation);
       if (cancelledBeforePrompt) return cancelled;
       this.assertPromptAccess(params.sessionId);
       params.onDispatch?.();
@@ -3852,7 +3877,12 @@ export class AcpAgentClient {
         {
           sessionId: params.protocolSessionId,
           prompt: [
-            ...(sendInstructions ? textPrompt(buildAcpAgentInstructionBlock(instructions)) : []),
+            ...(sendInstructions || sendOrientation
+              ? textPrompt(buildAcpAgentInstructionBlock(
+                  sendInstructions ? instructions : undefined,
+                  sendOrientation ? orientation : undefined,
+                ))
+              : []),
             ...params.prompt,
             ...(memory ? textPrompt(memory) : []),
           ],
@@ -3861,8 +3891,12 @@ export class AcpAgentClient {
       );
       // Recorded once the agent has answered the prompt. A prompt that fails,
       // or that compacted the block away, leaves the session due it again.
-      if (sendInstructions && !activeTurn?.compacted) {
-        this.recordDeliveredAgentInstructions(params.sessionId, digest);
+      if ((sendInstructions || sendOrientation) && activeTurn && !activeTurn.compacted) {
+        // A legacy row has just the persona digest. Store both in the same
+        // receipt so an orientation change does not resend a persona.
+        const digest = systemCapability === "system" ? `${personaDigest}${ACP_SYSTEM_CAPABILITY_RECEIPT}`
+          : orientationDigest ? `${personaDigest}/${orientationDigest}` : personaDigest || undefined;
+        activeTurn.deliveredAgentInstructions = digest ?? null;
       }
       return result;
     };
@@ -3907,6 +3941,7 @@ export class AcpAgentClient {
     this.updateSessionStatus(sessionId, "idle", this.now(), {
       workspaceContextDelivered,
       clearAgentInstructionsDigest,
+      deliveredAgentInstructions: activeTurn?.compacted ? undefined : activeTurn?.deliveredAgentInstructions,
     });
     return {
       assistantText: activeTurn?.assistantText ?? "",
@@ -3968,14 +4003,12 @@ export class AcpAgentClient {
   }
 
   /**
-   * One write per delivered block (the first delivery and each edit) and per
-   * compaction that clears the record. An unchanged record is not written.
+   * Live compaction can invalidate prompt delivery before the turn ends.
+   * Keep the provider's system append receipt and skip duplicate reports.
    */
-  private recordDeliveredAgentInstructions(
-    sessionId: string,
-    digest: string | undefined,
-  ): void {
+  private clearDeliveredPromptInstructions(sessionId: string): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    const digest = retainedSystemCapabilityReceipt(metadata?.agentInstructionsDigest);
     if (!metadata || metadata.agentInstructionsDigest === digest) {
       return;
     }
@@ -4104,6 +4137,7 @@ export class AcpAgentClient {
     options: AcpSessionMetadataUpdateOptions & {
       workspaceContextDelivered?: boolean;
       clearAgentInstructionsDigest?: boolean;
+      deliveredAgentInstructions?: string | null;
     } = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
@@ -4111,10 +4145,14 @@ export class AcpAgentClient {
       return;
     }
     const { agentInstructionsDigest, ...rest } = metadata;
+    const digest = options.clearAgentInstructionsDigest
+      ? retainedSystemCapabilityReceipt(agentInstructionsDigest)
+      : options.deliveredAgentInstructions === undefined
+        ? agentInstructionsDigest : options.deliveredAgentInstructions;
     this.options.store.upsertSession({
       ...rest,
-      ...(!options.clearAgentInstructionsDigest && agentInstructionsDigest !== undefined
-        ? { agentInstructionsDigest }
+      ...(digest
+        ? { agentInstructionsDigest: digest }
         : {}),
       status,
       ...(options.workspaceContextDelivered ? { antigravityWorkspaceContextDelivered: true } : {}),
@@ -4731,4 +4769,24 @@ function agentInstructionsDigest(
   return instructions
     ? createHash("sha256").update(`${protocolSessionId}\0${instructions}`).digest("hex")
     : undefined;
+}
+
+function retainedSystemCapabilityReceipt(receipt: string | undefined): string | undefined {
+  return receipt?.endsWith(ACP_SYSTEM_CAPABILITY_RECEIPT) ? ACP_SYSTEM_CAPABILITY_RECEIPT : undefined;
+}
+
+function withAntigravitySystemPrompt(
+  meta: Record<string, unknown> | undefined,
+  orientation: string,
+): Record<string, unknown> {
+  const antigravity = asRecord(meta?.antigravity);
+  const systemPrompt = asRecord(antigravity?.systemPrompt);
+  const existing = typeof systemPrompt?.append === "string" ? systemPrompt.append : undefined;
+  return {
+    ...meta,
+    antigravity: {
+      ...antigravity,
+      systemPrompt: { ...systemPrompt, append: existing ? `${orientation}\n\n${existing}` : orientation },
+    },
+  };
 }

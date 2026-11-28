@@ -390,6 +390,7 @@ export type AcpBackendAdapterOptions = {
   captureStores: ProtocolCaptureStore[];
   agentToolMcpServer?: AgentToolMcpServerLike;
   readJobMonitorCreationPreference?: (backend: AcpBackendId, sessionId: string) => Promise<boolean>;
+  isTaskMonitorThread?: (backend: AcpBackendId, threadId: string) => boolean;
   createAcpClient?: AcpClientFactory;
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
@@ -4288,6 +4289,7 @@ export class AcpBackendAdapter {
         runtimeCapabilities,
         sessionId,
         managedReview,
+        taskMonitor: startingTaskMonitor,
       }): Promise<AcpMcpServerRegistration> => {
         let baseRegistration: AcpMcpServerRegistration | undefined;
         const http = acpRuntimeSupportsHttpMcp(runtimeCapabilities);
@@ -4323,11 +4325,13 @@ export class AcpBackendAdapter {
         }
         const useManagedGateway = backendId === "acp:antigravity" && this.managedMcpGatewayAvailable
           && isAgentToolAdvertisedLocally("search_mcp_tools") && isAgentToolAdvertisedLocally("call_mcp_tool");
+        const taskMonitor = startingTaskMonitor || (sessionId && this.options.isTaskMonitorThread?.(backendId, sessionId));
         if (this.agentToolMcpServer) {
           try {
             const registration = await this.agentToolMcpServer.registerClient({
               backend: backendId,
               threadId: sessionId,
+              ...(taskMonitor ? { taskMonitor: true } : {}),
               ...(!http ? { stdioFallback: useManagedGateway ? "managed-connections" as const : true } : {}),
               ...(http && observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
             });
@@ -4335,6 +4339,7 @@ export class AcpBackendAdapter {
             baseRegistration = {
               servers: [http ? registration.server : buildAgentToolStdioServer(registration.server)],
               bindThread: registration.bindThread,
+              readCapabilityOrientation: registration.readCapabilityOrientation,
               ...(readTool ? {
                 hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {
                   if (serverName !== registration.server.name) return false;

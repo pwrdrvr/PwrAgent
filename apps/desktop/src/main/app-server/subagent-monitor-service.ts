@@ -3939,6 +3939,7 @@ export class SubAgentMonitorService {
         acpRuntime: selectedRuntime,
         reasoningEffort,
         hidden: true,
+        taskMonitor: true,
       });
       // Less than asked when the new session lacked the parent's native Yolo.
       this.bindTaskMonitorMcpThread(params.monitorId, thread.threadId, thread.executionMode);

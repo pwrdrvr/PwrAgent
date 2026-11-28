@@ -598,6 +598,7 @@ import {
   toDynamicToolResponse,
 } from "../agent-tools/agent-tool-router";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
+import { buildPwrAgentCapabilityOrientation, CREATE_JOB_MONITOR } from "../agent-tools/pwragent-capability-orientation";
 import {
   buildPwrAgentToolSearchDefinition,
   MESSAGING_EAGER_TOOLS,
@@ -6839,6 +6840,7 @@ export class DesktopBackendRegistry {
     mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
     managedReview?: boolean;
+    taskMonitor?: true;
     requiredAntigravityMode?: string;
   }): Promise<{
     threadId: string;
@@ -6868,6 +6870,7 @@ export class DesktopBackendRegistry {
       additionalMcpRegistration: params.mcpRegistration,
       ...(params.hidden ? { hidden: true } : {}),
       ...(params.managedReview ? { managedReview: true } : {}),
+      ...(params.taskMonitor ? { taskMonitor: true } : {}),
       requiredAntigravityMode: params.requiredAntigravityMode,
     }));
     if (
@@ -12733,12 +12736,13 @@ export class DesktopBackendRegistry {
             ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
             : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
           const instructions = providerDeliveredAgentInstructions(await this.getThreadAgentMetadata(params));
+          const orientation = await owned?.readCapabilityOrientation?.();
           const messageOrigin = resolveThreadMessageOrigin(params);
           prepared = {
             ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
             messageOrigin,
             executionMode: params.executionMode ?? overlay?.executionMode,
-            instructions,
+            instructions: [orientation, instructions].filter(Boolean).join("\n\n") || undefined,
             readAgentMemory: this.readAgentMemoryContext.bind(this, { backend: params.backend, threadId: params.threadId }),
             mcpServers,
             ...(this.subAgentMonitorService.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
@@ -13123,12 +13127,14 @@ export class DesktopBackendRegistry {
             tokenMiserConfig,
           );
           const agentMemoryContext = await this.readAgentMemoryContext(params);
+          const orientation = await this.codexCapabilityOrientation(params, overlay, dynamicTools);
           const start = () => listingDiagnostics.trace("workflow", { query: "provider-turn-start" }, () => client.startTurn({
             threadId: params.threadId,
             ...delegatedTurnAttribution(params.messageOrigin,
               params.agentMessages?.map((message) => message.origin) ?? params.agentMessageOrigins),
             input,
             agentMemoryContext,
+            ...(orientation ? { additionalContext: { pwragent_capabilities: { kind: "application", value: orientation } } } : {}),
             ...(pendingMessageContextId ? {
               onInputTextPrepared: (text: string | undefined) => {
                 this.updatePendingThreadMessageText(pendingMessageContextId, text);
@@ -18162,6 +18168,24 @@ export class DesktopBackendRegistry {
         },
       };
     });
+  }
+
+  private async codexCapabilityOrientation(
+    params: { backend: AppServerBackendKind; threadId: string },
+    overlay: ThreadOverlayState | undefined,
+    dynamicTools: CodexDynamicToolSpec[] | undefined,
+  ): Promise<string | undefined> {
+    if (params.backend !== "codex" || this.subAgentMonitorService.isTaskMonitorThread(params)) return undefined;
+    const catalog = dynamicTools?.flatMap((entry) => entry.type === "namespace"
+      ? entry.name === PWRAGENT_TOOL_NAMESPACE ? entry.tools.map(({ name }) => name) : []
+      : entry.name);
+    const monitor = catalog ? catalog.includes(CREATE_JOB_MONITOR) : await this.isJobMonitorCreationEnabled(params);
+    const search = overlay?.codexAgentToolsMcp || this.resolveCodexToolDiscoveryFn();
+    return buildPwrAgentCapabilityOrientation(
+      (name) => isAgentToolAdvertisedLocally(name)
+        && (catalog ? catalog.includes(name) : name !== CREATE_JOB_MONITOR || monitor),
+      search ? "codex" : "codexDirect",
+    );
   }
 
   private async buildCodexParentDynamicTools(

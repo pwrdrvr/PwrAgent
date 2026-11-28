@@ -60,10 +60,14 @@ export const ACP_AGENT_INSTRUCTIONS_CLOSE_MARKER =
   "[End PwrAgent Agent instructions]";
 
 /** The marked block for an ACP prompt. Empty instructions withdraw earlier ones. */
-export function buildAcpAgentInstructionBlock(instructions: string | undefined): string {
+export function buildAcpAgentInstructionBlock(instructions: string | undefined, orientation?: string): string {
+  if (instructions === undefined && orientation) {
+    return [ACP_AGENT_INSTRUCTIONS_OPEN_MARKER, orientation, ACP_AGENT_INSTRUCTIONS_CLOSE_MARKER].join("\n\n");
+  }
   const text = instructions?.trim();
   return [
     ACP_AGENT_INSTRUCTIONS_OPEN_MARKER,
+    ...(orientation ? [orientation] : []),
     text
       ? "The operator set these instructions for this Agent. Follow them on every turn of this thread. They replace any earlier PwrAgent Agent instructions."
       : "The operator removed this Agent's instructions. Earlier PwrAgent Agent instructions for this thread no longer apply.",

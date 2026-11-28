@@ -42,6 +42,7 @@ const kimiModel = "moonshotai/kimi-k3";
 const kimiProvider = "fixture-kimi";
 const kimiRoute = "/kimi/v1";
 const helperTitle = "Inspect checkout wait condition";
+const guideMarker = "# Waiting on work";
 const isTitleHelperRequest = (body: RequestBody) => JSON.stringify(body).includes("# Thread title guidelines");
 
 type CodexToolCall =
@@ -109,6 +110,29 @@ type Metrics = { [K in keyof TurnMetrics as `first${Capitalize<K>}` | `next${Cap
 
 const searchId = "fixture_search";
 const antigravitySearch = "mcp_pwragent_search_mcp_tools";
+const capabilityNames = ["handoff_task", "create_monitor_delegation"] as const;
+
+function expectCapabilityOrientation({ requests }: Capture, provider: BenchmarkCase) {
+  const conversation = requests.filter(({ body }) => !isTitleHelperRequest(body)
+    && (provider !== antigravity || JSON.stringify(body.tools ?? []).includes("mcp_pwragent_tool_search")));
+  expect(conversation.length, `${provider} conversation sample count`).toBeGreaterThan(0);
+  for (const { body } of conversation) {
+    expect(JSON.stringify(body).split("PwrAgent capabilities. Delegate"),
+      `${provider} receives one orientation per request`).toHaveLength(2);
+    const instructions = provider === antigravity ? body.systemInstruction : provider === "claude"
+      ? body.system : (body.input ?? []).filter((item) => item && typeof item === "object"
+        && "role" in item && item.role === "developer");
+    const orientation = JSON.stringify(instructions)?.match(/PwrAgent capabilities\. Delegate[^"<]+/u)?.[0];
+    expect(orientation).toContain("handoff_task");
+    expect(orientation).toContain("create_monitor_delegation");
+    expect(orientation).toContain("read_tool_guide");
+    const definitions = JSON.stringify([body.tools, ...(body.input ?? []).filter(isToolInventory)]);
+    for (const name of capabilityNames) {
+      expect(definitions).not.toMatch(new RegExp(`"name":"(?:mcp(?:__|_)pwragent(?:__|_))?${name}"`));
+      expect(definitions).not.toContain(`pwragent__${name}(`);
+    }
+  }
+}
 
 const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
@@ -277,7 +301,12 @@ async function startModelEndpoint(provider: BenchmarkCase) {
 
 type Comparison = { cwd: string; mode: "desktop" | "cli" };
 type Capture = { metrics: TurnMetrics; requests: Sample[]; toolRequests?: Sample[] };
-type BenchmarkOptions = { projectInstructionsCwd?: string; comparison?: Comparison; largeMcpCatalog?: "measure" | "exercise" };
+type BenchmarkOptions = {
+  projectInstructionsCwd?: string;
+  comparison?: Comparison;
+  largeMcpCatalog?: "measure" | "exercise";
+  capabilities?: true;
+};
 
 const selectedTool = "fixture_reviews_lookup_79";
 const toolPrompt = "Find the selected review lookup tool and use it.";
@@ -604,6 +633,145 @@ function kimiMcpReply(body: RequestBody, step: number): ModelReply {
   return {};
 }
 
+async function exerciseAntigravityCapabilities({
+  endpoint, registry, threadId, measureTurn, stopMonitorCreation,
+}: {
+  endpoint: Awaited<ReturnType<typeof startModelEndpoint>>;
+  registry: ReturnType<typeof createDesktopBackendRegistry>;
+  threadId: string;
+  measureTurn: (index: number, text: string) => Promise<Capture>;
+  stopMonitorCreation: () => void;
+}): Promise<Capture[]> {
+  const search = "mcp_pwragent_tool_search";
+  const invoke = "mcp_pwragent_call_pwragent_tool";
+  const guide = "read_tool_guide";
+  const send = (name: string, args: Record<string, unknown>): ModelReply => ({
+    gemini: { functionCall: { name, args: { ...args, toolSummary: "Check PwrAgent capabilities" } } },
+  });
+  const find = (query: string) => send(search, { query, limit: 1 });
+  const call = (toolName: string, args: Record<string, unknown> = {}) => send(invoke, { toolName, arguments: args });
+  const stop = registry.onEvent(async ({ backend, notification }) => {
+    if (backend !== antigravity || notification.method !== "item/commandExecution/requestApproval"
+      || notification.params.threadId !== threadId) return;
+    const { requestId, turnId } = notification.params;
+    await registry.submitServerRequest({ backend, threadId, turnId: String(turnId), requestId: String(requestId),
+      response: { decision: "accept" } });
+  });
+  let step = 0;
+  let priorResults: GeminiResult[] = [];
+  const responses = (body: RequestBody) => (body.contents ?? []).flatMap(({ parts }) =>
+    (parts ?? []).flatMap(({ functionResponse }) => functionResponse ?? []));
+  const searchResult = (result?: GeminiResult) => {
+    const output = result?.response.output ?? "";
+    const json = output.match(/(?:^|\n)(\{[\s\S]*?\n\})(?:\n|$)/u)?.[1];
+    expect(json, "the provider received a structured discovery result").toBeDefined();
+    return JSON.parse(json!) as { tools: Array<{ name: string; inputSchema: unknown }> };
+  };
+  try {
+    endpoint.setReply((body) => {
+      if (!JSON.stringify(body.tools ?? []).includes(`"name":"${search}"`)) return undefined;
+      priorResults = responses(body);
+      switch (step++) {
+        case 0: return find("handoff_task");
+        case 1:
+          expect(searchResult(priorResults.at(-1)).tools).toMatchObject([
+            { name: "handoff_task", inputSchema: { required: ["task"] } },
+          ]);
+          return call("handoff_task", { task: 8 });
+        case 2:
+          expect(priorResults.at(-1)?.response.error).toMatch(/task|invalid/i);
+          return find(guide);
+        case 3:
+          expect(searchResult(priorResults.at(-1)).tools).toMatchObject([{ name: guide }]);
+          return call(guide);
+        default:
+          expect(priorResults.at(-1)?.response.output).toContain("PwrAgent");
+          return {};
+      }
+    });
+    const first = await measureTurn(0, "Find and inspect the PwrAgent delegation workflow.");
+    endpoint.assertScript();
+    expect(step).toBe(5);
+    expectCapabilityOrientation(first, antigravity);
+
+    stopMonitorCreation();
+    await registry.closeIdleAcpSessions();
+    step = 0;
+    endpoint.setReply((body) => {
+      if (!JSON.stringify(body.tools ?? []).includes(`"name":"${search}"`)) return undefined;
+      const latest = responses(body).at(-1);
+      switch (step++) {
+        case 0: return call(guide);
+        case 1:
+          expect(latest?.response.output).toContain("PwrAgent");
+          return find("create_monitor_delegation");
+        case 2:
+          expect(searchResult(latest).tools.map(({ name }) => name)).not.toContain("create_monitor_delegation");
+          return call("create_monitor_delegation", { task: "Observe the fixture" });
+        default:
+          expect(latest?.response.error).toContain("Job Monitor creation is unavailable");
+          return {};
+      }
+    });
+    const next = await measureTurn(1, "Use the same guide again, then check the current monitoring options.");
+    endpoint.assertScript();
+    expect(step).toBe(4);
+    expectCapabilityOrientation(next, antigravity);
+    return [first, next];
+  } finally { stop(); }
+}
+
+function guideScript(provider: Exclude<BenchmarkCase, typeof antigravity>) {
+  const target = "read_tool_guide";
+  const claudeName = "mcp__pwragent__read_tool_guide";
+  let stage = 0;
+  return (body: RequestBody): ModelReply => {
+    const step = stage++;
+    if (provider === "claude") {
+      if (step === 0) return { claude: {
+        type: "tool_use", id: searchId, name: "ToolSearch", input: { query: `select:${claudeName}` },
+      } };
+      if (step === 1) {
+        expect(body.tools).toContainEqual(expect.objectContaining({
+          name: claudeName, input_schema: expect.objectContaining({ type: "object", additionalProperties: false }),
+        }));
+        return { claude: { type: "tool_use", id: callId, name: claudeName, input: {} } };
+      }
+      expect(JSON.stringify(body.messages)).toContain(guideMarker);
+      return {};
+    }
+    const input = array(body.input);
+    if (provider === kimi) {
+      const exec = (call_id: string, code: string): ModelReply => ({ codex: {
+        type: "function_call", call_id, name: kimiExecTool(body), arguments: JSON.stringify({ code }),
+      } });
+      if (step === 0) return exec(searchId, `text(await tools.tool_search({query: "${target}", limit: 1}));`);
+      if (step === 1) {
+        const result = input.find(({ call_id, type }) => call_id === searchId && type === "function_call_output");
+        expect(JSON.stringify(result)).toContain("pwragent__read_tool_guide");
+        return exec(callId, "text(await tools.pwragent__read_tool_guide({}));");
+      }
+    } else {
+      if (step === 0) return { codex: {
+        type: "tool_search_call", execution: "client", call_id: searchId, arguments: { query: target, limit: 1 },
+      } };
+      if (step === 1) {
+        const result = input.find(({ call_id, type }) => call_id === searchId && type === "tool_search_output");
+        expect(result?.tools).toContainEqual(expect.objectContaining({
+          name: "pwragent",
+          tools: expect.arrayContaining([expect.objectContaining({ name: target, parameters: expect.objectContaining({ type: "object" }) })]),
+        }));
+        return { codex: {
+          type: "function_call", call_id: callId, namespace: "pwragent", name: target, arguments: "{}",
+        } };
+      }
+    }
+    const result = input.find(({ call_id, type }) => call_id === callId && type === "function_call_output");
+    expect(JSON.stringify(result)).toContain(guideMarker);
+    return {};
+  };
+}
+
 async function exerciseCodexAndClaudeTools(
   scenario: Exclude<BenchmarkCase, typeof antigravity>,
   registry: ReturnType<typeof createDesktopBackendRegistry>,
@@ -663,7 +831,7 @@ async function captureModelRequests(
   scenario: BenchmarkCase,
   codexExecutable: string,
   antigravityExecutable: string,
-  { comparison, largeMcpCatalog, projectInstructionsCwd }: BenchmarkOptions = {},
+  { comparison, largeMcpCatalog, projectInstructionsCwd, capabilities }: BenchmarkOptions = {},
 ): Promise<Capture[]> {
   const provider = scenario === kimi ? "codex" : scenario;
   const home = await mkdtemp(path.join(os.tmpdir(), "pwragent-model-request-"));
@@ -766,14 +934,25 @@ async function captureModelRequests(
         modelMetadata: [expect.objectContaining({ id: kimiModel, contextWindow: 262144 })],
       })]);
     }
+    const overlayStore = new SqliteOverlayStore(db);
+    const acpSessionLifecycle: string[] = [];
     registry = createDesktopBackendRegistry({
-      ...(scenario === kimi ? {} : { codexClient }), overlayStore: new SqliteOverlayStore(db), messagingStore: null,
+      ...(scenario === kimi ? {} : { codexClient }), overlayStore, messagingStore: null,
+      ...(capabilities ? { acpSessionIdleCloseMs: 0 } : {}),
       mcpConnectionService: mcp?.service ?? null,
       discoverLocalAcpAgents: async () => [],
       acpAgentStore, acpSessionStore: new AcpSessionStore(db),
       createAcpTransport: (agent) => {
         if (!agent.launchDescriptor) throw new Error("Missing benchmark ACP launch descriptor.");
-        return new AcpStdioJsonRpcTransport({ launchDescriptor: agent.launchDescriptor, baseEnv: env });
+        const transport = new AcpStdioJsonRpcTransport({ launchDescriptor: agent.launchDescriptor, baseEnv: env });
+        if (capabilities) {
+          const request = transport.request.bind(transport);
+          vi.spyOn(transport, "request").mockImplementation((method, params, timeoutMs) => {
+            if (method === "session/close" || method === "session/load") acpSessionLifecycle.push(method);
+            return request(method, params, timeoutMs);
+          });
+        }
+        return transport;
       },
       claudeBackendOptions: {
         store: new ClaudeSessionStore(path.join(home, "claude-store")),
@@ -804,6 +983,7 @@ async function captureModelRequests(
       const start = endpoint.requests.length;
       await registry!.startTurn({ backend: provider, threadId, ...codexPolicy, input: [{ type: "text", text }] });
       await vi.waitFor(() => expect(terminal[index]).toBeDefined(), { timeout: 15_000 });
+      if (capabilities) endpoint.assertScript();
       expect(terminal[index]!.method, JSON.stringify({ terminal: terminal[index], paths: endpoint.paths })).toBe("turn/completed");
       await registry!.whenThreadTitleGenerationSettledForTests();
       const requests = endpoint.requests.slice(start);
@@ -824,6 +1004,34 @@ async function captureModelRequests(
       expect(Boolean(report.managedConnectionsViaGateway)).toBe(antigravityUsesGateway);
       expect(report.connections.map(({ connectionId }) => connectionId)).toEqual(mcp.connectionIds);
     }
+    if (capabilities) {
+      if (scenario === antigravity) {
+        const captures = await exerciseAntigravityCapabilities({
+          endpoint, registry, threadId, measureTurn,
+          stopMonitorCreation: () => overlayStore.setThreadJobMonitorCreation({ backend: antigravity, threadId, enabled: false }),
+        });
+        expect(acpSessionLifecycle).toContain("session/load");
+        expect(acpSessionLifecycle.indexOf("session/close")).toBeGreaterThanOrEqual(0);
+        expect(acpSessionLifecycle.indexOf("session/load")).toBeGreaterThan(acpSessionLifecycle.indexOf("session/close"));
+        return captures;
+      }
+      endpoint.setReply(guideScript(scenario));
+      const stop = registry.onEvent(async ({ backend, notification }) => {
+        if (backend !== "claude" || notification.method !== "item/commandExecution/requestApproval"
+          || notification.params.threadId !== threadId) return;
+        const { requestId, turnId, acpMcpToolName } = notification.params;
+        if (acpMcpToolName !== "mcp__pwragent__read_tool_guide"
+          && acpMcpToolName !== "pwragent / read_tool_guide" && acpMcpToolName !== "read_tool_guide") return;
+        await registry!.submitServerRequest({ backend, threadId, turnId: String(turnId), requestId: String(requestId),
+          response: { decision: "accept" } });
+      });
+      try {
+        const capture = await measureTurn(0, "Find the PwrAgent workflow guide and read it.");
+        expect(endpoint.scriptedRequests).toHaveLength(3);
+        expectCapabilityOrientation({ ...capture, requests: endpoint.scriptedRequests.slice(0, 1) }, scenario);
+        return [capture];
+      } finally { stop(); }
+    }
     if (largeMcpCatalog === "exercise" && mcp) {
       const runTurn = () => measureTurn(0, toolPrompt);
       if (scenario === antigravity) {
@@ -835,6 +1043,8 @@ async function captureModelRequests(
     const first = await measureTurn(0, initialPrompt);
     if (projectInstructionsCwd) return [first];
     const next = await measureTurn(1, nextPrompt);
+    expectCapabilityOrientation(first, scenario);
+    expectCapabilityOrientation(next, scenario);
     // Antigravity also makes its native title request for the helper session.
     const expectedHelperCalls = provider === antigravity ? 2 : provider === "codex" ? 1 : 0;
     expect.soft(first.requests.filter(({ body }) => isTitleHelperRequest(body)).length,
@@ -898,7 +1108,7 @@ const mcpCeilings: Record<BenchmarkCase, CatalogMetrics> = {
   codex: { firstBytes: 81_000, nextBytes: 55_000, firstToolBytes: 16_000, nextToolBytes: 16_000, firstCalls: 2, nextCalls: 1 },
   claude: { firstBytes: 88_000, nextBytes: 90_000, firstToolBytes: 40_000, nextToolBytes: 40_000, firstCalls: 1, nextCalls: 1 },
   [antigravity]: antigravityUsesGateway
-    ? { firstBytes: 106_000, nextBytes: 56_000, firstToolBytes: 33_000, nextToolBytes: 33_000, firstCalls: 4, nextCalls: 1 }
+    ? { firstBytes: 106_000, nextBytes: 56_000, firstToolBytes: 34_000, nextToolBytes: 34_000, firstCalls: 4, nextCalls: 1 }
     : { firstBytes: 173_000, nextBytes: 124_000, firstToolBytes: 100_000, nextToolBytes: 100_000, firstCalls: 4, nextCalls: 1 },
   [kimi]: { firstBytes: 55_000, nextBytes: 39_000, firstToolBytes: 23_000, nextToolBytes: 23_000, firstCalls: 2, nextCalls: 1 },
 };
@@ -908,7 +1118,7 @@ const toolUseCeilings: Record<BenchmarkCase, ToolUseMetrics> = {
   codex: { bytes: 193_000, primaryBytes: 57_000, toolBytes: 18_500, continuationBytes: 115_000, calls: 4, roundTripCalls: 2 },
   claude: { bytes: 270_000, primaryBytes: 91_000, toolBytes: 40_000, continuationBytes: 181_000, calls: 3, roundTripCalls: 2 },
   [antigravity]: antigravityUsesGateway
-    ? { bytes: 347_000, primaryBytes: 62_000, toolBytes: 35_500, continuationBytes: 239_000, calls: 8, roundTripCalls: 4 }
+    ? { bytes: 347_000, primaryBytes: 62_000, toolBytes: 36_500, continuationBytes: 239_000, calls: 8, roundTripCalls: 4 }
     : { bytes: 289_000, primaryBytes: 120_000, toolBytes: 100_000, continuationBytes: 120_000, calls: 5, roundTripCalls: 1 },
   [kimi]: { bytes: 136_000, primaryBytes: 42_000, toolBytes: 25_500, continuationBytes: 81_000, calls: 4, roundTripCalls: 2 },
 };
@@ -927,6 +1137,21 @@ const codexExecutable = process.env.PWRAGENT_MODEL_BENCH_CODEX;
 const antigravityExecutable = process.env.PWRAGENT_MODEL_BENCH_AGY;
 const artifactPath = process.env.PWRAGENT_MODEL_BENCH_RESULT;
 const mcpArtifactPath = process.env.PWRAGENT_MODEL_BENCH_MCP_RESULT;
+it.runIf(Boolean(codexExecutable && antigravityExecutable))(
+  "Antigravity searches PwrAgent capabilities, validates arguments and reuses a tool after reload",
+  async () => {
+    await captureModelRequests(antigravity, codexExecutable!, antigravityExecutable!, { capabilities: true });
+  },
+  30_000,
+);
+
+it.runIf(Boolean(codexExecutable && antigravityExecutable)).each(["codex", "claude", kimi] as const)(
+  "%s discovers and calls the authored PwrAgent guide",
+  async (provider) => {
+    await captureModelRequests(provider, codexExecutable!, antigravityExecutable!, { capabilities: true });
+  },
+  30_000,
+);
 it.runIf(Boolean(artifactPath || (codexExecutable && antigravityExecutable)))(
   "keeps outbound model requests bounded on first turns and follow-ups",
   async () => {
