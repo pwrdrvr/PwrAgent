@@ -183,7 +183,8 @@ import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automa
 import { describeAutoFixCoverage } from "./auto-fix-coverage";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
-import { LaunchpadWherePill, LaunchpadWhereSection } from "./LaunchpadWherePill";
+import { ComposerRunSplit } from "./ComposerRunSplit";
+import { ComposerWhere, ComposerWhereSection } from "./ComposerWhere";
 import type { ScheduledThreadAction, ScheduledThreadReviewPayload } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
@@ -197,6 +198,7 @@ import {
 import {
   describeEndedPullRequestAutoFix,
   formatThreadWorkspaceLabel,
+  formatWorkspaceHandoffDirection,
   getPrimaryWorkspaceRepository,
   getThreadWorkspace,
   hasPrimaryWorkspacePullRequest,
@@ -223,6 +225,7 @@ import {
   CloseIcon,
   FileCodeIcon,
   FolderIcon,
+  FolderPlusIcon,
   HistoryIcon,
   MoreVerticalIcon,
   PauseIcon,
@@ -232,10 +235,12 @@ import {
   MicIcon,
   PlusIcon,
   PullRequestIcon,
+  StopIcon,
   SearchIcon,
   SubthreadIcon,
   ThreadIcon,
   TrashIcon,
+  WorktreeIcon,
   CelestialIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
@@ -3577,7 +3582,6 @@ function useComposerController(props: ComposerProps) {
     setEditorDocument,
     workspaceMenuOpen,
     setWorkspaceMenuOpen,
-    workspaceMenuRef,
     scheduleMenuOpen,
     setScheduleMenuOpen,
     scheduleMenuRef,
@@ -3899,10 +3903,6 @@ function useComposerController(props: ComposerProps) {
       latestDraftSnapshotRef.current.snapshot.editorDocument
     );
     const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
-    const workspaceMenuRef = useDismissableMenu<HTMLDivElement>(
-      workspaceMenuOpen,
-      () => setWorkspaceMenuOpen(false),
-    );
     const {
       scheduleMenuOpen,
       setScheduleMenuOpen,
@@ -4330,7 +4330,6 @@ function useComposerController(props: ComposerProps) {
       setEditorDocument,
       workspaceMenuOpen,
       setWorkspaceMenuOpen,
-      workspaceMenuRef,
       scheduleMenuOpen,
       setScheduleMenuOpen,
       scheduleMenuRef,
@@ -12189,7 +12188,6 @@ function useComposerController(props: ComposerProps) {
     threadCodexEnvironmentActions,
     threadCodexEnvironmentPickerOptions,
     selectedThreadCodexAction,
-    currentThreadEnvActionStarting,
     threadEnvironmentBusy,
     threadEnvironmentValue,
     threadWorkspace,
@@ -12841,18 +12839,6 @@ function useComposerController(props: ComposerProps) {
       threadCodexEnvironmentActions.find(
         (action) => action.id === selectedThreadCodexActionId,
       ) ?? threadCodexEnvironmentActions[0];
-    const currentThreadEnvActionStartingKey =
-      props.thread && selectedThreadCodexAction
-        ? {
-            actionId: selectedThreadCodexAction.id,
-            backend: props.thread.source,
-            threadId: props.thread.id,
-          }
-        : undefined;
-    const currentThreadEnvActionStarting = sameThreadEnvActionStartingKey(
-      threadEnvActionStarting,
-      currentThreadEnvActionStartingKey,
-    );
     // The Environment chip is busy while a selection is in flight here, and
     // while any setup run streams for this thread. Main records the runtime
     // only after setup exits, so without this the chip keeps reading the old
@@ -13853,7 +13839,6 @@ function useComposerController(props: ComposerProps) {
       threadCodexEnvironmentActions,
       threadCodexEnvironmentPickerOptions,
       selectedThreadCodexAction,
-      currentThreadEnvActionStarting,
       threadEnvironmentBusy,
       threadEnvironmentValue,
       threadWorkspace,
@@ -16070,8 +16055,8 @@ function useComposerController(props: ComposerProps) {
    * what its control does, so nothing is out of reach on a narrow pane.
    */
   function renderFoldedComposerItems(close: () => void): ReactNode {
-    // Plain actions come first, then each titled choice (Workspace,
-    // Environment, Command...) as its own group between separators, so an
+    // Plain actions come first, then each titled choice (Environment,
+    // Skill profile...) as its own group between separators, so an
     // action never reads as one of the choices above it.
     const actions: ReactNode[] = [];
     const groups: ReactNode[][] = [];
@@ -16132,7 +16117,7 @@ function useComposerController(props: ComposerProps) {
     ];
 
     if (composerTierFolded("details")) {
-      if (props.thread && props.onPickAndAttachDirectoryToThread) {
+      if (props.thread && props.onPickAndAttachDirectoryToThread && !(workspaceLabel && threadWorkspace)) {
         // The row's control explains in a tooltip why a remote thread can't
         // add one; a menu row has no tooltip, so it says so itself.
         actions.push(configurationAction("add-directory", filesystemFederationTarget
@@ -16141,22 +16126,6 @@ function useComposerController(props: ComposerProps) {
           props.onClearPickDirectoryError?.();
           props.onPickAndAttachDirectoryToThread?.();
         }, props.pickingDirectory || Boolean(filesystemFederationTarget)));
-      }
-      if (!props.launchpad && workspaceLabel && threadWorkspace) {
-        const workspace: ReactNode[] = [label(`Workspace · ${workspaceLabel}`)];
-        if (threadWorkspace.mode === "worktree") {
-          workspace.push(configurationAction("handoff-worktree", "Handoff to New Worktree",
-            () => openHandoffDialog("worktree-to-worktree"), !canHandoffThreadWorkspace));
-        }
-        workspace.push(configurationAction(
-          "handoff",
-          threadWorkspace.mode === "worktree" ? "Handoff to Local" : "Handoff to New Worktree",
-          () => openHandoffDialog(threadWorkspace.mode === "worktree" ? "worktree-to-local" : "local-to-worktree"),
-          !canHandoffThreadWorkspace,
-        ));
-        workspace.push(configurationAction("move-project", "Move to Project",
-          () => openHandoffDialog("to-project"), !canMoveThreadProject));
-        groups.push(workspace);
       }
       if (props.thread && showPrAutoDispatchToggle) {
         actions.push(configurationAction("pr-automation", "Pull request automation…",
@@ -16198,41 +16167,35 @@ function useComposerController(props: ComposerProps) {
           }
         }
       }
-      if (props.launchpad && launchpadCodexEnvironmentOptions.length > 0) {
-        groups.push(choices(
-          "environment",
-          "Environment",
-          [
-            { label: "No environment", value: "" },
-            ...launchpadCodexEnvironmentOptions.map((environment) => ({
-              label: environment.name,
-              value: environment.id,
-            })),
-          ],
-          props.launchpad.codexEnvironmentId ?? "",
-          (value) => {
-            const environment = launchpadCodexEnvironmentOptions.find((candidate) => candidate.id === value);
-            handleLaunchpadPatch({
-              codexEnvironmentId: environment?.id,
-              codexEnvironmentExecutionTarget: environment
-                ? props.launchpad?.codexEnvironmentExecutionTarget ?? "local"
-                : undefined,
-              codexEnvironmentActionId: undefined,
-            });
-          },
-          launchpadSubmitting,
-        ));
+      if (workspaceOpenPath && editorApplication) {
+        actions.push(configurationAction("editor", `Open in ${editorApplication.name}`,
+          () => void openWorkspaceApplication(editorApplication)));
       }
+      if (workspaceOpenPath && terminalApplication) {
+        actions.push(configurationAction("terminal-app", `Open in ${terminalApplication.name}`,
+          () => void openWorkspaceApplication(terminalApplication)));
+      }
+      if (localPresetLaunchpadForRow()?.agent) {
+        const presetLaunchpad = localPresetLaunchpadForRow()!;
+        actions.push(configurationAction("agent-preset", `Agent · ${presetLaunchpad.agent!.name}…`,
+          () => setAgentPresetScope(presetLaunchpad.directoryKey), launchpadSubmitting));
+      }
+    }
+    if (supportsPlanMode && !planModeEnabled && composerTierFolded("details")) {
+      actions.push(action("plan", "Plan mode", () => setPlanModeEnabled(true), sending, false));
+    }
+    // The Run split folds whole: its environments and commands come to ⋮.
+    if (composerTierFolded("run")) {
       if (!props.launchpad && threadCodexEnvironmentPickerOptions.length > 0) {
-        groups.push(choices(
+        const environmentGroup = choices(
           "environment",
           "Environment",
           [
             { label: "No environment", value: "" },
-            ...threadCodexEnvironmentPickerOptions.map((environment) => ({
+            ...threadCodexEnvironmentPickerOptions.map((environment, index) => ({
               label: environment.name,
               value: environment.id,
-              disabled: !threadCodexEnvironmentOptions.includes(environment),
+              disabled: index >= threadCodexEnvironmentOptions.length,
             })),
           ],
           threadEnvironmentValue,
@@ -16245,10 +16208,15 @@ function useComposerController(props: ComposerProps) {
             void setThreadCodexEnvironment(value || undefined, actionId);
           },
           !props.desktopApi?.setCodexThreadEnvironment,
-        ));
+        );
+        if (environmentMenuAction) {
+          environmentGroup.push(configurationAction("environment-edit", environmentMenuAction.label,
+            environmentMenuAction.onSelect));
+        }
+        groups.push(environmentGroup);
       }
       if (props.thread && controlRuntime && threadCodexEnvironmentActions.length > 0) {
-        // Choosing a command sets what the row's ▶ runs; each command's own
+        // Choosing a command sets what the Run split's ▶ runs; each command's own
         // ▶ runs it now and leaves that choice alone.
         const thread = props.thread;
         const runUnavailable = configurationReadOnly || threadEnvironmentBusy || !props.desktopApi?.runCodexEnvironmentAction;
@@ -16306,33 +16274,6 @@ function useComposerController(props: ComposerProps) {
           }),
         ];
       }
-      if (workspaceOpenPath && editorApplication) {
-        actions.push(configurationAction("editor", `Open in ${editorApplication.name}`,
-          () => void openWorkspaceApplication(editorApplication)));
-      }
-      if (workspaceOpenPath && terminalApplication) {
-        actions.push(configurationAction("terminal-app", `Open in ${terminalApplication.name}`,
-          () => void openWorkspaceApplication(terminalApplication)));
-      }
-      if (localPresetLaunchpadForRow()?.agent) {
-        const presetLaunchpad = localPresetLaunchpadForRow()!;
-        actions.push(configurationAction("agent-preset", `Agent · ${presetLaunchpad.agent!.name}…`,
-          () => setAgentPresetScope(presetLaunchpad.directoryKey), launchpadSubmitting));
-      }
-    }
-    if (supportsPlanMode && !planModeEnabled && composerTierFolded("details")) {
-      actions.push(action("plan", "Plan mode", () => setPlanModeEnabled(true), sending, false));
-    }
-    if (composerTierFolded("run") && controlRuntime && !commandGroup) {
-      actions.push(configurationAction(
-        "run",
-        selectedThreadCodexAction ? `Run ${selectedThreadCodexAction.name}` : "Run command",
-        () => void runThreadCodexEnvironmentAction(),
-        currentThreadEnvActionStarting
-          || threadEnvironmentBusy
-          || !selectedThreadCodexAction
-          || !props.desktopApi?.runCodexEnvironmentAction,
-      ));
     }
     if (composerTierFolded("dictation") && dictationApi && dictation.phase === "idle" && !preparingSend) {
       actions.push(action("dictation", dictationLabel, toggleDictation, launchpadSubmitting || forking));
@@ -16384,20 +16325,22 @@ function useComposerController(props: ComposerProps) {
     return branch ? `local checkout on ${branch}` : "local checkout";
   }
 
-  function renderLaunchpadWherePill(): ReactNode {
+  function renderLaunchpadWhere(): ReactNode {
     if (!props.launchpad) return null;
     const hasProjectPicker = Boolean(props.onSelectDirectoryFromPicker || props.onPickAndRegisterDirectory);
     const projectLabel = props.directory?.kind === "directory"
       ? props.directory.label
       : props.launchpad.directoryLabel || "No selected project";
+    const checkoutLabel = launchpadCheckoutLabel();
     return (
-      <LaunchpadWherePill
-        checkoutLabel={launchpadCheckoutLabel()}
+      <ComposerWhere
         disabled={launchpadSubmitting}
-        projectLabel={projectLabel}
+        label={checkoutLabel ? `Where: ${projectLabel}, ${checkoutLabel}` : `Where: ${projectLabel}`}
+        mode={launchpadWorkspaceValue === "worktree" && checkoutLabel ? "worktree" : "local"}
+        panelLabel="Where this thread runs"
       >
         {hasProjectPicker ? (
-          <LaunchpadWhereSection label="Project">
+          <ComposerWhereSection label="Project">
             <ProjectPicker
               value={
                 props.directory && props.directory.kind === "directory"
@@ -16434,9 +16377,9 @@ function useComposerController(props: ComposerProps) {
                   : undefined
               }
             />
-          </LaunchpadWhereSection>
+          </ComposerWhereSection>
         ) : null}
-        <LaunchpadWhereSection label="Checkout">
+        <ComposerWhereSection label="Checkout">
           <ComposerDropdown
             ariaLabel="Workspace mode"
             compact
@@ -16493,9 +16436,9 @@ function useComposerController(props: ComposerProps) {
               />
             </div>
           ) : null}
-        </LaunchpadWhereSection>
+        </ComposerWhereSection>
         {launchpadMachine ? (
-          <LaunchpadWhereSection label="Machine">
+          <ComposerWhereSection label="Machine">
             <LaunchpadMachineChip
               control={launchpadMachine}
               disabled={launchpadSubmitting}
@@ -16518,9 +16461,176 @@ function useComposerController(props: ComposerProps) {
                 })();
               }}
             />
-          </LaunchpadWhereSection>
+          </ComposerWhereSection>
         ) : null}
-      </LaunchpadWherePill>
+        {launchpadCodexEnvironmentOptions.length > 0 ? (
+          // The environment's setup script runs in the checkout chosen
+          // above, so it is chosen here too.
+          <ComposerWhereSection label="Environment">
+            <ComposerDropdown
+              ariaLabel="Environment"
+              busy={
+                props.environmentSetup?.phase === "setup"
+                && props.environmentSetup.status === "running"
+              }
+              compact
+              disabled={launchpadSubmitting}
+              menuAction={environmentMenuAction}
+              icon={FileCodeIcon}
+              value={props.launchpad.codexEnvironmentId ?? ""}
+              options={[
+                { label: "No environment", value: "" },
+                ...launchpadCodexEnvironmentOptions.map((environment) => ({
+                  label: environment.name,
+                  value: environment.id,
+                })),
+              ]}
+              onChange={(value) => {
+                const environment = launchpadCodexEnvironmentOptions.find(
+                  (candidate) => candidate.id === value,
+                );
+                handleLaunchpadPatch({
+                  codexEnvironmentId: environment?.id,
+                  codexEnvironmentExecutionTarget: environment
+                    ? props.launchpad?.codexEnvironmentExecutionTarget ?? "local"
+                    : undefined,
+                  codexEnvironmentActionId: undefined,
+                });
+              }}
+            />
+          </ComposerWhereSection>
+        ) : null}
+      </ComposerWhere>
+    );
+  }
+
+  /**
+   * Where an existing thread runs, as one icon: its directories, Add
+   * directory, and the handoffs that change its checkout. A thread with no
+   * directory yet shows only Add directory.
+   */
+  function renderThreadWhere(): ReactNode {
+    if (props.launchpad || !props.thread) return null;
+    const thread = props.thread;
+    const canAddDirectory = Boolean(props.onPickAndAttachDirectoryToThread);
+    const addDirectoryDisabled = props.pickingDirectory || Boolean(filesystemFederationTarget);
+    const addDirectory = () => {
+      setWorkspaceMenuOpen(false);
+      props.onClearPickDirectoryError?.();
+      props.onPickAndAttachDirectoryToThread?.();
+    };
+    if (!workspaceLabel || !threadWorkspace) {
+      if (!canAddDirectory) return null;
+      const tooltip = filesystemFederationTarget
+        ? REMOTE_NATIVE_PICKER_TOOLTIP
+        : props.pickingDirectory ? "Adding directory…" : "Add directory";
+      return renderFoldSlot("details", (
+        <button
+          aria-busy={props.pickingDirectory || undefined}
+          aria-label="Add directory"
+          className="composer__toggle composer__attach-directory-button tooltip-target"
+          data-tooltip={tooltip}
+          disabled={addDirectoryDisabled}
+          type="button"
+          onClick={addDirectory}
+        >
+          <FolderPlusIcon size={14} aria-hidden="true" />
+        </button>
+      ));
+    }
+    const directories = thread.linkedDirectories;
+    const primary = directories.find((directory) => directory.kind === threadWorkspace.mode)
+      ?? directories[0];
+    const primaryName = primary?.label || threadWorkspace.repositoryPath;
+    const checkout = threadWorkspace.mode === "worktree" ? "worktree" : "local checkout";
+    const others = directories.length - 1;
+    const label = `Where: ${primaryName}, ${checkout}${primary?.gitBranch ? ` on ${primary.gitBranch}` : ""}${
+      others > 0 ? `, and ${others} more ${others === 1 ? "directory" : "directories"}` : ""
+    }`;
+    const handoffs: { direction: HandoffThreadWorkspaceRequest["direction"]; disabled: boolean }[] = [
+      ...(threadWorkspace.mode === "worktree"
+        ? [{ direction: "worktree-to-worktree" as const, disabled: !canHandoffThreadWorkspace }]
+        : []),
+      {
+        direction: threadWorkspace.mode === "worktree" ? "worktree-to-local" : "local-to-worktree",
+        disabled: !canHandoffThreadWorkspace,
+      },
+      { direction: "to-project", disabled: !canMoveThreadProject },
+    ];
+    return (
+      <ComposerWhere
+        directoryCount={directories.length}
+        label={label}
+        mode={threadWorkspace.mode}
+        open={workspaceMenuOpen}
+        panelLabel="Where this thread runs"
+        onOpenChange={setWorkspaceMenuOpen}
+      >
+        <ComposerWhereSection label={directories.length > 1 ? "Directories" : "Directory"}>
+          <ul className="composer-where__directories">
+            {(directories.length > 0
+              ? directories.map((directory) => ({
+                  id: directory.id,
+                  name: directory.label,
+                  path: directory.worktreePath ?? directory.path,
+                  branch: directory.gitBranch,
+                  kind: directory.kind,
+                }))
+              : [{
+                  id: threadWorkspace.sourcePath,
+                  name: threadWorkspace.sourcePath,
+                  path: threadWorkspace.sourcePath,
+                  branch: undefined,
+                  kind: "local" as const,
+                }]
+            ).map((directory) => (
+              <li className="composer-where__directory" key={directory.id}>
+                {directory.kind === "worktree"
+                  ? <WorktreeIcon aria-hidden="true" className="composer-where__directory-icon is-worktree" size={13} />
+                  : <FolderIcon aria-hidden="true" className="composer-where__directory-icon" size={13} />}
+                <span className="composer-where__directory-text">
+                  <span className="composer-where__directory-name">{directory.name}</span>
+                  <span className="composer-where__directory-path" title={directory.path}>
+                    {directory.path}
+                    {directory.branch ? ` · ${directory.branch}` : ""}
+                  </span>
+                </span>
+                <span className="composer-where__directory-kind">
+                  {directory.kind === "worktree" ? "worktree" : "local"}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {canAddDirectory ? (
+            <button
+              className="composer-where__action"
+              disabled={addDirectoryDisabled}
+              type="button"
+              onClick={addDirectory}
+            >
+              <FolderPlusIcon size={13} aria-hidden="true" />
+              {props.pickingDirectory
+                ? "Adding directory…"
+                : filesystemFederationTarget
+                  ? "Add directory… (local instance only)"
+                  : "Add directory…"}
+            </button>
+          ) : null}
+        </ComposerWhereSection>
+        <ComposerWhereSection label="Primary workspace">
+          {handoffs.map((handoff) => (
+            <button
+              className="composer-where__action"
+              disabled={handoff.disabled}
+              key={handoff.direction}
+              type="button"
+              onClick={() => openHandoffDialog(handoff.direction)}
+            >
+              {formatWorkspaceHandoffDirection(handoff.direction)}
+            </button>
+          ))}
+        </ComposerWhereSection>
+      </ComposerWhere>
     );
   }
 
@@ -16607,7 +16717,7 @@ function useComposerController(props: ComposerProps) {
             />
           ) : null}
 
-          {renderLaunchpadWherePill()}
+          {renderLaunchpadWhere()}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length
             ? renderFoldSlot("details", (
@@ -16632,106 +16742,7 @@ function useComposerController(props: ComposerProps) {
             ))
             : null}
 
-          {props.thread && props.onPickAndAttachDirectoryToThread ? renderFoldSlot("details", (
-            <button
-              className="composer__action-button composer__attach-directory-button"
-              data-tooltip={
-                filesystemFederationTarget
-                  ? REMOTE_NATIVE_PICKER_TOOLTIP
-                  : undefined
-              }
-              disabled={
-                props.pickingDirectory || Boolean(filesystemFederationTarget)
-              }
-              title={
-                filesystemFederationTarget
-                  ? REMOTE_NATIVE_PICKER_TOOLTIP
-                  : undefined
-              }
-              type="button"
-              onClick={() => {
-                props.onClearPickDirectoryError?.();
-                props.onPickAndAttachDirectoryToThread?.();
-              }}
-            >
-              <FolderIcon size={14} aria-hidden="true" />
-              <span>{props.pickingDirectory ? "Adding" : "Add directory"}</span>
-            </button>
-          )) : null}
-
-          {!props.launchpad && workspaceLabel && threadWorkspace ? renderFoldSlot("details", (
-            <div
-              className={`composer-dropdown composer-dropdown--compact${
-                workspaceMenuOpen ? " composer-dropdown--open" : ""
-              }`}
-              ref={workspaceMenuRef}
-            >
-              <button
-                aria-expanded={workspaceMenuOpen}
-                aria-haspopup="menu"
-                aria-label={`Workspace mode: ${workspaceLabel}`}
-                className="composer-dropdown__button"
-                disabled={!canMoveThreadProject}
-                type="button"
-                value={threadWorkspace.mode}
-                onClick={() => setWorkspaceMenuOpen((open) => !open)}
-              >
-                <span className="composer-dropdown__label">{workspaceLabel}</span>
-              </button>
-              {workspaceMenuOpen ? (
-                <div className="composer-dropdown__menu" role="menu">
-                  <button className="composer-dropdown__option" disabled type="button">
-                    <span aria-hidden="true" className="composer-dropdown__check">
-                      ✓
-                    </span>
-                    {workspaceLabel}
-                  </button>
-                  <div className="composer-dropdown__separator" role="separator" />
-                  {threadWorkspace.mode === "worktree" ? (
-                    <button
-                      className="composer-dropdown__option"
-                      disabled={!canHandoffThreadWorkspace}
-                      role="menuitem"
-                      type="button"
-                      onClick={() => openHandoffDialog("worktree-to-worktree")}
-                    >
-                      <span aria-hidden="true" className="composer-dropdown__check" />
-                      Handoff to New Worktree
-                    </button>
-                  ) : null}
-                  <button
-                    className="composer-dropdown__option"
-                    disabled={!canHandoffThreadWorkspace}
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      setWorkspaceMenuOpen(false);
-                      openHandoffDialog(
-                        threadWorkspace.mode === "worktree"
-                          ? "worktree-to-local"
-                          : "local-to-worktree"
-                      );
-                    }}
-                  >
-                    <span aria-hidden="true" className="composer-dropdown__check" />
-                    {threadWorkspace.mode === "worktree"
-                      ? "Handoff to Local"
-                      : "Handoff to New Worktree"}
-                  </button>
-                  <button
-                    className="composer-dropdown__option"
-                    disabled={!canMoveThreadProject}
-                    role="menuitem"
-                    type="button"
-                    onClick={() => openHandoffDialog("to-project")}
-                  >
-                    <span aria-hidden="true" className="composer-dropdown__check" />
-                    Move to Project
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          )) : null}
+          {renderThreadWhere()}
 
           {controlSkillProfile || props.launchpad?.backend === "codex"
             ? renderFoldSlot("details", <CodexSkillProfileControl {...skillProfile} />)
@@ -17011,10 +17022,9 @@ function useComposerController(props: ComposerProps) {
 
   function renderComposerFooter(): ReactNode {
     const hasSetup = Boolean(props.launchpad || props.thread);
+    // A new thread's environment is in its Where panel, not this group.
     const hasApplicationActions = Boolean(
-      launchpadCodexEnvironmentOptions.length > 0
-      || threadCodexEnvironmentOptions.length > 0
-      || controlRuntime
+      (!props.launchpad && (threadCodexEnvironmentPickerOptions.length > 0 || controlRuntime))
       || (workspaceOpenPath && (editorApplication || terminalApplication)),
     );
     return (
@@ -17052,141 +17062,64 @@ function useComposerController(props: ComposerProps) {
                 onOpen={openWorkspaceApplication}
               />
             )) : null}
-            {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? renderFoldSlot("details", (
-              <ComposerDropdown
-                ariaLabel="Environment"
-                busy={
-                  props.environmentSetup?.phase === "setup"
-                  && props.environmentSetup.status === "running"
-                }
-                compact
-                dense
-                disabled={launchpadSubmitting}
-                menuAction={environmentMenuAction}
-                icon={FileCodeIcon}
-                value={props.launchpad.codexEnvironmentId ?? ""}
-                options={[
-                  { label: "No environment", value: "" },
-                  ...launchpadCodexEnvironmentOptions.map((environment) => ({
-                    label: environment.name,
-                    value: environment.id,
-                  })),
-                ]}
-                onChange={(value) => {
-                  const environment = launchpadCodexEnvironmentOptions.find(
-                    (candidate) => candidate.id === value,
-                  );
-                  handleLaunchpadPatch({
-                    codexEnvironmentId: environment?.id,
-                    codexEnvironmentExecutionTarget: environment
-                      ? props.launchpad?.codexEnvironmentExecutionTarget ?? "local"
-                      : undefined,
-                    codexEnvironmentActionId: undefined,
-                  });
-                }}
-              />
-            )) : null}
-
-            {!props.launchpad && threadCodexEnvironmentPickerOptions.length > 0 ? renderFoldSlot("details", (
-              <ComposerDropdown
-                ariaLabel="Environment"
-                busy={threadEnvironmentBusy}
-                compact
-                dense
-                disabled={!props.desktopApi?.setCodexThreadEnvironment}
-                menuAction={environmentMenuAction}
-                icon={FileCodeIcon}
-                value={threadEnvironmentValue}
-                options={[
-                  { label: "No environment", value: "" },
-                  ...threadCodexEnvironmentPickerOptions.map((environment) =>
-                    threadCodexEnvironmentOptions.includes(environment)
-                      ? { label: environment.name, value: environment.id }
-                      : {
-                          // Main re-reads the workspace to select one, so an
-                          // environment it cannot find stays on the chip only.
-                          description: "Not found in this workspace",
-                          disabled: true,
-                          label: environment.name,
-                          value: environment.id,
-                        },
-                  ),
-                ]}
-                onChange={(value) => {
-                  const environment = threadCodexEnvironmentPickerOptions.find(
-                    (candidate) => candidate.id === value,
-                  );
-                  const actionId = resolveSelectedCodexEnvironmentActionId({
-                    environment,
-                    actionIdByEnvironmentId:
-                      props.thread?.codexEnvironmentRuntime
-                        ?.selectedActionIdByEnvironmentId,
-                  });
-                  void setThreadCodexEnvironment(value || undefined, actionId);
-                }}
-              />
-            )) : null}
-
-            {controlRuntime ? renderFoldSlot("details", (
-              // The command the ▶ beside the moon runs. Choosing one here
-              // only selects it.
-              <ComposerDropdown
-                ariaLabel="Environment command"
-                compact
-                disabled={
-                  threadEnvironmentBusy ||
-                  threadCodexEnvironmentActions.length === 0 ||
-                  !props.desktopApi?.runCodexEnvironmentAction
-                }
-                value={selectedThreadCodexAction?.id ?? ""}
-                options={
-                  threadCodexEnvironmentActions.length > 0
-                    ? threadCodexEnvironmentActions.map((action) => ({
-                        label: action.name,
-                        value: action.id,
+            {!props.launchpad && (threadCodexEnvironmentPickerOptions.length > 0 || controlRuntime)
+              ? renderFoldSlot("run", (
+                <ComposerRunSplit
+                  busy={threadEnvironmentBusy}
+                  commands={controlRuntime && props.thread
+                    ? threadCodexEnvironmentActions.map((environmentAction) => ({
+                        id: environmentAction.id,
+                        name: environmentAction.name,
+                        starting: sameThreadEnvActionStartingKey(threadEnvActionStarting, {
+                          actionId: environmentAction.id,
+                          backend: props.thread!.source,
+                          threadId: props.thread!.id,
+                        }),
                       }))
-                    : [{ label: "No commands", value: "" }]
-                }
-                onChange={(value) => {
-                  void setThreadCodexEnvironment(
-                    props.thread?.codexEnvironmentRuntime?.environmentId,
-                    value || undefined,
-                  );
-                }}
-              />
-            )) : null}
-
-            {controlRuntime ? renderFoldSlot("run", (
-              <button
-                aria-busy={currentThreadEnvActionStarting || undefined}
-                aria-label="Run"
-                className="composer__toggle composer__run-button tooltip-target"
-                data-tooltip={
-                  selectedThreadCodexAction
-                    ? `Run ${selectedThreadCodexAction.name}`
-                    : "Run command"
-                }
-                disabled={
-                  currentThreadEnvActionStarting ||
-                  threadEnvironmentBusy ||
-                  !selectedThreadCodexAction ||
-                  !props.desktopApi?.runCodexEnvironmentAction
-                }
-                type="button"
-                onClick={() => {
-                  void runThreadCodexEnvironmentAction();
-                }}
-              >
-                {currentThreadEnvActionStarting ? (
-                  <PendingSpinner
-                    pairing="standalone"
-                    standaloneReason="The Run button swaps its play glyph for a bare ring; its only text is the aria-label."
-                  />
-                ) : (
-                  <PlayIcon size={13} aria-hidden="true" />
-                )}
-              </button>
-            )) : null}
+                    : []}
+                  editAction={environmentMenuAction}
+                  environmentDisabled={!props.desktopApi?.setCodexThreadEnvironment}
+                  environmentId={threadEnvironmentValue}
+                  environments={threadCodexEnvironmentPickerOptions.map((environment, index) => ({
+                    id: environment.id,
+                    name: environment.name,
+                    // Main re-reads the workspace to select one, so an
+                    // environment it cannot find is listed but not chosen.
+                    // The picker is the discovered options plus, at the end,
+                    // the runtime's own when they lack it, so the index says
+                    // which without an O(E) lookup per row on every render.
+                    unavailableReason: index < threadCodexEnvironmentOptions.length
+                      ? undefined
+                      : "Not found in this workspace",
+                  }))}
+                  runDisabled={!props.desktopApi?.runCodexEnvironmentAction}
+                  selectedCommandId={selectedThreadCodexAction?.id}
+                  onRun={(command) => {
+                    void runThreadCodexEnvironmentAction(command
+                      ? threadCodexEnvironmentActions.find((candidate) => candidate.id === command.id)
+                      : undefined);
+                  }}
+                  onSelectCommand={(commandId) => {
+                    void setThreadCodexEnvironment(
+                      props.thread?.codexEnvironmentRuntime?.environmentId,
+                      commandId,
+                    );
+                  }}
+                  onSelectEnvironment={(value) => {
+                    const environment = threadCodexEnvironmentPickerOptions.find(
+                      (candidate) => candidate.id === value,
+                    );
+                    const actionId = resolveSelectedCodexEnvironmentActionId({
+                      environment,
+                      actionIdByEnvironmentId:
+                        props.thread?.codexEnvironmentRuntime
+                          ?.selectedActionIdByEnvironmentId,
+                    });
+                    void setThreadCodexEnvironment(value || undefined, actionId);
+                  }}
+                />
+              ))
+              : null}
             </fieldset>
           </div>
         ) : null}
@@ -17221,15 +17154,25 @@ function useComposerController(props: ComposerProps) {
           ) : null}
           {activeTurnId ? (
             <button
-              className="button button--ghost"
+              aria-busy={interrupting || undefined}
+              aria-label={interrupting ? "Stopping" : "Stop"}
+              className="composer__stop-button tooltip-target"
               data-testid="composer-stop-turn"
+              data-tooltip={interrupting ? "Stopping…" : "Stop"}
               disabled={preparingSend || props.disabled || interrupting}
               type="button"
               onClick={() => {
                 void stopTurn();
               }}
             >
-              {interrupting ? "Stopping…" : "Stop"}
+              {interrupting ? (
+                <PendingSpinner
+                  pairing="standalone"
+                  standaloneReason="The Stop button swaps its square for a bare ring; its only text is the aria-label."
+                />
+              ) : (
+                <StopIcon size={12} aria-hidden="true" />
+              )}
             </button>
           ) : null}
           {props.launchpadMaterializing && props.onCancelLaunchpadStartup ? (
