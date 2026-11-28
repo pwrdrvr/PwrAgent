@@ -280,6 +280,7 @@ export type BackendClient = {
     reasoningEffort?: string;
   }): Promise<HelperModelResolution>;
   generateStructuredObject?(params: {
+    requireExactModel?: boolean;
     signal?: AbortSignal;
     helper: HelperModelId;
     model?: string;
@@ -396,6 +397,7 @@ export type BackendClient = {
     config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
+    requireThreadResume?: boolean;
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
   }): Promise<{
     threadId: string;
@@ -422,6 +424,7 @@ export type BackendClient = {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadStartParams["config"];
     dynamicTools?: CodexDynamicToolSpec[];
+    requireThreadResume?: boolean;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
   listModels?(diagnostics?: {
     callerReason?: string;

@@ -2737,6 +2737,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<ListBackendsResponse>({
       method: FEDERATION_BACKEND_METHODS.listBackends,
       params: request,
+      ...(request.refreshAntigravityQuota === true ? { timeoutMs: 45_000 } : {}),
     });
   }
 

@@ -1,3 +1,4 @@
+import type { CaptureEvidence } from "../token-miser/bounded-command-helper";
 import * as mcpConnections from "@pwragent/shared/contracts/mcp-connections";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -57,10 +58,8 @@ it.skipIf(process.platform === "win32")("retains the native command's bytes and 
   const dir = await mkdtemp(path.join(tmpdir(), "bounded-oracle-"));
   let enabled = true;
   let approved = false;
-  const select = vi.fn(async () => 0);
   const store = new TestTokenMiserStore(dir);
-  const capture = new BoundedCommandCapture(() => store.issueOutputHandle(), async () => enabled, async () => approved,
-    () => ({ identity: "fixture", label: "fixture", select }));
+  const capture = new BoundedCommandCapture(() => store.issueOutputHandle(), async () => enabled, async () => approved);
   const generateSummary = vi.fn(async () => ({ status: "failed" as const, reason: "unexpected helper call" }));
   const managed = new TokenMiserService({ store, isEnabled: () => true, generateSummary });
   const run = (cmd: string) => spawnSync(shell, ["-c", cmd], {
@@ -142,7 +141,6 @@ it.skipIf(process.platform === "win32")("retains the native command's bytes and 
         })).toBeUndefined();
       }
       expect(generateSummary).not.toHaveBeenCalled();
-      expect(select).not.toHaveBeenCalled();
       if (command === "git diff") expect(raw.equals(run(command).stdout)).toBe(true);
       else {
         expect(raw.toString().match(/rendering π/g)).toHaveLength(1200);
@@ -189,15 +187,15 @@ it.skipIf(process.platform === "win32")("on terminal delivery stops only the sti
   }
 });
 
-it.skipIf(process.platform === "win32")("classifies ambiguous hunks once within the approved helper scope", async () => {
+it.skipIf(process.platform === "win32")("summarizes a completed diff once within the approved scope", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "bounded-hunks-"));
   const caller = { backend: "codex", threadId: "thread", turnId: "turn", transport: "codex_dynamic_tool" } as const;
-  const select = vi.fn(async (_command: string, excerpts: string[], _signal: AbortSignal) => {
-    expect(excerpts.length).toBe(3);
-    expect(Buffer.byteLength(excerpts.join("\n"))).toBeLessThan(3000);
-    return 1;
+  const select = vi.fn(async (evidence: CaptureEvidence, _signal: AbortSignal) => {
+    expect(evidence.detail).toContain("+b detail 0");
+    expect(Buffer.byteLength(evidence.detail)).toBeLessThan(3000);
+    return "Summary: multiple files changed";
   });
-  let helper = { identity: "fixture", label: "fixture", select };
+  let helper = { identity: "fixture", label: "fixture", enrich: select };
   const approve = vi.fn(async () => true);
   const store = new TestTokenMiserStore(dir);
   const capture = new BoundedCommandCapture(() => store.issueOutputHandle(), async () => true, approve, () => helper);
@@ -219,7 +217,7 @@ it.skipIf(process.platform === "win32")("classifies ambiguous hunks once within 
     expect(approve).toHaveBeenCalledWith(caller, "git diff", "fixture");
     const summaries = await Promise.all([capture.inspect(caller, id), capture.inspect(caller, id)]);
     expect(summaries[0]).toBe(summaries[1]);
-    expect(summaries[0]).toContain("+b detail 0");
+    expect(summaries[0]).toContain("Summary: multiple files changed");
     store.startTurn(caller.threadId, caller.turnId);
     const [tool] = boundedCommandTools(capture, store);
     const deliveries = [];
@@ -243,19 +241,19 @@ it.skipIf(process.platform === "win32")("classifies ambiguous hunks once within 
     expect(select).toHaveBeenCalledTimes(1);
     const other = await captureDiff();
     helper = { ...helper, identity: "new provider" };
-    expect(await capture.inspect(caller, other)).not.toContain("+b detail 0");
+    expect(await capture.inspect(caller, other)).not.toContain("Summary: multiple files changed");
     expect(select).toHaveBeenCalledTimes(1);
-    const failed = await captureDiff();
     select.mockRejectedValueOnce(new Error("offline"));
+    const failed = await captureDiff();
     expect(await capture.inspect(caller, failed)).toContain("git diff exited 0");
     expect(select).toHaveBeenCalledTimes(2);
-    const pending = await captureDiff();
     const entered = Promise.withResolvers<AbortSignal>();
-    select.mockImplementationOnce(async (_command, _excerpts, signal) => {
+    select.mockImplementationOnce(async (_evidence, signal) => {
       entered.resolve(signal);
       await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
-      return 0;
+      return "";
     });
+    const pending = await captureDiff();
     const result = expect(capture.inspect(caller, pending)).rejects.toThrow("expired");
     const signal = await entered.promise;
     await capture.endTurn(caller);
@@ -328,4 +326,55 @@ it.skipIf(process.platform === "win32")("keeps concurrent capture handles distin
     await capture.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+it.skipIf(process.platform === "win32")("gates an empty diff at native exit using only the issuing turn's pre-command message", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "bounded-empty-"));
+  const run = (cmd: string) => spawnSync(shell, ["-c", cmd], { cwd: dir, encoding: "utf8" });
+  try {
+    expect(run("git init -q").status).toBe(0);
+    for (const backend of ["codex", "claude", "acp:antigravity"] as const) {
+      const owner = { backend, turnId: "turn", threadId: "parent" };
+      const entered = Promise.withResolvers<CaptureEvidence>();
+      const enrich = vi.fn(async (input: CaptureEvidence) => { entered.resolve(input); return "fixture note"; });
+      const capture = new BoundedCommandCapture(() => "o1", async () => true, async () => true,
+        () => ({ identity: "test", label: "test", enrich }));
+      const message = (text: string, threadId = "parent", phase: "final" | "commentary" = "final") =>
+        capture.observeIntent({ backend, notification: { method: "item/agentMessage/delta", params: {
+          threadId, turnId: "turn", itemId: "message", phase, delta: text,
+        } } }, () => true);
+      try {
+        // Codex announces a provisional start before the native start. Only the native turn has a terminal event.
+        if (backend === "codex") for (let n = 0; n < 256; n++) {
+          capture.observeIntent({ backend, notification: { method: "turn/started", params: {
+            threadId: "parent", turn: { id: `pending:parent:${n}` },
+          } } }, () => true);
+        }
+        capture.observeIntent({ backend, notification: { method: "turn/started", params: {
+          threadId: "parent", turn: { id: "turn" },
+        } } }, () => true);
+        message("Inspect ");
+        message("the staged changes");
+        const padded = "Inspect the staged changes".padEnd(380, ".");
+        message(padded.slice("Inspect the staged changes".length));
+        message("\ud83d");
+        message("\udca1");
+        message("outside the byte budget");
+        message("foreign text", "different-thread");
+        if (backend === "acp:antigravity") message("private thought", "parent", "commentary");
+        const issued = await capture.prepare(owner, "git diff --cached");
+        message("written after preparation");
+        const native = run(issued.command);
+        expect(native.status).toBe(0);
+        const completed = { id: "shell", command: issued.command, completed: true, output: native.stdout };
+        capture.observe(owner, completed);
+        capture.observe(owner, completed);
+        expect(await entered.promise).toMatchObject({ command: "git diff --cached", bytes: 0, exitCode: 0,
+          intent: padded + "💡" });
+        expect(await capture.inspect(owner, issued.objectId)).toContain("Exact output: o1");
+        expect(enrich).toHaveBeenCalledTimes(1);
+        expect((await capture.readBytes(owner, "o1", 0)).totalBytes).toBe(0);
+      } finally { await capture.close(); }
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

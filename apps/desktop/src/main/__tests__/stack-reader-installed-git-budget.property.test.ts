@@ -8,7 +8,7 @@ import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitDirectory, bundledGitExecutable, configureBundledGit } from "../bundled-git";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
-import { forgetGithubForgeStacks, githubForgeStackRepository, recordGithubForgeStack } from "../stacks/github-forge-stacks";
+import { forgetGithubForgeStacks, recordGithubForgeStack } from "../stacks/github-forge-stacks";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
 let restoreGit: (() => void) | undefined;
@@ -113,7 +113,9 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const reader = new StackReader();
     const rows = [row(first, "first"), row(second, "second")];
     const scope = [first, second];
-    const interrupted = await reader.read(rows, [], scope, undefined, observation, undefined, new Set([repository]));
+    const target: PrSummary = { provider: "github.com", org: "fixture", repo: "publishing", number: 1,
+      url: "https://github.com/fixture/publishing/pull/1", state: "passing", headRefName: "feat" };
+    const interrupted = await reader.read(rows, [], scope, undefined, observation, undefined, [target]);
     const fresh = await reader.read(rows, [], scope);
     expect(fresh.stacks.map((stack) => stack.name)).toEqual(["feat"]);
     expect(interrupted).toEqual(fresh);
@@ -155,7 +157,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
     onTestFinished(() => starts.mockRestore());
     onTestFinished(forgetGithubForgeStacks);
-    const publishing = new Set([githubForgeStackRepository({ host: "GitHub.com", owner: "Fixture", repo: "Publishing" })]);
+    const publishing = upperRow.prs!;
     const readForPublication = (reader: StackReader, rows: NavigationThreadSummary[]) =>
       reader.read(rows, [], [upper], undefined, undefined, undefined, publishing);
     const checkoutStarts = () => starts.mock.calls.flatMap(([cwd, [verb], purpose]) =>
@@ -180,6 +182,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const rows = [lowerRow, upperRow];
     await writeFile(catalog, JSON.stringify({
       schemaVersion: 1, repository, stacks: [{
+        number: 42,
         trunk: { branch: "main", head },
         branches: [{ branch: "lower", head, base: head }, { branch: "upper", head, base: head }],
       }],
@@ -189,11 +192,28 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     expect(local.stacks.map((stack) => stack.inferred)).toEqual([false]);
     expect(checkoutStarts()).toContain(lower);
 
+    // An unrelated PR in the same clone cannot publish a catalog's layers.
+    const unrelated = { ...publishing[0]!, number: 99, headRefName: "unrelated" };
+    starts.mockClear();
+    const skipped = await reader.read(rows, [], [upper], undefined, undefined, undefined, [unrelated]);
+    expect(skipped).toEqual({ stacks: [], catalogs: local.catalogs });
+    expect(checkoutStarts()).toEqual([upper]);
+    expect(await reader.read(rows, [], [upper])).toEqual(local);
+
     await writeFile(path.join(repo, ".git", "pwragent-stack-op.json"), "{}");
     const busy = await readForPublication(reader, rows);
+    expect(busy.stacks[0]).toMatchObject({ githubStack: 42, journalHeld: true });
     expect(busy.stacks[0]?.layers.map((entry) => entry.health)).toEqual(["held", "held"]);
 
     await rm(catalog);
+    const advertised = { ...publishing[0]!, githubStack: { number: 3, position: 2, size: 2 } };
+    const advertisedRows = [{ ...upperRow, prs: [advertised] }, row(lower, "unbound")];
+    const advertisedReader = new StackReader();
+    const readAdvertised = () => advertisedReader.read(advertisedRows, [], [upper], undefined, undefined, undefined, [advertised]);
+    starts.mockClear();
+    expect((await readAdvertised()).stacks).toEqual([]);
+    expect(checkoutStarts()).toEqual([upper]);
+
     recordGithubForgeStack({
       repository, number: 3, trunk: "main",
       layers: [
@@ -201,8 +221,22 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
         { number: 2, branch: "upper", head, open: true, merged: false },
       ],
     });
-    const forge = await readForPublication(reader, rows);
+    starts.mockClear();
+    expect((await readAdvertised()).stacks).toEqual([]);
+    expect(checkoutStarts()).toEqual([upper]);
+    const forge = await advertisedReader.read(advertisedRows, [], [upper]);
     expect(forge.stacks.map((stack) => stack.githubStack)).toEqual([3]);
+    expect(forge.stacks[0]?.journalHeld).toBeUndefined();
+
+    // A separate local publishing target must not admit the forge-only stack.
+    await writeFile(catalog, JSON.stringify({
+      schemaVersion: 1, repository, stacks: [{
+        trunk: { branch: "main", head },
+        branches: [{ branch: "unrelated", head, base: head, pullRequest: { number: unrelated.number } }],
+      }],
+    }));
+    const mixed = await advertisedReader.read(advertisedRows, [], [upper], undefined, undefined, undefined, [unrelated, advertised]);
+    expect(mixed.stacks.map((stack) => stack.name)).toEqual(["unrelated"]);
 
     forgetGithubForgeStacks();
     await mkdir(redirected);
@@ -210,7 +244,9 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     await writeCatalog(redirected, "publishing");
     await writeFile(redirect, "");
     starts.mockClear();
-    const moved = await readForPublication(reader, rows);
+    const moved = await reader.read(rows, [], [upper], undefined, undefined, undefined, [
+      { ...publishing[0]!, headRefName: "feat" },
+    ]);
     expect(checkoutStarts()).toContain(upper);
     expect(moved.stacks[0]?.name).toBe("feat");
     expect(moved.stacks[0]?.key).not.toBe(local.stacks[0]?.key);
@@ -252,6 +288,15 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       expect(checkoutReads()).toContain(missing);
       expect(checkoutReads().filter((cwd) => paths.includes(cwd))).toEqual([]);
     }), { numRuns: 3, examples: [[[unrelated, nested]]] });
+
+    const scopedRows = [layer, row(unrelated, "unrelated")];
+    process.env.PWRAGENT_GIT_PATH = wrapper;
+    const scopedOracle = await new StackReader().read(scopedRows, [], [stacked]);
+    starts.mockClear();
+    process.env.PWRAGENT_GIT_PATH = executable;
+    const scoped = await new StackReader().read(scopedRows, [], [stacked]);
+    expect(scoped).toEqual(scopedOracle);
+    expect(checkoutReads()).toEqual([stacked]);
 
     // A wrapper can discover the stack from a path with no catalog of its own.
     await writeFile(wrapper, [
@@ -498,6 +543,8 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-ttl-default-")));
     restoreGit = isolateProcessGitEnvironment();
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    const realRunGit = gitExecutable.runGitCommand;
+    const runSpy = vi.spyOn(gitExecutable, "runGitCommand");
     try {
       const tracked = path.join(sandbox, "tracked");
       await mkdir(tracked, { recursive: true });
@@ -511,12 +558,19 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       ];
 
       process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
-      const probedPaths = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
       const oracle = await new StackReader().read([rows[0]!], []);
+      const missing = new Set(rows.slice(1).map((item) => item.linkedDirectories[0]!.path));
+      // The budget depends on the missing-path answer. Keep the tracked
+      // checkout live and model the same Git error for the 17 absent paths.
+      runSpy.mockImplementation(async (cwd, args, options) => {
+        if (args[0] === "rev-parse" && missing.has(cwd)) throw missingCheckoutError(cwd);
+        return await realRunGit(cwd, args, options);
+      });
+      const probedPaths = () => runSpy.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
 
       let now = 0;
       const reader = new StackReader(() => now);
-      start.mockClear();
+      runSpy.mockClear();
       const cold = await reader.read(rows, []);
       expect(cold.stacks).toEqual(oracle.stacks);
       expect(probedPaths()).toHaveLength(totalDirs);
@@ -524,7 +578,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       // Expire all cached entries at once: one background pass must cap
       // synchronous TTL revalidations at the default budget (16).
       now += 31_000;
-      start.mockClear();
+      runSpy.mockClear();
       const firstRefresh = await reader.read(rows, []);
       expect(firstRefresh.stacks).toEqual(oracle.stacks);
       const firstPass = probedPaths();
@@ -533,13 +587,15 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       // Another long gap expires even the just-refreshed entries. The last
       // two must still get slots on the second pass.
       now += 31_000;
-      start.mockClear();
+      runSpy.mockClear();
       const secondRefresh = await reader.read(rows, []);
       expect(secondRefresh.stacks).toEqual(oracle.stacks);
       const secondPass = probedPaths();
       expect(secondPass).toHaveLength(16);
       expect(new Set([...firstPass, ...secondPass])).toEqual(new Set(rows.map((item) => item.linkedDirectories[0]!.path)));
+      expect(start.mock.calls.filter(([cwd]) => missing.has(cwd))).toHaveLength(0);
     } finally {
+      runSpy.mockRestore();
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }

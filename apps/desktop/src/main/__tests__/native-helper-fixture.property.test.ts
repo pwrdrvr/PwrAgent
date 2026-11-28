@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
+import type { TestProject, TestSpecification } from "vitest/node";
+import * as nativeFixture from "../../test-setup/native-helper-fixture";
 import { createNativeHelperFixture, runNativeFixtureCommand } from "../../test-setup/native-helper-fixture";
-import { nativeHelperConsumers } from "../../test-setup/native-helper-fixtures";
+import setup, { nativeHelperConsumers } from "../../test-setup/native-helper-fixtures";
 import { isProcessIdAlive } from "../process-tree";
 
 describe("native helper fixture ownership", () => {
@@ -12,13 +14,110 @@ describe("native helper fixture ownership", () => {
     const cargo = path.resolve("apps/desktop/src/main/__tests__/maintenance-cargo-output.property.test.ts");
     const allocation = path.resolve("apps/desktop/src/main/__tests__/maintenance-disk-usage.property.test.ts");
     const ipc = path.resolve("apps/desktop/src/main/__tests__/mcp-ipc-http.test.ts");
-    fc.assert(fc.property(fc.array(fc.constantFrom(cargo, allocation, ipc, path.resolve("unrelated.test.ts"))), (files) => {
-      expect(nativeHelperConsumers(files)).toEqual([
-        ...(files.includes(cargo) ? ["maintenanceCargo"] : []),
-        ...(files.includes(allocation) ? ["maintenanceAllocation"] : []),
-        ...(files.includes(ipc) ? ["mcpIpc"] : []),
-      ]);
-    }));
+    const launcher = path.resolve("apps/desktop/src/main/__tests__/windows-git-job-launcher.test.ts");
+    fc.assert(fc.property(
+      fc.array(fc.constantFrom(cargo, allocation, ipc, launcher, path.resolve("unrelated.test.ts"))),
+      (files) => {
+        const relayConsumers = [
+          ...(files.includes(cargo) ? ["maintenanceCargo"] : []),
+          ...(files.includes(allocation) ? ["maintenanceAllocation"] : []),
+          ...(files.includes(ipc) ? ["mcpIpc"] : []),
+        ];
+        expect(nativeHelperConsumers(files, "darwin")).toEqual(relayConsumers);
+        expect(nativeHelperConsumers(files, "win32")).toEqual([
+          ...relayConsumers,
+          ...(files.includes(launcher) ? ["windowsGitJobLauncher"] : []),
+        ]);
+      },
+    ), { examples: [[[launcher]]] });
+  });
+
+  it("prepares the native pipe probe only for its selected Windows x64 suite", () => {
+    const probe = path.resolve("apps/desktop/scripts/windows-pipe-observation.test.mjs");
+    expect(nativeHelperConsumers([probe], "win32", "x64")).toEqual(["windowsPipeProbe"]);
+    expect(nativeHelperConsumers([probe], "win32", "arm64")).toEqual([]);
+    expect(nativeHelperConsumers([probe], "darwin", "x64")).toEqual([]);
+    expect(nativeHelperConsumers([], "win32", "x64")).toEqual([]);
+  });
+
+  it("prepares the compiled Job launcher for a standalone Windows navigation Git reuse rerun", () => {
+    const navigation = path.resolve("apps/desktop/src/main/__tests__/navigation-stack-git-reuse.property.test.ts");
+    expect(nativeHelperConsumers([navigation], "win32")).toEqual(["windowsGitJobLauncher"]);
+    expect(nativeHelperConsumers([navigation], "darwin")).toEqual([]);
+  });
+
+  it.each([
+    ["windowsGitJobLauncher", "src/main/__tests__/windows-git-job-launcher.test.ts"],
+    ["windowsPipeProbe", "scripts/windows-pipe-observation.test.mjs"],
+  ] as const)("rebuilds %s on a selected watch rerun", async (consumer, testFile) => {
+    const { platform, arch } = process;
+    const testPath = path.resolve("apps/desktop", testFile);
+    const provide = vi.fn();
+    let rerun!: (specs: TestSpecification[]) => Promise<void>;
+    const project = {
+      provide,
+      onTestsRerun: (callback: typeof rerun) => { rerun = callback; },
+      vitest: { config: {}, state: { getPaths: () => [testPath] }, getModuleSpecifications: () => [spec] },
+    } as unknown as TestProject;
+    const spec = { project, moduleId: testPath } as TestSpecification;
+    let source = "first build";
+    const build = vi.spyOn(nativeFixture, "runNativeFixtureCommand").mockImplementation(async (_command, args, signal) => {
+      if (consumer === "windowsPipeProbe") {
+        expect(signal).toBeInstanceOf(AbortSignal);
+        writeFileSync(args.find((arg) => arg.startsWith("/out:"))!.slice(5), source);
+      } else {
+        writeFileSync(path.join(args[1]!, "pwragent-windows-job.exe"), source);
+      }
+    });
+    let dispose: (() => Promise<void>) | undefined;
+    try {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      Object.defineProperty(process, "arch", { value: "x64" });
+      dispose = await setup(project);
+      const first = provide.mock.lastCall![1][consumer];
+      expect(readFileSync(first, "utf8")).toBe("first build");
+      await rerun([]);
+      expect(build).toHaveBeenCalledTimes(1);
+      source = "edited native source";
+      await rerun([spec]);
+      const second = provide.mock.lastCall![1][consumer];
+      expect(readFileSync(second, "utf8")).toBe(source);
+      expect(existsSync(first)).toBe(false);
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform });
+      Object.defineProperty(process, "arch", { value: arch });
+      build.mockRestore();
+      await dispose?.();
+    }
+  });
+
+  it("stops an active compiler on deadline and drains before removing its build tree", async () => {
+    const deadline = new AbortController();
+    const timeout = new DOMException("Compiler deadline expired", "TimeoutError");
+    const fixture = createNativeHelperFixture((root) => runNativeFixtureCommand(process.execPath, ["-e", `
+      const fs = require("node:fs");
+      const [pidFile, release] = process.argv.slice(1);
+      fs.writeFileSync(pidFile, String(process.pid));
+      const timer = setInterval(() => { if (fs.existsSync(release)) clearInterval(timer); }, 10);
+    `, path.join(root, "compiler.pid"), path.join(root, "release")], deadline.signal));
+    const result = vi.fn();
+    void fixture.ready.then(() => result("completed"), result);
+    try {
+      const pid = await vi.waitFor(() => {
+        const pid = Number(readFileSync(path.join(fixture.root, "compiler.pid"), "utf8"));
+        expect(isProcessIdAlive(pid)).toBe(true);
+        return pid;
+      }, { timeout: 5_000 });
+      const cleanup = fixture.dispose();
+      deadline.abort(timeout);
+      await vi.waitFor(() => expect(result).toHaveBeenCalledWith(timeout), { timeout: 2_000 });
+      expect(isProcessIdAlive(pid)).toBe(false);
+      await cleanup;
+      expect(existsSync(fixture.root)).toBe(false);
+    } finally {
+      if (existsSync(fixture.root)) writeFileSync(path.join(fixture.root, "release"), "");
+      await fixture.dispose();
+    }
   });
 
   // Model: requesting teardown does not transfer output ownership away from

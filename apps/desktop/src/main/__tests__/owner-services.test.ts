@@ -6,7 +6,8 @@ import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { afterAll, expect, expectTypeOf, it, vi } from "vitest";
 import type { ResearchPorts } from "@pwragent/owner-core/research-service";
-import type { NavigationDirectorySummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationDirectorySummary, NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
 import * as navigationQuerySource from "../app-server/navigation-query-source";
 import * as researchRuntime from "../research/research-runtime";
@@ -62,6 +63,83 @@ it("returns the root's instances through every owner getter", async () => {
     expect(port).not.toHaveProperty("setThreadExecutionMode");
   }
   expect(() => startOwnerServices(getOwnerHostServices(), { bootMode: "bootstrap", startedAt: 1 })).toThrow(/already/);
+});
+
+it("evaluates a stack child once per poll even when the same poll observes its merged parent", async () => {
+  const service = getDesktopAppServerService() as unknown as {
+    backgroundPrPollingEnabled: boolean;
+    advanceObservedStacks(prs: readonly PrSummary[]): Promise<void>;
+    applyPolledPrStatuses(prs: PrSummary[], fetchedAt: number): Promise<string[]>;
+    getThreadDependencyCoordinator(): { handlePrEvent(): Promise<void> };
+    handlePrAutoDispatchSnapshots(prs: PrSummary[], observedAt: number): Promise<void>;
+    rememberPrStatuses(prs: PrSummary[], fetchedAt: number, source: string): { changed: PrSummary[] };
+    seedPrStatusRegistryFromThreads(threads: NavigationThreadSummary[]): void;
+    setThreadPrAttachment(key: string, attachment: { backend: "claude"; primaryRepoKey: string; prs: PrSummary[] } | undefined): void;
+  };
+  const now = Date.now();
+  const pr = (number: number, headRefName: string, baseRefName: string): PrSummary => ({
+    number, provider: "github.com", org: "fixture", repo: "stack-poll",
+    url: `https://github.com/fixture/stack-poll/pull/${number}`,
+    lifecycleState: "open", state: "passing", headRefName, baseRefName,
+    headSha: "a".repeat(40), createdAt: now - 10_000,
+  });
+  const lower = pr(1, "lower", "main");
+  const upper = pr(2, "upper", "lower");
+  const merged: PrSummary = { ...lower, lifecycleState: "merged", mergedAt: now - 1_000 };
+  const key = buildThreadIdentityKey("claude", "stack-poll-child");
+  const passedLayers: number[][] = [];
+  const advance = vi.spyOn(service, "advanceObservedStacks").mockImplementation(async (prs) => {
+    passedLayers.push(prs.filter((entry) => entry.lifecycleState === "open").map((entry) => entry.number));
+  });
+  const previousPolling = service.backgroundPrPollingEnabled;
+  try {
+    service.backgroundPrPollingEnabled = true;
+    service.setThreadPrAttachment(key, { backend: "claude", primaryRepoKey: "github.com/fixture/stack-poll", prs: [upper] });
+    service.seedPrStatusRegistryFromThreads([{
+      id: "stack-poll-child", source: "claude", title: "Child", titleSource: "explicit",
+      inbox: { inInbox: false }, linkedDirectories: [], prs: [lower, upper],
+    }]);
+    const dependencies = service.getThreadDependencyCoordinator();
+
+    // The poll and its status notifications are the same forge observation.
+    await service.applyPolledPrStatuses([merged, upper], now);
+    await dependencies.handlePrEvent();
+    expect(passedLayers).toEqual([[2]]);
+
+    // A later parent-only observation can retry with the registered child.
+    await service.applyPolledPrStatuses([merged], now + 31_000);
+    await dependencies.handlePrEvent();
+    expect(passedLayers).toEqual([[2], [2]]);
+
+    const laterParent = pr(3, "second-parent", "main");
+    const laterChild = pr(4, "second-child", "second-parent");
+    const laterMerge: PrSummary = { ...laterParent, lifecycleState: "merged", mergedAt: now + 40_000 };
+    service.setThreadPrAttachment(key, { backend: "claude", primaryRepoKey: "github.com/fixture/stack-poll", prs: [laterChild] });
+    service.rememberPrStatuses([laterParent, laterChild], now + 40_000, "fixture");
+    const watching = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const dispatch = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockImplementationOnce(async () => {
+      watching.resolve();
+      await resume.promise;
+    });
+    const poll = service.applyPolledPrStatuses([laterMerge], now + 41_000);
+    try {
+      await watching.promise;
+      // Refreshing the same status can advance its timestamp without emitting
+      // a new transition. The in-flight poll still owns the merge signal.
+      expect(service.rememberPrStatuses([laterMerge], now + 42_000, "selected-lookup").changed).toEqual([]);
+    } finally {
+      resume.resolve();
+      await poll;
+      dispatch.mockRestore();
+    }
+    await dependencies.handlePrEvent();
+    expect(passedLayers).toEqual([[2], [2], [4]]);
+  } finally {
+    service.backgroundPrPollingEnabled = previousPolling;
+    service.setThreadPrAttachment(key, undefined);
+    advance.mockRestore();
+  }
 });
 
 it("updates the Development Working Updates default without refreshing the messaging lease", async () => {

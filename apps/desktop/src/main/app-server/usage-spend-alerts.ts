@@ -22,7 +22,8 @@ export function detectUsageSpendAlerts(params: {
   };
   threadId: string;
   threadSpendAlerted?: boolean;
-  threadSpendMicros?: number;
+  /** null when storage proved the total is below the alert threshold. */
+  threadSpendMicros?: number | null;
   triggeredAlertIds: ReadonlySet<string>;
   now?: number;
 }): ThreadSpendAlert[] {
@@ -68,7 +69,7 @@ export function detectUsageSpendAlerts(params: {
     }
   }
 
-  if (params.policy.threadSpendEnabled && !params.threadSpendAlerted) {
+  if (params.policy.threadSpendEnabled && !params.threadSpendAlerted && params.threadSpendMicros !== null) {
     const thresholdMicros = spendThresholdMicros(
       params.policy.threadSpendThresholdUsd,
     );

@@ -123,9 +123,6 @@ function ProviderFacts({ backend, now, account }: {
   const scopes = panelLimitScopes(visible, credits);
   const version = backendVersion(backend);
   const showsPlan = backend.kind === "codex" || Boolean(backend.account?.planType);
-  // A balance follows a named plan ("Pro · 100 credits"), never a status such
-  // as "Not signed in", which would read as the credits' state.
-  const creditsOnPlan = credits && backend.account?.planType ? credits : undefined;
   return (
     <>
       <dl className="backend-status-list__metadata-grid">
@@ -153,16 +150,15 @@ function ProviderFacts({ backend, now, account }: {
         {showsPlan ? (
           <div>
             <dt>Plan</dt>
-            <dd>
-              {providerPlanText(backend)}
-              {creditsOnPlan ? <> · <CreditsText credits={creditsOnPlan} now={now} /></> : null}
-            </dd>
+            <dd>{providerPlanText(backend)}</dd>
           </div>
         ) : null}
-        {credits && !creditsOnPlan ? (
+        {/* The balance has its own row: once a window runs out, it is what a
+            turn spends, so it must not hide in the Plan line's text. */}
+        {credits ? (
           <div>
             <dt>Credits</dt>
-            <dd><CreditsText credits={credits} now={now} /></dd>
+            <dd><CreditsValue credits={credits} now={now} /></dd>
           </div>
         ) : null}
       </dl>
@@ -212,13 +208,10 @@ function limitNameWithoutLimit(name: string): string {
   return label ? label.charAt(0).toUpperCase() + label.slice(1) : name.trim();
 }
 
-/** The credit balance, worded to follow the plan on its line. */
-function CreditsText({ credits, now }: { credits: BackendRateLimitSummary; now: number }) {
+/** The credit balance under its own label: "29,093", "Unlimited" or "Available". */
+function CreditsValue({ credits, now }: { credits: BackendRateLimitSummary; now: number }) {
   const row = describeRateLimitRow(credits, now);
-  if (row.figure) {
-    return <><b className="backend-status-list__figure">{row.figure}</b> credits</>;
-  }
-  return <>{row.text === "Unlimited" ? "Unlimited credits" : "Credits available"}</>;
+  return row.figure ? <b className="backend-status-list__figure">{row.figure}</b> : <>{row.text}</>;
 }
 
 /**

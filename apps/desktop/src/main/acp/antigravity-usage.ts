@@ -29,6 +29,7 @@ const INTERACTIVE_AUTH_PROMPT_PATTERN =
 
 type UsageProcess = OwnedChildProcess & { stdout: Readable | null; stderr?: Readable | null };
 type UsageProcessOptions = {
+  onStarted?: () => void;
   platform?: NodeJS.Platform;
   spawn?: (command: string, args: string[], options: SpawnOptions) => UsageProcess;
   terminate?: typeof terminateOwnedProcessTree;
@@ -144,6 +145,7 @@ async function readCommandOutput(
   } catch {
     return undefined;
   }
+  if (child.pid) options.onStarted?.();
   const signal = AbortSignal.any([ownerSignal, AbortSignal.timeout(timeoutMs)]);
   const completion = Promise.withResolvers<string | undefined>();
   const cancel = () => completion.resolve(undefined);

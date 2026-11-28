@@ -92,7 +92,7 @@ export function buildCodexLaunchNotice(params: {
     title: "Codex installation failed to start",
     tone: params.selectedCommand ? "warning" : "error",
     message:
-      "Open Codex settings and click Refresh Codex to rediscover available"
+      "Open Codex settings and click Check again under Setup to rediscover available"
       + " versions. If it still fails, reinstall the Codex CLI.",
     ...(params.selectedCommand
       ? { detail: "Another working Codex installation is available." }
@@ -114,7 +114,7 @@ export function CodexInstallGuideLink(props: { showRefreshHint?: boolean }) {
     <>
       {props.showRefreshHint ? (
         <p className="app-notice-toast__detail">
-          Click Refresh Codex in Settings to rediscover available versions.
+          Click Check again under Setup in Codex settings to rediscover available versions.
         </p>
       ) : null}
       <a className="app-notice-toast__link"

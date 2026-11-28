@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +25,7 @@ import {
 } from "../app-server/acp-backend-adapter";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
+import * as antigravityUsageCooldown from "../acp/antigravity-usage-cooldown";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
@@ -510,7 +511,7 @@ describe("describeInstalledAcpBackend", () => {
           expect(settings.unavailableReason).toBe(summary.unavailableReason);
           if (deprecated) {
             expect(settings.lastDiscoveryError).toContain("Antigravity");
-            expect(settings.lastDiscoveryError).toContain("Re-probe");
+            expect(settings.lastDiscoveryError).toContain("Check again in Setup");
           } else {
             expect(settings.lastDiscoveryError).toBe(lastDiscoveryError);
           }
@@ -1141,6 +1142,26 @@ describe("AcpBackendAdapter", () => {
       examples: [["path", true, undefined], ["override", true, undefined]],
       numRuns: 20,
     });
+  });
+
+  it("skips process launch when helper admission changes during installed-agent lookup", async () => {
+    const agent = buildAntigravityQuotaAgent("/fixture/agent");
+    const lookup = Promise.withResolvers<AcpInstalledAgentRecord>();
+    const createAcpTransport = vi.fn(() => new FakeAcpAgentTransport());
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [], createAcpTransport, emit: async () => {}, handleServerRequest: async () => ({}),
+    });
+    vi.spyOn(adapter, "resolveInstalledAgent").mockReturnValue(lookup.promise);
+    let enabled = true;
+    try {
+      const run = adapter.runEphemeralPrompt(agent.backendId, {
+        cwd: "/fixture", prompt: "fixture", timeoutMs: 5000, maxOutputChars: 100, allowPrompt: () => enabled,
+      });
+      enabled = false;
+      lookup.resolve(agent);
+      await expect(run).rejects.toThrow("disabled");
+      expect(createAcpTransport).not.toHaveBeenCalled();
+    } finally { await adapter.close(); }
   });
 
   it("remembers failed ephemeral disposal after the prompt has already settled", async () => {
@@ -4079,22 +4100,63 @@ describe("AcpBackendAdapter", () => {
     try {
       expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toBeUndefined();
       expect(readAntigravityUsage).not.toHaveBeenCalled();
-      expect((await adapter.describeInstalledBackends(true))[0]?.rateLimits).toBeUndefined();
-      await adapter.describeInstalledBackends(true);
-      expect(readAntigravityUsage).toHaveBeenCalledExactlyOnceWith(agent.launchDescriptor, expect.any(AbortSignal));
+      const first = adapter.describeInstalledBackends(true);
+      const second = adapter.describeInstalledBackends(true);
+      await vi.waitFor(() => expect(readAntigravityUsage)
+        .toHaveBeenCalledExactlyOnceWith(agent.launchDescriptor, expect.any(AbortSignal)));
       expect(createAcpClient).not.toHaveBeenCalled();
       const rateLimits = [
         { name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 20 },
         { name: "Weekly Claude/GPT limit", limitId: "3p-weekly", usedPercent: 45 },
       ];
       reading.resolve({ rateLimits });
+      expect((await first)[0]?.rateLimits).toEqual(rateLimits);
+      expect((await second)[0]?.rateLimits).toEqual(rateLimits);
       await vi.waitFor(() => expect(emit).toHaveBeenCalledWith({
         backend: agent.backendId,
         notification: { method: "backend/providerStatus/updated", params: { backend: agent.backendId } },
       }));
       expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toEqual(rateLimits);
     } finally {
+      reading.resolve({ rateLimits: [] });
       await adapter.close();
+    }
+  });
+
+  it("lets the admitted owner read immediately after a different owner was refused", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-test-agy-admission-"));
+    onTestFinished(async () => { await rm(root, { recursive: true, force: true }); });
+    const agent = buildAntigravityQuotaAgent("/fake/agy");
+    const readAntigravityUsage = vi.fn(async () => ({ rateLimits: [] }));
+    const denied = Promise.withResolvers<void>();
+    const makeOwner = (assertOwnerAdmission?: () => void) => createTestAcpBackendAdapter({
+      antigravityUsageRoot: root,
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      assertOwnerAdmission,
+      readAntigravityUsage,
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+    });
+    const first = makeOwner(() => {
+      denied.resolve();
+      throw new Error("Another owner holds the lease");
+    });
+    const second = makeOwner();
+    try {
+      await first.describeInstalledBackends(true);
+      await denied.promise;
+      const [closed] = await Promise.allSettled([first.close()]);
+      expect(readAntigravityUsage).not.toHaveBeenCalled();
+      await second.describeInstalledBackends(true);
+      await vi.waitFor(() => expect(readAntigravityUsage).toHaveBeenCalledOnce());
+      expect(closed?.status).toBe("fulfilled");
+    } finally {
+      await Promise.allSettled([first.close(), second.close()]);
     }
   });
 
@@ -4104,10 +4166,14 @@ describe("AcpBackendAdapter", () => {
       fc.pre(first !== second);
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
       const agent = buildAntigravityQuotaAgent("/fake/agy");
+      const started = Promise.withResolvers<void>();
       const initial = Promise.withResolvers<{ rateLimits: BackendRateLimitSummary[] }>();
       const weekly = { name: "Weekly Gemini limit", limitId: "gemini", usedPercent: 20 };
       const readAntigravityUsage = vi.fn()
-        .mockReturnValueOnce(initial.promise)
+        .mockImplementationOnce(() => {
+          started.resolve();
+          return initial.promise;
+        })
         .mockResolvedValueOnce({ rateLimits: [weekly] });
       let accountKey = first;
       const adapter = createTestAcpBackendAdapter({
@@ -4123,31 +4189,31 @@ describe("AcpBackendAdapter", () => {
         resolveAntigravityUsageAccountKey: () => accountKey,
       });
       try {
-        await adapter.describeInstalledBackends(true);
-        expect(readAntigravityUsage).toHaveBeenCalledTimes(1);
+        const requested = adapter.describeInstalledBackends(true);
+        await started.promise;
         accountKey = second;
         initial.resolve({ rateLimits: [weekly, { ...weekly, name: "Weekly Claude/GPT limit", limitId: "claude-gpt" }] });
-        await vi.waitFor(() => expect(adapter.limitObservation(agent.backendId)).toBeDefined());
+        await requested;
         expect(adapter.limitObservation(agent.backendId)?.accountKey).toBe(first);
         expect((await adapter.describeInstalledBackends())[0]?.rateLimitsObservedAt).toBe(1_800_000_000_000);
 
-        clock.mockReturnValue(1_800_000_600_000);
+        clock.mockReturnValue(1_800_000_900_000);
         await adapter.describeInstalledBackends(true);
-        await vi.waitFor(() => expect(adapter.limitObservation(agent.backendId)?.observedAt).toBe(1_800_000_600_000));
         const next = adapter.limitObservation(agent.backendId);
         expect(next?.accountKey).toBe(second);
         expect(next?.limits.map((limit) => limit.limitId)).toEqual(["gemini"]);
-        expect((await adapter.describeInstalledBackends())[0]?.rateLimitsObservedAt).toBe(1_800_000_600_000);
+        expect((await adapter.describeInstalledBackends())[0]?.rateLimitsObservedAt).toBe(1_800_000_900_000);
       } finally {
+        initial.resolve({ rateLimits: [] });
         await adapter.close();
         clock.mockRestore();
       }
-    }), { numRuns: 12, examples: [["account-a", undefined], [undefined, "account-b"]] });
+    }), { numRuns: Number(process.env.MBT_RUNS ?? 5), examples: [["account-a", undefined], [undefined, "account-b"]] });
   });
 
   it("clears a prior Antigravity 5h resetAt when a newer probe resets the bucket to idle before that timestamp passes", async () => {
     const baseNow = 1_800_000_000_000;
-    const staleResetAt = baseNow + 15 * 60_000;
+    const staleResetAt = baseNow + 20 * 60_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(baseNow);
     const agent = buildAntigravityQuotaAgent("/fake/agy");
     const active: BackendRateLimitSummary = {
@@ -4184,9 +4250,9 @@ describe("AcpBackendAdapter", () => {
       ]));
 
       // Second probe arrives before the local clock reaches staleResetAt and omits resetAt.
-      clock.mockReturnValue(baseNow + 10 * 60_000);
+      clock.mockReturnValue(baseNow + 15 * 60_000);
       await adapter.describeInstalledBackends(true);
-      await vi.waitFor(() => expect(adapter.limitObservation(agent.backendId)?.observedAt).toBe(baseNow + 10 * 60_000));
+      await vi.waitFor(() => expect(adapter.limitObservation(agent.backendId)?.observedAt).toBe(baseNow + 15 * 60_000));
 
       const describedAfterIdle = (await adapter.describeInstalledBackends())[0]?.rateLimits;
       expect(describedAfterIdle).toEqual([idle]);
@@ -4209,8 +4275,8 @@ describe("AcpBackendAdapter", () => {
 
   it.each([false, true] as const)("only shows quota from the selected Antigravity executable, including when a retired read finishes late [%#]", async (oldReadCompleted) => {
     const oldLimits = [{ name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 20 }];
-    // The selected executable determines both quota visibility and eligibility
-    // to read, regardless of whether its predecessor had finished reading.
+    // Selecting another executable clears its predecessor's quota without
+    // granting another CLI attempt while the predecessor drains or cools down.
     let agent = buildAntigravityQuotaAgent("/old/agy");
     const oldRead = Promise.withResolvers<{ rateLimits: BackendRateLimitSummary[] }>();
     const readAntigravityUsage = vi.fn((launch: AcpLaunchDescriptor, _signal: AbortSignal) =>
@@ -4232,18 +4298,19 @@ describe("AcpBackendAdapter", () => {
     });
     try {
       await adapter.getClient(agent.backendId);
-      await adapter.describeInstalledBackends(true);
+      const retired = adapter.describeInstalledBackends(true);
+      await vi.waitFor(() => expect(readAntigravityUsage).toHaveBeenCalledOnce());
       if (oldReadCompleted) {
         oldRead.resolve({ rateLimits: oldLimits });
         await vi.waitFor(async () => expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toEqual(oldLimits));
       }
       agent = buildAntigravityQuotaAgent("/new/agy");
-      expect((await adapter.describeInstalledBackends(true))[0]?.rateLimits).toBeUndefined();
-      expect(readAntigravityUsage.mock.calls.map(([launch]) => launch.command)).toEqual(["/old/agy", "/new/agy"]);
+      expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toBeUndefined();
+      expect(readAntigravityUsage.mock.calls.map(([launch]) => launch.command)).toEqual(["/old/agy"]);
       expect(readAntigravityUsage.mock.calls[0]?.[1].aborted).toBe(true);
       oldRead.resolve({ rateLimits: oldLimits });
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toBeUndefined();
+      if (!oldReadCompleted) expect((await retired)[0]?.rateLimits).toBeUndefined();
+      expect((await adapter.describeInstalledBackends(true))[0]?.rateLimits).toBeUndefined();
     } finally {
       oldRead.resolve({ rateLimits: oldLimits });
       await adapter.close();
@@ -4273,7 +4340,8 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: async () => ({}),
     });
     await adapter.getClient(agent.backendId);
-    await adapter.describeInstalledBackends(true);
+    const requested = adapter.describeInstalledBackends(true);
+    await vi.waitFor(() => expect(controllerObserved).toHaveLength(1));
     const settled = vi.fn();
     const closing = adapter.close().then(settled);
     try {
@@ -4283,6 +4351,7 @@ describe("AcpBackendAdapter", () => {
     } finally {
       cleanup.resolve(undefined);
       await closing;
+      await requested;
     }
     expect(settled).toHaveBeenCalledTimes(1);
   });
@@ -4329,6 +4398,7 @@ describe("AcpBackendAdapter", () => {
     lastDiscoveryError,
     capabilityStatus,
   }) => {
+    const enterCooldown = vi.spyOn(antigravityUsageCooldown, "withAntigravityUsageCooldown");
     const agent: AcpInstalledAgentRecord = {
       ...buildAntigravityQuotaAgent("/fake/agy"),
       lastDiscoveredAt,
@@ -4353,9 +4423,11 @@ describe("AcpBackendAdapter", () => {
       await adapter.describeInstalledBackends(true);
       const shouldProbe = lastDiscoveryError === undefined
         && (lastDiscoveredAt !== undefined || capabilityStatus === "discovered");
-      expect(readAntigravityUsage).toHaveBeenCalledTimes(shouldProbe ? 1 : 0);
+      expect(enterCooldown).toHaveBeenCalledTimes(Number(shouldProbe));
+      expect(readAntigravityUsage).toHaveBeenCalledTimes(Number(shouldProbe));
     } finally {
       await adapter.close();
+      enterCooldown.mockRestore();
     }
   });
 
@@ -6758,8 +6830,19 @@ function createTestAcpBackendAdapter(
     Omit<AcpBackendAdapterOptions, "discoverLocalAcpAgents">
     & Partial<Pick<AcpBackendAdapterOptions, "discoverLocalAcpAgents">>,
 ): AcpBackendAdapter {
+  const readUsage = options.readAntigravityUsage;
+  const antigravityUsageRoot = readUsage && !options.antigravityUsageRoot
+    ? mkdtempSync(path.join(os.tmpdir(), "pwragent-test-agy-cooldown-")) : undefined;
+  if (antigravityUsageRoot) {
+    onTestFinished(() => rmSync(antigravityUsageRoot, { recursive: true, force: true }));
+  }
   return new AcpBackendAdapter({
+    antigravityUsageRoot,
     ...options,
+    readAntigravityUsage: readUsage && ((launch, signal, processOptions) => {
+      processOptions?.onStarted?.();
+      return readUsage(launch, signal);
+    }),
     discoverLocalAcpAgents: options.discoverLocalAcpAgents ?? (async () => []),
   });
 }

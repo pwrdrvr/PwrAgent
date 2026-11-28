@@ -12895,6 +12895,39 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("clears unfocused thinking when an approval resolves after the idle deadline", () => {
+    let listener: (event: AgentEvent) => void;
+    const desktopApi: DesktopApi = {
+      onAgentEvent(callback) {
+        listener = callback;
+        return () => undefined;
+      },
+    };
+    const send = (notification: AgentEvent["notification"]) =>
+      act(() => listener({ backend: "codex", notification }));
+    const threadId = "background";
+    const turnId = "turn-1";
+    const requestId = "approval-1";
+    const key = "codex:background";
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useThreadSessionState({ desktopApi }));
+      send({ method: "turn/started", params: { threadId, turn: { id: turnId, status: "inProgress" } } });
+      send({ method: "thread/status/changed", params: { threadId, status: { type: "idle" } } });
+      send({ method: "item/commandExecution/requestApproval", params: { threadId, turnId, itemId: "call-1", requestId } });
+      act(() => { vi.advanceTimersByTime(1_501); });
+      expect(result.current.approvalRequestThreadKeys[key]).toBe(true);
+      expect(result.current.thinkingThreadKeys[key]).toBe(true);
+
+      send({ method: "serverRequest/resolved", params: { threadId, requestId } });
+      expect(result.current.approvalRequestThreadKeys[key]).toBeUndefined();
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(result.current.thinkingThreadKeys[key]).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows a Codex safety hold for the running turn until model text streams", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

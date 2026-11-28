@@ -93,6 +93,7 @@ import {
   ReviewAutoFixDispatcher,
   reviewAutoFixMessage,
   setReviewAutoFixListener,
+  type ReviewAutoFixDispatcherDeps,
 } from "../thread-reviews/review-auto-fix";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
@@ -311,8 +312,8 @@ export function installThreadTodoRuntime(params: {
   broadcast: (event: ThreadTodosChangedEvent) => void;
   /** The local Directories lens rows, for naming and filing projects. */
   listProjects: () => Promise<ThreadTodoProjectCandidate[]>;
+  readReviewStackHold?: ReviewAutoFixDispatcherDeps["readStackHold"];
   /** `[git] default_merge_method`. */
-  readReviewStackHold?: (review: ThreadReview) => Promise<string | undefined>;
   readDefaultMergeMethod: () => ThreadTodoMergeMethod;
   /** The federation agent tools, which start threads on peers. */
   federation?: PwrAgentFederationHandler;
@@ -436,6 +437,7 @@ export function installThreadTodoRuntime(params: {
     if (event.notification.method === "navigation/providerThreads/refreshed") {
       // Discovery and authentication recovery can make persisted owners
       // available without changing a card. The inventory spans backends.
+      reviewAutoFixDispatcher.wake();
       params.broadcast({ at: Date.now() });
       return;
     }
@@ -455,15 +457,23 @@ export function installThreadTodoRuntime(params: {
     }
     const status = event.notification.method === "thread/status/changed" ? event.notification.params.status : undefined;
     const queueStatus = event.notification.method === "thread/turnQueue/updated" ? event.notification.params.status : undefined;
-    if (event.notification.method === "pullRequest/status/updated"
-      || event.notification.method === "thread/stackHold/updated") {
-      reviewAutoFixDispatcher.wake();
+    const queueEnded = queueStatus === "terminal" || queueStatus === "cancelled" || queueStatus === "failed";
+    if (event.notification.method === "pullRequest/status/updated") {
+      reviewAutoFixDispatcher.wakeForPullRequest(event.notification.params.prKey, event.navigationPullRequestKeyAliases);
+    } else if (event.notification.method === "thread/stackHold/updated") {
+      const { threadId } = event.notification.params;
+      if (threadId) reviewAutoFixDispatcher.wakeForStackOperation({ backend: event.backend, threadId });
+      else reviewAutoFixDispatcher.wake();
+    } else if (event.notification.method === "thread/pullRequests/updated") {
+      reviewAutoFixDispatcher.wake({ backend: event.backend, threadId: event.notification.params.threadId });
     } else if (!handledTerminalTurn && (event.notification.method === "thread/lock/updated"
       || (status && typeof status === "object" && "type" in status && status.type === "idle")
-      || queueStatus === "terminal" || queueStatus === "cancelled" || queueStatus === "failed")) {
+      || queueEnded)) {
       const threadId = "threadId" in event.notification.params && typeof event.notification.params.threadId === "string"
         ? event.notification.params.threadId : undefined;
-      reviewAutoFixDispatcher.wake(threadId ? { backend: event.backend, threadId } : undefined);
+      const thread = threadId ? { backend: event.backend, threadId } : undefined;
+      if (queueEnded && thread) reviewAutoFixDispatcher.onThreadAvailable(thread);
+      else reviewAutoFixDispatcher.wake(thread);
     }
     const completed = completedThreadReview(event);
     if (completed) {

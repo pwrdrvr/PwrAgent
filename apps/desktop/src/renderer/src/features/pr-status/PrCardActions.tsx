@@ -1,5 +1,6 @@
 import type { PrSummary, ThreadPullRequestMergeTarget } from "@pwragent/shared/contracts/navigation";
 import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
+import type { TooltipKeep } from "../../lib/useViewportTooltip";
 import { copyText } from "../../lib/copy-text";
 import { PrCardMergeControl } from "./PrCardMergeControl";
 import type { PullRequestMergeService } from "./pull-request-merge-context";
@@ -13,7 +14,7 @@ export function PrCardActions(props: {
   merge?: PrCardMerge;
   /** The PR's stack membership: a GitHub stack's merge can land layers below it. */
   stack?: CompactStackMembership;
-  onLayoutChange: () => void;
+  onLayoutChange: (keep?: TooltipKeep) => void;
 }) {
   const { pr, onDismiss, onDetach, merge } = props;
   // Pointer shortcuts. The chip or list row keeps the keyboard's route to

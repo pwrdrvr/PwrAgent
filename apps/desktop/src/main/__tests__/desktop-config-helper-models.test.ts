@@ -8,6 +8,7 @@ import {
   parseDesktopSettingsToml,
 } from "../settings/desktop-config";
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
+import { withCaptureRow } from "../../renderer/src/features/settings/token-miser-capture-helpers";
 
 const save = (
   existing: string,
@@ -231,6 +232,42 @@ describe("desktop config task monitor models", () => {
     ].join("\n"), "test.toml");
     expect(parsed.models?.taskMonitorModels).toEqual({
       "acp:gemini": { source: "provider", model: "gemini-3-flash" },
+    });
+  });
+
+  it("saves one Token Miser (v2) thread-type row from Settings and keeps every other row", () => {
+    const existing = [
+      "[models]",
+      "helper_default_model = \"gpt-6-luna\"",
+      "",
+      "[[models.helper_models]]",
+      "helper = \"thread_titles\"",
+      "reasoning_effort = \"medium\"",
+      "",
+      "[[models.helper_models]]",
+      "helper = \"token_miser_capture_antigravity\"",
+      "backend = \"acp:grok\"",
+      "model = \"grok-fast\"",
+      "",
+      "[[models.helper_models]]",
+      "helper = \"helper_from_a_newer_build\"",
+      "model = \"kept\"",
+      "",
+    ].join("\n");
+    const read = parseDesktopSettingsToml(existing, "test.toml").models!.helperModels!;
+    const written = save(existing, withCaptureRow(read, "token_miser_capture_claude", {
+      model: "claude-haiku-5-5",
+      reasoningEffort: "low",
+    }));
+
+    expect(parseDesktopSettingsToml(written, "test.toml").models?.helperModels).toEqual({
+      defaultModel: "gpt-6-luna",
+      helpers: {
+        thread_titles: { reasoningEffort: "medium" },
+        token_miser_capture_antigravity: { backend: "acp:grok", model: "grok-fast" },
+        token_miser_capture_claude: { model: "claude-haiku-5-5", reasoningEffort: "low" },
+        helper_from_a_newer_build: { model: "kept" },
+      },
     });
   });
 });

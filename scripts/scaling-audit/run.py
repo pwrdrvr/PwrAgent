@@ -95,7 +95,7 @@ def run(repo, output, suites, args):
             if "properties" in suites:
                 stage(folder / "scaling-audit-model.ts", (KIT / "matched-model.ts").read_text())
         if "pricing" in suites or "token-miser" in suites:
-            stage(MAIN / "scaling-audit-pricing-rows.ts", (KIT / "pricing-rows.ts").read_text())
+            stage(MAIN / "scaling-audit-pricing-rows.ts", (ROOT / MAIN / "pricing-read-counts.ts").read_text())
         if "navigation" in suites or "sqlite" in suites:
             stage(MAIN / "scaling-audit-navigation-fixture.ts", (KIT / "navigation-fixture.ts").read_text())
             stage(MAIN / "scaling-audit-generate.mjs", (KIT / "generate.mjs").read_text().replace("./shape.json", "./scaling-audit-shape.json"))
@@ -106,6 +106,7 @@ def run(repo, output, suites, args):
         raw = output / "work.jsonl"
         raw.touch()
         env = dict(os.environ, PWRAGENT_HOME=home, PWRAGENT_PROFILE="default", UV_THREADPOOL_SIZE="4",
+                   AUDIT_KEYED_SESSIONS=str(int((repo / "apps/desktop/src/renderer/src/lib/thread-session-cache.ts").is_file())),
                    AUDIT_LIVE_THREADS=str(int(LIVE in suites)), AUDIT_FILES=json.dumps(projects), AUDIT_CASES=str(args.cases), AUDIT_RESULTS=str(raw),
                    AUDIT_COPIES=str(args.copies), AUDIT_ARCHIVED=str(args.archived),
                    AUDIT_LEGACY_OWNER=str(int(label in ("v150", "v151", "v152"))),

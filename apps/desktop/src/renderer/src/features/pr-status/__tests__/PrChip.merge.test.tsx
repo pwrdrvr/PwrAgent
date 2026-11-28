@@ -134,6 +134,39 @@ describe("PrChip sidebar card merge", () => {
     }));
   });
 
+  // The confirming click lands where the first one did: the confirm button
+  // takes the pill label's place at the merge row's right edge, the question
+  // opens above the row, and nothing below the row changes, so a card pinned
+  // to the window's bottom edge grows upward around a row that stays put.
+  it("asks from the same row, in the same place, with nothing below it moving", async () => {
+    renderChip(pr(), api());
+    const card = await openCard();
+    const row = card.querySelector<HTMLElement>(".pr-status-card__merge-row")!;
+    const lastButton = () => {
+      const buttons = row.querySelectorAll("button");
+      return buttons[buttons.length - 1]!;
+    };
+    const below = () => {
+      const out: string[] = [];
+      for (let next = row.nextElementSibling; next; next = next.nextElementSibling) out.push(next.outerHTML);
+      return out;
+    };
+    const idleBelow = below();
+    expect(lastButton()).toHaveTextContent("Squash merge");
+
+    fireEvent.click(lastButton());
+    expect(card.querySelector(".pr-status-card__merge-row")).toBe(row);
+    expect(within(row).getByText("Cancel")).toBeInTheDocument();
+    expect(lastButton()).toHaveTextContent("Squash merge");
+    expect(below()).toEqual(idleBelow);
+    const question = within(card).getByText("Squash merge #11 into main?");
+    expect(row.compareDocumentPosition(question) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+
+    fireEvent.click(within(row).getByText("Cancel"));
+    expect(card.querySelector(".pr-status-card__merge-row")).toBe(row);
+    expect(below()).toEqual(idleBelow);
+  });
+
   it("lists only the repository's methods, and a pick from the list is remembered", async () => {
     const { merge } = renderChip(pr(), api());
     const card = await openCard();

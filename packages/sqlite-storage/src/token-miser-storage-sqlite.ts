@@ -4,8 +4,13 @@ import type {
   TokenMiserRetentionRecord,
   TokenMiserStorage,
 } from "@pwragent/owner-core/token-miser-storage";
+import { watchPricingRows } from "./sqlite-pricing-row-changes";
 import type { StateDb } from "./state-db";
 import { prepareSqliteRead } from "./sqlite-prepared-read";
+
+export const OPEN_REPLAY_GATE = `CASE WHEN json_valid(payload) THEN
+  json_extract(payload, '$.replayTrackingVersion') = 2 AND json_type(payload, '$.replayTrackingStoppedAt') IS NULL
+  ELSE 0 END`;
 
 type MetadataPageRow = { thread_id: string; created_at: number; object_id: string; payload: string };
 
@@ -40,12 +45,65 @@ export class SqliteTokenMiserStorage<
     return row ? JSON.parse(row.payload) as Metadata : undefined;
   }
 
+  readMetadataByIds(objectIds: readonly string[]): Metadata[] {
+    const rows = prepareSqliteRead(this.db, `SELECT payload FROM token_miser_objects
+      WHERE object_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(objectIds)) as { payload: string }[];
+    return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
+  }
+
   listMetadata(threadId?: string): Metadata[] {
     const rows = (threadId === undefined
       ? this.db.prepare("SELECT payload FROM token_miser_objects ORDER BY created_at DESC").all()
       : this.db.prepare("SELECT payload FROM token_miser_objects WHERE thread_id = ? ORDER BY created_at DESC").all(threadId)
     ) as Array<{ payload: string }>;
     return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
+  }
+
+  watchPricingMetadata(threadId: string, changed: (id: string) => void) {
+    const db = this.db;
+    let observationCount: number | undefined;
+    const priorMembership = new Map<string, boolean>();
+    let version: number | undefined;
+    const closeObservations = watchPricingRows(db, "token_miser_observations", threadId, (id, present) => {
+      if (observationCount !== undefined && !priorMembership.has(id)) priorMembership.set(id, present);
+    });
+    const closeMetadata = watchPricingRows(db, "token_miser_objects", threadId, changed);
+    type Row = { created_at: number; rowid: number; payload: string };
+    const parse = (row: Row) => ({ createdAt: row.created_at, rowid: row.rowid, entry: JSON.parse(row.payload) as Metadata });
+    return {
+      dataVersion: () => {
+        const committed = db.pragma("data_version", { simple: true }) as number;
+        if (version !== committed) observationCount = undefined;
+        version = committed;
+        return committed;
+      },
+      all: () => (prepareSqliteRead(db, "SELECT created_at, rowid, payload FROM token_miser_objects WHERE thread_id = ?")
+        .all(threadId) as Row[]).map(parse),
+      get: (id: string) => {
+        const row = prepareSqliteRead(db, "SELECT created_at, rowid, payload FROM token_miser_objects WHERE object_id = ? AND thread_id = ?")
+          .get(id, threadId) as Row | undefined;
+        return row && parse(row);
+      },
+      observationCount: () => {
+        if (observationCount === undefined) {
+          observationCount = (prepareSqliteRead(db, "SELECT count(*) AS n FROM token_miser_observations WHERE thread_id = ?")
+            .get(threadId) as { n: number }).n;
+        } else {
+          // Compare the first before-image with the final committed membership.
+          // A rollback, payload-only update or delete/reinsert has zero delta.
+          let delta = 0;
+          for (const [id, before] of priorMembership) {
+            const present = prepareSqliteRead(db, "SELECT 1 FROM token_miser_observations WHERE observation_id = ? AND thread_id = ?")
+              .get(id, threadId);
+            delta += Number(Boolean(present)) - Number(before);
+          }
+          observationCount += delta;
+        }
+        priorMembership.clear();
+        return observationCount;
+      },
+      close: () => { closeMetadata(); closeObservations(); },
+    };
   }
 
   readMetadataPage(after: TokenMiserObjectRecord | undefined, limit: number, threadId?: string): {
@@ -88,6 +146,15 @@ export class SqliteTokenMiserStorage<
           WHERE (thread_id, created_at, object_id) > (?, ?, ?)
           ORDER BY thread_id, created_at, object_id LIMIT ?`)
           .all(after.threadId, after.createdAt, after.objectId, limit)) as MetadataPageRow[];
+  }
+
+  readOpenReplayPage(threadId: string, afterId: string | undefined, limit: number): TokenMiserObjectRecord[] {
+    // Replay membership and compaction follow the current payload. The stable
+    // object ID still advances the page cursor after a peer reassigns a gate.
+    return prepareSqliteRead(this.db, `SELECT object_id AS objectId, json_extract(payload, '$.threadId') AS threadId,
+        json_extract(payload, '$.createdAt') AS createdAt
+      FROM token_miser_objects INDEXED BY idx_token_miser_open_replay
+      WHERE json_extract(payload, '$.threadId') = ? AND object_id > ? AND ` + OPEN_REPLAY_GATE + " ORDER BY object_id LIMIT ?").all(threadId, afterId ?? "", limit) as TokenMiserObjectRecord[];
   }
 
   writeMetadata(metadata: Metadata): void {

@@ -192,11 +192,11 @@ describe("helper model reasoning", () => {
 });
 
 describe("helper model catalog", () => {
-  it("defines every helper once, with Codex first", () => {
+  it("defines every helper once and uses the Claude backend for Claude capture by default", () => {
     expect(HELPER_MODEL_DEFINITIONS.map((definition) => definition.id))
       .toEqual([...HELPER_MODEL_IDS]);
     for (const definition of HELPER_MODEL_DEFINITIONS) {
-      expect(definition.backends[0]).toBe("codex");
+      expect(definition.backends[0]).toBe(definition.id === "token_miser_capture_claude" ? "claude" : "codex");
     }
   });
 });

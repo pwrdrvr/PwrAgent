@@ -240,8 +240,13 @@ export function addTokenMiserGateAccountingTotals(
  * the fallback — the same records the per-turn folds already sum. Pass them as
  * `gateAccountings`, or already reduced as `gateTotals`.
  */
+type SavingsAccounting = Pick<ThreadTokenMiserAccounting, "interceptionCount" | "helperDecisionCount" | "passThroughCount" | "estimatedParentTokensSaved"> & {
+  codeMode?: { callCount: number };
+  savings?: TokenMiserSavingsTerms & { pricedGateCount: number };
+};
+
 export function buildTokenMiserSavingsSummary(params: {
-  accounting?: ThreadTokenMiserAccounting;
+  accounting?: SavingsAccounting | ThreadTokenMiserAccounting;
   gateAccountings?: readonly (TokenMiserSubAgentAccounting | undefined)[];
   gateTotals?: TokenMiserGateAccountingTotals;
 }): TokenMiserSavingsSummary | undefined {
@@ -395,7 +400,7 @@ export function buildTokenMiserSavingsSplit(
  * window's while quoting a different quantity.
  */
 function readAvoidedParentTokens(
-  accounting: ThreadTokenMiserAccounting | undefined,
+  accounting: SavingsAccounting | undefined,
   gates: TokenMiserGateAccountingTotals,
 ): number | undefined {
   if (accounting) return accounting.estimatedParentTokensSaved;

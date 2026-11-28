@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { detectUsageSpendAlerts } from "../app-server/usage-spend-alerts";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import * as gitDiscovery from "../settings/git-discovery";
 import { suggestedSlackAppName } from "../messaging/messaging-settings-domain";
@@ -1970,12 +1971,16 @@ describe("DesktopSettingsService", () => {
         },
       });
       expect(service.resolveTokenMiserBoundedCommands()).toBe(true);
+      await service.writeConfigPatchTargeted({ models: { helperModels: { defaultModel: "global-codex",
+        helpers: { token_miser_capture_codex: { backend: "claude" } },
+      } } });
+      expect(service.resolveHelperModelSettings().helpers.token_miser_capture_codex).toEqual({ backend: "claude" });
       expect(service.resolveTokenMiserBoundedHelper()).toBe("deterministic");
-      for (const helper of ["decision", "codex", "deterministic"] as const) {
-        await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedHelper: helper } });
-        expect(service.resolveTokenMiserBoundedHelper()).toBe(helper);
-        expect((await service.readSettingsProjection()).experimental.tokenMiserBoundedHelper).toEqual({ value: helper, source: "config" });
-      }
+      // A stale viewer's excerpt-selector patch cannot broaden inference or introduce a retired key.
+      await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedHelper: "openai" } });
+      expect(service.resolveTokenMiserGate()).toBe("none");
+      expect(service.resolveTokenMiserSummarizer()).toBe("off");
+      expect(fs.readFileSync(configPath, "utf8")).not.toContain("token_miser_bounded_helper");
       await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedCommands: false } });
       expect(service.resolveTokenMiserBoundedCommands()).toBe(false);
       await service.writeConfigPatchTargeted({ experimental: { tokenMiserBoundedCommands: true } });
@@ -1984,6 +1989,33 @@ describe("DesktopSettingsService", () => {
       await service.refreshCodexDiscovery(issueProviderDiscoveryPermit("settings-user-action"));
       await expect(service.resolveCodexCommand()).resolves.toMatchObject({ command: "/path/codex" });
       expect(ensureManaged).not.toHaveBeenCalled();
+    });
+
+    it("only authorizes the new inference frequency from an explicit split setting", async () => {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      for (const legacy of ["deterministic", "configured", "openai", "jev", "local", "codex", "decision"]) {
+        const raw = `[experimental]\n# keep me\ntoken_miser_bounded_helper = "${legacy}"\ntoken_miser_gate = 42\n`;
+        fs.writeFileSync(configPath, raw);
+        const { service } = buildService(configPath);
+        expect(service.resolveTokenMiserGate()).toBe("none");
+        expect(service.resolveTokenMiserSummarizer()).toBe("off");
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        await service.writeConfigPatchTargeted({ experimental: { tokenMiserSummarizer: "configured" } });
+        expect(service.resolveTokenMiserBoundedHelper()).toBe("configured");
+        await service.writeConfigPatchTargeted({ experimental: { tokenMiserGate: "jev" } });
+        const saved = fs.readFileSync(configPath, "utf8");
+        expect(saved).toContain('# keep me');
+        expect(saved.match(/pwragent-legacy-settings key=token_miser_bounded_helper/g)).toHaveLength(1);
+        expect(saved).toMatch(/kept_for_older_clients\ntoken_miser_bounded_helper = "jev"/u);
+        const reloaded = buildService(configPath).service;
+        expect(reloaded.resolveTokenMiserGate()).toBe("jev");
+        expect(reloaded.resolveTokenMiserSummarizer()).toBe("configured");
+      }
+      fs.writeFileSync(configPath, "");
+      const { service } = buildService(configPath);
+      await service.writeConfigPatchTargeted({ experimental: { tokenMiserGate: "local" } });
+      expect(fs.readFileSync(configPath, "utf8")).not.toContain("token_miser_bounded_helper");
+      expect((await service.readSettingsProjection()).experimental.tokenMiserGate?.value).toBe("local");
     });
 
     it("downloads and selects the build without Token Miser", async () => {
@@ -2199,7 +2231,7 @@ describe("DesktopSettingsService", () => {
       },
     });
     await expect(service.resolveCodexCommand()).rejects.toThrow(
-      "Refresh Codex in Settings",
+      "Check again under Setup in Settings → Codex",
     );
     expect(resolve).not.toHaveBeenCalled();
   });
@@ -2650,7 +2682,7 @@ describe("DesktopSettingsService", () => {
     // still pending would leave a startup surface waiting forever for one.
     expect(service.isCodexDiscoveryPending()).toBe(false);
     await expect(service.resolveCodexCommand()).rejects.toThrow(
-      "Refresh Codex in Settings",
+      "Check again under Setup in Settings → Codex",
     );
   });
 
@@ -3305,7 +3337,7 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain("untouched = \"keep\"");
   });
 
-  it("persists bounded active-turn and thread spend alerts", async () => {
+  it("defaults a fresh profile to no spend alerts and preserves threshold-only settings", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -3317,7 +3349,7 @@ describe("DesktopSettingsService", () => {
     expect((await service.readSettingsProjection()).general.spendAlerts).toEqual({
       activeTurnSpendEnabled: { value: false, source: "default" },
       activeTurnSpendThresholdUsd: { value: 5, source: "default" },
-      threadSpendEnabled: { value: true, source: "default" },
+      threadSpendEnabled: { value: false, source: "default" },
       threadSpendThresholdUsd: { value: 25, source: "default" },
     });
 
@@ -3337,10 +3369,62 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveSpendAlertPolicy()).toEqual({
       activeTurnSpendEnabled: false,
       activeTurnSpendThresholdUsd: 7.5,
-      threadSpendEnabled: true,
+      threadSpendEnabled: false,
       threadSpendThresholdUsd: 40,
     });
   });
+
+  it.each([undefined, true, false])(
+    "requires explicit thread spend opt-in in an existing profile (%s)",
+    async (configured) => {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      const initialToml = "[general.spend_alerts]\nthread_spend_threshold_usd = 40\n"
+        + (configured === undefined ? "" : `thread_spend_enabled = ${configured}\n`);
+      fs.writeFileSync(configPath, initialToml);
+      const openProfile = () => new DesktopSettingsService({
+        configPath,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      const service = openProfile();
+      // Crossing a saved threshold only triggers a warning after explicit opt-in.
+      const alertKinds = (profile: DesktopSettingsService) => detectUsageSpendAlerts({
+        backend: "codex",
+        policy: profile.resolveSpendAlertPolicy(),
+        pricing: { lines: [], summaries: [] },
+        threadId: "thread-estimated-spend",
+        threadSpendMicros: 41_000_000,
+        triggeredAlertIds: new Set(),
+      }).map((alert) => alert.kind);
+
+      expect(alertKinds(service)).toEqual(configured === true ? ["thread-spend"] : []);
+      expect(service.resolveSpendAlertPolicy()).toMatchObject({
+        threadSpendEnabled: configured === true,
+        threadSpendThresholdUsd: 40,
+      });
+      expect((await service.readSettingsProjection()).general.spendAlerts.threadSpendEnabled).toEqual({
+        value: configured === true,
+        source: configured === undefined ? "default" : "config",
+      });
+      expect(fs.readFileSync(configPath, "utf8")).toBe(initialToml);
+
+      const toggled = configured !== true;
+      await service.writeConfigPatchTargeted({
+        general: { spendAlerts: { threadSpendEnabled: toggled } },
+      });
+
+      const reopened = openProfile();
+      expect(alertKinds(reopened)).toEqual(toggled ? ["thread-spend"] : []);
+      expect(reopened.resolveSpendAlertPolicy()).toMatchObject({
+        threadSpendEnabled: toggled,
+        threadSpendThresholdUsd: 40,
+      });
+      expect((await reopened.readSettingsProjection()).general.spendAlerts.threadSpendEnabled).toEqual({
+        value: toggled,
+        source: "config",
+      });
+    },
+  );
 
   it("defaults quit confirmation to enabled and persists overrides", async () => {
     const root = createTempRoot();

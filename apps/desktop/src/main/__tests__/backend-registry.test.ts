@@ -1083,6 +1083,45 @@ describe("DesktopBackendRegistry", () => {
     });
   }
 
+  it("publishes settled Codex MCP calls to the voice action stream", async () => {
+    const codexClient = voiceClient();
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(),
+      resolveCodexAgentToolsMcp: () => true, threadTitleGenerationService: null });
+    const mcp = new McpClient({ name: "voice-fixture", version: "1.0.0" });
+    try {
+      const { threadId } = await registry.startThread({ backend: "codex", cwd: nonRepositoryCwd });
+      const { turnId } = await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Read the input source." }] }, "desktop");
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId, turnId, turn: { id: turnId } },
+      } });
+      const voice = await registry.acquireNativeVoiceBackend(threadId);
+      const observe = vi.fn();
+      const unsubscribe = voice.onToolCall!(observe);
+      try {
+        const { server } = await registry["agentToolMcpServer"]!.registerClient({ backend: "codex", threadId });
+        await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+          requestInit: { headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) },
+        }));
+        const tool = "get_current_turn_input_source";
+        const denied = await mcp.callTool({ name: tool, arguments: {}, _meta: { threadId: "different-thread" } });
+        expect(denied).toMatchObject({ isError: true });
+        expect(observe).not.toHaveBeenCalled();
+        const result = await mcp.callTool({ name: tool, arguments: {}, _meta: { threadId } });
+        expect(result).toMatchObject({ structuredContent: { source: "desktop" } });
+        expect(observe).toHaveBeenCalledExactlyOnceWith({ threadId, tool, namespace: "pwragent", arguments: {},
+          response: { success: true, contentItems: [{ type: "inputText", text: expect.stringContaining('"desktop"') }] },
+        });
+      } finally {
+        unsubscribe();
+        voice.release();
+        await emitCompletedTurn(registry, "codex", threadId, turnId);
+      }
+    } finally {
+      await mcp.close();
+      await registry.close();
+    }
+  });
+
   it("preserves the coding start reservation when voice joins during preparation", async () => {
     const codexClient = voiceClient();
     const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });

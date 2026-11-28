@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,7 +50,7 @@ import type {
 } from "@pwragent/shared/contracts/thread-tools";
 import type { ThreadPrWatchesResponse } from "@pwragent/shared/contracts/thread-pr-watches";
 import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
-import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import type { PrStatusObservations } from "../app-server/thread-pull-request-summaries";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
@@ -2812,15 +2812,16 @@ describe("app server ipc", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")("uses one Git config read per standard clone checkout in the owner PR inventory", async () => {
+  it.skipIf(process.platform === "win32")("shares proved wildcard config across sibling checkouts with explicitly selected bundled Git", async () => {
     const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
     const { bundledGitDirectory, bundledGitExecutable, configureBundledGit } = await import("../bundled-git");
     const { runGitCommand } = await import("../app-server/git-executable");
+    const checkoutConfig = await import("../pr-status/pr-remote-heads");
     const { gitSubprocessDiagnostics, prGitSubprocessCaller } = await import("../diagnostics/git-subprocess-diagnostics");
     const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache, parseForgeRemote } =
       await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-single-branch-"));
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-clone-config-")));
     const restore = isolateProcessGitEnvironment(root);
     const fleet = process.env.PWRAGENT_MEASURE_SINGLE_BRANCH_INVENTORY;
     configureBundledGit(process.env.PWRAGENT_INVENTORY_GIT_RESOURCES ?? path.dirname(bundledGitDirectory()));
@@ -2831,13 +2832,16 @@ describe("app server ipc", () => {
       restore();
       await rm(root, { recursive: true, force: true });
     });
+    process.env.GIT_CONFIG_SYSTEM = path.join(root, "system-config");
+    delete process.env.GIT_CONFIG_NOSYSTEM;
+    await writeFile(process.env.GIT_CONFIG_SYSTEM, "[core]\n\tabbrev = 12\n");
     const source = path.join(root, "source");
     const branchName = fleet ? "main" : "release/v1";
     await runGitCommand(root, ["init", "-b", branchName, source]);
     await runGitCommand(source, ["-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
       "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture"]);
     const rows: (AppServerThreadSummary & { prs: PrSummary[] })[] = [];
-    const expected: Array<{ id: string; key: string; cwd: string; variant: string }> = [];
+    const expected: Array<{ id: string; key: string; cwd: string; clone: string; variant: string }> = [];
     for (const variant of ["single-branch", "wildcard"]) {
       const groups = Array.from({ length: fleet ? 36 : 1 }, (_, index) => index);
       const clones = await Promise.all(groups.map(async (index) => {
@@ -2851,7 +2855,7 @@ describe("app server ipc", () => {
         const refspec = (await runGitCommand(clone, ["config", "--get", "remote.origin.fetch"])).stdout.trim();
         const branch = variant === "single-branch" ? branchName : "*";
         expect(refspec).toBe(`+refs/heads/${branch}:refs/remotes/origin/${branch}`);
-        for (let index = 0; index < (fleet ? 10 : 1); index++) {
+        for (let index = 0; index < (fleet ? 10 : 2); index++) {
           const cwd = `${clone}-checkout-${index}`;
           await runGitCommand(clone, ["worktree", "add", "--detach", cwd]);
           const names = (await runGitCommand(cwd, ["remote"])).stdout.trim();
@@ -2863,7 +2867,7 @@ describe("app server ipc", () => {
             url: `https://${remote.host}/${remote.owner}/${remote.repo}/pull/${rows.length + 1}` });
           rows.push({ id, source: "codex", title: "Clone fixture", titleSource: "explicit",
             linkedDirectories: [{ id, kind: "worktree", label: "Checkout", path: clone, worktreePath: cwd }], prs: [pr] });
-          expected.push({ id, key: `${remote.host}/${remote.owner}/${remote.repo}`, cwd, variant });
+          expected.push({ id, key: `${remote.host}/${remote.owner}/${remote.repo}`, cwd, clone, variant });
         }
       }
     }
@@ -2871,6 +2875,8 @@ describe("app server ipc", () => {
     getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
     listThreads.mockResolvedValue(rows as never);
     resolveGitHubRepoForDirectory.mockImplementation((cwd, options) => readOrigin(cwd!, options));
+    const fullCheckoutProof = vi.spyOn(checkoutConfig, "observeLinkedPrCheckout");
+    onTestFinished(() => { fullCheckoutProof.mockRestore(); });
     const starts = new Map<string, string[]>();
     const startGit = gitSubprocessDiagnostics.startGit.bind(gitSubprocessDiagnostics);
     const diagnostics = vi.spyOn(gitSubprocessDiagnostics, "startGit").mockImplementation((cwd, args, purpose) => {
@@ -2884,8 +2890,8 @@ describe("app server ipc", () => {
     registerAppServerIpcHandlers();
     await startAppServerOwnerNavigation();
 
-    // Native Git owns the target, and only one effective config sample is
-    // needed for either clone shape with a canonical Git executable.
+    // The owner must match each checkout's native origin. Only wildcard
+    // config supplies the proof for borrowing its sibling's sample.
     expect(expected.map(({ id }) => appServerService.readPrimaryGitRepository("codex", id)))
       .toEqual(expected.map(({ key }) => key));
     if (fleet) {
@@ -2896,11 +2902,25 @@ describe("app server ipc", () => {
       }
       await writeFile(fleet, JSON.stringify(counts, null, 2));
     }
-    for (const variant of ["wildcard", "single-branch"]) {
-      expect(new Set(expected.filter((row) => row.variant === variant).map(({ cwd }) =>
-        (starts.get(cwd) ?? []).map((command) => command.split(" ", 1)[0]).join(", "))))
-        .toEqual(new Set(["config"]));
+    const wildcardStarts = new Map<string, string[]>();
+    const narrowPaths = new Set<string>();
+    const narrowClones = new Set<string>();
+    for (const { clone, cwd, variant } of expected) {
+      if (variant === "single-branch") {
+        expect(starts.get(cwd)).toEqual([expect.stringMatching(/^config /)]);
+        narrowPaths.add(cwd);
+        narrowClones.add(clone);
+        continue;
+      }
+      const commands = wildcardStarts.get(clone) ?? [];
+      commands.push(...(starts.get(cwd) ?? []));
+      wildcardStarts.set(clone, commands);
     }
+    for (const commands of wildcardStarts.values()) {
+      expect(commands).toEqual([expect.stringMatching(/^config .*--show-origin/)]);
+    }
+    // Only the seed needs a full checkout proof when the refspec cannot be shared.
+    expect(fullCheckoutProof.mock.calls.filter(([cwd]) => narrowPaths.has(cwd))).toHaveLength(narrowClones.size);
   });
 
   it("keeps dormant attachments polling by number across checkout-cache expiry and validates a selected checkout", async () => {
@@ -12522,7 +12542,7 @@ describe("app server ipc", () => {
     }));
     const thread = { backend: "codex" as const, threadId: "review-stack-read" };
     const service = appServerService as unknown as {
-      setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
+      setThreadPrAttachment: (key: string, attachment: { backend: AppServerBackendKind; primaryRepoKey: string; prs: PrSummary[] }) => void;
     };
     const attach = (rows: PrSummary[]) => service.setThreadPrAttachment(`codex:${thread.threadId}`, {
       backend: thread.backend, primaryRepoKey: "github.com/fixture/review-stack-read", prs: rows,
@@ -12559,6 +12579,43 @@ describe("app server ipc", () => {
     expect(listing).toHaveBeenCalledTimes(1);
     expect(readNavigationPullRequests).toHaveBeenCalledTimes(1);
     expect(project.mock.calls.map(([, , directories]) => directories)).toEqual([[cwd], [linked]]);
+
+    // A real projection binds the lower repair to its own thread. When its
+    // activity clears, the same PRs and Git refs allow the upper review.
+    await runGitCommand(cwd, ["switch", "lower"]);
+    const lowerKey = buildThreadIdentityKey("claude", "review-stack-lower");
+    service.setThreadPrAttachment(lowerKey, {
+      backend: "claude", primaryRepoKey: "github.com/fixture/review-stack-read", prs: [prs[0]!],
+    });
+    attach([{ ...prs[1]!, linkedDirectoryPaths: [linked] }]);
+    listing.mockResolvedValue({
+      backend: thread.backend, fetchedAt: 1, threads: [{
+        id: thread.threadId, source: thread.backend, title: "Upper review", titleSource: "explicit",
+        linkedDirectories: [{ id: linked, path: linked, kind: "local", label: "Upper" }],
+      }, {
+        id: "review-stack-lower", source: "claude", title: "Lower repair", titleSource: "explicit",
+        linkedDirectories: [{ id: cwd, path: cwd, kind: "local", label: "Lower" }],
+      }],
+    });
+    const observation = { readActivity: vi.fn(), heldBy: vi.fn(), observeOperation: vi.fn(), unavailable: vi.fn() };
+    let repairing = true;
+    const activity = vi.spyOn(appServerService, "stackThreadActivity").mockImplementation(async (key) => {
+      expect(observation.readActivity).toHaveBeenCalledWith(key);
+      return { repair: key === lowerKey && repairing };
+    });
+    onTestFinished(() => activity.mockRestore());
+    await expect(appServerService.automationStackHold(review, observation)).resolves.toBe("Held by #1: repair in progress");
+    expect(observation.heldBy).toHaveBeenCalledExactlyOnceWith(lowerKey);
+    expect(observation.observeOperation).toHaveBeenCalledWith(expect.arrayContaining([lowerKey]), false);
+    repairing = false;
+    observation.heldBy.mockClear();
+    await expect(appServerService.automationStackHold(review, observation)).resolves.toBeUndefined();
+    expect(observation.heldBy).not.toHaveBeenCalled();
+    const preflight = vi.spyOn(getDesktopStackReader(), "preflightCatalogs").mockResolvedValueOnce([{ status: "unavailable" }]);
+    onTestFinished(() => preflight.mockRestore());
+    await expect(appServerService.automationStackHold(review, observation))
+      .resolves.toBe("Held while stack settlement is unavailable");
+    expect(observation.unavailable).toHaveBeenCalledOnce();
   });
 
   it("rechecks late PR attachments for the workspace and branch captured by the review", async () => {

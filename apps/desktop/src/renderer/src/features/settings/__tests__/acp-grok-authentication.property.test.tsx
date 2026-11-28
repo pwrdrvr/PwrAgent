@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry } from "@pwragent/shared/contracts/backend";
@@ -33,15 +33,29 @@ function entry(overrides: Partial<AcpAgentSettingsEntry> = {}): AcpAgentSettings
   };
 }
 
+function accountStep(): HTMLElement {
+  const step = document.querySelector<HTMLElement>('[data-step="account"]');
+  if (!step) throw new Error("no account step");
+  return step;
+}
+
+function readyStep(): HTMLElement {
+  const step = document.querySelector<HTMLElement>('[data-step="ready"]');
+  if (!step) throw new Error("no ready step");
+  return step;
+}
+
 function show(getEntry: () => AcpAgentSettingsEntry) {
   const listAcpAgents = vi.fn(async () => ({
     fetchedAt: 1_000,
     entries: [getEntry()],
   }));
   const copyText = vi.fn(async () => undefined);
+  // Settings shows one agent per screen, Setup first.
   render(
     <AcpAgentsSettings
       desktopApi={{ listAcpAgents, copyText } as unknown as DesktopApi}
+      only={getEntry().registryId}
     />,
   );
   return { listAcpAgents, copyText };
@@ -66,16 +80,20 @@ describe("Grok authentication recovery", () => {
         const current = entry({ lastDiscoveryError: undefined, activeCommand, [field]: AUTH_ERROR });
         const { copyText } = show(() => current);
         try {
-          expect(await screen.findByText("Sign in required")).toBeInTheDocument();
-          expect(screen.getByText("Sign in required"))
+          expect(await screen.findByText("Sign-in required"))
             .toHaveClass("settings-card__chip--warn");
-          expect(screen.getByText(/Run this in your terminal to sign in to Grok/))
-            .toBeInTheDocument();
+          const account = accountStep();
+          expect(account).toHaveAttribute("aria-current", "step");
+          expect(account).toHaveTextContent("Run this in a terminal");
+          // A rejected sign-in is never Ready.
+          expect(readyStep()).not.toHaveTextContent(/✓/);
           fireEvent.click(screen.getByRole("button", { name: "Copy Grok sign-in command" }));
           await waitFor(() => expect(copyText).toHaveBeenCalledWith(
             `'${activeCommand.replaceAll("'", "'\"'\"'")}' login`,
           ));
-          expect(screen.getByRole("button", { name: "Check sign-in" })).toBeEnabled();
+          expect(within(account).getByRole("button", { name: "Check again" })).toBeEnabled();
+          // The step's Check again is the screen's only one.
+          expect(screen.getAllByRole("button", { name: "Check again" })).toHaveLength(1);
         } finally {
           cleanup();
         }
@@ -108,14 +126,14 @@ describe("Grok authentication recovery", () => {
   it("clears the sign-in guidance only after a successful recheck", async () => {
     let current = entry();
     const { listAcpAgents } = show(() => current);
-    await screen.findByText("Sign in required");
-    fireEvent.click(screen.getByRole("button", { name: "Check sign-in" }));
+    await screen.findByText("Sign-in required");
+    fireEvent.click(within(accountStep()).getByRole("button", { name: "Check again" }));
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("Sign in required")).toBeInTheDocument();
+    expect(await screen.findByText("Sign-in required")).toBeInTheDocument();
 
-    current = entry({ lastDiscoveryError: undefined });
-    fireEvent.click(screen.getByRole("button", { name: "Check sign-in" }));
-    await screen.findByText("Discovered");
+    current = entry({ lastDiscoveryError: undefined, lastDiscoveredAt: Date.now() });
+    fireEvent.click(within(accountStep()).getByRole("button", { name: "Check again" }));
+    await screen.findByText("Ready", { selector: ".settings-card__chip" });
     expect(screen.queryByRole("button", { name: "Copy Grok sign-in command" }))
       .not.toBeInTheDocument();
     expect(listAcpAgents).toHaveBeenLastCalledWith(expect.objectContaining({

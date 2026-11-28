@@ -6,12 +6,13 @@ import {
   type FederationProtocolEnvelope,
   type FederationRequestEnvelope,
 } from "@pwragent/shared/contracts/federation";
+import { CHECKOUT_FEDERATION_METHOD } from "../resource-checkouts/resource-checkout-service";
 import { FederationRouter } from "../federation/federation-router";
 import * as owner from "@pwragent/federation/federation-backend-methods";
 import { evaluateFederationSessionPolicy } from "../federation/federation-policy";
 
 const blocked = [
-  ...Object.values(owner.FEDERATION_BACKEND_METHODS),
+  ...Object.values(owner.FEDERATION_BACKEND_METHODS), CHECKOUT_FEDERATION_METHOD,
   "file.push", "file.push.begin", "file.pull", "pty.open", "service.open",
   "thread.handoff.send", "thread.handoff.import", "new.unmapped.method",
 ];

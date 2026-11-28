@@ -40,6 +40,18 @@ type RowChange = {
   workers?: boolean;
   provider?: Partial<ProviderRow>;
 };
+type RowPatch = {
+  rows: Map<number, NavigationThreadSummary>;
+  directories: Map<number, NavigationDirectoryActivity>;
+  observation?: { observedAt: number; inputRequestThreadKeys: ReadonlySet<string> };
+};
+
+function clearRowPatch(patch: RowPatch): void {
+  patch.rows.clear();
+  patch.directories.clear();
+  patch.observation = undefined;
+}
+
 type Source = {
   backend: AppServerBackendScope;
   recheckMs?: number;
@@ -52,7 +64,9 @@ type Source = {
   status?(row: ProviderRow): ProviderRow["threadStatus"];
   refresh?(backend: AppServerBackendKind, id: string, activity: boolean, workers: boolean): Promise<AppServerThreadSummary | undefined> | undefined;
   cached(backend: AppServerBackendKind, id: string): AppServerThreadSummary | undefined;
-  join(rows: ProviderRow[], coverage: NavigationQueryIndex["coverage"], checkouts: "saved" | "reuse" | "refresh"): Promise<NavigationQueryIndex>;
+  join(rows: ProviderRow[], coverage: NavigationQueryIndex["coverage"], checkouts: "saved" | "reuse" | "refresh",
+    seedCurrent?: () => boolean): Promise<NavigationQueryIndex>;
+  releaseSeedJoin?(): void;
   decorate?(rows: NavigationThreadSummary[]): NavigationThreadSummary[];
   forget?(key: string): void;
   dependents?(key: string): Iterable<string> | undefined;
@@ -109,6 +123,7 @@ export class LiveNavigationIndex {
   private viewerEpoch = 0;
   private viewerGapEpoch = -1;
   private seedCoverage?: NavigationQueryIndex["coverage"];
+  private seedVerification?: AppServerBackendScope | "checkout";
   private visibilityChanged = true;
   private lastDiscovery = 0;
   // The mounted remote cache is one source per host. Concurrent callers can
@@ -149,6 +164,8 @@ export class LiveNavigationIndex {
 
   close(): void {
     this.disposed = true;
+    this.seedVerification = undefined;
+    this.source.releaseSeedJoin?.();
     if (this.scheduled) clearImmediate(this.scheduled);
   }
 
@@ -201,6 +218,9 @@ export class LiveNavigationIndex {
     }
     if (n.method === "navigation/sidebarEnrichment/updated" || n.method === "pullRequest/status/updated"
       || !navigationQueryEventRequiresRefresh(n.method, n.params)) return;
+    // A discovery notice can repeat the seed's pending scope. The gap set
+    // alone cannot distinguish that notice from the scheduled verification.
+    this.seedVerification = undefined;
     this.visibilityChanged ||= navigationInvalidationMayChangeMembership(n.method);
     if (n.method === "navigation/providerThreads/refreshed") {
       const provider = (n.params as { backend?: AppServerBackendKind }).backend;
@@ -347,6 +367,9 @@ export class LiveNavigationIndex {
       this.needsRetry = true;
       throw error;
     }).finally(() => {
+      // Only a successful initial publication with verification still queued
+      // can keep its seed. Verification consumes the marker before listing.
+      if (this.needsRetry || !this.seedVerification) this.source.releaseSeedJoin?.();
       this.pending = undefined;
       this.background = undefined;
       this.reconciling = false;
@@ -363,6 +386,8 @@ export class LiveNavigationIndex {
     this.observeVersion();
     const gaps = [...this.gaps];
     this.gaps.clear();
+    const seedVerification = this.seedVerification;
+    this.seedVerification = undefined;
     this.reconciling = !index || Boolean(gaps.length);
     const visibility = this.reconciling || this.visibilityChanged ? this.source.visibility?.(observedAt) : undefined;
     this.visibilityChanged = false;
@@ -389,7 +414,8 @@ export class LiveNavigationIndex {
         if (observed.coverage?.state === "complete") for (const [id, row] of this.providers) {
           if (row.source === scope && !fresh.has(id)) changes.set(id, { backend: scope, id: row.id, removed: true });
         }
-        index = await this.apply(index, changes);
+        const patch: RowPatch = { rows: new Map(), directories: new Map() };
+        index = this.publishRowPatch(await this.apply(index, changes, patch), patch);
         // A scoped success cannot certify coverage of another provider.
         if (observed.coverage?.state !== "complete" || index.coverage?.state !== "complete") this.gaps.add(this.source.backend);
       }
@@ -421,15 +447,26 @@ export class LiveNavigationIndex {
         }
         for (const row of listing.rows) this.providers.set(key(row), compact(row));
         coverage = listing.coverage;
-        if (!prior && listing.verifyAfterSeed) this.gaps.add(this.source.backend);
-        else if (!prior && listing.checkoutsAfterSeed) this.gaps.add("checkout");
+        if (!prior) {
+          const verify = listing.verifyAfterSeed ? this.source.backend : listing.checkoutsAfterSeed ? "checkout" : undefined;
+          if (verify) {
+            if (!gaps.length && !this.gaps.size && !this.changes.size) this.seedVerification = verify;
+            this.gaps.add(verify);
+          }
+        }
       }
       if (this.source.retentionChanged) {
         this.providerBytes = 0;
         for (const row of this.providers.values()) this.providerBytes += jsonBytes(row);
       }
+      const seed = this.seedVerification;
+      const seedCurrent = !prior && seed
+        ? () => !this.disposed && !this.changes.size && this.seedVerification === seed && this.gaps.size === 1
+        : seedVerification && gaps.length === 1 && gaps[0] === seedVerification && coverage?.state === "complete"
+          ? () => !this.disposed && !this.changes.size && !this.gaps.size : undefined;
       const joined = await this.source.join([...this.providers.values()], coverage, !prior ? "saved"
-        : gaps.every((scope) => scope === "overlay" || (scope === "saved" && !(this.source.backend === "all" || this.source.backend === "codex"))) ? "reuse" : "refresh");
+        : gaps.every((scope) => scope === "overlay" || (scope === "saved" && !(this.source.backend === "all" || this.source.backend === "codex"))) ? "reuse" : "refresh",
+        seedCurrent);
       if (this.disposed) throw new Error("Navigation source was replaced.");
       if (!prior && coverage && coverage.state !== "checking") {
         if (!this.gaps.size && this.source.verifySeedDirectories?.(joined)) this.gaps.add("geometry");
@@ -444,12 +481,16 @@ export class LiveNavigationIndex {
       this.positions = new Map(index.threads.map((row, i) => [key(row), i]));
     }
     if (prior) this.seedCoverage = undefined;
+    const patch: RowPatch = { rows: new Map(), directories: new Map() };
+    // Point reads may span several waves of notices before readers get a new
+    // snapshot. Keep the replacements against the last published inventory.
     while (this.changes.size && !this.disposed) {
       const changes = this.changes;
       this.changes = new Map();
-      index = await this.apply(index!, changes);
+      index = await this.apply(index!, changes, patch);
     }
     if (this.disposed) throw new Error("Navigation source was replaced.");
+    if (index) index = this.publishRowPatch(index, patch);
     if (this.lastPatch?.to !== index) this.lastPatch = undefined;
     if (index && this.source.retentionChanged) {
       const patch = this.lastPatch?.from.deref() === prior ? this.lastPatch : undefined;
@@ -465,6 +506,17 @@ export class LiveNavigationIndex {
     if (prior && this.reconciling) this.source.notify();
   }
 
+  private publishRowPatch(index: NavigationQueryIndex, patch: RowPatch): NavigationQueryIndex {
+    if (!patch.observation) return index;
+    const { observedAt, inputRequestThreadKeys } = patch.observation;
+    const next = replaceNavigationQueryRows(index, patch.rows, inputRequestThreadKeys, observedAt, patch.directories);
+    if (index !== next) {
+      this.lastPatch = { from: new WeakRef(index), to: next, rows: [...patch.rows.keys()], directories: [...patch.directories.keys()] };
+    }
+    clearRowPatch(patch);
+    return next;
+  }
+
   private rememberDirectories(index: NavigationQueryIndex): void {
     this.directoryPositions.clear();
     index.directories.forEach((directory, position) => {
@@ -476,7 +528,7 @@ export class LiveNavigationIndex {
     });
   }
 
-  private async apply(index: NavigationQueryIndex, changes: Map<string, RowChange>): Promise<NavigationQueryIndex> {
+  private async apply(index: NavigationQueryIndex, changes: Map<string, RowChange>, patch: RowPatch): Promise<NavigationQueryIndex> {
     const observedAt = nextNavigationObservation();
     for (const id of [...changes.keys()]) for (const child of this.source.dependents?.(id) ?? []) {
       const row = this.providers.get(child);
@@ -540,32 +592,40 @@ export class LiveNavigationIndex {
       if (row) base.push(row);
     }
     const projected = new Map((this.source.decorate?.(base) ?? base).map((row) => [key(row), row]));
-    const replacements = new Map<number, NavigationThreadSummary>();
     let geometry = false;
-    const directories = new Map<number, NavigationDirectoryActivity>();
+    let changed = false;
     for (const id of changes.keys()) {
       const row = projected.get(id);
       const previous = this.rows.get(id);
       if (isDeepStrictEqual(previous, row)) continue;
+      changed = true;
       geometry ||= directoryInputsChanged(previous, row);
       if (!geometry && previous && row && (previous.inbox.inInbox !== row.inbox.inInbox || previous.updatedAt !== row.updatedAt)) {
         for (const position of this.directoryPositions.get(id) ?? []) {
-          const directory = directories.get(position) ?? index.directories[position]!;
-          directories.set(position, { latestUpdatedAt: Math.max(directory.latestUpdatedAt ?? 0, row.updatedAt ?? 0),
+          const directory = patch.directories.get(position) ?? index.directories[position]!;
+          patch.directories.set(position, { latestUpdatedAt: Math.max(directory.latestUpdatedAt ?? 0, row.updatedAt ?? 0),
             needsAttentionCount: directory.needsAttentionCount + Number(row.inbox.inInbox) - Number(previous.inbox.inInbox) });
         }
       }
       if (row) {
         this.rows.set(id, row);
-        if (previous) replacements.set(this.positions.get(id)!, row);
+        if (!geometry) patch.rows.set(this.positions.get(id)!, row);
       } else this.rows.delete(id);
     }
     const inputRequestThreadKeys = this.source.inputKeys();
     if (!geometry) {
-      const next = replaceNavigationQueryRows(index, replacements, inputRequestThreadKeys, observedAt, directories);
-      if (index !== next) this.lastPatch = { from: new WeakRef(index), to: next, rows: [...replacements.keys()], directories: [...directories.keys()] };
-      return next;
+      const previousKeys = patch.observation?.inputRequestThreadKeys ?? index.inputRequestThreadKeys;
+      const inputKeysChanged = !isDeepStrictEqual(inputRequestThreadKeys, new Set(previousKeys));
+      if (changed || inputKeysChanged) {
+        patch.observation = { observedAt, inputRequestThreadKeys };
+      }
+      // Input requests have their own membership and observation boundaries.
+      // A later wave can restore the prior set while advancing its watermark.
+      return inputKeysChanged ? this.publishRowPatch(index, patch) : index;
     }
+    // The structural projection consumes the already updated rows and
+    // recomputes directory activity, so it supersedes any pending patch.
+    clearRowPatch(patch);
     const threads = [...this.rows.values()];
     // If physical directory discovery spans a turn of the event loop, release
     // waiting displays and announce completion when the observation is ready.

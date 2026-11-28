@@ -5,10 +5,11 @@ import type { CheckoutDefinition } from "@pwragent/owner-core/resource-checkout-
 import { isResourceQueueOrder, RESOURCE_QUEUE_ORDERS, type ResourceQueueOrder } from "@pwragent/shared/contracts/resource-checkouts";
 import { canonicalKey as parseCanonicalKey, object, positiveInt, text } from "./checkout-input";
 
+export const MAX_EXTERNAL_DOMAINS = 100;
+
 export type ExternalBinding = {
   authorityInstanceId: string;
   authorityMachineId: string;
-  allowedInstances: string[];
   definition: CheckoutDefinition;
 };
 
@@ -27,7 +28,7 @@ export function readExternalCheckoutBindings(root: string): { bindings: External
     throw error;
   }
   const config = object(JSON.parse(raw));
-  if (config.version !== 1 || !Array.isArray(config.domains) || config.domains.length > 100) {
+  if (config.version !== 1 || !Array.isArray(config.domains) || config.domains.length > MAX_EXTERNAL_DOMAINS) {
     throw new Error("Invalid resource checkout authorities configuration.");
   }
   const keys = new Set<string>();
@@ -38,15 +39,11 @@ export function readExternalCheckoutBindings(root: string): { bindings: External
     keys.add(canonicalKey);
     const authorityInstanceId = text(domain.authorityInstanceId, "authority instance ID");
     const authorityMachineId = text(domain.authorityMachineId, "authority machine ID");
-    if (!Array.isArray(domain.allowedInstances) || domain.allowedInstances.length > 100) {
-      throw new Error("An explicit checkout peer allowlist is required.");
-    }
     const capacity = positiveInt(domain.capacity, "capacity", 1_000);
     const revision = positiveInt(domain.revision, "definition revision");
     const updatedAt = positiveInt(domain.updatedAt, "definition update time");
     return {
       authorityInstanceId, authorityMachineId,
-      allowedInstances: domain.allowedInstances.map((id: unknown) => text(id, "allowed instance ID")),
       definition: {
         resourceId: canonicalKey, canonicalKey, scope: "federation", counted: capacity > 1, capacity,
         displayName: text(domain.displayName, "display name"), kindLabel: text(domain.kindLabel, "kind"),

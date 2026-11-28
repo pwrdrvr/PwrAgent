@@ -67,6 +67,7 @@ import {
   threadExecutionModeForClaudePermission,
 } from "./claude-permissions";
 import { createClaudeElicitationHandler } from "./claude-elicitation";
+import { runClaudeExcerptQuery, type ClaudeExcerptRequest } from "./claude-excerpt-query";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeCatalog, readClaudeMcpServerStatus } from "./claude-models";
 import {
   CLAUDE_TERMINAL_COMMANDS_SEED,
@@ -3810,6 +3811,15 @@ export class ClaudeBackend {
       if (this.rewindQueries.get(threadId) === closed.promise) this.rewindQueries.delete(threadId);
       closed.resolve();
     }
+  }
+
+  /** Summarize bounded command evidence through the owning Claude installation. */
+  async summarizeCapture(params: ClaudeExcerptRequest, cwd: string) {
+    const { executable } = await this.requireInstallation();
+    const startQuery = this.options.query ?? (await loadClaudeAgentSdk()).query;
+    const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+    this.options.assertOwnerAdmission?.();
+    return await runClaudeExcerptQuery(startQuery, params, claudeHarnessOptions(executable, env), cwd);
   }
 
   private async runRewindQuery<T>(session: ClaudeSession, run: (control: Query) => Promise<T>): Promise<T> {

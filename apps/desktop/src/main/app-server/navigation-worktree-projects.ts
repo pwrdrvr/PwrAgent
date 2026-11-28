@@ -84,6 +84,7 @@ async function resolveGitWorktreeProjects(
   const projects = new Map(directories.filter((directory) => !worktreeParents.has(directory.key))
     .map((directory) => [directory.key, directory]));
   const groupedProjectKeys = new Map<string, string>();
+  const mergedProjects = new Map<string, { summary: NavigationDirectorySummary; members: Set<string> }>();
   const aliases = new Map<string, string[]>();
   let repositorySources: NavigationQueryIndex["worktreeRepositorySources"];
   for (const project of projects.values()) {
@@ -93,32 +94,36 @@ async function resolveGitWorktreeProjects(
     const parentPath = worktreeParents.get(worktree.key);
     if (!parentPath) continue;
     const key = groupedProjectKeys.get(parentPath) ?? `directory:${parentPath}`;
-    const existing = projects.get(key);
-    // Hidden draft and settings records are still addressable by composer
-    // history, but only a registration or a thread can create a project row.
-    if (!existing && !worktree.threadKeys.length && worktree.launchpad?.registeredAt == null) continue;
+    let merged = mergedProjects.get(key);
+    if (!merged) {
+      const existing = projects.get(key);
+      // Hidden draft and settings records are still addressable by composer
+      // history, but only a registration or a thread can create a project row.
+      if (!existing && !worktree.threadKeys.length && worktree.launchpad?.registeredAt == null) continue;
+      const summary: NavigationDirectorySummary = existing ? { ...existing } : {
+        key, kind: "directory", path: parentPath, label: path.posix.basename(parentPath) || parentPath,
+        threadKeys: [], needsAttentionCount: 0,
+        gitStatus: options.gitStatusByKey?.[key]?.gitStatus,
+        repositoryKey: worktree.gitStatus?.originRepository ?? worktree.repositoryKey,
+        repositoryKeys: worktree.gitStatus?.remoteRepositories ?? worktree.repositoryKeys,
+      };
+      if (!existing) {
+        applyNavigationDirectoryOverlay(summary, options.directoryOverlays?.[key]);
+        repositorySources ??= {};
+        repositorySources[key] = { key: worktree.key, repositoryRevision: navigationDirectoryRepositoryRevision(worktree.gitStatus) };
+      }
+      merged = { summary, members: new Set(summary.threadKeys) };
+      mergedProjects.set(key, merged);
+      projects.set(key, summary);
+    }
     const keys = aliases.get(key);
     if (keys) keys.push(worktree.key);
     else aliases.set(key, [worktree.key]);
-    const parent: NavigationDirectorySummary = existing ?? {
-      key, kind: "directory", path: parentPath, label: path.posix.basename(parentPath) || parentPath,
-      threadKeys: [], needsAttentionCount: 0,
-      gitStatus: options.gitStatusByKey?.[key]?.gitStatus,
-      repositoryKey: worktree.gitStatus?.originRepository ?? worktree.repositoryKey,
-      repositoryKeys: worktree.gitStatus?.remoteRepositories ?? worktree.repositoryKeys,
-    };
-    if (!existing) {
-      applyNavigationDirectoryOverlay(parent, options.directoryOverlays?.[key]);
-      repositorySources ??= {};
-      repositorySources[key] = { key: worktree.key, repositoryRevision: navigationDirectoryRepositoryRevision(worktree.gitStatus) };
-    }
-    projects.set(key, {
-      ...parent,
-      threadKeys: [...new Set([...parent.threadKeys, ...worktree.threadKeys])],
-      needsAttentionCount: parent.needsAttentionCount + worktree.needsAttentionCount,
-      latestUpdatedAt: Math.max(parent.latestUpdatedAt ?? 0, worktree.latestUpdatedAt ?? 0),
-    });
+    for (const member of worktree.threadKeys) merged.members.add(member);
+    merged.summary.needsAttentionCount += worktree.needsAttentionCount;
+    merged.summary.latestUpdatedAt = Math.max(merged.summary.latestUpdatedAt ?? 0, worktree.latestUpdatedAt ?? 0);
   }
+  for (const { summary, members } of mergedProjects.values()) summary.threadKeys = [...members];
   return {
     directories: [...projects.values()].sort((left, right) => left.label.localeCompare(right.label)),
     ...(aliases.size ? { worktreeProjectAliases: Object.fromEntries(aliases) } : {}),

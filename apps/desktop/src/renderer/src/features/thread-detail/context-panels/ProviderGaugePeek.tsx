@@ -1,31 +1,29 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import { usageLimitProviderForBackend } from "@pwragent/shared/contracts/usage-activity";
 import { GaugeIcon, PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   describeRateLimitRow,
+  formatUsedPercent,
   formatBackendPlanType,
+  isCreditsRateLimit,
   isIndividualRateLimit,
   selectVisibleRateLimits,
   type BackendRateLimitSummary,
 } from "../../../lib/backend-status-format";
 import { HoverCardBridge, type BridgedHoverCard } from "../../../lib/hover-card-bridge";
 import { groupRateLimitsByScope } from "../../../lib/rate-limit-scopes";
-import { useViewportTooltip } from "../../../lib/useViewportTooltip";
+import { TOOLTIP_HOVER_DELAY_MS, useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   useLocalUsagePace,
   usagePaceAccountKey,
   usagePaceRefreshKey,
 } from "../../federation-activity/useLocalUsagePace";
-import { describeLimitPace } from "../../federation-activity/usage-activity-presentation";
-import {
-  limitSeriesFor,
-  limitUsageDropped,
-  type LimitAccount,
-} from "../../federation-activity/usage-limits";
+import { limitPaceOutcomePhrases } from "../../federation-activity/usage-activity-presentation";
+import type { LimitAccount } from "../../federation-activity/usage-limits";
 import { capLatchSample, fiveHourLatchKey, fiveHourLatches, type FiveHourSample } from "./five-hour-latch";
-import { RateLimitRow } from "./RateLimitRow";
+import { limitRowPace } from "./limit-pace";
 
 type PeekDesktopApi = Pick<DesktopApi, "openUsageActivity" | "readUsageActivity">;
 
@@ -61,6 +59,11 @@ export type ProviderPeekEntry = {
   backend: BackendSummary;
   /** Its caps at risk; the latch decides, as for a 5h row. */
   caps: ProviderPeekCap[];
+  /**
+   * Its credit balance, as the AI providers panel shows it: what a turn
+   * spends once a window runs out.
+   */
+  credits?: BackendRateLimitSummary;
   scopes: ProviderPeekScope[];
   /** The fullest shown allowance or cap, which orders the providers. */
   usedPercent?: number;
@@ -80,8 +83,10 @@ function chartableBackends(backends: readonly BackendSummary[]): BackendSummary[
 function providerPeekScopes(
   backend: BackendSummary,
   now: number,
-): { scopes: ProviderPeekScope[]; caps: ProviderPeekCap[] } {
+): { scopes: ProviderPeekScope[]; caps: ProviderPeekCap[]; credits?: BackendRateLimitSummary } {
   const visible = selectVisibleRateLimits(backend);
+  const credits = visible.find(isCreditsRateLimit);
+  const withCredits = credits ? { credits } : {};
   // The panel's filter, in the provider's own order: Antigravity's pools
   // read as it reports them, not as the panel sorts its rows.
   const shown = new Set(visible);
@@ -99,7 +104,7 @@ function providerPeekScopes(
         ...(usedPercent === undefined ? {} : { usedPercent }),
         ...(fiveHour ? { fiveHour: fiveHour.limit } : {}),
       };
-    }), caps: providerPeekCaps(backend, visible, now) };
+    }), caps: providerPeekCaps(backend, visible, now), ...withCredits };
   }
   let fullest: ProviderPeekScope | undefined;
   for (const limit of visible) {
@@ -108,7 +113,7 @@ function providerPeekScopes(
     fullest = { scope: null, window: describeRateLimitRow(limit, now).label.replace(/ limit$/i, ""), limit, usedPercent };
   }
   // With no window to show, the fullest limit is the row, a cap included.
-  return { scopes: fullest ? [fullest] : [], caps: [] };
+  return { scopes: fullest ? [fullest] : [], caps: [], ...withCredits };
 }
 
 /**
@@ -143,7 +148,7 @@ export function providerPeekEntries(
   const entries = backends
     .filter((backend) => backend.available)
     .map((backend, order) => {
-      const { scopes, caps } = providerPeekScopes(backend, now);
+      const { scopes, caps, credits } = providerPeekScopes(backend, now);
       const percents = [
         ...caps.map((cap) => cap.usedPercent),
         ...scopes.flatMap((scope) => scope.usedPercent === undefined ? [] : [scope.usedPercent]),
@@ -151,7 +156,13 @@ export function providerPeekEntries(
       const usedPercent = percents.length ? Math.max(...percents) : undefined;
       return {
         order,
-        entry: { backend, caps, scopes, ...(usedPercent === undefined ? {} : { usedPercent }) } satisfies ProviderPeekEntry,
+        entry: {
+          backend,
+          caps,
+          ...(credits ? { credits } : {}),
+          scopes,
+          ...(usedPercent === undefined ? {} : { usedPercent }),
+        } satisfies ProviderPeekEntry,
       };
     });
   return entries
@@ -225,11 +236,12 @@ export function useProviderGaugePeek(options: {
 
   return {
     enter: (target) => {
-      if (bridge.enterTrigger(cardRef.current)) {
+      const wait = bridge.enterTrigger(cardRef.current, target, TOOLTIP_HOVER_DELAY_MS);
+      if (wait === 0) {
         show(target, content());
         return;
       }
-      showAfterDelay(target, content);
+      showAfterDelay(target, content, wait);
     },
     leave: () => {
       if (visible) {
@@ -291,14 +303,15 @@ export function ProviderGaugePeekCard(props: {
       </div>
       {entries.length ? (
         <ul className="provider-peek__list">
-          {entries.map(({ backend, caps, scopes }) => (
+          {entries.map(({ backend, caps, credits, scopes }) => (
             <li key={backend.kind} className="provider-peek__provider">
               <span className="provider-peek__name">
                 <span aria-hidden="true" className="backend-status-list__dot" />
                 {backend.label}
               </span>
-              {/* The provider's own cap leads while at risk: it binds every scope. */}
-              {caps.length ? (
+              {/* The provider's own cap leads while at risk: it binds every
+                  scope. Its credit balance follows, as on the panel. */}
+              {caps.length || credits ? (
                 <div className="provider-peek__scope">
                   {caps.map((cap) => (
                     <PeekLimitRow
@@ -310,6 +323,7 @@ export function ProviderGaugePeekCard(props: {
                       warning={cap.usedPercent >= 100}
                     />
                   ))}
+                  {credits ? <PeekLimitRow window="Credits" limit={credits} now={now} account={undefined} /> : null}
                 </div>
               ) : null}
               {scopes.length ? scopes.map((entry) => {
@@ -335,7 +349,7 @@ export function ProviderGaugePeekCard(props: {
                     ) : null}
                   </div>
                 );
-              }) : (
+              }) : credits ? null : (
                 <span className="provider-peek__none">
                   {backend.account?.planType
                     ? `${formatBackendPlanType(backend, backend.account.planType)} · no limits reported`
@@ -364,11 +378,21 @@ export function ProviderGaugePeekCard(props: {
 }
 
 /**
- * The panel's limit row under a window-only label in one fixed column, so
- * every provider's bar starts at the same edge and runs the same width. The
- * panel's own label (the scope and "limit" too) stays on the panel.
+ * One limit in the peek's narrow card, laid out so nothing wraps mid-phrase:
+ *
+ *   WEEKLY  [bar...........] 53%
+ *           resets Tue 6:00 AM
+ *           +0.7%/h hits 100% Mon 3 PM,
+ *           14 h 55 m before the reset
+ *
+ * The window label, the bar and the percent share the first line, in fixed
+ * columns, so every bar in the peek starts and ends at the same edges. The
+ * count and reset take the next line, and the pace the one after. Each
+ * phrase is unbreakable, so a line breaks only between them: a time never
+ * loses its "PM" to the next line. A row with no bar (a credit balance)
+ * shows its value beside the label instead.
  */
-function PeekLimitRow(props: {
+export function PeekLimitRow(props: {
   window: string;
   limit: BackendRateLimitSummary;
   now: number;
@@ -376,37 +400,82 @@ function PeekLimitRow(props: {
   /** Out, or on pace to run out before the reset. */
   warning?: boolean;
 }) {
+  const row = describeRateLimitRow(props.limit, props.now);
+  const pace = limitRowPace(props.limit, row.usedPercent, props.account, props.now);
+  const used = row.usedPercent === undefined ? undefined : Math.min(100, Math.max(0, row.usedPercent));
+  const projected = pace?.projectedPercent;
+  const short = pace?.described.short ?? false;
+  // A count ("98 of 100 used") says more than its percent, on the detail line.
+  const count = used !== undefined && row.figure && !row.figure.endsWith("%")
+    ? `${row.figure} ${row.text ?? ""}`.trim()
+    : undefined;
+  const details = [count, row.reset].filter((detail): detail is string => Boolean(detail));
   return (
     <div className={`provider-peek__limit${props.warning ? " is-warning" : ""}`}>
       <span className="provider-peek__window">{props.window}</span>
-      <dl className="backend-status-list__metadata-grid provider-peek__stat">
-        <RateLimitRow limit={props.limit} now={props.now} account={props.account} />
-      </dl>
+      {used !== undefined ? (
+        <>
+          <span className={`backend-status-list__meter provider-peek__bar${used >= 100 ? " is-full" : ""}`} aria-hidden="true">
+            <i style={{ width: `${used}%` }} />
+            {projected !== undefined && projected > used ? (
+              <s
+                className={short ? "is-short" : undefined}
+                style={{ left: `${used}%`, width: `${projected - used}%` }}
+              />
+            ) : null}
+          </span>
+          <b className={`backend-status-list__figure provider-peek__percent${short ? " is-short" : ""}`}>
+            {formatUsedPercent(used)}%
+          </b>
+        </>
+      ) : (
+        <span className="provider-peek__value">
+          {row.figure ? <b className="backend-status-list__figure">{row.figure}</b> : null}
+          {row.figure && row.text ? " " : null}
+          {row.text}
+        </span>
+      )}
+      {details.length ? (
+        <span className="provider-peek__detail">
+          {details.map((detail, index) => (
+            <Fragment key={`${index}:${detail}`}>
+              {index ? " " : null}
+              <span className="provider-peek__phrase">
+                {detail}
+                {index < details.length - 1 ? " ·" : null}
+              </span>
+            </Fragment>
+          ))}
+        </span>
+      ) : null}
+      {pace && pace.sentence ? (
+        <span className={`usage-pace provider-peek__pace${short ? " is-short" : ""}`}>
+          <span>{pace.described.rate}</span>
+          {limitPaceOutcomePhrases(pace.described.projection, pace.series.latest, props.now).map((phrase) => (
+            <Fragment key={phrase}>
+              {" "}
+              <span className="provider-peek__phrase">{phrase}</span>
+            </Fragment>
+          ))}
+        </span>
+      ) : null}
     </div>
   );
 }
 
 /**
- * Where a limit's pace lands at its reset, exactly as `RateLimitRow`'s pace
- * line reads it ("On pace for about N% at the reset"), so a 5h row that
- * appears agrees with its own pace text; 100 when it runs out first.
- * Undefined while unknown: under 30 minutes of the window, no pace, or a
- * reading the series has not caught up with.
+ * Where a limit's pace lands at its reset, read from the same `limitRowPace`
+ * that draws the row's hatch and pace line, so a 5h row that appears agrees
+ * with its own pace; 100 when it runs out first. Undefined while unknown:
+ * under 30 minutes of the window, no pace, or a reading the series has not
+ * caught up with.
  */
 export function projectedPercentAtReset(
   limit: BackendRateLimitSummary,
   account: LimitAccount | undefined,
   now: number,
 ): number | undefined {
-  const used = describeRateLimitRow(limit, now).usedPercent;
-  const series = limitSeriesFor(account, limit);
-  if (!series || used === undefined || used >= 100 || series.latest.usedPercent >= 100
-    || limitUsageDropped(series.latest.usedPercent, used) || series.latest.resetAt !== limit.resetAt
-    || (limit.resetAt !== undefined && limit.resetAt <= now)) return undefined;
-  const pace = describeLimitPace(series, now, true);
-  if (!pace) return undefined;
-  if (pace.projection.kind === "full") return 100;
-  return pace.projection.percent < used ? undefined : pace.projection.percent;
+  return limitRowPace(limit, describeRateLimitRow(limit, now).usedPercent, account, now)?.projectedPercent;
 }
 
 function fiveHourSample(limit: BackendRateLimitSummary, projectedPercent: number | undefined, now: number): FiveHourSample {

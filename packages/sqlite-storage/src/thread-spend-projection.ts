@@ -85,6 +85,7 @@ class ThreadSpendProjection {
  * missing ID invalidates the whole map (clear). SQLite changes arrive through
  * the ledger watcher so a held gate only replaces its current stored cost. */
 export interface SpendGateLines extends ReadonlyMap<string, ThreadUsageLineRecord> {
+  readonly positiveUsdMicros?: number;
   watchChanges(listener: (id?: string) => void): () => void;
 }
 

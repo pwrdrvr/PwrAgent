@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import { HOVER_CARD_SWAP_REST_MS } from "../../../lib/hover-card-bridge";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { PrChip } from "../PrChip";
@@ -97,13 +98,17 @@ describe("PrChip sidebar card", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("swaps at once from a card to another chip", () => {
+  it("swaps from a card to another chip once the pointer rests on it", () => {
     const { chip } = renderSidebar();
     const card = hoverUntilCard(chip(11));
     fireEvent.mouseLeave(chip(11));
     fireEvent.mouseEnter(card);
     fireEvent.mouseLeave(card);
     fireEvent.mouseEnter(chip(12));
+    // Passing over the chip is not asking about it: the card stays.
+    act(() => vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS - 1));
+    expect(screen.getByRole("tooltip")).toBe(card);
+    act(() => vi.advanceTimersByTime(1));
     const cards = screen.getAllByRole("tooltip");
     expect(cards).toHaveLength(1);
     expect(cards[0]).toHaveTextContent("Change 12");
@@ -136,15 +141,30 @@ describe("PrChip sidebar card", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("swaps to the next chip's card at once during a sweep", () => {
+  it("swaps to the next chip's card after a short rest during a sweep", () => {
     const { chip } = renderSidebar();
     hoverUntilCard(chip(11));
     fireEvent.mouseLeave(chip(11));
     fireEvent.mouseEnter(chip(12));
-    // No hover delay, and only the new card.
+    // Shorter than the hover delay, and only ever one card.
+    act(() => vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS - 1));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Change 11");
+    act(() => vi.advanceTimersByTime(1));
     const cards = screen.getAllByRole("tooltip");
     expect(cards).toHaveLength(1);
     expect(cards[0]).toHaveTextContent("Change 12");
+  });
+
+  it("does not swap to a chip the pointer only slides across", () => {
+    const { chip } = renderSidebar();
+    const card = hoverUntilCard(chip(11));
+    fireEvent.mouseLeave(chip(11));
+    fireEvent.mouseEnter(chip(12));
+    act(() => vi.advanceTimersByTime(HOVER_CARD_SWAP_REST_MS - 1));
+    fireEvent.mouseLeave(chip(12));
+    fireEvent.mouseEnter(card);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS * 3));
+    expect(screen.getAllByRole("tooltip")).toEqual([card]);
   });
 
   it("closes at once when the card had to open over the rows", () => {

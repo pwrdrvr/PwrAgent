@@ -43,8 +43,13 @@ import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata"
 import { prepareSqliteRead } from "./sqlite-prepared-read";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteChangedThreadKeys, sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
+import { DIRECT_REPLACEMENT, DIRECT_SPEND_HISTORY, GAP_CEILING, ROLLED_UP_REPLACEMENT, ROLLED_UP_SPEND_HISTORY } from "./thread-pricing-summary-schema";
 import { forgetThreadSpend, projectedThreadSpend, type SpendGateLines } from "./thread-spend-projection";
+import { PricingPageCards, PricingPageLiveRows, PricingPagePrices, type PricingPageAccounting, type PricingPageOverlay } from "./pricing-page-overlay";
+import type { PricingGateSelection } from "@pwragent/shared/thread-pricing-display";
+import { addTokenMiserGateAccountingTotals } from "@pwragent/shared/token-miser-savings-summary";
 import { PricingPageMarkers, ThreadPricingPageIndex } from "./thread-pricing-page";
+import { watchPricingRows } from "./sqlite-pricing-row-changes";
 import { sqliteUsageLedgerVersions, watchPricingPage } from "./sqlite-usage-ledger-change-version";
 import {
   PROJECT_CHECKOUT_GROUPS_META_KEY,
@@ -199,6 +204,7 @@ import {
 import { buildDirectorySummaries, hasPersistableLaunchpadState, navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import {
   estimateTokenUsageCost,
+  listTokenUsagePricingRates,
   resolveTokenUsagePriceUnavailableReason,
 } from "@pwragent/shared/token-usage-pricing";
 import { OPENROUTER_ASSUMED_PRICING_CATALOG_ID } from "@pwragent/shared/openrouter-assumed-pricing";
@@ -218,9 +224,19 @@ import type {
 const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
 // The focused thread, its context panel, and a few threads open in other
 // windows. A long thread's ledger holds a few MB.
+export type { PricingAccountingReader } from "./pricing-page-overlay";
+
 type OpenPricingPage = {
+  prices?: PricingPagePrices;
+  accounting?: PricingPageAccounting;
+  accountingOwner?: object;
   index?: ThreadPricingPageIndex;
-  monitorId?: string;
+  cards: PricingPageCards;
+  dirtyCards: Set<string>;
+  liveLines: PricingPageLiveRows<ThreadUsageLineRecord>;
+  liveCards: PricingPageLiveRows<ThreadSubAgentSummary>;
+  localIds: Set<string>;
+  decorationKey?: string;
   version: number;
   markers?: PricingPageMarkers;
   dirtyMarkers: Set<string>;
@@ -235,6 +251,43 @@ type ThreadPricingReadParams = {
   threadId: string;
   /** A publication also delivers older turn prices repaired by its reads. */
   onRepriced?: (line: ThreadUsageLineRecord) => void;
+};
+
+// Gaps always use standard reference prices. Compute a bound across dates,
+// models and input bands. Each independently rounded nonnegative component
+// costs at most twice its unrounded price, even for fractional rates.
+const standardRates = listTokenUsagePricingRates().filter(rate => rate.serviceTier === "standard");
+const gapMicrosPerComponentToken = 2 * (
+  Math.max(...standardRates.map(rate => rate.inputMicrosPerMillion))
+  + Math.max(...standardRates.map(rate => rate.cachedInputMicrosPerMillion))
+  + 2 * Math.max(...standardRates.map(rate => rate.outputMicrosPerMillion))
+) / 1_000_000;
+
+// One maximum per class is an indexed end-of-range lookup. An empty class
+// returns NULL. A zero ceiling can still contain a child or negative charge.
+function spendCeilingQuery(scope: "direct" | "parent", replacement: 0 | 1): string {
+  const lookup = scope === "direct"
+    ? "idx_thread_usage_lines_spend_thread WHERE backend = @backend AND thread_id = @threadId AND "
+      + DIRECT_SPEND_HISTORY + " AND (" + DIRECT_REPLACEMENT + ")"
+    : "idx_thread_usage_lines_spend_parent WHERE backend = @backend AND parent_thread_id = @threadId AND "
+      + ROLLED_UP_SPEND_HISTORY + " AND (" + ROLLED_UP_REPLACEMENT + ")";
+  return "(SELECT MAX(" + GAP_CEILING + ") FROM thread_usage_lines INDEXED BY " + lookup + " = " + replacement + ")";
+}
+
+const THREAD_SPEND_SUMMARY = `
+  SELECT SUM(CASE WHEN UPPER(currency) = 'USD' THEN total_cost_micros ELSE 0 END) AS micros,
+         SUM(unpriced_usage_line_count) AS unpriced, MIN(ledger_delta_ready) AS ready,
+         ` + spendCeilingQuery("direct", 0) + ` AS direct_ceiling,
+         ` + spendCeilingQuery("direct", 1) + ` AS direct_replacement,
+         ` + spendCeilingQuery("parent", 0) + ` AS parent_ceiling,
+         ` + spendCeilingQuery("parent", 1) + ` AS parent_replacement
+    FROM thread_pricing_summaries INDEXED BY idx_thread_pricing_summaries_thread
+   WHERE backend = @backend AND thread_id = @threadId`;
+
+type ThreadSpendRead = ThreadPricingReadParams & {
+  localModelIds: readonly string[];
+  liveLines: readonly ThreadUsageLineRecord[];
+  liveGates?: SpendGateLines;
 };
 
 type ThreadPricingLedgerRead = {
@@ -866,6 +919,7 @@ type NavigationThreadInputs = {
   hasProvider?: (key: string) => boolean;
   handoffDependency?: (child: string, dependency: string) => void;
   managedMembership?: (keys: ReadonlySet<string>) => void;
+  inboxClock?: { now: number; observeSnooze(until: number): void };
 };
 
 type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownThreadKeys: string[] };
@@ -956,6 +1010,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const external = this.stateDb.raw.pragma("data_version", { simple: true });
     const local = sqliteOwnerNavigationChangeVersion(this.stateDb.raw);
     return `${external}:${local}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
+  }
+
+  /** The cold join proof covers every local and external write, including
+   * join dependencies normally refreshed by events such as Auto-fix claims. */
+  readNavigationSeedJoinVersion(): string | undefined {
+    const db = this.stateDb.raw;
+    if (db.inTransaction) return undefined;
+    const external = db.pragma("data_version", { simple: true });
+    const { changes } = db.prepare("SELECT total_changes() AS changes").get() as { changes: number };
+    return `${external}:${changes}`;
   }
 
   readViewerNavigationSourceVersion(): string {
@@ -1224,6 +1288,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       const overlay = normalizeThreadOverlayState(
         Object.fromEntries(Object.entries(value).filter(([, field]) => field !== null)) as ThreadOverlayState,
       );
+      if (overlay.snoozedUntil) params.inboxClock?.observeSnooze(overlay.snoozedUntil);
       if (params.worktreeRepositoryAliases?.size && overlay.extraLinkedDirectories.length) {
         const identity = (value: string) => navigationPathIdentity(value, process.platform === "win32");
         overlay.extraLinkedDirectories = overlay.extraLinkedDirectories.map((directory) => {
@@ -1278,6 +1343,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
     });
     const threads = materializeNavigationThreads({ threads: withContext, overlayByThreadKey: overlays, workspaceRoots: params.workspaceRoots,
+      now: params.inboxClock?.now,
       firstSnapshot: !baseline && !backendState?.lastSnapshotHash,
       previousKnownThreadKeys: previousKnownThreadKeys ?? [] }).map((thread) => {
         const key = buildThreadIdentityKey(thread.source, thread.id);
@@ -3631,10 +3697,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return pricing;
   }
 
-  /** Page a chronological turn ledger. Gate grouping and live provider overlays
-   * use the full display projection. Caller-owned transactions never seed this cache. */
+  /** An open ledger projects committed rows and owner-local substitutions under one SQLite snapshot. */
   async readThreadPricingPage(params: {
     backend: AppServerBackendKind; threadId: string; offset: number; limit: number;
+    gateSelection?: PricingGateSelection; deferGates?: boolean; overlay?: PricingPageOverlay;
   }) {
     const db = this.stateDb.raw;
     if (db.inTransaction) return undefined;
@@ -3645,9 +3711,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       await this.repriceThreadUsageHistory(params);
       entry = this.openPricingPages.get(key);
     }
+    const storageKey = this.subAgentStorageKey(params);
+    // Legacy totals may need a write, which cannot upgrade a stale WAL read snapshot.
+    this.subAgentTable.initializeGateTotals(storageKey);
     if (!entry) {
-      const page: OpenPricingPage = { version: -1, dirtyMarkers: new Set(), dirty: new Set(), stop: () => {} };
-      page.stop = watchPricingPage(db, backend, threadId, (table, id) => {
+      const page: OpenPricingPage = {
+        version: -1, cards: new PricingPageCards(), dirtyCards: new Set(), localIds: new Set(),
+        liveLines: new PricingPageLiveRows(), liveCards: new PricingPageLiveRows(),
+        dirtyMarkers: new Set(), dirty: new Set(), stop: () => {},
+      };
+      const stopCards = watchPricingRows(db, "thread_sub_agents", storageKey, (id) => {
+        if (!page.cards.needs(id)) page.dirtyCards.add(id);
+      });
+      const stopLedger = watchPricingPage(db, backend, threadId, (table, id) => {
         // A TEMP trigger also fires for rolled-back writes. Read the final values
         // under a committed snapshot before applying any of these hints.
         if (table === "thread_compactions") {
@@ -3658,7 +3734,6 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           }
           return;
         }
-        if (table === "thread_usage_lines" && id === page.monitorId) page.monitorId = undefined;
         if (!page.index || !id) return;
         if (table === "thread_usage_lines") page.dirty.add(id);
         if (table === "thread_usage_turns") {
@@ -3669,6 +3744,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           page.dirty.clear();
         }
       });
+      page.stop = () => { stopCards(); stopLedger(); page.liveLines.close(); page.liveCards.close(); page.accounting?.close(); };
       entry = page;
     }
     const page = entry;
@@ -3680,38 +3756,113 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       this.openPricingPages.delete(id);
     }
     try {
+      if (page.accountingOwner !== params.overlay?.accountingOwner) {
+        page.accounting?.close();
+        page.accountingOwner = params.overlay?.accountingOwner;
+        try {
+          page.accounting = params.overlay?.openAccounting?.();
+        } catch (error) {
+          params.overlay?.accountingFailed?.(error);
+          page.accounting = undefined;
+          page.accountingOwner = undefined;
+        }
+        page.index = undefined;
+      }
       return db.transaction(() => {
         const version = db.pragma("data_version", { simple: true }) as number;
-        if (version !== page.version) {
+        const overlay = params.overlay;
+        page.liveLines.sync(overlay?.lines, page.dirty);
+        page.liveCards.sync(overlay?.cards, page.dirtyCards);
+        if (version !== page.version || page.decorationKey !== overlay?.decorationKey) {
           page.index = undefined;
-          page.monitorId = undefined;
           page.markers = undefined;
           page.dirtyMarkers.clear();
           page.version = version;
+          page.decorationKey = overlay?.decorationKey;
         }
-        if (page.monitorId) return undefined;
-        if (page.index && !page.index.rewindChanged(page.dirty)) page.index = undefined;
-        if (page.index && page.dirty.size) {
-          const changed: ThreadUsageLineRecord[] = [];
+        const decorate = (line: ThreadUsageLineRecord) => {
+          if (overlay?.isLocal(line)) page.localIds.add(line.usageLineId);
+          return overlay?.decorate(line) ?? line;
+        };
+        const readCards = (ids: string[]) => this.subAgentTable.getMany(storageKey, ids);
+        const needCards = (lines: Iterable<ThreadUsageLineRecord>) => {
+          for (const line of lines) {
+            if (line.scope === "monitor" && line.sourceItemId && page.cards.needs(line.sourceItemId)) page.dirtyCards.add(line.sourceItemId);
+          }
+        };
+        if (page.index) {
+          const readChanged = (ids: Iterable<string>) => {
+            const rows: ThreadUsageLineRecord[] = [];
+            const live = new Map<string, ThreadUsageLineRecord>();
+            const missing = new Set<string>();
+            for (const id of ids) {
+              page.localIds.delete(id);
+              const replacement = overlay?.lines?.get(id);
+              if (replacement) live.set(id, replacement);
+              const line = this.readThreadUsageLineSync(id);
+              if (line && line.status !== "superseded" && line.backend === backend
+                && (line.threadId === threadId || line.parentThreadId === threadId)) rows.push(line);
+              else missing.add(id);
+            }
+            this.attachUsageTurnMetadataSync(backend, threadId, rows);
+            if (page.accounting && page.prices) {
+              for (const line of rows) page.prices.replace(line.usageLineId, line, page.accounting);
+              for (const id of missing) page.prices.replace(id, undefined, page.accounting);
+            }
+            return [...rows.filter((line) => !live.has(line.usageLineId)), ...live.values()].map(decorate);
+          };
+          const retiredMonitors = new Set<string>();
+          const changed = new Map(readChanged(page.dirty).map((line) => [line.usageLineId, line]));
           for (const id of page.dirty) {
-            const line = this.readThreadUsageLineSync(id);
-            if (line && line.status !== "superseded" && line.backend === backend
-              && (line.threadId === threadId || line.parentThreadId === threadId)) changed.push(line);
+            if (page.index.sameLine(id, changed.get(id))) {
+              page.dirty.delete(id);
+              changed.delete(id);
+            } else {
+              const old = page.index.get(id);
+              const next = changed.get(id);
+              if (old?.scope === "monitor" && old.sourceItemId && (next?.scope !== "monitor" || old.sourceItemId !== next.sourceItemId)) retiredMonitors.add(old.sourceItemId);
+              // Stored prices win in the savings equation. Only a live-only
+              // gate can change that equation independently of the stored index.
+              for (const line of [old, next]) {
+                if (line?.scope === "monitor" && line.sourceItemId && !page.prices?.gate(line.sourceItemId)) page.accounting?.changed(line);
+              }
+              if (page.index.replaceMonitor(id, next)) {
+                page.dirty.delete(id);
+                changed.delete(id);
+              }
+            }
           }
-          this.attachUsageTurnMetadataSync(backend, threadId, changed);
-          if (!page.index.append(changed)) page.index = undefined;
+          if (!page.index.rewindChanged(page.dirty, changed)) page.index = undefined;
+          if (page.index) {
+            needCards(changed.values());
+            if (!page.cards.update(page.dirtyCards, readCards, overlay?.cards, page.index)
+              || !page.index.append([...changed.values()])) page.index = undefined;
+            if (page.index) {
+              for (const id of retiredMonitors) page.dirtyCards.add(id);
+              page.cards.forgetUnused(page.dirtyCards, page.index, overlay?.cards);
+            }
+          }
         }
-        page.dirty.clear();
         if (!page.index) {
+          page.cards = new PricingPageCards();
+          page.dirtyCards.clear();
+          page.localIds.clear();
           const baseline = this.readStoredThreadPricing(params, true);
-          const monitor = baseline.lines.find((line) => line.scope === "monitor");
-          if (monitor) {
-            page.monitorId = monitor.usageLineId;
-            return undefined;
+          if (page.accounting) {
+            page.accounting.reset();
+            page.prices = new PricingPagePrices(threadId);
+            for (const line of baseline.lines) page.prices.replace(line.usageLineId, line, page.accounting);
           }
-          page.index = ThreadPricingPageIndex.fromHistory(baseline.lines);
+          const lines = new Map(baseline.lines.map((line) => [line.usageLineId, line]));
+          for (const [id, line] of overlay?.lines ?? []) lines.set(id, line);
+          needCards(lines.values());
+          for (const id of overlay?.cards?.keys() ?? []) page.dirtyCards.add(id);
+          page.cards.update(page.dirtyCards, readCards, overlay?.cards);
+          page.index = ThreadPricingPageIndex.fromHistory(Array.from(lines.values(), decorate), page.cards.effective);
           if (!page.index) return undefined;
         }
+        page.dirty.clear();
+        page.dirtyCards.clear();
         type MarkerRow = ThreadCompactionRow & { rowid: number };
         if (!page.markers) {
           page.markers = new PricingPageMarkers();
@@ -3726,10 +3877,30 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           }
         }
         page.dirtyMarkers.clear();
-        return page.index.page({
-          ...params, markerRevision: page.markers.revision(), summaries: this.readStoredPricingSummaries(params),
+        const history = page.index.page({
+          ...params, merged: Boolean(overlay?.lines?.size || page.localIds.size),
+          markerRevision: page.markers.revision() + page.cards.revision(), summaries: this.readStoredPricingSummaries(params),
           markers: (lineIds, turns) => page.markers!.read(lineIds, turns),
         });
+        const tokenMiserGateTotals = addTokenMiserGateAccountingTotals(this.subAgentTable.gateTotals(storageKey), page.cards.adjustment);
+        if (page.accounting && page.prices) {
+          const prices = page.prices;
+          try {
+            page.accounting.project(history, tokenMiserGateTotals, {
+              gate: (id) => prices.gate(id) ?? overlay?.liveGate?.(id), parent: prices.parent, focusedCost: prices.focusedCost,
+              invocations: () => (prepareSqliteRead(db, `SELECT * FROM thread_tool_invocations WHERE backend = ? AND thread_id = ?
+                ORDER BY observed_at DESC, invocation_id DESC LIMIT 200`).all(backend, threadId) as ThreadToolInvocationRow[]).map(threadToolInvocationFromRow),
+            }, params.deferGates);
+          } catch (error) {
+            // Retry optional accounting through the ordinary reader, which can
+            // still serve ledger prices if the metadata store is unavailable.
+            overlay?.accountingFailed?.(error);
+            page.stop();
+            this.openPricingPages.delete(key);
+            return undefined;
+          }
+        }
+        return { ...history, tokenMiserGateTotals };
       })();
     } catch (error) {
       page.stop();
@@ -3740,30 +3911,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   }
 
   /** The alert total includes priced historical gaps and in-flight monitor usage. */
-  async readThreadSpendMicros(params: ThreadPricingReadParams & {
-    localModelIds: readonly string[];
-    liveLines: readonly ThreadUsageLineRecord[];
-    liveGates?: SpendGateLines;
-  }): Promise<number> {
+  readThreadSpendMicros(params: ThreadSpendRead & { thresholdMicros?: undefined }): Promise<number>;
+  readThreadSpendMicros(params: ThreadSpendRead & { thresholdMicros: number }): Promise<number | null>;
+  async readThreadSpendMicros(params: ThreadSpendRead & { thresholdMicros?: number }): Promise<number | null> {
     const db = this.stateDb.raw;
-    // The summary and gap probes share a SQLite snapshot. The partial
-    // indexes contain only main rows that could anchor a priced usage gap.
-    const readSummary = () => prepareSqliteRead(db, `
-      SELECT SUM(CASE WHEN UPPER(currency) = 'USD' THEN total_cost_micros ELSE 0 END) AS micros,
-             SUM(unpriced_usage_line_count) AS unpriced,
-             EXISTS (
-               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_spend_thread
-               WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
-                 AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL
-               UNION ALL
-               SELECT 1 FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_spend_parent
-               WHERE backend = @backend AND parent_thread_id = @threadId AND parent_thread_id IS NOT NULL
-                 AND status != 'superseded' AND model IS NOT NULL AND scope != 'monitor' AND cumulative_output_tokens IS NOT NULL
-             ) AS possible_gap
-        FROM thread_pricing_summaries INDEXED BY idx_thread_pricing_summaries_thread
-       WHERE backend = @backend AND thread_id = @threadId
-    `).get({ backend: params.backend, threadId: params.threadId }) as {
-      micros: number | null; unpriced: number | null; possible_gap: number;
+    // The summary and the indexed checks for exceptions share one SQLite snapshot.
+    const readSummary = () => prepareSqliteRead(db, THREAD_SPEND_SUMMARY).get({ backend: params.backend, threadId: params.threadId }) as {
+      micros: number | null; unpriced: number | null; ready: number | null;
+      direct_ceiling: number | null; parent_ceiling: number | null; direct_replacement: number | null; parent_replacement: number | null;
     };
     let summary = readSummary();
     if (summary.unpriced && this.firstUnpricedBatchHasModel(params)) {
@@ -3773,7 +3928,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (pending) await pending;
       summary = readSummary();
     }
-    if (!summary.possible_gap && !params.localModelIds.length && !params.liveLines.length && !params.liveGates?.size) return summary.micros ?? 0;
+    if (!params.localModelIds.length && !params.liveLines.length) {
+      const ceiling = Math.max(summary.direct_ceiling ?? 0, summary.parent_ceiling ?? 0,
+        summary.direct_replacement ?? 0, summary.parent_replacement ?? 0);
+      const stored = summary.micros ?? 0;
+      if (!ceiling && !params.liveGates?.size) return stored;
+      const live = params.liveGates?.size ? params.liveGates.positiveUsdMicros : 0;
+      // Replacing a stored nonnegative charge can only lower this gross sum.
+      // A possible crossing still needs the exact historical gaps and overlays.
+      const safeReplacements = !params.liveGates?.size || (summary.direct_replacement === null && summary.parent_replacement === null);
+      if (safeReplacements && summary.ready === 1 && live !== undefined && params.thresholdMicros !== undefined
+        && stored + live + ceiling * gapMicrosPerComponentToken < params.thresholdMicros) return null;
+    }
     // Never retain uncommitted caller state. Our own read transaction keeps
     // the spend checkpoint, changed rows, worker replacements and summary on
     // the same snapshot when another owner is writing this profile.
@@ -5138,7 +5304,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     backend: ThreadOverlayState["backend"];
     threadId: string;
   }): Promise<TokenMiserGateAccountingTotals> {
-    return this.subAgentTable.gateTotals(this.subAgentStorageKey(params));
+    const key = this.subAgentStorageKey(params);
+    this.subAgentTable.initializeGateTotals(key);
+    return this.subAgentTable.gateTotals(key);
   }
 
   /** Cards whose `monitorId` starts with `monitorIdPrefix`, keyed by thread id. */
@@ -7779,6 +7947,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     executionMode: ThreadExecutionMode;
     updatedAt?: number;
     codexSkillProfile?: ThreadOverlayState["codexSkillProfile"];
+    codexAgentToolsMcp?: true;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const stored = this.getThread(threadKey);
@@ -7792,6 +7961,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       executionMode: params.executionMode,
       executionModeUpdatedAt: params.updatedAt ?? Date.now(),
       ...(params.codexSkillProfile ? { codexSkillProfile: params.codexSkillProfile } : {}),
+      ...(params.codexAgentToolsMcp ? { codexAgentToolsMcp: true } : {}),
     };
     // Every turn start re-asserts the mode. Only an ACP thread reads the
     // timestamp (to rank the overlay against a provider snapshot), so an
@@ -7800,6 +7970,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       stored
       && stored.executionMode === nextState.executionMode
       && stored.codexSkillProfile === nextState.codexSkillProfile
+      && stored.codexAgentToolsMcp === nextState.codexAgentToolsMcp
       && (
         !isAcpBackendId(params.backend)
         || stored.executionModeUpdatedAt === nextState.executionModeUpdatedAt

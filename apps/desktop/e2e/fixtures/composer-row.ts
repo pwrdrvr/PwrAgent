@@ -1,13 +1,16 @@
 import { expect, type Locator, type Page } from "@playwright/test";
+import { openLaunchpadWherePanel } from "./launchpad-where";
 import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 /**
  * The composer's control row is one line. Controls that do not fit fold into
  * ⋮ (Thread options) in a fixed order: first the Details-bound controls
- * (environment, command, editor and terminal apps, workspace handoff), then
- * the environment ▶, dictation and attach. Which ones fold depends on the
- * pane's width, so these helpers drive a control in the row when it is there
- * and through ⋮ when it has folded.
+ * (editor and terminal apps, Plan, PR Auto-fix), then the Run split (the
+ * environment, its commands and ▶), dictation and attach. Which ones fold
+ * depends on the pane's width, so these helpers drive a control in the row
+ * when it is there and through ⋮ when it has folded. The Where icon never
+ * folds: a thread's directories and handoffs, and a new thread's project,
+ * checkout and environment, are in its panel.
  */
 export type ComposerFoldTier = "details" | "run" | "dictation" | "attach";
 
@@ -70,50 +73,88 @@ export async function closeComposerThreadOptions(page: Page): Promise<void> {
   await expect(menu).toBeHidden();
 }
 
+function isLaunchpadRow(page: Page): Promise<boolean> {
+  return composerRow(page).evaluate((row) => row.getAttribute("aria-label") === "New thread settings");
+}
+
+/** Which of the Run split's radio groups a picker name means. */
+function runSplitGroup(control: RegExp): "Environment" | "Command" {
+  return /command/i.test(control.source) ? "Command" : "Environment";
+}
+
+/** The Run split's menu half; it is named for the thread's environment. */
+function runSplitMenuButton(page: Page): Locator {
+  return composerRow(page).locator(".composer-run__menu-button");
+}
+
+async function openRunSplitMenu(page: Page): Promise<Locator> {
+  const menu = page.getByRole("menu", { name: "Environment and commands" });
+  if (!(await menu.isVisible())) await runSplitMenuButton(page).click();
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
 /**
- * Chooses `option` from a Details-bound dropdown in the row (the Environment
- * or Environment command picker, by its accessible name), or from the same
- * choice's radio group in ⋮ when it has folded.
+ * Chooses `option` for the environment or its command (`control` is the
+ * Environment or Environment command name). A thread's are in the Run
+ * split's menu, or ⋮ when it has folded; a new thread's environment is in
+ * its Where panel.
  */
 export async function chooseComposerOption(page: Page, control: RegExp, option: string): Promise<void> {
-  if (await isComposerTierFolded(page, "details", composerRowButton(page, control))) {
+  if (await isLaunchpadRow(page)) {
+    await openLaunchpadWherePanel(page);
+    await page.getByRole("dialog", { name: "Where this thread runs" })
+      .getByRole("button", { name: control }).click();
+    await page.getByRole("option", { name: option, exact: true }).click();
+    return;
+  }
+  if (await isComposerTierFolded(page, "run", runSplitMenuButton(page))) {
     const menu = await openComposerThreadOptions(page);
     await menu.getByRole("menuitemradio", { name: option, exact: true }).click();
     await expect(menu).toBeHidden();
     return;
   }
-  await composerRow(page).getByRole("button", { name: control, exact: true }).click();
-  await page.getByRole("option", { name: option, exact: true }).click();
+  const menu = await openRunSplitMenu(page);
+  await menu.getByRole("group", { name: runSplitGroup(control) })
+    .getByRole("menuitemradio", { name: option, exact: true }).click();
+  await expect(menu).toBeHidden();
 }
 
-/**
- * Expects a Details-bound dropdown to show `option`: its label in the row, or
- * the checked radio in ⋮ when it has folded.
- */
+/** Expects the environment or its command to be `option`, wherever it is chosen. */
 export async function expectComposerOption(page: Page, control: RegExp, option: string): Promise<void> {
-  if (await isComposerTierFolded(page, "details", composerRowButton(page, control))) {
+  if (await isLaunchpadRow(page)) {
+    await openLaunchpadWherePanel(page);
+    await expect(page.getByRole("dialog", { name: "Where this thread runs" })
+      .getByRole("button", { name: control })).toContainText(option);
+    return;
+  }
+  if (await isComposerTierFolded(page, "run", runSplitMenuButton(page))) {
     const menu = await openComposerThreadOptions(page);
     await expect(menu.getByRole("menuitemradio", { name: option, exact: true }))
       .toHaveAttribute("aria-checked", "true");
     await closeComposerThreadOptions(page);
     return;
   }
-  await expect(composerRow(page).getByRole("button", { name: control, exact: true }))
-    .toContainText(option);
+  const menu = await openRunSplitMenu(page);
+  await expect(menu.getByRole("group", { name: runSplitGroup(control) })
+    .getByRole("menuitemradio", { name: option, exact: true }))
+    .toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
 }
 
 /**
- * Expects the composer to offer no environment: no picker in the row, drawn
- * or folded, so none in ⋮ either.
+ * Expects the composer to offer no environment: no Run split in the row,
+ * drawn or folded, so none in ⋮ either.
  */
 export async function expectNoComposerEnvironment(page: Page): Promise<void> {
   await expect(composerRow(page)).toHaveAttribute("data-folded-tiers", /^\d$/);
-  await expect(composerRowButton(page, /^Environment(?::|$)/)).toHaveCount(0);
+  await expect(runSplitMenuButton(page)).toHaveCount(0);
 }
 
-/** Runs the selected environment command: the row's ▶, or its ▶ in ⋮. */
+/** Runs the selected environment command: the Run split's ▶, or its ▶ in ⋮. */
 export async function runComposerCommand(page: Page): Promise<void> {
-  if (await isComposerTierFolded(page, "run", composerRowButton(page, "Run"))) {
+  if (await isComposerTierFolded(page, "run", runSplitMenuButton(page))) {
     const menu = await openComposerThreadOptions(page);
     await menu
       .locator(".composer-thread-options__command", { has: page.locator("[aria-checked='true']") })
@@ -122,18 +163,29 @@ export async function runComposerCommand(page: Page): Promise<void> {
     await expect(menu).toBeHidden();
     return;
   }
-  await composerRow(page).getByRole("button", { name: "Run", exact: true }).click();
+  await composerRow(page).locator(".composer-run__run").click();
 }
 
-/** Picks a workspace handoff action from the row's Workspace mode menu, or from ⋮. */
-export async function chooseComposerWorkspaceAction(page: Page, action: string): Promise<void> {
-  if (await isComposerTierFolded(page, "details", composerRowButton(page, /^Workspace mode(?::|$)/))) {
-    const menu = await openComposerThreadOptions(page);
-    await menu.getByRole("menuitem", { name: action, exact: true }).click();
-    return;
+/** Opens a thread's Where panel: its directories, Add directory, and handoffs. */
+export async function openComposerWherePanel(page: Page): Promise<Locator> {
+  const panel = page.getByRole("dialog", { name: "Where this thread runs" });
+  if (!(await panel.isVisible())) {
+    await composerRow(page).getByRole("button", { name: /^Where:/ }).click();
   }
-  await composerRow(page).getByLabel(/^Workspace mode(?::|$)/).click();
-  await page.getByRole("menuitem", { name: action, exact: true }).click();
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
+export async function closeComposerWherePanel(page: Page): Promise<void> {
+  const panel = page.getByRole("dialog", { name: "Where this thread runs" });
+  if (await panel.isVisible()) await composerRow(page).getByRole("button", { name: /^Where:/ }).click();
+  await expect(panel).toBeHidden();
+}
+
+/** Picks a workspace handoff action from the thread's Where panel. */
+export async function chooseComposerWorkspaceAction(page: Page, action: string): Promise<void> {
+  const panel = await openComposerWherePanel(page);
+  await panel.getByRole("button", { name: action, exact: true }).click();
 }
 
 /**

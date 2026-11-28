@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } fro
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import {
@@ -27,6 +27,7 @@ import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
 const mocks = vi.hoisted(() => ({
+  windowsJobLauncher: undefined as string | undefined,
   profileStore: undefined as SqliteOverlayStore | undefined,
   messaging: {
     findActiveBindings: vi.fn(async () => []),
@@ -43,6 +44,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
+vi.mock("../windows-job-launcher-path", () => ({ windowsJobLauncherPath: () => mocks.windowsJobLauncher }));
 
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
@@ -55,6 +57,7 @@ type GitLaunchRecord = {
   cwd: string;
   args: string[];
   purpose: GitSubprocessPurpose;
+  failed?: boolean;
 };
 
 const git = (cwd: string, ...args: string[]) => runIsolatedGitSync(cwd, args).trim();
@@ -335,8 +338,13 @@ async function createRealGitSidebarFixture(catalogCount: number) {
   const launches: GitLaunchRecord[] = [];
   const originalStartGit = gitSubprocessDiagnostics.startGit;
   const startGitSpy = vi.spyOn(gitSubprocessDiagnostics, "startGit").mockImplementation((cwd, args, purpose) => {
-    launches.push({ cwd, args: [...args], purpose: purpose ?? "unspecified" });
-    return originalStartGit.call(gitSubprocessDiagnostics, cwd, args, purpose);
+    const launch: GitLaunchRecord = { cwd, args: [...args], purpose: purpose ?? "unspecified" };
+    launches.push(launch);
+    const finish = originalStartGit.call(gitSubprocessDiagnostics, cwd, args, purpose);
+    return (failed) => {
+      launch.failed = failed;
+      finish(failed);
+    };
   });
   const userRefreshSpy = vi.spyOn(GitUserRefreshBudget.prototype, "tryTake");
 
@@ -387,6 +395,14 @@ async function createRealGitSidebarFixture(catalogCount: number) {
 }
 
 describe("desktop sidebar background stack Git reuse", () => {
+  beforeAll(() => {
+    if (process.platform !== "win32") return;
+    // Keep the real Windows Job boundary without starting a PowerShell
+    // compiler host for every Git command during the cold observation.
+    mocks.windowsJobLauncher = inject("nativeHelperFixtures").windowsGitJobLauncher;
+    if (!mocks.windowsJobLauncher) throw new Error("The compiled Windows Git Job launcher fixture was not prepared");
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -397,6 +413,13 @@ describe("desktop sidebar background stack Git reuse", () => {
     { catalogCount: 16, label: "sixteen warm catalogs" },
   ])("spends zero stack Git launches and zero user-refresh tokens across seen, reaction, rename, and unrelated PR status updates with $label", { timeout: 60_000 }, async ({ catalogCount }) => {
     const fixture = await createRealGitSidebarFixture(catalogCount);
+    const wallStart = Date.now();
+    const monotonicStart = performance.now();
+    let elapsed = 0;
+    // Both clocks participate in Git freshness. Advance past page retention
+    // between events and keep Git warm independently of runner speed.
+    const wallClock = vi.spyOn(Date, "now").mockImplementation(() => wallStart + elapsed);
+    const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => monotonicStart + elapsed);
     try {
       // Cold warm-up for both owner and viewer across exact, children, and directory pages.
       const warmOwner = await fixture.readPages("owner");
@@ -405,9 +428,16 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(warmViewer.exact.entries.find((e) => e.row.id === "bound-parent")?.row.stackMemberships).toHaveLength(1);
       expect(warmOwner.children.entries.map((e) => e.row.id)).toContain("bound-child");
       expect(warmOwner.directory.entries.map((e) => e.row.id)).toContain("bound-parent");
-      expect(countLaunches(fixture.launches).stackStatus).toBeGreaterThanOrEqual(catalogCount * 2);
+      const coldStatus = fixture.launches.filter(({ purpose, args }) =>
+        purpose === "stack-status" && (args[0] === "worktree" || args[0] === "for-each-ref"));
+      expect(coldStatus.filter(({ failed }) => failed !== false)).toEqual([]);
+      for (const command of ["worktree", "for-each-ref"]) {
+        expect(new Set(coldStatus.filter(({ args }) => args[0] === command).map(({ cwd }) => cwd)).size)
+          .toBeGreaterThanOrEqual(catalogCount);
+      }
 
       // 1. Mark row seen (updates SQLite threads -> advances owner navigation source version + event).
+      elapsed += 1_500;
       const ownerVersionBeforeSeen = fixture.overlayStore.readOwnerNavigationSourceVersion();
       fixture.resetCounters();
       await fixture.overlayStore.markThreadSeen({
@@ -429,6 +459,7 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(seenViewer.directory.entries.find((e) => e.row.id === "bound-parent")?.row.inbox.lastSeenUpdatedAt).toBe(2_000);
 
       // 2. Change reaction (updates SQLite threads -> advances owner navigation source version + event).
+      elapsed += 1_500;
       const ownerVersionBeforeReaction = fixture.overlayStore.readOwnerNavigationSourceVersion();
       fixture.resetCounters();
       await fixture.overlayStore.setThreadReaction({
@@ -449,6 +480,7 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(reactionViewer.exact.entries.find((e) => e.row.id === "bound-parent")?.row.reactions).toEqual(["rocket"]);
 
       // 3. Rename row (both row title AND stack layer thread title must update with zero Git launches).
+      elapsed += 1_500;
       fixture.resetCounters();
       fixture.setParentTitle("Renamed stack parent");
       fixture.setChildTitle("Renamed stack child");
@@ -466,6 +498,7 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(stackLayer?.layer.thread?.title).toBe("Renamed stack parent");
 
       // 4. Unrelated pullRequest/status/updated for a PR in another repository.
+      elapsed += 1_500;
       fixture.resetCounters();
       const unrelatedPr: PrSummary = {
         provider: "github.com",
@@ -489,6 +522,8 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(prOwner.exact.entries.find((e) => e.row.id === "bound-parent")?.row.stackMemberships).toHaveLength(1);
       expect(prViewer.exact.entries.find((e) => e.row.id === "bound-parent")?.row.stackMemberships).toHaveLength(1);
     } finally {
+      monotonicClock.mockRestore();
+      wallClock.mockRestore();
       await fixture.cleanup();
     }
   });
@@ -655,11 +690,19 @@ describe("desktop sidebar background stack Git reuse", () => {
       const afterCatalog = await fixture.readOwnerIndex();
       expect(readBoundLayer(afterCatalog)?.layer.health).toBe("in_sync");
 
-      // 6. Expired observation (advance past STACK_DETAIL_REUSE_MS) must re-run live stack-status Git.
+      // 6. A rename after expiry must refresh the two clones even though only the title changed.
       fixture.resetCounters();
       now += STACK_DETAIL_REUSE_MS + 1;
-      await fixture.readOwnerIndex();
-      expect(countLaunches(fixture.launches).stackStatus).toBeGreaterThanOrEqual(4);
+      const expiredTitle = "Renamed after Git status expired";
+      fixture.setParentTitle(expiredTitle);
+      fixture.emit("thread/name/updated", { threadId: "bound-parent", threadName: expiredTitle, titleSource: "explicit" });
+      const afterExpiry = await fixture.readOwnerIndex();
+      expect(readBoundLayer(afterExpiry)?.layer.thread?.title).toBe(expiredTitle);
+      const expiredLaunches = countLaunches(fixture.launches);
+      expect(expiredLaunches.stackStatus).toBe(4);
+      expect(expiredLaunches.byArgv.get("stack-status:worktree")).toBe(2);
+      expect(expiredLaunches.byArgv.get("stack-status:for-each-ref")).toBe(2);
+      expect(fixture.userRefreshSpy).not.toHaveBeenCalled();
 
       // 7. Authoritative scopes (scoped StackReader.read and invalidated selected-stack-detail) always run live Git.
       const reader = new StackReader(() => now);

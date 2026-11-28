@@ -155,9 +155,9 @@ export function runPrMetadataGit(
     onAdmitted?.();
     return runGitCommand(cwd, args, demand?.signal ? {
       ...options,
-      beforeSpawn: (executable) => {
+      beforeSpawn: (executable, env) => {
         demand.signal?.throwIfAborted();
-        options?.beforeSpawn?.(executable);
+        options?.beforeSpawn?.(executable, env);
       },
     } : options);
   }, demand);

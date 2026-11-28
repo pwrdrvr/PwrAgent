@@ -627,6 +627,7 @@ import {
   type AgentToolMcpClientContext,
   type AgentToolMcpRegistration,
   type AgentToolMcpServerLike,
+  type CodexAgentToolMcpResult,
   type ResolvedAgentToolMcpCallContext,
 } from "../agent-tools/agent-tool-mcp-server";
 
@@ -899,8 +900,10 @@ import {
   readRecord,
 } from "./backend-registry-notification-values";
 import {
+  PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME,
   TOKEN_MISER_MANAGED_CAPABILITY_REASON,
   buildClaudeConnectionMcpServerName,
+  buildCodexAgentToolsMcpConfig,
   buildCodexConnectionMcpConfig,
   buildCodexParentDynamicToolSpecs,
   buildCodexPdfMcpConfig,
@@ -1150,7 +1153,7 @@ export class DesktopBackendRegistry {
   private readonly acpSessionRuntimeOptions: AcpSessionRuntimeOptions;
   private readonly threadModelSettings: ThreadModelSettings;
   private readonly claudeBackend: ClaudeBackend;
-  private readonly claudeAgentToolMcpServer?: AgentToolMcpServerLike;
+  private readonly agentToolMcpServer?: AgentToolMcpServerLike;
   private closed = false;
   private shutdownRequested = false;
   private closeOperation?: Promise<void>;
@@ -1424,8 +1427,9 @@ export class DesktopBackendRegistry {
    */
   private readonly observedThreadNames = new Map<
     string,
-    { title: string; titleSource: AppServerRenamedTitleSource }
+    { title: string; titleSource: AppServerRenamedTitleSource; observationSequence: number }
   >();
+  private lastThreadNameEventSequence = 0;
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private readonly queuedMessageTitler: QueuedMessageTitler;
@@ -1913,6 +1917,7 @@ export class DesktopBackendRegistry {
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
   private readonly resolveCodexToolDiscoveryFn: () => boolean;
+  private readonly resolveCodexAgentToolsMcpFn: () => boolean;
   private readonly resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   private readonly resolveProviderModelDefaultsFn: () => Record<
     string,
@@ -1983,7 +1988,7 @@ export class DesktopBackendRegistry {
         threadId: caller.threadId, turnId: caller.turnId ?? "",
         requestId: `bounded-command-${randomUUID()}`, serverName: "PwrAgent Token Miser",
         mode: "form", requestedSchema: { type: "object", properties: {} },
-        message: `Allow Token Miser to retain output from one native shell invocation of ${command}? The command uses the shell's working directory and permissions. Its full output will be available to this turn for up to five minutes.${helper ? ` Relevant excerpts may be sent to ${helper}.` : ""}`,
+        message: `Allow Token Miser to retain output from one native shell invocation of ${command}? The command uses the shell's working directory and permissions. Its full output will be available to this turn for up to five minutes.${helper ? ` The command, bounded output, and recent assistant message may be sent to ${helper}.` : ""}`,
         _meta: null,
       },
     });
@@ -2069,6 +2074,7 @@ export class DesktopBackendRegistry {
     this.pendingEnvironmentLaunchStore = dependencies.pendingEnvironmentLaunchStore;
     this.resolveCodexDefaultModeRequestUserInputFn = dependencies.resolveCodexDefaultModeRequestUserInputFn;
     this.resolveCodexToolDiscoveryFn = dependencies.resolveCodexToolDiscoveryFn;
+    this.resolveCodexAgentToolsMcpFn = dependencies.resolveCodexAgentToolsMcpFn;
     this.resolveDefaultPrAutoDispatchEnabledFn = dependencies.resolveDefaultPrAutoDispatchEnabledFn;
     this.resolveProviderModelDefaultsFn = dependencies.resolveProviderModelDefaultsFn;
     this.resolveHelperModelSettingsFn = dependencies.resolveHelperModelSettingsFn;
@@ -2115,7 +2121,7 @@ export class DesktopBackendRegistry {
     this.worktreeArchiveService = dependencies.worktreeArchiveService;
     this.worktreeRecoveryService = dependencies.worktreeRecoveryService;
     this.pdfToolMcpServer = dependencies.pdfToolMcpServer;
-    this.claudeAgentToolMcpServer = dependencies.claudeAgentToolMcpServer;
+    this.agentToolMcpServer = dependencies.agentToolMcpServer;
     this.claudeBackend = dependencies.claudeBackend;
     this.acpBackend = dependencies.acpBackend;
     this.acpSessionRuntimeOptions = dependencies.acpSessionRuntimeOptions;
@@ -2263,6 +2269,7 @@ export class DesktopBackendRegistry {
       beginStartingTurnOrigin: (...args: Parameters<typeof this.beginStartingTurnOrigin>) => this.beginStartingTurnOrigin(...args),
       bindStartingTurnOrigin: (...args: Parameters<typeof this.bindStartingTurnOrigin>) => this.bindStartingTurnOrigin(...args),
       buildForkedCodexEnvironmentRuntime: (...args: Parameters<ThreadDirectoryService["buildForkedCodexEnvironmentRuntime"]>) => this.threadDirectoryService.buildForkedCodexEnvironmentRuntime(...args),
+      buildCodexAgentToolsMcpConfigForThread: (...args: Parameters<typeof this.buildCodexAgentToolsMcpConfigForThread>) => this.buildCodexAgentToolsMcpConfigForThread(...args),
       buildSupportedCodexDynamicToolsRefresh: (...args: Parameters<typeof this.buildSupportedCodexDynamicToolsRefresh>) => this.buildSupportedCodexDynamicToolsRefresh(...args),
       buildSupportedCodexTokenMiserConfig: (...args: Parameters<typeof this.buildSupportedCodexTokenMiserConfig>) => this.buildSupportedCodexTokenMiserConfig(...args),
       buildSupportedPwrdrvrTokenMiserActivation: (...args: Parameters<typeof this.buildSupportedPwrdrvrTokenMiserActivation>) => this.buildSupportedPwrdrvrTokenMiserActivation(...args),
@@ -2392,6 +2399,7 @@ export class DesktopBackendRegistry {
       publishIncomingWork: (...args: Parameters<typeof this.publishIncomingWork>) => this.publishIncomingWork(...args),
       publishLiveTokenMiserLedgerEntryInOrder: (...args: Parameters<ThreadUsageLedger["publishLiveTokenMiserLedgerEntryInOrder"]>) => this.threadUsageLedger.publishLiveTokenMiserLedgerEntryInOrder(...args),
       publishLocalEvent: (...args: Parameters<typeof this.publishLocalEvent>) => this.publishLocalEvent(...args),
+      publishNativeVoiceMcpToolCall: (call: CodexAgentToolMcpResult) => this.publishNativeVoiceMcpToolCall(call),
       readCausalMessagingContext: (...args: Parameters<typeof this.readCausalMessagingContext>) => this.readCausalMessagingContext(...args),
       readTurnCausalMessagingOrigin: (context: Parameters<typeof this.readTurnCausalMessagingOrigin>[0]) => this.readTurnCausalMessagingOrigin(context),
       readCodexDefaultModelsOnce: (...args: Parameters<typeof this.readCodexDefaultModelsOnce>) => this.readCodexDefaultModelsOnce(...args),
@@ -2407,6 +2415,7 @@ export class DesktopBackendRegistry {
       recordCodexWorktreeOwnerThread: (...args: Parameters<typeof this.recordCodexWorktreeOwnerThread>) => this.recordCodexWorktreeOwnerThread(...args),
       recordMissingCodexThread: (...args: Parameters<typeof this.recordMissingCodexThread>) => this.recordMissingCodexThread(...args),
       recordQueuedMessageTitle: (...args: Parameters<typeof this.recordQueuedMessageTitle>) => this.recordQueuedMessageTitle(...args),
+      recordOpenAIDecisionsUsageLines: (lines: ThreadUsageLineRecord[]) => this.recordOpenAIDecisionsUsageLines(lines),
       recordTokenMiserHelperInference: (...args: Parameters<ThreadUsageLedger["recordTokenMiserHelperInference"]>) => this.threadUsageLedger.recordTokenMiserHelperInference(...args),
       redescribeCachedCodexRuntime: (...args: Parameters<typeof this.redescribeCachedCodexRuntime>) => this.redescribeCachedCodexRuntime(...args),
       refreshCodexProviderCatalogs: (...args: Parameters<typeof this.refreshCodexProviderCatalogs>) => this.refreshCodexProviderCatalogs(...args),
@@ -2430,6 +2439,7 @@ export class DesktopBackendRegistry {
       get resolveCodexModelProviderKeysFn() { return current().resolveCodexModelProviderKeysFn; },
       get resolveCodexModelProvidersFn() { return current().resolveCodexModelProvidersFn; },
       resolveCodexThreadExecutionModeForActiveTurn: (...args: Parameters<typeof this.resolveCodexThreadExecutionModeForActiveTurn>) => this.resolveCodexThreadExecutionModeForActiveTurn(...args),
+      resolveCodexAgentToolsMcpResumeConfig: (...args: Parameters<typeof this.resolveCodexAgentToolsMcpResumeConfig>) => this.resolveCodexAgentToolsMcpResumeConfig(...args),
       resolveCodexToolCallExecutionMode: (...args: Parameters<typeof this.resolveCodexToolCallExecutionMode>) => this.resolveCodexToolCallExecutionMode(...args),
       get resolveDefaultPrAutoDispatchEnabledFn() { return current().resolveDefaultPrAutoDispatchEnabledFn; },
       resolveForgeToolPolicy: (...args: Parameters<ForgeToolBridge["resolveForgeToolPolicy"]>) => this.forgeToolBridge.resolveForgeToolPolicy(...args),
@@ -2508,6 +2518,7 @@ export class DesktopBackendRegistry {
       get openAIDecisionsHandler() { return current().openAIDecisionsHandler; },
       get checkoutHandler() { return current().checkoutHandler; },
       resourceCheckoutToolMode: (thread: { backend: AppServerBackendKind; threadId?: string }) => this.resourceCheckoutToolMode(thread),
+      get advertisedResearchHandler() { return current().advertisedResearchHandler; },
       get mcpResearchHandler() { return current().mcpResearchHandler; },
       isResearchDecisionsReady: () => current().isResearchDecisionsReady(),
       get threadTurnQueue() { return current().threadTurnQueue; },
@@ -3882,7 +3893,7 @@ export class DesktopBackendRegistry {
   async stackRepairActive(thread: StackThreadRef): Promise<boolean> {
     // The queue owns the fix during preparation, before a backend turn has
     // a starting origin. A review waiting for admission owns no queue entry.
-    if (this.threadTurnQueue.hasActiveReviewAutoFix(thread)) return true;
+    if (this.threadTurnQueue.hasActiveReviewAutoFix(thread, { includePublishingTerminal: false })) return true;
     const active = this.getActiveTurnForThread(thread);
     const starting = this.findStartingTurnOrigin(active ?? thread);
     const isRepair = (origin?: AppServerThreadMessageOrigin, reviewFix?: boolean) =>
@@ -4179,7 +4190,7 @@ export class DesktopBackendRegistry {
     if ((!policy || policy.enabledBackends.includes("claude")) && (request.refreshModels === true || request.refreshModels === "claude")) {
       await this.claudeBackend.discover();
     }
-    const refreshAntigravityQuota = request.refreshRateLimits === true
+    const refreshAntigravityQuota = request.refreshAntigravityQuota === true
       && (!policy || policy.enabledBackends.includes("acp:antigravity"));
     const acpSummaries = !policy || policy.enabledBackends.some(isAcpBackendId)
       ? await this.acpBackend.describeInstalledBackends(refreshAntigravityQuota)
@@ -4389,7 +4400,7 @@ export class DesktopBackendRegistry {
           ...(overlay?.extraLinkedDirectories ?? []),
           ...(cachedDirectory ? [cachedDirectory] : []),
         ]),
-      });
+      }, pending.observationSequence);
       result.push(projected);
     }
     checkDeadline();
@@ -4766,7 +4777,13 @@ export class DesktopBackendRegistry {
         // Point reads omit checkout and runtime facts supplied by discovery.
         // Keep those facts and take the activity watermark and acknowledged title.
         const { title, titleSource } = projectOwnerThreadTitle(native, await this.overlayStore.getThreadMetadata?.(ref));
-        summary = this.withObservedThreadName({ ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt });
+        // Only Codex has a listing that can trail this read; other backends
+        // answer it from the store their rename wrote.
+        summary = this.withObservedThreadName(
+          { ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt },
+          observation,
+          ref.backend !== "codex",
+        );
       }
     }
     if (!summary) return undefined;
@@ -4790,6 +4807,7 @@ export class DesktopBackendRegistry {
     if (this.closed || (ref.backend === "codex" && this.isCodexBootstrapDeferredFn())) {
       throw new Error("Thread link discovery is unavailable.");
     }
+    const observationSequence = this.reserveThreadInfoObservation();
     const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
     const overlay = (await readOverlays.call(this.overlayStore, {
       backend: ref.backend, threadIds: [ref.threadId],
@@ -4830,7 +4848,7 @@ export class DesktopBackendRegistry {
           : ref.backend === "claude" ? thread.executionMode ?? overlay?.executionMode : overlay?.executionMode ?? thread.executionMode,
         model: overlay?.model ?? thread.model,
         reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
-      }),
+      }, observationSequence),
     };
   }
 
@@ -4992,10 +5010,12 @@ export class DesktopBackendRegistry {
     overlay: ThreadOverlayState | undefined,
     forVoice = false,
   ) {
+    if (overlay?.codexAgentToolsMcp && client.replaceThreadDeveloperInstructions) return undefined;
     const tools = await this.buildSupportedCodexDynamicToolsRefresh({
       client,
       threadId,
       tokenMiserEnabled: this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+      codexAgentToolsMcp: overlay?.codexAgentToolsMcp,
     });
     if (tools === undefined || !client.refreshThreadTools) {
       throw new Error(forVoice
@@ -5030,10 +5050,16 @@ export class DesktopBackendRegistry {
             await client.replaceThreadDeveloperInstructions({
               threadId: params.threadId,
               dynamicTools,
+              ...(overlay?.codexAgentToolsMcp ? {
+                config: await this.buildCodexAgentToolsMcpConfigForThread(
+                  params.threadId,
+                  this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+                ),
+              } : {}),
               developerInstructions: instructions,
               updateMessage: buildCodexAgentInstructionUpdate(instructions),
             });
-          } else {
+          } else if (dynamicTools !== undefined) {
             await client.refreshThreadTools!({ threadId: params.threadId, dynamicTools });
           }
         });
@@ -8235,17 +8261,23 @@ export class DesktopBackendRegistry {
     )) {
       await this.threadUsageLedger.repairTokenMiserHistory(request.threadId);
     }
-    const pricingHistoryPage = resource === "pricing" && backend !== "codex" && !request.display.pricingGateGroup
-      ? await this.overlayStore.readThreadPricingPage?.({ backend, threadId: request.threadId, ...threadDisplayRange(request.display) })
+    const pricingOverlay = resource === "pricing" && backend === "codex" ? this.threadUsageLedger.pricingPageOverlay(request.threadId) : undefined;
+    const pricingHistoryPage = resource === "pricing" && (backend !== "codex" || pricingOverlay)
+      ? await this.overlayStore.readThreadPricingPage?.({
+          backend, threadId: request.threadId, ...threadDisplayRange(request.display),
+          overlay: pricingOverlay, gateSelection: request.display.pricingGateGroup, deferGates: request.display.deferPricingGates,
+        })
       : undefined;
-    if (pricingHistoryPage) {
-      const tokenMiserGateTotals = await this.overlayStore.readThreadTokenMiserGateTotals({ backend, threadId: request.threadId });
+    if (pricingHistoryPage && (backend !== "codex" || pricingHistoryPage.summary)) {
+      const thread = { backend, threadId: request.threadId };
+      const accounting = backend === "codex" && this.tokenMiserStore && !pricingHistoryPage.savings ? await this.overlayStore.readThreadToolAccounting(thread) : undefined;
+      const toolAccounting = accounting ? await this.threadUsageLedger.withTokenMiserAccounting({ ...thread, accounting }) : undefined;
       return projectThreadDisplay({
-        backend, threadId: request.threadId, fetchedAt: Date.now(),
+        ...thread, fetchedAt: Date.now(), toolAccounting,
         replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
       }, request, {
-        ...overlay, pricingHistoryPage, tokenMiserGateTotals,
-        activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
+        ...overlay, pricingHistoryPage, tokenMiserGateTotals: pricingHistoryPage.tokenMiserGateTotals,
+        activeTurnId: this.getActiveTurnForThread(thread)?.turnId,
       });
     }
     const pricing = await this.threadUsageLedger.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
@@ -9524,6 +9556,7 @@ export class DesktopBackendRegistry {
       pendingStart: _pendingStart,
       ...request
     } = params;
+    const useAgentToolsMcp = backend === "codex" && this.resolveCodexAgentToolsMcpFn();
     const skillProfile = backend === "codex" && codexSkillProfileId
       ? getDesktopSettingsService().readModelsConfig().codex?.skillProfiles?.find(({ id }) => id === codexSkillProfileId)
       : undefined;
@@ -9652,7 +9685,7 @@ export class DesktopBackendRegistry {
     const tokenMiserEnabled = backend === "codex"
       && this.resolveTokenMiserEnabledForOverride(tokenMiserOverride);
     const runtimePreparation = resources.track(tokenMiserEnabled ? this.prepareTokenMiserRuntime() : Promise.resolve());
-    const agentToolCatalogs = resolveAgentToolCatalogs({
+    const agentToolCatalogs = useAgentToolsMcp ? [] : resolveAgentToolCatalogs({
       appManagementHandler: this.appManagementHandler,
       currentTurnInputSource: this.currentTurnInputSource,
       automationInspectionHandler: this.automationInspectionHandler,
@@ -9687,6 +9720,12 @@ export class DesktopBackendRegistry {
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
         ? this.registerPdfMcpClient({})
         : Promise.resolve(undefined));
+    const agentToolsMcpPreparation = resources.registerConnections(useAgentToolsMcp
+      ? this.registerCodexAgentToolsMcp({ tokenMiserEnabled }).then((registration) => [{
+          ...registration,
+          revoke: () => registration.revokeUnbound?.(),
+        }])
+      : Promise.resolve([]));
     const deferAcpConnections = backend === "acp:antigravity";
     const connectionPreparation = resources.registerConnections(backend === "codex" || (isAcpBackendId(backend) && !deferAcpConnections)
       ? this.threadMcpConnections.registerMcpConnections(mcpConnectionIds, undefined, backend)
@@ -9696,7 +9735,7 @@ export class DesktopBackendRegistry {
       ? this.threadMcpConnections.readConfiguredCodexMcpServerNames(cwd)
       : Promise.resolve(undefined));
     const resolvedDynamicTools =
-      backend === "codex"
+      backend === "codex" && !useAgentToolsMcp
         ? withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(agentToolCatalogs), this.resolveCodexToolDiscoveryFn())
         : undefined;
     // Custom MCP servers can report READY without Codex exposing their tools
@@ -9704,8 +9743,8 @@ export class DesktopBackendRegistry {
     const dynamicTools = resolvedDynamicTools?.length
       ? resolvedDynamicTools
       : undefined;
-    const [pdfMcpRegistration, preparedMcpRegistrations, inheritedCodexMcpServerNames] = await joinConcurrent([
-      pdfMcpPreparation, connectionPreparation, inventoryPreparation, runtimePreparation,
+    const [pdfMcpRegistration, preparedMcpRegistrations, inheritedCodexMcpServerNames, [agentToolsMcpRegistration]] = await joinConcurrent([
+      pdfMcpPreparation, connectionPreparation, inventoryPreparation, agentToolsMcpPreparation, runtimePreparation,
     ]);
     const pdfMcpConfig = pdfMcpRegistration
       ? buildCodexPdfMcpConfig(pdfMcpRegistration)
@@ -9733,6 +9772,7 @@ export class DesktopBackendRegistry {
     const codexThreadConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
       connectionMcpConfig,
+      agentToolsMcpRegistration ? buildCodexAgentToolsMcpConfig(agentToolsMcpRegistration) : undefined,
       tokenMiserConfig,
     );
     const toAcpMcpRegistration = (registrations: typeof preparedMcpRegistrations): AcpMcpServerRegistration | undefined =>
@@ -9904,6 +9944,7 @@ export class DesktopBackendRegistry {
           await this.overlayStore.setThreadExecutionMode({
             ...identity, executionMode: effectiveExecutionMode,
             ...(codexSkillProfile ? { codexSkillProfile } : {}),
+            ...(useAgentToolsMcp ? { codexAgentToolsMcp: true } : {}),
           });
           metadata.codexSkillProfile = codexSkillProfile;
         } catch (error) {
@@ -10160,6 +10201,7 @@ export class DesktopBackendRegistry {
         : buildLocalLinkedDirectory(cwd);
     let result: { threadId: string };
     let pdfMcpRegistration: AgentToolMcpRegistration | undefined;
+    let agentToolsMcpRegistration: AgentToolMcpRegistration | undefined;
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
     if (backend === "claude") {
@@ -10205,11 +10247,6 @@ export class DesktopBackendRegistry {
           client,
           enabled: tokenMiserEnabled,
         });
-        const codexThreadConfig = mergeCodexThreadConfigs(
-          pdfMcpConfig,
-          tokenMiserConfig,
-        );
-
         try {
           const sourceRuntime = directoryKind === "workspace"
             ? undefined
@@ -10244,6 +10281,14 @@ export class DesktopBackendRegistry {
             worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
           };
         }
+        if (sourceOverlay?.codexAgentToolsMcp) {
+          agentToolsMcpRegistration = await this.registerCodexAgentToolsMcp({ tokenMiserEnabled });
+        }
+        const codexThreadConfig = mergeCodexThreadConfigs(
+          pdfMcpConfig,
+          agentToolsMcpRegistration ? buildCodexAgentToolsMcpConfig(agentToolsMcpRegistration) : undefined,
+          tokenMiserConfig,
+        );
         result = await this.withArchiveWorkspaceWrite([cwd ?? "", ...linkedDirectories.map((directory) => linkedDirectoryWorktreePath(directory) ?? directory.path)], async () => await this.forkCodexThreadWithPendingStart(client, {
           threadId: request.sourceThreadId,
           ...(request.sourceThreadPath?.trim()
@@ -10259,7 +10304,9 @@ export class DesktopBackendRegistry {
           ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
         }, pending, codexEnvironmentStartupFailure));
         pdfMcpRegistration?.bindThread(result.threadId);
+        agentToolsMcpRegistration?.bindThread(result.threadId);
       } catch (error) {
+        agentToolsMcpRegistration?.revokeUnbound?.();
         await preparedWorkspace.rollback?.();
         request.onPreparedWorkspaceRollback?.(undefined);
         throw error;
@@ -10318,6 +10365,7 @@ export class DesktopBackendRegistry {
         ...(backend === "codex" && sourceOverlay?.codexSkillProfile
           ? { codexSkillProfile: sourceOverlay.codexSkillProfile }
           : {}),
+        ...(agentToolsMcpRegistration ? { codexAgentToolsMcp: true } : {}),
       });
       if (backend === "codex" && sourceOverlay?.tokenMiserEnabled !== undefined) {
         await this.overlayStore.setThreadTokenMiser({
@@ -12433,6 +12481,36 @@ export class DesktopBackendRegistry {
       : "render_initial_pages";
   }
 
+  private async registerCodexAgentToolsMcp(params: {
+    threadId?: string;
+    tokenMiserEnabled: boolean;
+  }): Promise<AgentToolMcpRegistration> {
+    if (!this.agentToolMcpServer) {
+      throw new Error("PwrAgent tools via MCP are unavailable on this instance.");
+    }
+    return await this.agentToolMcpServer.registerClient({ backend: "codex", ...params });
+  }
+
+  private async buildCodexAgentToolsMcpConfigForThread(
+    threadId: string,
+    tokenMiserEnabled: boolean,
+  ) {
+    return buildCodexAgentToolsMcpConfig(await this.registerCodexAgentToolsMcp({ threadId, tokenMiserEnabled }));
+  }
+
+  private async resolveCodexAgentToolsMcpResumeConfig(
+    threadId: string,
+    config: CodexThreadStartParams["config"],
+  ): Promise<CodexThreadStartParams["config"]> {
+    if (readRecord(config?.mcp_servers)?.[PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME]) return config;
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend: "codex", threadId });
+    if (!overlay?.codexAgentToolsMcp) return config;
+    const ownedMcp = await this.buildCodexAgentToolsMcpConfigForThread(
+      threadId, this.resolveTokenMiserEnabledForOverride(overlay.tokenMiserEnabled),
+    );
+    return mergeCodexThreadConfigs(config, ownedMcp);
+  }
+
   private async registerPdfMcpClient(params: {
     threadId?: string;
   }): Promise<AgentToolMcpRegistration | undefined> {
@@ -12637,7 +12715,7 @@ export class DesktopBackendRegistry {
           for (const registration of registrations) registration.bindThread(params.threadId);
           // As for ACP, PwrAgent's own tools are optional: a server that cannot
           // start must not block the operator's turn.
-          const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId })
+          const owned = await this.agentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId })
             .catch((error: unknown) => {
               backendRegistryLog.warn("agent_tool_mcp_start_failed", {
                 backend: "claude",
@@ -12887,6 +12965,9 @@ export class DesktopBackendRegistry {
         const pdfPreparation = hasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
           ? this.registerPdfMcpClient({ threadId: params.threadId })
           : Promise.resolve(undefined);
+        const agentToolsMcpPreparation = overlay?.codexAgentToolsMcp
+          ? this.buildCodexAgentToolsMcpConfigForThread(params.threadId, tokenMiserEnabledForThread)
+          : Promise.resolve(undefined);
         // Re-read per turn so a mid-thread change to the selection or the
         // provider policy lands on the operator's next message.
         const isolateFromInherited =
@@ -12928,8 +13009,8 @@ export class DesktopBackendRegistry {
             : params.reasoningEffort ?? overlay?.reasoningEffort,
           fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
         });
-        const [, connectionConfig, preparedInput, settings, resolvedCwd, pdfRegistration] = await joinConcurrent([
-          runtimePreparation, connectionPreparation, inputPreparation, settingsPreparation, cwdPreparation, pdfPreparation,
+        const [, connectionConfig, preparedInput, settings, resolvedCwd, pdfRegistration, agentToolsMcpConfig] = await joinConcurrent([
+          runtimePreparation, connectionPreparation, inputPreparation, settingsPreparation, cwdPreparation, pdfPreparation, agentToolsMcpPreparation,
         ]);
         cwd = resolvedCwd;
         turnParams = settings;
@@ -12938,6 +13019,7 @@ export class DesktopBackendRegistry {
         codexThreadConfig = mergeCodexThreadConfigs(
           hasPdfMcpToolCatalog ? (pdfRegistration ? buildCodexPdfMcpConfig(pdfRegistration) : buildCodexPdfMcpDisabledConfig()) : undefined,
           connectionConfig,
+          agentToolsMcpConfig,
         );
       },
       announce: (pendingTurnId) => {
@@ -13027,6 +13109,7 @@ export class DesktopBackendRegistry {
               threadId: params.threadId,
               tokenMiserEnabled: tokenMiserEnabledForThread,
               turnId: syntheticStartedTurnId,
+              codexAgentToolsMcp: overlay?.codexAgentToolsMcp,
             });
           const pwrdrvrTokenMiser =
             await this.buildSupportedPwrdrvrTokenMiserActivation({
@@ -13064,6 +13147,7 @@ export class DesktopBackendRegistry {
             defaultModeRequestUserInput:
               this.resolveCodexDefaultModeRequestUserInputFn(),
             ...(dynamicTools !== undefined ? { dynamicTools } : {}),
+            ...(overlay?.codexAgentToolsMcp ? { requireThreadResume: true } : {}),
             ...(pwrdrvrTokenMiser !== undefined
               ? { pwrdrvrTokenMiser }
               : {}),
@@ -18136,7 +18220,9 @@ export class DesktopBackendRegistry {
     threadId: string;
     tokenMiserEnabled: boolean;
     turnId?: string;
+    codexAgentToolsMcp?: true;
   }): Promise<CodexDynamicToolSpec[] | undefined> {
+    if (params.codexAgentToolsMcp) return undefined;
     if (!(await this.supportsTokenMiserDynamicToolsResume(params.client))) {
       return undefined;
     }
@@ -19019,6 +19105,7 @@ export class DesktopBackendRegistry {
     callerReason?: string;
     ownerId?: string;
   }): Promise<AppServerThreadSummary[]> {
+    const observationSequence = this.reserveThreadInfoObservation();
     const observedFilterThreadIds =
       this.observedCodexThreadIdsMatchingFilter(params.filter);
     let incomplete = false;
@@ -19128,6 +19215,9 @@ export class DesktopBackendRegistry {
       allThreads,
       params,
     );
+    // A pending start's placeholder carries the owner's own rename, so only a
+    // row the provider listed can acknowledge it.
+    const providerListedThreadIds = new Set(allThreads.map((thread) => thread.id));
 
     const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
     const overlaysByThreadId = await readOverlays.call(this.overlayStore, {
@@ -19224,7 +19314,10 @@ export class DesktopBackendRegistry {
 
     const statusReconciledThreads = enrichedThreads
       .map((thread) => this.reconcileCodexThreadListStatus(thread))
-      .map((thread) => this.withObservedThreadName(thread));
+      .map((thread) => this.withObservedThreadName(
+        thread,
+        providerListedThreadIds.has(thread.id) ? observationSequence : undefined,
+      ));
     const normalizedFilter = params.filter?.trim().toLowerCase();
     const filteredThreads = normalizedFilter && observedFilterThreadIds.size > 0
       ? statusReconciledThreads.filter(
@@ -19991,7 +20084,7 @@ export class DesktopBackendRegistry {
             };
             // Stock Codex keeps the creation-time catalog. The dispatch gate
             // still enforces the thread setting when its registered tool is called.
-            const initialTools = await this.buildCodexParentDynamicTools(
+            const initialTools = overlay?.codexAgentToolsMcp ? [] : await this.buildCodexParentDynamicTools(
               this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
               { tokenMiserOverride: overlay?.tokenMiserEnabled, jobMonitorCreationEnabled: overlay?.jobMonitorCreationEnabled !== false
                 || !(await this.supportsTokenMiserDynamicToolsResume(client)) },
@@ -19999,7 +20092,18 @@ export class DesktopBackendRegistry {
             const fresh = await client.prepareFreshNativeVoiceThread?.({ ...admission, dynamicTools: initialTools });
             if (!fresh) {
               const manager = this.overlayStore.getVoiceManagerThread?.();
-              if (manager?.backend === "codex" && manager.threadId === threadId
+              if (overlay?.codexAgentToolsMcp) {
+                if (!client.resumeNativeVoiceThread) {
+                  throw new Error("This Codex runtime cannot resume live voice with PwrAgent tools via MCP.");
+                }
+                await client.resumeNativeVoiceThread({
+                  ...admission,
+                  config: await this.buildCodexAgentToolsMcpConfigForThread(
+                    threadId,
+                    this.resolveTokenMiserEnabledForOverride(overlay?.tokenMiserEnabled),
+                  ),
+                });
+              } else if (manager?.backend === "codex" && manager.threadId === threadId
                 && !overlay?.codexEnvironmentRuntime
                 && client.resumeNativeVoiceThread
                 && !(await this.supportsTokenMiserDynamicToolsResume(client))) {
@@ -20009,7 +20113,7 @@ export class DesktopBackendRegistry {
                 await client.resumeNativeVoiceThread(admission);
               } else {
                 const dynamicTools = await this.requireCodexAgentRefreshTools(client, threadId, overlay, true);
-                await client.refreshThreadTools!({ ...admission, dynamicTools });
+                if (dynamicTools !== undefined) await client.refreshThreadTools!({ ...admission, dynamicTools });
               }
             }
           }
@@ -20881,10 +20985,13 @@ export class DesktopBackendRegistry {
     if (params.backend === "codex" && this.codexClient.readThreadSummary) {
       // Eligibility is checked before and after helper work. Read this identity
       // each time so a late operator rename still cancels generated naming.
+      const observationSequence = this.reserveThreadInfoObservation();
       return await this.withCodexThreadClient(params.threadId, async (client) => {
         const thread = await client.readThreadSummary!(params.threadId);
         const metadata = await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: params.threadId });
-        return thread.archivedAt === undefined ? this.withObservedThreadName({ ...thread, ...projectOwnerThreadTitle(thread, metadata) }) : undefined;
+        return thread.archivedAt === undefined ? this.withObservedThreadName(
+          { ...thread, ...projectOwnerThreadTitle(thread, metadata) }, observationSequence, false,
+        ) : undefined;
       }).catch(() => undefined);
     }
     if (isAcpBackendId(params.backend)) {
@@ -20995,20 +21102,38 @@ export class DesktopBackendRegistry {
   ): Promise<unknown> {
     const response = await promise;
     if (backend === "codex" && request.method === "item/tool/call" && this.nativeVoiceToolListeners.size > 0) {
-      const call: NativeVoiceToolCall = {
+      this.publishNativeVoiceToolCall({
         threadId: request.params.threadId,
         tool: String(request.params.tool),
         ...(typeof request.params.namespace === "string" ? { namespace: request.params.namespace } : {}),
         arguments: request.params.arguments,
         response,
-      };
-      for (const listener of this.nativeVoiceToolListeners) {
-        try { listener(call); } catch (error) {
-          backendRegistryLog.warn("voice tool-call listener failed", { error: String(error) });
-        }
-      }
+      });
     }
     return response;
+  }
+
+  private publishNativeVoiceMcpToolCall(call: CodexAgentToolMcpResult): void {
+    if (this.nativeVoiceToolListeners.size === 0) return;
+    this.publishNativeVoiceToolCall({
+      threadId: call.threadId,
+      tool: call.tool,
+      namespace: PWRAGENT_TOOL_NAMESPACE,
+      arguments: call.arguments,
+      response: {
+        success: call.result.isError !== true,
+        contentItems: call.result.content.flatMap((item) =>
+          item.type === "text" ? [{ type: "inputText", text: item.text }] : []),
+      },
+    });
+  }
+
+  private publishNativeVoiceToolCall(call: NativeVoiceToolCall): void {
+    for (const listener of this.nativeVoiceToolListeners) {
+      try { listener(call); } catch (error) {
+        backendRegistryLog.warn("voice tool-call listener failed", { error: String(error) });
+      }
+    }
   }
 
   private async performServerRequest(
@@ -22838,22 +22963,23 @@ export class DesktopBackendRegistry {
         if (trimmed) {
           const key = buildThreadIdentityKey(event.backend, threadId);
           const titleSource = normalizeRenamedTitleSource(params.titleSource);
+          const observationSequence = this.reserveThreadInfoObservation();
           this.threadInfoStore.observe({
             identity: { backend: event.backend, threadId },
-            observationSequence: this.reserveThreadInfoObservation(),
-            source: "lifecycle-notification",
+            observationSequence,
+            source: "name-notification",
             title: trimmed,
             titleSource,
           });
-          // Only where a provider can still contradict us. This map is the
-          // "provider has not echoed our rename back yet" set, and every
-          // reader of it is Codex-facing; the sole path that removes an entry
-          // is the Codex listing. An ACP rename has no such window — it wrote
-          // the session store on its way here, and that store is what ACP
-          // listings read — so remembering one only leaks an entry that
-          // nothing can ever retire.
+          // Keep the name until a provider read can confirm it. ACP listings
+          // already read the session store that the rename updated.
           if (!isAcpBackendId(event.backend)) {
-            this.observedThreadNames.set(key, { title: trimmed, titleSource });
+            this.lastThreadNameEventSequence = observationSequence;
+            this.observedThreadNames.set(key, { title: trimmed, titleSource, observationSequence });
+            // A start renamed before the provider lists it (a to-do card names
+            // its thread at once) is served from this placeholder.
+            const pending = this.pendingStartedThreads.get(key);
+            if (pending) this.pendingStartedThreads.set(key, { ...pending, title: trimmed, titleSource });
           }
         }
       }
@@ -22877,23 +23003,41 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * A fresh Codex point read can see a newer explicit name, but the pending
+   * observation stays until the provider listing catches up.
+   */
   private withObservedThreadName(
     thread: AppServerThreadSummary,
+    providerObservationSequence?: number,
+    acknowledge = true,
   ): AppServerThreadSummary {
     const key = buildThreadIdentityKey(thread.source, thread.id);
     const observed = this.observedThreadNames.get(key);
     if (!observed) {
+      // A newer listing may already have acknowledged the rename. The name
+      // still applies to provider reads that started before the event.
+      if (providerObservationSequence !== undefined && providerObservationSequence < this.lastThreadNameEventSequence) {
+        return this.threadInfoStore.projectTitleAfterNameNotification(thread, providerObservationSequence);
+      }
       return thread;
     }
-    if (thread.titleSource === observed.titleSource) {
+    if (
+      providerObservationSequence !== undefined
+      && providerObservationSequence > observed.observationSequence
+      && thread.titleSource === observed.titleSource
+      && (observed.titleSource === "explicit" || thread.title === observed.title)
+    ) {
       // Matching provenance means the provider acknowledged our event. Text
       // that differs under the same source is durable provider truth from a
       // rename this process may not have observed (profiles can be shared by
       // processes). Comparing against the recorded source rather than a
       // hardcoded `explicit` is what lets a generated title retire: stamping
       // `explicit` here would also overwrite the `derived` the rename set,
-      // leaving listThreads and getThreadInfo permanently disagreeing.
-      this.observedThreadNames.delete(key);
+      // leaving listThreads and getThreadInfo permanently disagreeing. A
+      // different `derived` text is the provider's prompt preview, not a
+      // rename, so only the same text acknowledges a generated title.
+      if (acknowledge) this.observedThreadNames.delete(key);
       return thread;
     }
     return {
@@ -23520,6 +23664,7 @@ export class DesktopBackendRegistry {
 
   private async emit(event: AgentEvent, codexStatusSequence?: number, codexStartDelivery?: CodexStartDeliveryReceipt): Promise<void> {
     const notification = event.notification;
+    this.boundedCommandCapture.observeIntent(event, this.resolveTokenMiserBoundedCommands);
     if (!event.federationTarget && this.boundedCommandCapture.pending
       && (notification.method === "item/started" || notification.method === "item/completed")) {
       const item = readRecord(notification.params.item);
@@ -23542,6 +23687,7 @@ export class DesktopBackendRegistry {
     if (isTerminal && !event.federationTarget) {
       const turnId = turnIdFromTerminalNotification(notification);
       if (turnId) {
+        this.boundedCommandCapture.forgetIntent({ backend: event.backend, threadId: notification.params.threadId, turnId });
         if (this.boundedCommandCapture.pending) {
           const threadId = notification.params.threadId;
           releaseBoundedCommands = this.boundedCommandCapture.endTurn({ backend: event.backend, threadId, turnId },

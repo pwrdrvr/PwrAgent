@@ -58,7 +58,7 @@ export function checkOwnerParity<Host extends { close(): Promise<void> }>(
 export function prepareOwnerParity<Host extends { close(): Promise<void> }>(
   { signal, onTestFinished }: TestLifetime,
   startOwners: ReadonlyArray<(signal: AbortSignal) => Promise<Host>>,
-  withFixture: FixtureScope,
+  withFixture: FixtureScope = (run) => run(),
 ) {
   const startup = new AbortController();
   const fixtureSignal = AbortSignal.any([signal, startup.signal]);

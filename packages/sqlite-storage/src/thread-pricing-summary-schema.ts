@@ -1,5 +1,35 @@
 import type Database from "better-sqlite3";
 
+// A gap requires at least one cumulative component to exceed this row alone.
+// Earlier nonnegative accounted tokens can only reduce it further. Keep the
+// component test shared by the expression indexes and their readers.
+const POSSIBLE_PRICED_GAP = `(status != 'superseded' AND model IS NOT NULL AND scope != 'monitor'
+  AND cumulative_output_tokens IS NOT NULL AND cumulative_cached_input_tokens IS NOT NULL
+  AND (COALESCE(cumulative_uncached_input_tokens, cumulative_input_tokens - cumulative_cached_input_tokens) > uncached_input_tokens
+    OR cumulative_cached_input_tokens > cached_input_tokens OR cumulative_output_tokens > output_tokens
+    OR cumulative_reasoning_output_tokens > reasoning_output_tokens)) IS TRUE`;
+
+// A negative charge can increase spend when replaced. Native children can
+// also have charges summarized only under their parent. Exclude both cases
+// when using the summary plus live costs to rule out an alert.
+const NEGATIVE_CHARGE = "(price_status = 'priced' AND total_cost_micros < 0)";
+export const ROLLED_UP_REPLACEMENT = `${NEGATIVE_CHARGE} IS TRUE`;
+export const DIRECT_REPLACEMENT = `(${NEGATIVE_CHARGE} OR parent_thread_id != thread_id) IS TRUE`;
+
+// Keep the explicit cumulative_output_tokens term: SQLite must be able to
+// prove the old INDEXED BY spend queries imply these partial predicates.
+export const DIRECT_SPEND_HISTORY = `status != 'superseded' AND
+  (cumulative_output_tokens IS NOT NULL OR ${NEGATIVE_CHARGE} OR parent_thread_id != thread_id)`;
+export const ROLLED_UP_SPEND_HISTORY = `parent_thread_id IS NOT NULL AND status != 'superseded' AND
+  (cumulative_output_tokens IS NOT NULL OR ${NEGATIVE_CHARGE})`;
+
+// Accounted tokens never decrease. Only actual gap candidates contribute a
+// ceiling, independently of whether the row needs replacement reconciliation.
+export const GAP_CEILING = `CASE WHEN ${POSSIBLE_PRICED_GAP} THEN MAX(0,
+  COALESCE(cumulative_uncached_input_tokens, cumulative_input_tokens - cumulative_cached_input_tokens, 0),
+  COALESCE(cumulative_cached_input_tokens, 0), COALESCE(cumulative_output_tokens, 0),
+  COALESCE(cumulative_reasoning_output_tokens, 0)) ELSE 0 END`;
+
 // Update only initialized buckets. The store materializes new buckets so a
 // native child's usage does not gain a separate visible summary. Match both
 // identities on existing buckets, once when the thread is its own parent.

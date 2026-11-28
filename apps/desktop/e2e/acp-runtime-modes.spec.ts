@@ -11,10 +11,9 @@ import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { accessTrigger, chooseAccessStop } from "./fixtures/access-picker";
 import {
-  closeComposerThreadOptions,
+  closeComposerWherePanel,
   composerRowButton,
-  isComposerTierFolded,
-  openComposerThreadOptions,
+  openComposerWherePanel,
 } from "./fixtures/composer-row";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
@@ -859,18 +858,12 @@ test("disables workspace handoff for ACP threads after conversation history", as
   try {
     await app.window.getByRole("button", { name: /ACP Handoff Thread/i }).click();
 
-    const workspaceMode = composerRowButton(app.window, /^Workspace mode(?::|$)/);
-    await expect(workspaceMode).toBeDisabled();
-    await expect(workspaceMode).toHaveAttribute("value", "local");
-    const handoff = { name: "Handoff to New Worktree", exact: true };
-    if (await isComposerTierFolded(app.window, "details", workspaceMode)) {
-      const menu = await openComposerThreadOptions(app.window);
-      await expect(menu.getByRole("menuitem", handoff)).toBeDisabled();
-      await closeComposerThreadOptions(app.window);
-    } else {
-      await workspaceMode.click({ force: true });
-      await expect(app.window.getByRole("menuitem", handoff)).toHaveCount(0);
-    }
+    await expect(composerRowButton(app.window, /^Where:/)).toHaveAttribute("data-mode", "local");
+    // Where still lists the directory; only its handoffs are off.
+    const where = await openComposerWherePanel(app.window);
+    await expect(where.getByRole("button", { name: "Handoff to New Worktree", exact: true })).toBeDisabled();
+    await expect(where.getByRole("button", { name: "Move to Project", exact: true })).toBeDisabled();
+    await closeComposerWherePanel(app.window);
     await expect(
       app.window.getByRole("dialog", { name: /Handoff to/i }),
     ).toHaveCount(0);

@@ -9,10 +9,11 @@ const immediateTimers = {
 
 describe("HoverCardBridge.holds", () => {
   // Rule: a trigger inside what the visible card is about (a chip on the
-  // card's own row) never swaps that card at once; any other trigger does.
-  it("keeps the card that holds the trigger, and swaps for one it does not", () => {
+  // card's own row) waits its full hover delay; any other trigger the pointer
+  // is not passing waits only the swap rest. Neither closes the card itself.
+  it("gives a held trigger the full delay, and any other the swap rest", () => {
     fc.assert(fc.property(fc.boolean(), fc.boolean(), (held, passTrigger) => {
-      const bridge = new HoverCardBridge(300, immediateTimers);
+      const bridge = new HoverCardBridge(300, immediateTimers, 150);
       const chip = { id: "chip" } as unknown as Element;
       let rowHidden = false;
       const row: BridgedHoverCard = {
@@ -21,10 +22,10 @@ describe("HoverCardBridge.holds", () => {
       };
       const prCard: BridgedHoverCard = { hide: () => undefined };
       bridge.shown(row);
-      const swap = bridge.enterTrigger(prCard, passTrigger ? chip : undefined);
+      const wait = bridge.enterTrigger(prCard, passTrigger ? chip : undefined, 250);
       const keeps = held && passTrigger;
-      expect(swap).toBe(!keeps);
-      expect(rowHidden).toBe(!keeps);
+      expect(wait).toBe(keeps ? 250 : 150);
+      expect(rowHidden).toBe(false);
     }));
   });
 });

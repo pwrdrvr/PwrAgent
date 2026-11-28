@@ -217,7 +217,15 @@ type TooltipState = {
   left?: number;
   /** Computed top after measure; undefined on the first paint. */
   top?: number;
+  /**
+   * An element inside a beside card that keeps its place on screen while
+   * the content around it changes, measured against this anchor position.
+   */
+  keep?: TooltipKeep & { targetTop: number };
 };
+
+/** An element inside the card and the viewport `top` it should keep. */
+export type TooltipKeep = { element: HTMLElement; top: number };
 
 type TooltipTargetRect = {
   bottom: number;
@@ -526,8 +534,13 @@ export function useViewportTooltip(options: {
    * Replace the content of an already-visible tooltip in place (no-op
    * while hidden). Keeps the current position until the re-measure pass
    * settles, so live data updates don't blink the tooltip.
+   *
+   * With `keep`, a beside card is placed so that element stays where it
+   * was on screen: a button the pointer is on stays under the pointer as
+   * the card grows or shrinks around it. The card keeps that hold until it
+   * hides or its anchor moves.
    */
-  update: (content: ReactNode) => void;
+  update: (content: ReactNode, options?: { keep?: TooltipKeep }) => void;
   hide: () => void;
   /** The shown tooltip's element, if any. */
   getElement: () => HTMLElement | null;
@@ -825,9 +838,15 @@ export function useViewportTooltip(options: {
     if (placement === "beside" && targetRef.current) {
       const anchor = getAnchorRectRef.current?.(targetRef.current)
         ?? targetRef.current.getBoundingClientRect();
+      const keep = state.keep;
+      // The card's top that puts the kept element back where it was; the
+      // viewport clamp below still wins.
+      const targetTop = keep && keep.targetTop === state.targetTop && tooltipElement.contains(keep.element)
+        ? keep.top - (keep.element.getBoundingClientRect().top - rect.top)
+        : state.targetTop;
       const { left, top } = besideTooltipPosition({
         anchor,
-        targetTop: state.targetTop,
+        targetTop,
         width: rect.width,
         height: rect.height,
         minLeft: horizontalLeft,
@@ -1014,9 +1033,12 @@ export function useViewportTooltip(options: {
     [clearHoverDelay, rememberTarget, show],
   );
 
-  const update = useCallback((content: ReactNode): void => {
+  const update = useCallback((content: ReactNode, options?: { keep?: TooltipKeep }): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipUpdate, tooltipId);
-    setState((current) => (current ? { ...current, content } : current));
+    const keep = options?.keep;
+    setState((current) => (current
+      ? { ...current, content, ...(keep ? { keep: { ...keep, targetTop: current.targetTop } } : {}) }
+      : current));
   }, [tooltipId]);
 
   useEffect(() => clearHoverDelay, [clearHoverDelay]);

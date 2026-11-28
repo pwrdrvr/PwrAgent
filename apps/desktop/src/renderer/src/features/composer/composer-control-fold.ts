@@ -3,14 +3,14 @@
  * not fit, they fold into the ⋮ menu in a fixed order instead of wrapping:
  *
  * 1. `details`: the controls moving to the thread's Details rail. They are
- *    the environment and command pickers, the editor and terminal apps, the
- *    workspace handoff menu, PR Auto-fix, and the skill profile.
- * 2. `run`: the environment ▶, which runs the selected command.
+ *    the editor and terminal apps, Plan, PR Auto-fix, the skill profile, and
+ *    Add directory on a thread with no directory yet.
+ * 2. `run`: the Run split, which holds the environment, its commands and ▶.
  * 3. `dictation`.
  * 4. `attach`. It still works by paste and drag-drop while folded.
  *
- * The access control, the model pill, ⋮, the context moon and the Send split
- * never fold. Once every tier has folded, the model name truncates. Nothing
+ * The access control, the model pill, the Where icon, ⋮, the context moon
+ * and the Send split never fold. Once every tier has folded, the model name truncates. Nothing
  * else gives up width.
  *
  * A pane can be narrower than even those pinned controls. Then the row

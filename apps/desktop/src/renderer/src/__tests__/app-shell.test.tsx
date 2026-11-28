@@ -2728,7 +2728,7 @@ describe("App", () => {
         spendAlerts: {
           activeTurnSpendEnabled: { value: true, source: "config" },
           activeTurnSpendThresholdUsd: { value: 5, source: "default" },
-          threadSpendEnabled: { value: true, source: "default" },
+          threadSpendEnabled: { value: false, source: "default" },
           threadSpendThresholdUsd: { value: 25, source: "default" },
         },
         appearance: {
@@ -3154,6 +3154,9 @@ describe("App", () => {
     const writeSettingsConfig = vi.fn(
       async () => await new Promise<never>(() => {}),
     );
+    const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
+      async () => ({ fetchedAt: Date.now(), backends: [] }),
+    );
 
     Object.defineProperty(window, "pwragent", {
       configurable: true,
@@ -3179,7 +3182,7 @@ describe("App", () => {
         })),
         readSettings: () => settings.promise,
         writeSettingsConfig,
-        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        listBackends,
         getNavigationSnapshot: async (): Promise<NavigationSnapshot> => ({
           backend: "all",
           fetchedAt: Date.now(),
@@ -3268,6 +3271,30 @@ describe("App", () => {
       within(context).getByRole("tab", { name: "Changes" }),
     ).toHaveAttribute("aria-selected", "true");
     expect(within(context).getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true");
+
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      const quotaRequests = () => listBackends.mock.calls.filter(([request]) => request?.refreshAntigravityQuota);
+      expect(quotaRequests()).toHaveLength(0);
+      await act(async () => { fireEvent.click(within(context).getByRole("tab", { name: "AI provider info" })); });
+      expect(quotaRequests()).toHaveLength(1);
+      await clickButton("Hide context rail");
+      expect(quotaRequests()).toHaveLength(1);
+      await clickButton("Show context rail");
+      expect(quotaRequests()).toHaveLength(2);
+      await act(async () => {
+        fireEvent.keyDown(window, { metaKey: true, altKey: true, code: "KeyB", key: "b" });
+      });
+      expect(quotaRequests()).toHaveLength(2);
+      await act(async () => {
+        fireEvent.keyDown(window, { metaKey: true, altKey: true, code: "KeyB", key: "b" });
+      });
+      expect(quotaRequests()).toHaveLength(3);
+    } finally {
+      focus.mockRestore();
+      visibility.mockRestore();
+    }
   });
 
   it("renders the live thread shell with transcript history", async () => {

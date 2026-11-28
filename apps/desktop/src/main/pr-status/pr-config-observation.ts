@@ -2,7 +2,7 @@ import path from "node:path";
 import { bundledGitExecutable, isPackagedBundledGit } from "../bundled-git";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getSelectedManagedGit } from "../git-command";
-import { gitCommandPreference, gitRuntimeEnvironment } from "../git-runtime";
+import { gitCommandEnvironment, gitCommandPreference } from "../git-runtime";
 import { parseGitRemoteConfigRecords } from "./git-remote-config";
 
 const MAX_CONFIG_INCLUDES = 16;
@@ -18,19 +18,24 @@ export function canReadSingleBranchOrigin(executable: string, env: NodeJS.Proces
     && !Object.keys(env).some((key) => GIT_CONFIG_OVERRIDE.test(key) || GIT_DISCOVERY_OVERRIDE.test(key));
 }
 
-export function readPrConfigInputs(cwd: string) {
+export function readPrConfigInputs(cwd: string, scope?: "inventory") {
   const env = buildPwrAgentChildProcessEnv(process.env);
   const preference = gitCommandPreference(env);
   const executable = bundledGitExecutable();
   if (getSelectedManagedGit() || (preference && path.normalize(preference) !== path.normalize(executable))) return "native-only" as const;
-  const nativeOnly = process.platform === "win32" || Boolean(preference);
+  // Inventory can borrow a sample from the exact packaged executable.
+  // Scheduled prefetch keeps its checkout-specific native path.
+  const packagedInventory = scope === "inventory" && preference !== undefined && isPackagedBundledGit(preference);
+  const nativeOnly = process.platform === "win32" || Boolean(preference && !packagedInventory);
   if (!path.isAbsolute(cwd) || Object.keys(env).some((key) => GIT_CONFIG_OVERRIDE.test(key))) {
     return undefined;
   }
-  const runtime = gitRuntimeEnvironment(env);
+  if (scope === "inventory" && (nativeOnly || Object.keys(env).some((key) => GIT_DISCOVERY_OVERRIDE.test(key)))) return undefined;
+  const runtime = gitCommandEnvironment(env, preference);
   const { GIT_CONFIG_SYSTEM: system, GIT_CONFIG_NOSYSTEM: noSystem, GIT_CONFIG_GLOBAL: global, HOME: home, XDG_CONFIG_HOME: xdg } = runtime;
   if (noSystem !== undefined && noSystem !== "0" && noSystem !== "1") return undefined;
-  if (noSystem !== "1" && (!system || !path.isAbsolute(system))) return undefined;
+  const discoverSystemConfig = packagedInventory && noSystem !== "1" && system === undefined;
+  if (noSystem !== "1" && !discoverSystemConfig && (!system || !path.isAbsolute(system))) return undefined;
   // Joining a path removes parent components before the filesystem can
   // follow any symlinks. Git can reach a different config with the raw path.
   if (global === undefined && (!home || !path.isAbsolute(home) || hasParentComponent(home)
@@ -40,10 +45,10 @@ export function readPrConfigInputs(cwd: string) {
   const paths = global !== undefined
     ? [global]
     : [path.join(xdg || path.join(home!, ".config"), "git/config"), path.join(home!, ".gitconfig")];
-  if (noSystem !== "1") paths.push(system!);
+  if (noSystem !== "1" && system !== undefined) paths.push(system);
   paths.push(executable);
   if (paths.some((file) => /[\r\n\uFFFD]/.test(file) || hasParentComponent(file))) return undefined;
-  return { env, paths: paths.map((file) => path.normalize(file)), nativeOnly };
+  return { env, runtime, executable, paths: paths.map((file) => path.normalize(file)), nativeOnly, discoverSystemConfig };
 }
 
 function hasParentComponent(file: string): boolean {

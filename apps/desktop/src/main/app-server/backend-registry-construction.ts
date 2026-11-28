@@ -155,6 +155,7 @@ export type DesktopBackendRegistryOptions = {
   isBootstrapMode?: () => boolean;
   resolveCodexDefaultModeRequestUserInput?: () => boolean;
   resolveCodexToolDiscovery?: () => boolean;
+  resolveCodexAgentToolsMcp?: () => boolean;
   /** Legacy injection accepted for older callers; runMode owns routing. */
   resolveManagedReviewEnabled?: () => boolean;
   resolveDefaultPrAutoDispatchEnabled?: () => boolean;
@@ -260,6 +261,7 @@ export interface RegistryDependencies {
   pendingEnvironmentLaunchStore: PendingEnvironmentLaunchStore;
   resolveCodexDefaultModeRequestUserInputFn: () => boolean;
   resolveCodexToolDiscoveryFn: () => boolean;
+  resolveCodexAgentToolsMcpFn: () => boolean;
   resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   resolveProviderModelDefaultsFn: () => Record<
     string,
@@ -321,7 +323,7 @@ export interface RegistryDependencies {
   worktreeArchiveService: WorktreeArchiveService;
   worktreeRecoveryService: WorktreeRecoveryService;
   pdfToolMcpServer?: AgentToolMcpServerLike;
-  claudeAgentToolMcpServer?: AgentToolMcpServerLike;
+  agentToolMcpServer?: AgentToolMcpServerLike;
   claudeBackend: ClaudeBackend;
   acpBackend: AcpBackendAdapter;
   providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;

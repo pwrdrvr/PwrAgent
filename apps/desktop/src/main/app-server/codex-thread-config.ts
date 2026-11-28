@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared/codex-model-providers";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import { buildOutpostCodexPermissionOverrides, isOutpostManagedConfigKey } from "../headless/outpost-codex-sandbox";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
   ThreadStartParams as CodexThreadStartParams,
@@ -184,14 +184,36 @@ export function buildCodexTokenMiserDynamicToolSpecs(
 }
 
 export const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
+// A process-scoped alias stays stable through App Server replacement while
+// keeping Codex's recursive config merge away from user-defined servers.
+export const PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME = `pwragent_apps_${randomUUID().replaceAll("-", "")}`;
 
 export function buildCodexPdfMcpConfig(
   registration: AgentToolMcpRegistration,
 ): CodexThreadStartParams["config"] {
+  return buildCodexOwnedMcpConfig(PWRAGENT_PDF_MCP_SERVER_NAME, registration, false);
+}
+
+export function buildCodexAgentToolsMcpConfig(
+  registration: AgentToolMcpRegistration,
+): CodexThreadStartParams["config"] {
+  return buildCodexOwnedMcpConfig(
+    PWRAGENT_AGENT_TOOLS_MCP_SERVER_NAME, registration, true, MCP_CONNECTION_CODEX_TOOL_TIMEOUT_SECONDS,
+  );
+}
+
+function buildCodexOwnedMcpConfig(
+  serverName: string,
+  registration: AgentToolMcpRegistration,
+  required: boolean,
+  toolTimeoutSeconds?: number,
+): CodexThreadStartParams["config"] {
   return {
     mcp_servers: {
-      [PWRAGENT_PDF_MCP_SERVER_NAME]: {
+      [serverName]: {
         enabled: true,
+        ...(required ? { required: true } : {}),
+        ...(toolTimeoutSeconds === undefined ? {} : { tool_timeout_sec: toolTimeoutSeconds }),
         http_headers: Object.fromEntries(
           registration.server.headers.map(({ name, value }) => [name, value]),
         ),

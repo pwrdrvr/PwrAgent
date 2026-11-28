@@ -41,23 +41,19 @@ export type ThreadTitleAdapterParams = {
   turnTimeoutMs?: number;
 };
 
-export type ThreadTitleAdapterResult =
-  | {
-      status: "ok";
-      object: unknown;
-      accountKey?: string;
-      cachedTokens?: number;
-      helperThreadId?: string;
-      helperTurnId?: string;
-      model?: string;
-      reasoningEffort?: string;
-      serviceTier?: string;
-      tokenUsage?: unknown;
-    }
-  | {
-      status: "unavailable" | "failed";
-      reason: string;
-    };
+export type ThreadTitleAdapterResult = (
+  | { status: "ok"; object: unknown }
+  | { status: "unavailable" | "failed"; reason: string }
+) & {
+  accountKey?: string;
+  cachedTokens?: number;
+  helperThreadId?: string;
+  helperTurnId?: string;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  tokenUsage?: unknown;
+};
 
 export type ThreadTitleGenerator = {
   generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult>;

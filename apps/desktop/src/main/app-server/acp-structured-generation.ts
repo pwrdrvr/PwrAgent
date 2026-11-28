@@ -51,6 +51,7 @@ const DEFAULT_MAX_OUTPUT_CHARS = 32_000;
  */
 export async function generateAcpStructuredObject(params: {
   backend: AcpBackendId;
+  signal?: AbortSignal;
   /** A directory the operator does not work in. */
   cwd: string;
   run: (request: AcpEphemeralPromptRequest) => Promise<AcpEphemeralPromptResult>;
@@ -76,6 +77,7 @@ export async function generateAcpStructuredObject(params: {
   let result: AcpEphemeralPromptResult;
   try {
     result = await params.run({
+      ...(params.signal ? { signal: params.signal } : {}),
       cwd: params.cwd,
       prompt: `${params.prompt}\n\n${contract}`,
       sessionMeta: helper.sessionMeta(`${params.system}\nYou have no tools.\n${contract}`),
@@ -88,21 +90,22 @@ export async function generateAcpStructuredObject(params: {
   } catch (error) {
     return { status: "failed", reason: failureReason(helper.label, error, params.turnTimeoutMs, maxOutputChars) };
   }
+  const model = result.model ?? params.model;
+  const metadata = {
+    ...(model ? { model } : {}),
+    ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {}),
+    ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+  };
   const object = parseAcpJsonAnswer(result.text);
   if (
     !isRecord(object)
     || !matchesSchema(params.schema, object)
     || params.isMatch?.(object) === false
   ) {
-    return { status: "failed", reason: `${helper.label} did not answer with the requested JSON.` };
+    return { status: "failed", reason: `${helper.label} did not answer with the requested JSON.`,
+      ...(result.tokenUsage ? metadata : {}) };
   }
-  const model = result.model ?? params.model;
-  return {
-    status: "ok",
-    object,
-    ...(model ? { model } : {}),
-    ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {}),
-  };
+  return { status: "ok", object, ...metadata };
 }
 
 function failureReason(label: string, error: unknown, timeoutMs: number, maxOutputChars: number): string {

@@ -69,14 +69,22 @@ export function describeLimitPace(series: LimitSeries, now: number, compact = fa
  * starts with the rate.
  */
 export function limitPaceOutcome(projection: LimitProjection, latest: LimitPoint, now: number): string {
+  return limitPaceOutcomePhrases(projection, latest, now).join(" ");
+}
+
+/**
+ * `limitPaceOutcome` in the pieces a narrow line may break between, so a
+ * time or a duration ("Mon 3 PM", "14 h 55 m") never splits across lines.
+ */
+export function limitPaceOutcomePhrases(projection: LimitProjection, latest: LimitPoint, now: number): string[] {
   if (projection.kind === "atReset") {
-    return `on pace for about ${Math.round(projection.percent)}% at the reset`;
+    return ["on pace for", `about ${Math.round(projection.percent)}%`, "at the reset"];
   }
   const when = usageWhen(projection.at, now, true);
   if (latest.resetAt !== undefined) {
-    return `hits 100% ${when}, ${usageDuration(latest.resetAt - projection.at)} before the reset`;
+    return ["hits 100%", `${when},`, usageDuration(latest.resetAt - projection.at), "before the reset"];
   }
-  return `100% in about ${usageDuration(projection.at - latest.at)} (${when})`;
+  return ["100% in about", usageDuration(projection.at - latest.at), `(${when})`];
 }
 
 /** Why a row sits outside the window's total, in the words the list shows. */

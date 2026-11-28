@@ -10,7 +10,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...await importOriginal<typeof import("node:child_process")>(), spawn: vi.fn(),
 }));
 vi.mock("../git-runtime", () => ({
-  gitRuntimeEnvironment: (env: NodeJS.ProcessEnv) => env,
+  gitCommandEnvironment: (env: NodeJS.ProcessEnv) => env,
   resolveRuntimeGitExecutable: async () => "fixture-git.exe",
 }));
 vi.mock("../bundled-git-lfs-advisory", () => ({ noteBundledGitCommand: vi.fn() }));

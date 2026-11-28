@@ -94,13 +94,13 @@ const NO_FOLD: ComposerRowFoldState = { foldedTierCount: 0, overflows: false };
 const FOLD_TIERS: ReadonlySet<string> = new Set(COMPOSER_FOLD_TIERS);
 
 /**
- * The labels that ellipsize once every tier has folded: the model name, the
- * new-thread provider, and the Where label.
+ * The labels that ellipsize once every tier has folded: the model name and
+ * the new-thread provider.
  */
-const TRUNCATING_LABELS = ".model-settings__pill-model, .model-settings__pill-provider, .composer-where__label";
+const TRUNCATING_LABELS = ".model-settings__pill-model, .model-settings__pill-provider";
 
 /** The pills around those labels, which clip whatever does not fit. */
-const CLIPPING_PILLS = ".model-settings__pill, .composer-where__pill";
+const CLIPPING_PILLS = ".model-settings__pill";
 
 /**
  * The boxes that sit in the row's flex line, in order. `display: contents`

@@ -80,6 +80,7 @@ export { ShieldIcon } from "./ShieldIcon";
 export { SkillIcon } from "./SkillIcon";
 export { SlackIcon } from "./SlackIcon";
 export { SmileyIcon } from "./SmileyIcon";
+export { StopIcon } from "./StopIcon";
 export { StarMapIcon } from "./StarMapIcon";
 export { SubAgentsIcon } from "./SubAgentsIcon";
 export { SubthreadIcon } from "./SubthreadIcon";

@@ -1287,6 +1287,15 @@ function liveOwnerIndex(registry: DesktopBackendRegistry, backend: AppServerBack
     else rowBytes.delete(key);
   }
   let aliases: Parameters<typeof overlay.readNavigationQueryThreads>[0]["worktreeRepositoryAliases"];
+  let seedJoin: {
+    version: string;
+    joinedAt: number;
+    expiresAt: number;
+    workspaceRoots: string[];
+    threads: AppServerThreadSummary[];
+    aliases: typeof aliases;
+    joined: ReturnType<typeof overlay.readNavigationQueryIndex>;
+  } | undefined;
   const handoffChildren = new Map<string, Set<string>>();
   function rememberHandoffDependency(child: string, dependency: string): void {
     const children = handoffChildren.get(dependency);
@@ -1336,23 +1345,46 @@ function liveOwnerIndex(registry: DesktopBackendRegistry, backend: AppServerBack
     refresh: (backend, threadId, activity, workers) => registry.refreshNavigationThread?.({ backend, threadId }, activity, workers),
     verifySeedDirectories: (index) => index.directories.some((directory) => directory.kind === "directory" && directory.path && path.isAbsolute(directory.path)),
     status: (row) => registry.navigationThreadStatus?.(row),
-    join: (rows, coverage, mode) => listingDiagnostics.trace("index", {}, async () => {
+    join: (rows, coverage, mode, seedCurrent) => listingDiagnostics.trace("index", {}, async () => {
+      const seed = seedJoin;
+      seedJoin = undefined;
       const enrich = mode !== "saved";
       const projected = mode === "refresh" ? await projectNavigationCheckoutDirectories(rows, AbortSignal.timeout(30_000), () => {}, {})
         : { threads: rows.map(useCheckout), worktreeRepositoryAliases: aliases };
       aliases = projected.worktreeRepositoryAliases;
       checkouts = new Map(rows.map((input, i) => [buildThreadIdentityKey(input.source, input.id),
         { input: checkoutFields(input), output: checkoutFields(projected.threads[i]!) }]));
-      handoffChildren.clear();
-      rowBytes.clear();
-      totalBytes = 0;
-      const joined = overlay.readNavigationQueryIndex({ backend, ...projected, workspaceRoots: resolveScratchProjectsRoots(),
-        measureRow, measureDirectories: (bytes) => { directoryBytes = bytes; },
-        managedMembership: (keys) => { managedKeys = keys; }, handoffDependency: rememberHandoffDependency });
+      const workspaceRoots = resolveScratchProjectsRoots();
+      const version = seedCurrent?.() ? overlay.readNavigationSeedJoinVersion?.() : undefined;
+      const now = version === undefined ? 0 : Date.now();
+      let expiresAt = Infinity;
+      let joined: ReturnType<typeof overlay.readNavigationQueryIndex>;
+      if (seed && seed.version === version && seed.joinedAt <= now && now < seed.expiresAt
+        && isDeepStrictEqual(seed.threads, projected.threads)
+        && isDeepStrictEqual(seed.aliases, aliases) && isDeepStrictEqual(seed.workspaceRoots, workspaceRoots)) {
+        // The seed also populated the row byte accounting and handoff dependencies.
+        joined = seed.joined;
+      } else {
+        handoffChildren.clear();
+        rowBytes.clear();
+        totalBytes = 0;
+        const inboxClock = mode === "saved" && version !== undefined ? { now,
+          observeSnooze: (until: number) => { if (until > now) expiresAt = Math.min(expiresAt, until); },
+        } : undefined;
+        joined = overlay.readNavigationQueryIndex({ backend, ...projected, workspaceRoots,
+          inboxClock,
+          measureRow, measureDirectories: (bytes) => { directoryBytes = bytes; },
+          managedMembership: (keys) => { managedKeys = keys; }, handoffDependency: rememberHandoffDependency });
+      }
       const threads = registry.withNavigationSubAgentActivity(await decorateNavigationRows(joined.threads, registry));
-      return { ...await projectDirectories(joined, threads, overlay, enrich), threads: applySidebarStackRows(registry, backend, threads), coverage,
+      const directories = await projectDirectories(joined, threads, overlay, enrich);
+      if (mode === "saved" && version !== undefined && seedCurrent?.() && overlay.readNavigationSeedJoinVersion?.() === version) {
+        seedJoin = { version, joinedAt: now, expiresAt, workspaceRoots, threads: projected.threads, aliases, joined };
+      }
+      return { ...directories, threads: applySidebarStackRows(registry, backend, threads), coverage,
         inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys() };
     }),
+    releaseSeedJoin: () => { seedJoin = undefined; },
     decorate: (rows) => applySidebarStackRows(registry, backend, rows),
     forget: (id) => { measureRow(id, 0); checkouts.delete(id); },
     dependents: (id) => handoffChildren.get(id),

@@ -1632,6 +1632,23 @@ describe("CodexAppServerClient", () => {
     } finally { await client.close(); }
   });
 
+  it.each(["compact", "rewind"] as const)("restores scoped MCP during the first resume for %s", async (operation) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const threadId = "thread-2";
+    const config = { mcp_servers: { pwragent_apps_test: { required: true, url: "http://127.0.0.1:8765/mcp" } } };
+    const client = new CodexAppServerClient({
+      resolveThreadResumeConfig: async (id) => id === threadId ? config : undefined,
+    });
+    try {
+      if (operation === "compact") await client.compactThread({ threadId });
+      else await client.revertThread({ threadId, beforeTurnId: "turn-2" });
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+      expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject({ threadId, config });
+    } finally {
+      await client.close();
+    }
+  });
+
   it.each([false, true])("applies the compaction model before compacting (already loaded: %s)", async (alreadyLoaded) => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const client = new CodexAppServerClient();

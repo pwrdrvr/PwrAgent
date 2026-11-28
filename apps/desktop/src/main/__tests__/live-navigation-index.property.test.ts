@@ -16,7 +16,7 @@ import { NavigationWindowPageDeltas } from "../app-server/navigation-window-page
 import { expandWindowNavigationPage, NavigationWindowQueries } from "../../renderer/src/lib/navigation-window-queries";
 
 function fixture(observe?: (event: AgentEvent) => void, durable = false,
-  refresh?: ConstructorParameters<typeof LiveNavigationIndex>[0]["refresh"]) {
+  refresh?: ConstructorParameters<typeof LiveNavigationIndex>[0]["refresh"], pauseProjection?: () => Promise<void> | undefined) {
   const db = durable ? openInMemoryStateDb() : undefined;
   const storage = db && new SqliteOverlayStore(db);
   const providers = new Map<string, AppServerThreadSummary>(["a", "b", "c", "d"].map((id) =>
@@ -44,6 +44,7 @@ function fixture(observe?: (event: AgentEvent) => void, durable = false,
   }
   let complete = Promise.withResolvers<void>();
   let gate: Promise<void> | undefined;
+  let inputKeys = new Set<string>();
   let version = 0;
   const lists: string[] = [];
   const live = new LiveNavigationIndex({
@@ -60,8 +61,13 @@ function fixture(observe?: (event: AgentEvent) => void, durable = false,
       return { threads, coverage, ...directories(threads) };
     },
     cached: (_, id) => providers.get(id), refresh,
-    projectRows: async (rows) => projectRows(rows), directories: async (threads) => { await gate; return directories(threads); },
-    inputKeys: () => new Set(), retentionChanged: () => {}, notify: () => complete.resolve(), failed: (error) => { throw error; },
+    projectRows: async (rows) => {
+      const pause = pauseProjection?.();
+      if (pause) await pause;
+      return projectRows(rows);
+    },
+    directories: async (threads) => { await gate; return directories(threads); },
+    inputKeys: () => inputKeys, retentionChanged: () => {}, notify: () => complete.resolve(), failed: (error) => { throw error; },
   });
   const emit = (notification: AgentEvent["notification"]) => {
     const event = { backend: "codex" as const, notification };
@@ -70,6 +76,7 @@ function fixture(observe?: (event: AgentEvent) => void, durable = false,
   };
   return { live, providers, archived, overlays, full, emit, lists, persist, close: () => { live.close(); db?.close(); },
     block: (promise: Promise<void>) => { gate = promise; },
+    setInputKeys: (...keys: string[]) => { inputKeys = new Set(keys); },
     external: () => { version++; },
     completion: () => { complete = Promise.withResolvers<void>(); return complete.promise; } };
 }
@@ -145,9 +152,156 @@ it("agrees with full projection after status, pin, archive, parent, seen and rec
   await fc.assert(fc.asyncProperty(fc.array(operation, { minLength: 5, maxLength: 18 }), (ops) => compareSequence(ops)), { numRuns: 5 });
 });
 
+it("publishes one sparse Attention delta when status edits arrive during row projection", async () => {
+  const started = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const work = vi.fn();
+  const liveStore = new NavigationQueryStore({ onAttentionWork: work });
+  const fullStore = new NavigationQueryStore();
+  let paused = false;
+  const f = fixture((event) => {
+    liveStore.observeAttentionEvent(event);
+    fullStore.observeAttentionEvent(event);
+  }, false, undefined, () => {
+    if (paused) return;
+    paused = true;
+    started.resolve();
+    return finish.promise;
+  });
+  const requests: NavigationQueryRequest[] = [true, false].map((promoteOnTurnEnd) => ({
+    protocol: 2, consumer: "main-sidebar", pageSize: 1,
+    attentionView: { id: String(promoteOnTurnEnd), promoteOnTurnEnd },
+    query: { kind: "lens", lens: "attention", attention: "active" },
+  }));
+  const read = (store: NavigationQueryStore, index: Awaited<ReturnType<typeof f.live.read>>, request: NavigationQueryRequest) =>
+    store.readPage({ incremental: store === liveStore, scopeKey: "viewer", request, loadIndex: async () => index });
+  const setStatus = (threadId: string, type: "active" | "idle") => {
+    f.providers.get(threadId)!.threadStatus = type;
+    f.emit({ method: "thread/status/changed", params: { threadId, status: { type } } });
+  };
+  try {
+    f.providers.get("c")!.threadStatus = "active";
+    f.providers.get("d")!.threadStatus = "active";
+    const initial = await f.live.read();
+    for (const request of requests) {
+      expect((await read(liveStore, initial, request)).nextCursor).toBeDefined();
+      await read(fullStore, initial, request);
+    }
+    work.mockClear();
+    const slice = Array.prototype.slice;
+    let copies = 0;
+    using measured = vi.spyOn(Array.prototype, "slice").mockImplementation(function (this: unknown[], start, end) {
+      if (start === undefined && end === undefined && Object.isFrozen(this) && this.length === initial.threads.length
+        && this.every((row) => initial.threads.some(({ id }) => id === (row as NavigationThreadSummary | undefined)?.id))) copies++;
+      return slice.call(this, start, end);
+    });
+    setStatus("a", "active");
+    const published = f.live.read();
+    await started.promise;
+    setStatus("b", "active");
+    finish.resolve();
+    const current = await published;
+    measured.mockRestore();
+    const full = { ...f.full(), observedAt: current.observedAt };
+    for (const request of requests) {
+      const actual = await read(liveStore, current, request);
+      const expected = await read(fullStore, full, request);
+      expect([actual.entries, actual.counts]).toEqual([expected.entries, expected.counts]);
+    }
+    expect({ copies, visits: work.mock.calls }).toEqual({ copies: 1,
+      visits: [["rank", 2], ["membership", 2], ["rank", 2], ["membership", 2]] });
+  } finally { finish.resolve(); f.close(); }
+});
+
+it("advances the observation when input request membership changes and returns during one drain", async () => {
+  const passes = Array.from({ length: 2 }, () => ({
+    entered: Promise.withResolvers<void>(), finish: Promise.withResolvers<void>(),
+  }));
+  let pass = 0;
+  const f = fixture(undefined, false, undefined, () => {
+    const gate = passes[pass++];
+    gate?.entered.resolve();
+    return gate?.finish.promise;
+  });
+  try {
+    const initial = await f.live.read();
+    f.setInputKeys("codex:a");
+    f.emit({ method: "thread/status/changed", params: { threadId: "a", status: { type: "idle" } } });
+    const published = f.live.read();
+    await passes[0]!.entered.promise;
+    f.emit({ method: "thread/status/changed", params: { threadId: "b", status: { type: "idle" } } });
+    passes[0]!.finish.resolve();
+    await passes[1]!.entered.promise;
+    f.setInputKeys();
+    passes[1]!.finish.resolve();
+    const current = await published;
+    expect(current.threads).toBe(initial.threads);
+    expect(current.inputRequestThreadKeys?.size ?? 0).toBe(0);
+    expect(current.observedAt).toBeGreaterThan(initial.observedAt!);
+  } finally {
+    for (const pass of passes) pass.finish.resolve();
+    f.close();
+  }
+});
+
 it("matches the full SQLite join after a pinned child disappears and returns across reconnect", async () => {
   await compareSequence(["pin", "parent", "status", "seen", "archive", "reconnect", "archive"].map((kind, i) =>
     ({ kind, id: "b", on: i !== 6 })), true);
+});
+
+it.each(["provider rejection", "scope closure"] as const)("releases the raw cold seed on %s before joining again", async (outcome) => {
+  const rows: NavigationThreadSummary[] = [{ id: "saved", source: "codex", title: "Saved", titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: false } }];
+  const listingStarted = Promise.withResolvers<void>();
+  const listing = Promise.withResolvers<void>();
+  const failed = Promise.withResolvers<unknown>();
+  const published = Promise.withResolvers<void>();
+  const error = new Error("Provider listing rejected");
+  let seedRetained = false;
+  const join = vi.fn<ConstructorParameters<typeof LiveNavigationIndex>[0]["join"]>(async (_rows, coverage, mode, seedCurrent) => {
+    seedRetained = mode === "saved" && seedCurrent?.() === true;
+    return { threads: rows, directories: [], coverage };
+  });
+  const source: ConstructorParameters<typeof LiveNavigationIndex>[0] & { releaseSeedJoin(): void } = {
+    backend: "all", version: () => "0", changedKeys: () => undefined,
+    list: async (_scope, saved) => {
+      if (saved) return { rows, coverage: { state: "checking" }, verifyAfterSeed: true };
+      listingStarted.resolve();
+      await listing.promise;
+      return { rows, coverage: { state: "complete" } };
+    },
+    join, releaseSeedJoin: () => { seedRetained = false; },
+    cached: () => rows[0], sqlite: async () => rows, projectRows: async () => rows,
+    directories: async () => ({ directories: [] }), inputKeys: () => new Set(),
+    failed: failed.resolve, notify: published.resolve,
+  };
+  const live = new LiveNavigationIndex(source);
+  try {
+    const first = await live.read();
+    expect(first.coverage?.state).toBe("checking");
+    expect(first.threads.map(({ id }) => id)).toEqual(["saved"]);
+    expect(seedRetained).toBe(true);
+    if (outcome === "scope closure") {
+      live.close();
+    } else {
+      await listingStarted.promise;
+      expect(await live.read()).toBe(first);
+      listing.reject(error);
+      expect(await failed.promise).toBe(error);
+    }
+    // Neither exit reaches the verified join that normally consumes the seed.
+    expect(join).toHaveBeenCalledTimes(1);
+    expect(seedRetained).toBe(false);
+    if (outcome === "provider rejection") {
+      source.list = async () => ({ rows, coverage: { state: "complete" } });
+      expect(await live.read()).toBe(first);
+      await published.promise;
+      expect((await live.read()).coverage?.state).toBe("complete");
+    }
+  } finally {
+    listing.resolve();
+    live.close();
+  }
 });
 
 it("keeps the last page during a SQLite gap and applies a newer event over a delayed source listing", async () => {

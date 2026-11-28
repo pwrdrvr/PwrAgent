@@ -219,7 +219,7 @@ export function PricingSettings(props: {
             checked={spendAlerts.threadSpendEnabled.value}
             disabled={props.saving}
             label="Total thread spend"
-            sub={`Alert when a thread reaches $${spendAlerts.threadSpendThresholdUsd.value.toFixed(2)} in estimated list-price spend.`}
+            sub={`Show a warning when a thread reaches $${spendAlerts.threadSpendThresholdUsd.value.toFixed(2)} in estimated spend at model list prices. Your bill may differ.`}
             source={sourceBadge(spendAlerts.threadSpendEnabled)}
             onChange={(next) => {
               return props.onSpendAlertsChange({
@@ -235,7 +235,7 @@ export function PricingSettings(props: {
             min={MIN_SPEND_ALERT_THRESHOLD_USD}
             source={sourceBadge(spendAlerts.threadSpendThresholdUsd)}
             step={0.01}
-            sub="Estimated list-price spend allowed across the thread before the alert is raised."
+            sub="Estimated list-price total that triggers the warning. The warning does not stop the thread."
             suffix="USD"
             value={spendAlerts.threadSpendThresholdUsd.value}
             onSave={(next) => {

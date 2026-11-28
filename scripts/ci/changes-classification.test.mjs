@@ -276,19 +276,21 @@ it("gates every cross-platform job on the classifier and nothing else on it", ()
   expect(windows).toContain("needs.pr-test-impact-plan.outputs.e2e_windows_mode == 'selected'");
 });
 
-// Oracle: the required `Test` check passes only when the Linux unit lanes
-// succeeded, or were skipped because the test plan succeeded and explicitly
-// emitted `[]` for `unit_linux_lanes`. Run the step's actual shell.
-it("accepts a skipped Test lane in the Test gate only when the test plan selected no unit test", () => {
+// Oracle: the required Test check needs a successful renderer layout check.
+// Unit lanes may skip when the test plan explicitly selected none.
+it("requires renderer layout even when the Test gate has no selected unit lanes", () => {
   const gate = jobSection("test-result");
   const script = gate.split("        run: |\n")[1].split("\n").map((line) => line.slice(10)).join("\n");
-  for (const testResult of ["success", "failure", "cancelled", "skipped"]) {
-    for (const lanes of [undefined, "", "[]", "[1]", "[1,2,3,4]"]) {
-      const env = { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: "/dev/null", TEST_RESULT: testResult };
-      if (lanes !== undefined) env.UNIT_LINUX_LANES = lanes;
-      const run = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
-      const pass = testResult === "success" || (lanes === "[]" && testResult === "skipped");
-      expect(run.status === 0, `test=${testResult} lanes=${lanes}`).toBe(pass);
+  const results = ["success", "failure", "cancelled", "skipped"];
+  for (const layoutResult of results) {
+    for (const testResult of results) {
+      for (const lanes of [undefined, "", "[]", "[1]", "[1,2,3,4]"]) {
+        const env = { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: "/dev/null", LAYOUT_RESULT: layoutResult, TEST_RESULT: testResult };
+        if (lanes !== undefined) env.UNIT_LINUX_LANES = lanes;
+        const run = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+        const unitPassed = testResult === "success" || (lanes === "[]" && testResult === "skipped");
+        expect(run.status === 0, `layout=${layoutResult} test=${testResult} lanes=${lanes}`).toBe(layoutResult === "success" && unitPassed);
+      }
     }
   }
 });

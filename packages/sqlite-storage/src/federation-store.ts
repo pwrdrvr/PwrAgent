@@ -186,6 +186,11 @@ export class FederationStore implements FederationStorage {
     return row ? rowToPeer(row) : undefined;
   }
 
+  /** Changes committed by other connections sharing this profile. */
+  externalChangeVersion(): number {
+    return this.stateDb.raw.pragma("data_version", { simple: true }) as number;
+  }
+
   listPeers(options?: { includeRevoked?: boolean }): FederationPeerSummary[] {
     const rows = options?.includeRevoked
       ? (this.stateDb.raw

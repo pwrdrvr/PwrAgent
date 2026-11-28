@@ -528,6 +528,8 @@ function DesktopAppShell(props: {
     launchpadConnectionsDock,
     threadJump,
     closeThreadJump,
+    toggleSidebar,
+    toggleContextRail,
     setSidebarHiddenPersisted,
     setContextRailPinnedPersisted,
     setProjectIndexHiddenPersisted,
@@ -538,7 +540,12 @@ function DesktopAppShell(props: {
     setLaunchpadConnectionsDockPersisted,
     resizeSidebar,
     startSidebarResize,
-  } = useShellLayout(props.settings);
+  } = useShellLayout(props.settings, {
+    onSidebarOpened: () => windowBackendSummaries.requestAntigravityQuota(),
+    onProvidersOpened: () => {
+      if (mainView === "thread") backendSummaries.requestAntigravityQuota();
+    },
+  });
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
   // The open thread whose title strip holds a rename field.
@@ -1804,32 +1811,14 @@ function DesktopAppShell(props: {
       await navigation.refresh?.("action/messaging-unbind");
     },
   );
-  const pendingSpendAlertCapacity = Math.max(0, 10 - appNotices.durable.filter((notice) =>
-    notice.id.startsWith("spend-alert:thread:")).length);
-  useEffect(() => {
-    if (!normalAppEnabled || readRendererFederationTarget() || !desktopApi?.listPendingThreadSpendAlerts
-      || !pendingSpendAlertCapacity) return;
-    let disposed = false;
-    let pending = false;
-    const read = async () => {
-      if (pending || disposed) return;
-      pending = true;
-      try {
-        const page = await desktopApi.listPendingThreadSpendAlerts!({ limit: pendingSpendAlertCapacity });
-        if (disposed) return;
-        for (const { alert, backend } of page.alerts) {
-          dispatchAppNotice({ type: "show", notice: buildSpendAlertNotice({ alert, backend,
-            threadLink: { backend, threadId: alert.threadId, title: alert.threadId, inThreadList: false, linkedDirectories: [] } }) });
-          acknowledgeThreadSpendAlert({ alert, backend });
-        }
-      } catch {
-        // Undelivered alerts remain durable on the owner. Focus retries the read.
-      } finally { pending = false; }
-    };
-    void read();
-    const unsubscribe = desktopApi.onWindowFocus?.(() => { void read(); });
-    return () => { disposed = true; unsubscribe?.(); };
-  }, [acknowledgeThreadSpendAlert, desktopApi, normalAppEnabled, pendingSpendAlertCapacity]);
+  usePendingThreadSpendAlerts({
+    acknowledge: acknowledgeThreadSpendAlert,
+    desktopApi,
+    durableNotices: appNotices.durable,
+    // The owner also gates reads made before the settings snapshot arrives.
+    enabled: normalAppEnabled && settings.snapshot?.general.spendAlerts?.threadSpendEnabled.value !== false,
+    show: showAppNotice,
+  });
 
   // Help → Copy Diagnostics Info reports the selected thread; the sidebar's
   // thread menu reports the thread it was opened on, without selecting it.
@@ -2014,26 +2003,9 @@ function DesktopAppShell(props: {
           .repeatedLargeOutputMinimumPercent,
     );
   }, [settings.snapshot?.general.toolOutputAlerts]);
-  // The sidebar belongs to the window's navigation owner even when its
-  // selected transcript belongs to a peer. A peer's provider catalog must
-  // not remove management actions from this window's local thread rows.
-  const windowFederationTarget = useMemo(() => readRendererFederationTarget(), []);
-  const windowBackendSummaries = useBackendSummaries(desktopApi, {
-    enabled: normalAppEnabled,
-    federationTarget: windowFederationTarget,
-    suspended: Boolean(windowFederationTarget && remoteReadsSuspended),
-    pollRateLimits: !sidebarHidden,
-  });
-  const selectedPeerCatalog = !federationTargetsEqual(activeFederationTarget, windowFederationTarget);
-  const selectedPeerBackendSummaries = useBackendSummaries(desktopApi, {
-    enabled: normalAppEnabled && selectedPeerCatalog,
-    federationTarget: activeFederationTarget,
-    suspended: remoteReadsSuspended,
-    pollRateLimits: !sidebarHidden,
-  });
-  const backendSummaries = selectedPeerCatalog
-    ? selectedPeerBackendSummaries
-    : windowBackendSummaries;
+  const { windowFederationTarget, windowBackendSummaries, backendSummaries } = useShellBackendSummaries(
+    desktopApi, normalAppEnabled, activeFederationTarget, remoteReadsSuspended, !sidebarHidden,
+  );
   const remoteSidebarBackends = useSidebarOwnerBackends(desktopApi, navigation.threads, {
     enabled: normalAppEnabled,
     windowInstanceId: windowFederationTarget?.instanceId,
@@ -4260,6 +4232,7 @@ function DesktopAppShell(props: {
         bindOptimisticUserMessageToTurn: session.bindOptimisticUserMessageToTurn,
         backendError: backendSummaries.error,
         backends: backendSummaries.backends,
+        onRequestAntigravityQuota: backendSummaries.requestAntigravityQuota,
         applications,
         codexFastAllowed:
           settings.snapshot?.models?.codex.allowFast?.value ?? true,
@@ -4436,6 +4409,7 @@ function DesktopAppShell(props: {
           },
         },
         contextRailPinned,
+        onToggleContextRail: toggleContextRail,
         onContextRailPinnedChange: setContextRailPinnedPersisted,
         activeContextTab,
         onActiveContextTabChange: setActiveContextTabPersisted,
@@ -4451,7 +4425,7 @@ function DesktopAppShell(props: {
             : launchpadConnectionsDock,
         onLaunchpadConnectionsDockChange: setLaunchpadConnectionsDockPersisted,
         sidebarHidden,
-        onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
+        onToggleSidebar: toggleSidebar,
         mastheadActions,
         historyNav,
         starMap: starMapControls,
@@ -4674,8 +4648,8 @@ function DesktopAppShell(props: {
           layout={{
             sidebarOpen: !sidebarHidden,
             railOpen: contextRailPinned,
-            onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-            onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+            onToggleSidebar: toggleSidebar,
+            onToggleRail: toggleContextRail,
           }}
           starMap={starMapControls}
           actions={mastheadActions}
@@ -4720,6 +4694,7 @@ function DesktopAppShell(props: {
             backends={windowBackendSummaries.backends}
             remoteBackends={remoteSidebarBackends}
             onRefreshRateLimits={windowBackendSummaries.refreshRateLimits}
+            onRequestAntigravityQuota={windowBackendSummaries.requestAntigravityQuota}
             browseMode={navigation.browseMode}
             attentionScope={navigation.attentionScope}
             onAttentionScopeChange={navigation.setAttentionScope}
@@ -5016,8 +4991,8 @@ function DesktopAppShell(props: {
                 layout={{
                   sidebarOpen: !sidebarHidden,
                   railOpen: contextRailPinned,
-                  onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-                  onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                  onToggleSidebar: toggleSidebar,
+                  onToggleRail: toggleContextRail,
                 }}
                 masthead={mastheadActions}
                 history={historyNav}
@@ -5105,8 +5080,8 @@ function DesktopAppShell(props: {
                   layout={{
                     sidebarOpen: !sidebarHidden,
                     railOpen: contextRailPinned,
-                    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-                    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+                    onToggleSidebar: toggleSidebar,
+                    onToggleRail: toggleContextRail,
                   }}
                   masthead={mastheadActions}
                   history={historyNav}
@@ -5420,8 +5395,41 @@ function isSettingsSection(
   );
 }
 
+function useShellBackendSummaries(
+  desktopApi: DesktopApi | undefined,
+  enabled: boolean,
+  activeFederationTarget: FederationTarget | undefined,
+  remoteReadsSuspended: boolean,
+  pollRateLimits: boolean,
+) {
+  // The sidebar belongs to the window's navigation owner even when its
+  // selected transcript belongs to a peer.
+  const windowFederationTarget = useMemo(() => readRendererFederationTarget(), []);
+  const windowBackendSummaries = useBackendSummaries(desktopApi, {
+    enabled,
+    federationTarget: windowFederationTarget,
+    suspended: Boolean(windowFederationTarget && remoteReadsSuspended),
+    pollRateLimits,
+  });
+  const selectedPeerCatalog = !federationTargetsEqual(activeFederationTarget, windowFederationTarget);
+  const selectedPeerBackendSummaries = useBackendSummaries(desktopApi, {
+    enabled: enabled && selectedPeerCatalog,
+    federationTarget: activeFederationTarget,
+    suspended: remoteReadsSuspended,
+    pollRateLimits,
+  });
+  return {
+    windowFederationTarget,
+    windowBackendSummaries,
+    backendSummaries: selectedPeerCatalog ? selectedPeerBackendSummaries : windowBackendSummaries,
+  };
+}
+
 // Own window layout, including live drag width and startup preference adoption.
-function useShellLayout(settings: DesktopSettingsState) {
+function useShellLayout(settings: DesktopSettingsState, actions: {
+  onSidebarOpened: () => void;
+  onProvidersOpened: () => void;
+}) {
   const [sidebarWidth, setSidebarWidth] = useState(408);
   // Live mirror of `sidebarWidth`. A pointer drag updates this ref (and the
   // DOM) on every move WITHOUT calling setState, so the `.app-shell` rerender
@@ -5516,13 +5524,18 @@ function useShellLayout(settings: DesktopSettingsState) {
     },
     [writeConfig],
   );
-  // Single owner of the window-layout keyboard chords (⌘B/⌃B sidebar,
-  // ⌘⌥B/⌃⌥B rail, ⇧⌘B/⇧⌃B project index). Bound once here — never per
-  // PanelToggleButtons chip — so it fires exactly once regardless of how many
-  // chips are mounted.
+  const toggleSidebar = useEventCallback(() => {
+    if (sidebarHidden) actions.onSidebarOpened();
+    setSidebarHiddenPersisted(!sidebarHidden);
+  });
+  const toggleContextRail = useEventCallback(() => {
+    if (!contextRailPinned && activeContextTab === "providers") actions.onProvidersOpened();
+    setContextRailPinnedPersisted(!contextRailPinned);
+  });
+  // Bind once per window so each layout chord runs exactly one action.
   useLayoutChordHotkeys({
-    onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
-    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+    onToggleSidebar: toggleSidebar,
+    onToggleRail: toggleContextRail,
     onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
   });
   // Called once per drag and once per arrow-key run, on release.
@@ -5713,6 +5726,8 @@ function useShellLayout(settings: DesktopSettingsState) {
     launchpadConnectionsDock,
     threadJump,
     closeThreadJump,
+    toggleSidebar,
+    toggleContextRail,
     setSidebarHiddenPersisted,
     setContextRailPinnedPersisted,
     setProjectIndexHiddenPersisted,
@@ -5832,6 +5847,52 @@ function useMainView() {
 }
 
 // Own the authentication/configuration notice producers and login dialog state.
+function usePendingThreadSpendAlerts({
+  acknowledge,
+  desktopApi,
+  durableNotices,
+  enabled,
+  show,
+}: {
+  acknowledge: (params: { alert: ThreadSpendAlert; backend: AppServerBackendKind }) => void;
+  desktopApi?: DesktopApi;
+  durableNotices: readonly AppNoticeToastNotice[];
+  enabled: boolean;
+  show: (notice: AppNoticeToastNotice) => void;
+}) {
+  const capacity = Math.max(0, 10 - durableNotices.filter((notice) =>
+    notice.id.startsWith("spend-alert:thread:")).length);
+  useEffect(() => {
+    if (!enabled || readRendererFederationTarget() || !desktopApi?.listPendingThreadSpendAlerts
+      || !capacity) return;
+    let disposed = false;
+    let pending = false;
+    const read = async () => {
+      if (pending || disposed) return;
+      pending = true;
+      try {
+        const page = await desktopApi.listPendingThreadSpendAlerts!({ limit: capacity });
+        if (disposed) return;
+        for (const { alert, backend } of page.alerts) {
+          show(buildSpendAlertNotice({
+            alert,
+            backend,
+            threadLink: { backend, threadId: alert.threadId, title: alert.threadId, inThreadList: false, linkedDirectories: [] },
+          }));
+          acknowledge({ alert, backend });
+        }
+      } catch {
+        // Undelivered alerts remain durable on the owner. Focus retries the read.
+      } finally {
+        pending = false;
+      }
+    };
+    void read();
+    const unsubscribe = desktopApi.onWindowFocus?.(() => { void read(); });
+    return () => { disposed = true; unsubscribe?.(); };
+  }, [acknowledge, capacity, desktopApi, enabled, show]);
+}
+
 function useAppNoticeProducers(props: {
   desktopApi?: DesktopApi;
   settings: DesktopSettingsState;

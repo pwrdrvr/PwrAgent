@@ -28,7 +28,8 @@ import {
   parseMonitorJobHeuristicDecision,
   type MonitorJobHeuristicEvidence,
 } from "./monitor-job-suggestion";
-import { LivePricingLines } from "./live-pricing-lines";
+import { TokenMiserPricingPage } from "./token-miser-pricing-page";
+import { LiveGatePricingLines, LivePricingLines, LivePricingMap } from "./live-pricing-lines";
 import { isCodexPricingLine, priceLocalModelUsage } from "@pwragent/shared/local-model-pricing";
 import {
   type ThreadDisplayCards,
@@ -86,7 +87,7 @@ import {
   toolInvocationReviewInputFromNotification,
   type ToolOutputIncidentAggregate,
 } from "./tool-invocation-accounting";
-import { detectUsageSpendAlerts } from "./usage-spend-alerts";
+import { detectUsageSpendAlerts, spendThresholdMicros } from "./usage-spend-alerts";
 import { getMainLogger } from "../log";
 import {
   completedAtFromTerminalNotification,
@@ -166,6 +167,9 @@ import { isDevelopment, logDebug } from "./registry-debug-log";
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const TOKEN_MISER_LEDGER_BATCH_SIZE = 64;
 const TOKEN_MISER_LEGACY_CLEANUP_DELAY_MS = 30_000;
+
+type ReplayGate = Pick<TokenMiserObjectMetadata, "objectId" | "threadId" | "createdAt"
+  | "cachedReplayCount" | "lastParentCumulativeInputTokens" | "parentRequestsObservedAfterGate">;
 
 type TokenMiserLedgerWriteOptions = {
   publishPricing?: boolean;
@@ -540,7 +544,7 @@ export class ThreadUsageLedger {
 
   private readonly activeTokenMiserReplayEntries = new Map<
     string,
-    Map<string, TokenMiserObjectMetadata>
+    Map<string, ReplayGate>
   >();
 
   /**
@@ -561,7 +565,7 @@ export class ThreadUsageLedger {
 
   private readonly liveTokenMiserSubAgents = new Map<
     string,
-    Map<string, ThreadSubAgentSummary>
+    LivePricingMap<ThreadSubAgentSummary>
   >();
 
   private readonly liveTokenMiserUsageLines = new Map<
@@ -994,13 +998,41 @@ export class ThreadUsageLedger {
     return changedPricing ? mergeThreadPricingLines(merged, lines) : { ...merged, lines };
   }
 
+  pricingPageOverlay(threadId: string) {
+    // Worker usage can replace arbitrary turns and is reconciled by the full reader.
+    if (!this.workerPricingCollections(threadId).next().done
+      || this.subAgentMonitorService.liveCodexNativeSubAgentUsageRecords.get(threadId)?.size) return undefined;
+    const lines = this.liveTokenMiserUsageLines.get(threadId);
+    const cards = this.liveTokenMiserSubAgents.get(threadId);
+    if ((lines && !lines.watchChanges) || (cards && !cards.watchChanges)) return undefined;
+    const local = new Set(this.host().resolveCodexLocalModelIdsFn());
+    const labels = new Map(this.host().codexBackendSummary?.launchpadOptions?.models?.map((model) => [model.id, model.label]));
+    const store = this.host().tokenMiserStore;
+    return {
+      accountingOwner: store,
+      openAccounting: () => store && TokenMiserPricingPage.open(store, threadId),
+      accountingFailed: (error: unknown) => backendRegistryLog.warn("failed to read indexed Token Miser accounting", {
+        threadId, error: error instanceof Error ? error.message : String(error),
+      }),
+      liveGate: (id: string) => lines?.forSource(id),
+      lines, cards, decorationKey: JSON.stringify([[...local], [...labels]]),
+      decorate(line: ThreadUsageLineRecord) {
+        if (!line.model || !isCodexPricingLine(line)) return line;
+        const label = labels.get(line.model);
+        const decorated = label ? { ...line, modelLabel: label } : line;
+        return local.has(line.model) ? priceLocalModelUsage(decorated) : decorated;
+      },
+      isLocal: (line: ThreadUsageLineRecord) => Boolean(line.model && local.has(line.model) && isCodexPricingLine(line)),
+    };
+  }
+
   private *livePricingCollections(threadId: string): Iterable<LivePricingLines> {
     const gates = this.liveTokenMiserUsageLines.get(threadId);
     if (gates) yield gates;
     yield* this.workerPricingCollections(threadId);
   }
 
-  private *workerPricingCollections(threadId: string): Iterable<LivePricingLines> {
+  private *workerPricingCollections(threadId: string): IterableIterator<LivePricingLines> {
     const workers = this.subAgentMonitorService.liveCodexNativeSubAgentUsageRecords;
     if (!workers.size) return;
     for (const worker of workers.get(threadId)?.values() ?? []) yield worker.lines;
@@ -1065,6 +1097,7 @@ export class ThreadUsageLedger {
     const threadSpendMicros = !baseline && this.host().spendAlertPolicy.threadSpendEnabled && !threadSpendAlerted
       ? await usage.readThreadSpendMicros?.({
           ...readParams,
+          thresholdMicros: spendThresholdMicros(this.host().spendAlertPolicy.threadSpendThresholdUsd),
           liveGates: params.backend === "codex" ? this.liveTokenMiserUsageLines.get(params.threadId) : undefined,
           liveLines: params.backend === "codex" ? [...this.workerPricingCollections(params.threadId)].flatMap((group) => [...group.values()]) : [],
           localModelIds,
@@ -2962,8 +2995,10 @@ export class ThreadUsageLedger {
     boundedCaptureBackend?: AppServerBackendKind,
   ): Promise<void> {
     const { threadId, turnId, inferenceId, usage: result } = params;
-    if (result.status !== "ok" || !result.tokenUsage) return;
+    if (!result.tokenUsage) return;
+    const reportedCost = readRecord(result.tokenUsage)?.claudeCostUSD;
     const usage = buildTaskMonitorUsageSnapshot({
+      providerCostUsd: typeof reportedCost === "number" ? reportedCost : undefined,
       model: result.model,
       serviceTier: result.serviceTier,
       tokenUsage: result.tokenUsage,
@@ -3121,9 +3156,8 @@ export class ThreadUsageLedger {
     // The request cursor belongs to this Codex session. Only the gate
     // records survive a restart.
     let persistedBoundary: Promise<number> | undefined;
-    for (const page of store.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE, threadId)) {
+    for (const open of store.listOpenReplayPages(TOKEN_MISER_LEDGER_BATCH_SIZE, threadId)) {
       if (this.context.lifecycle.closed) return false;
-      const open = page.filter((entry) => entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined);
       if (open.length > 0) {
         const usage = this.context.stores.usage;
         const thread = { backend: "codex" as const, threadId };
@@ -3135,7 +3169,7 @@ export class ThreadUsageLedger {
         const objectIds: string[] = [];
         for (const entry of open) {
           if (compactedAt > entry.createdAt) objectIds.push(entry.objectId);
-          else this.rememberActiveTokenMiserReplayEntry(entry);
+          else this.rememberActiveTokenMiserReplayEntry({ ...entry, replayTrackingVersion: 2 });
         }
         if (objectIds.length > 0) {
           const restored = await store.restoreReplayTracking({
@@ -3152,7 +3186,7 @@ export class ThreadUsageLedger {
   }
 
   rememberActiveTokenMiserReplayEntry(
-    metadata: TokenMiserObjectMetadata,
+    metadata: ReplayGate & Pick<TokenMiserObjectMetadata, "replayTrackingVersion" | "replayTrackingStoppedAt">,
   ): void {
     const active = this.activeTokenMiserReplayEntries.get(metadata.threadId);
     if (
@@ -3165,7 +3199,7 @@ export class ThreadUsageLedger {
       }
       return;
     }
-    const entries = active ?? new Map<string, TokenMiserObjectMetadata>();
+    const entries = active ?? new Map<string, ReplayGate>();
     entries.set(metadata.objectId, metadata);
     this.activeTokenMiserReplayEntries.set(metadata.threadId, entries);
   }
@@ -3295,17 +3329,18 @@ export class ThreadUsageLedger {
       return;
     }
     const observed = [...entries.entries()];
-    const updated = await Promise.all(
-      observed.map(([objectId]) =>
-        this.host().tokenMiserStore!.recordParentModelRequest({
-          cumulativeInputTokens,
-          objectId,
-          requestEpoch:
-            this.tokenMiserRequestEpochByCursor.get(cursorKey)
-            ?? this.tokenMiserRequestEpoch,
-        })
-      ),
-    );
+    const request = {
+      cumulativeInputTokens,
+      requestEpoch: this.tokenMiserRequestEpochByCursor.get(cursorKey) ?? this.tokenMiserRequestEpoch,
+    };
+    const pages = [];
+    for (let start = 0; start < observed.length; start += TOKEN_MISER_LEDGER_BATCH_SIZE) {
+      const ids = observed.slice(start, start + TOKEN_MISER_LEDGER_BATCH_SIZE).map(([id]) => id);
+      pages.push(host.tokenMiserStore.recordParentModelRequests(request, ids, isDevelopment
+        ? (index, before) => { observed[start + index] = [ids[index]!, before]; }
+        : undefined));
+    }
+    const updated = (await Promise.all(pages)).flat();
     this.logTokenMiserReplayDecision({
       cumulativeInputTokens,
       observed,
@@ -3347,7 +3382,7 @@ export class ThreadUsageLedger {
   // Gated on isDevelopment, so packaged builds do no parsing work here.
   private logTokenMiserReplayDecision(params: {
     cumulativeInputTokens: number;
-    observed: readonly (readonly [string, TokenMiserObjectMetadata])[];
+    observed: readonly (readonly [string, ReplayGate])[];
     threadId: string;
     tokenUsage: unknown;
     updated: readonly (TokenMiserObjectMetadata | undefined)[];
@@ -3887,12 +3922,11 @@ export class ThreadUsageLedger {
     if (this.context.lifecycle.closed) {
       return;
     }
-    const pricing = typeof this.context.stores.usage.readThreadPricing === "function"
-      ? await this.context.stores.usage.readThreadPricing({
-          backend: "codex",
-          threadId: entry.threadId,
-        })
-      : { lines: [], summaries: [] };
+    const usageStore = this.context.stores.usage;
+    const monitorId = tokenMiserMonitorId(entry);
+    const storedLines = usageStore.readTokenMiserGatePricingLines
+      ? await usageStore.readTokenMiserGatePricingLines({ backend: "codex", threadId: entry.threadId, sourceItemIds: [monitorId], turnIds: [entry.turnId] })
+      : (await usageStore.readThreadPricing?.({ backend: "codex", threadId: entry.threadId }))?.lines ?? [];
     // Invocations only reconstruct replays for gates that predate observed
     // replay tracking. A v2 gate never reads them, so skip the full read.
     const toolAccounting =
@@ -3904,19 +3938,17 @@ export class ThreadUsageLedger {
             threadId: entry.threadId,
           })
         : undefined;
-    const linesById = new Map(
-      pricing.lines.map((line) => [line.usageLineId, line]),
-    );
-    for (const pending of this.pendingLiveThreadUsageLines.values()) {
-      const lineThreadId = pending.line.parentThreadId ?? pending.line.threadId;
-      if (pending.backend === "codex" && lineThreadId === entry.threadId) {
-        linesById.set(pending.line.usageLineId, pending.line);
-      }
+    const linesById = new Map(storedLines.map((line) => [line.usageLineId, line]));
+    for (const { backend, line } of this.pendingLiveThreadUsageLines.values()) {
+      if (backend === "codex" && (line.parentThreadId ?? line.threadId) === entry.threadId) linesById.set(line.usageLineId, line);
     }
-    for (const line of this.liveTokenMiserUsageLines.get(entry.threadId)?.values()
-      ?? []) {
-      linesById.set(line.usageLineId, line);
+    const live = this.liveTokenMiserUsageLines.get(entry.threadId);
+    for (const id of linesById.keys()) {
+      const replacement = live?.get(id);
+      if (replacement) linesById.set(id, replacement);
     }
+    const gate = live?.forSource(monitorId);
+    if (gate) linesById.set(gate.usageLineId, gate);
     const artifact = this.buildTokenMiserLedgerArtifact({
       entry,
       indexes: {
@@ -3926,7 +3958,7 @@ export class ThreadUsageLedger {
     });
     if (
       artifact.gateUsageLine
-      && !pricing.lines.some((line) =>
+      && !storedLines.some((line) =>
         line.usageLineId === artifact.gateUsageLine?.usageLineId
       )
       && !this.pendingLiveThreadUsageLines.has(
@@ -3947,12 +3979,12 @@ export class ThreadUsageLedger {
       }
     }
     const liveSubAgents = this.liveTokenMiserSubAgents.get(entry.threadId)
-      ?? new Map<string, ThreadSubAgentSummary>();
+      ?? new LivePricingMap<ThreadSubAgentSummary>();
     liveSubAgents.set(artifact.subAgent.monitorId, artifact.subAgent);
     this.liveTokenMiserSubAgents.set(entry.threadId, liveSubAgents);
     if (artifact.gateUsageLine) {
       const liveUsageLines = this.liveTokenMiserUsageLines.get(entry.threadId)
-        ?? new LivePricingLines();
+        ?? new LiveGatePricingLines();
       liveUsageLines.set(
         artifact.gateUsageLine.usageLineId,
         artifact.gateUsageLine,
@@ -3996,14 +4028,15 @@ export class ThreadUsageLedger {
     }
     const threadId = first.threadId;
     const liveSubAgents = this.liveTokenMiserSubAgents.get(threadId)
-      ?? new Map<string, ThreadSubAgentSummary>();
+      ?? new LivePricingMap<ThreadSubAgentSummary>();
     const liveUsageLines = this.liveTokenMiserUsageLines.get(threadId)
-      ?? new LivePricingLines();
-    // A rebuilt gate line is keyed by its own monitor id, so adding it to the
-    // live lines can change only that gate's lookup. Index the lines once and
-    // record each addition rather than rescanning them per gate.
+      ?? new LiveGatePricingLines();
     const indexes: TokenMiserLedgerIndexes = {
-      pricing: indexTokenMiserPricingLines(liveUsageLines.values()),
+      pricing: liveUsageLines instanceof LivePricingLines ? {
+        gateUsageLine: (id) => liveUsageLines.forSource(id),
+        parentUsageLine: (thread, turn) => liveUsageLines.forParent(thread, turn),
+        appendGateUsageLine: () => {},
+      } : indexTokenMiserPricingLines((liveUsageLines as ReadonlyMap<string, ThreadUsageLineRecord>).values()),
       replays: indexTokenMiserCachedReplays([]),
     };
     for (const entry of entries) {

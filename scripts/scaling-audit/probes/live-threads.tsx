@@ -100,6 +100,7 @@ it.each(scenarios)("streams $n concurrent turns over $history prior entries ($de
   vi.setSystemTime(new Date("2026-01-01T12:00:00Z"));
   const lanes = Array.from({ length: n }, (_, i) => threadWorkload(i, history));
   const byId = new Map(lanes.map((lane) => [lane.thread.id, lane]));
+  let ownerReads = 0;
   const listeners = new Set<(event: AgentEvent) => void>();
   const desktopApi: DesktopApi = {
     onAgentEvent(listener) {
@@ -107,7 +108,7 @@ it.each(scenarios)("streams $n concurrent turns over $history prior entries ($de
       return () => listeners.delete(listener);
     },
     async readThread({ threadId }) {
-      if (globalThis.liveThreadWork) globalThis.liveThreadWork.ownerReads++;
+      ownerReads++;
       return { backend: "codex", threadId, fetchedAt: Date.now(), replay: {
         entries: byId.get(threadId)!.entries, messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
       } };
@@ -138,7 +139,11 @@ it.each(scenarios)("streams $n concurrent turns over $history prior entries ($de
   }
   await open(lanes[0]);
   expect(Object.keys(selected.thinkingThreadKeys)).toHaveLength(n);
+  const thinking = selected.thinkingThreadKeys;
+  const approvals = selected.approvalRequestThreadKeys;
+  const inputs = selected.inputRequestThreadKeys;
   const work: LiveThreadWork = { indicatorVisits: 0, retentionVisits: 0, projections: 0, projectionRows: 0, backgroundProjections: 0, commits: 0, ownerReads: 0 };
+  const readsBeforeStreaming = ownerReads;
   let events = 0;
   let batches = 0;
   const send = (batch: Event[]) => {
@@ -150,6 +155,9 @@ it.each(scenarios)("streams $n concurrent turns over $history prior entries ($de
     } finally {
       globalThis.liveThreadWork = undefined;
     }
+    expect(selected.thinkingThreadKeys).toBe(thinking);
+    expect(selected.approvalRequestThreadKeys).toBe(approvals);
+    expect(selected.inputRequestThreadKeys).toBe(inputs);
     events += batch.length;
   };
   const details = () => selected.entries.flatMap((entry) => entry.type === "activity" ? entry.details ?? [] : []);
@@ -197,11 +205,13 @@ it.each(scenarios)("streams $n concurrent turns over $history prior entries ($de
     });
     expect(transcript).toEqual(lane.tools.flatMap((tool, i) => [tool, ["reply-" + i, lane.replies[i]]]));
   }
-  // Session retention may visit each live session once per event. Three indicator
-  // maps may visit each session per render batch. Visible work has a per-turn cap.
+  work.ownerReads = ownerReads - readsBeforeStreaming;
+  // Keep the merged audit replayable on its original full-scan implementation.
+  // For keyed updates, each event may visit only its own session in either path.
+  const keyed = process.env.AUDIT_KEYED_SESSIONS === "1";
   const budgets: LiveThreadWork = {
-    retentionVisits: n * events,
-    indicatorVisits: 3 * n * batches,
+    retentionVisits: keyed ? events : n * events,
+    indicatorVisits: keyed ? events : 3 * n * batches,
     backgroundProjections: 0,
     projections: steps,
     projectionRows: steps * (history + rounds * 2 + 1),
@@ -209,6 +219,8 @@ it.each(scenarios)("streams $n concurrent turns over $history prior entries ($de
     ownerReads: 0,
   };
   record({ kind: "live-threads", n, history, delivery, events, batches, budgets, ...work });
+  expect(work.retentionVisits).toBeGreaterThan(0);
+  expect(work.indicatorVisits).toBeGreaterThan(0);
   for (const key of Object.keys(budgets) as (keyof LiveThreadWork)[]) {
     expect(work[key], key).toBeLessThanOrEqual(budgets[key]);
   }

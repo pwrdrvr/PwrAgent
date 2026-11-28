@@ -1,5 +1,6 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { DESKTOP_SPEND_ALERT_POLICY_DEFAULT } from "@pwragent/shared/contracts/settings";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -113,6 +114,7 @@ describe("turn end read budget", () => {
   async function setupThread(params: {
     historicalTurns: number;
     stateDb: StateDb;
+    threadSpendEnabled?: boolean;
   }) {
     const store = new SqliteOverlayStore(params.stateDb);
     const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-turn-end-"));
@@ -125,6 +127,10 @@ describe("turn end read budget", () => {
         onPendingRequest: () => () => {},
       } as never,
       overlayStore: store,
+      resolveSpendAlertPolicy: params.threadSpendEnabled ? () => ({
+        ...DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
+        threadSpendEnabled: true,
+      }) : undefined,
     });
     const internals = registry as unknown as Internals;
     internals.tokenMiserStore = new TestTokenMiserStore(
@@ -215,6 +221,7 @@ describe("turn end read budget", () => {
     const { internals, ledgerSize, registry, store } = await setupThread({
       historicalTurns,
       stateDb,
+      threadSpendEnabled: true,
     });
 
     const ledger = countWholeLedgerReads(stateDb, THREAD_ID);
@@ -354,6 +361,7 @@ describe("turn end read budget", () => {
     const { internals, registry, store } = await setupThread({ historicalTurns, stateDb });
     await endTurn(internals);
     const builds = {
+      pricingPages: vi.spyOn(store, "readThreadPricingPage"),
       cardLists: vi.spyOn(store, "listThreadSubAgents"),
       cardReads: vi.spyOn(store, "getThreadSubAgents"),
       overlays: vi.spyOn(store, "getThreadOverlayState"),
@@ -397,7 +405,7 @@ describe("turn end read budget", () => {
     const small = await measureRendererRefresh(20);
     const large = await measureRendererRefresh(2_000);
     expect(small).toEqual({
-      cardLists: 0, cardReads: 1, overlays: 1, pricingLedgers: 1, tokenMiser: 1, toolAccounting: 1, turnUsage: 1,
+      pricingPages: 1, cardLists: 0, cardReads: 0, overlays: 1, pricingLedgers: 0, tokenMiser: 0, toolAccounting: 0, turnUsage: 1,
     });
     expect(large).toEqual(small);
   }, 60_000);

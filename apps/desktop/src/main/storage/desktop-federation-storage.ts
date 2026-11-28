@@ -24,6 +24,9 @@ const fields = {
 /** Only federation-owned settings are available here, with each original write
  * left independent. Pairing and reset do not acquire a new transaction. */
 export const desktopFederationState = {
+  externalChangeVersion(): number {
+    return new FederationStore(getAppStateDb()).externalChangeVersion();
+  },
   read(field: keyof typeof fields): string | undefined {
     return getAppStateDb().getMeta(fields[field]);
   },

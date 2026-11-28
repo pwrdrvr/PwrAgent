@@ -1310,6 +1310,14 @@ export class DesktopSettingsService {
           false,
         ),
         tokenMiserBoundedCommands: this.resolveConfigBoolean(config.experimental?.tokenMiserBoundedCommands, false),
+        tokenMiserGate: {
+          value: config.experimental?.tokenMiserGate ?? "none",
+          source: config.experimental?.tokenMiserGate === undefined ? "default" : "config",
+        },
+        tokenMiserSummarizer: {
+          value: config.experimental?.tokenMiserSummarizer ?? "off",
+          source: config.experimental?.tokenMiserSummarizer === undefined ? "default" : "config",
+        },
         tokenMiserBoundedHelper: {
           value: config.experimental?.tokenMiserBoundedHelper ?? "deterministic",
           source: config.experimental?.tokenMiserBoundedHelper === undefined ? "default" : "config",
@@ -1337,6 +1345,10 @@ export class DesktopSettingsService {
         codexToolDiscovery: this.resolveConfigBoolean(
           config.experimental?.codexToolDiscovery,
           true,
+        ),
+        codexAgentToolsMcp: this.resolveConfigBoolean(
+          config.experimental?.codexAgentToolsMcp,
+          false,
         ),
         researchEnabled: this.resolveConfigBoolean(
           config.experimental?.researchEnabled,
@@ -2431,6 +2443,14 @@ export class DesktopSettingsService {
     });
   }
 
+  resolveTokenMiserGate() {
+    return this.configStore.read("experimental").tokenMiserGate ?? "none";
+  }
+
+  resolveTokenMiserSummarizer() {
+    return this.configStore.read("experimental").tokenMiserSummarizer ?? "off";
+  }
+
   resolveTokenMiserBoundedHelper() {
     return this.configStore.read("experimental").tokenMiserBoundedHelper ?? "deterministic";
   }
@@ -2523,6 +2543,10 @@ export class DesktopSettingsService {
 
   resolveCodexToolDiscovery(): boolean {
     return this.readExperimentalConfig().codexToolDiscovery ?? true;
+  }
+
+  resolveCodexAgentToolsMcp(): boolean {
+    return this.readExperimentalConfig().codexAgentToolsMcp === true;
   }
 
   /** Research is for every local backend. Codex Tool Discovery decides only whether Codex threads are offered its tools. */
@@ -3605,7 +3629,7 @@ export class DesktopSettingsService {
       }
     }
     throw new Error(
-      "Codex discovery has not selected an executable. Refresh Codex in Settings.",
+      "Codex discovery has not selected an executable. Select Check again under Setup in Settings → Codex.",
     );
   }
 

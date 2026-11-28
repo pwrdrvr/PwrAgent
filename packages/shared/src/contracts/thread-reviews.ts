@@ -113,10 +113,13 @@ export type ListThreadReviewsRequest = Partial<ThreadReviewIdentity> & {
 
 /**
  * What a landed review's Auto-fix turn is doing, as its owner sees it.
- * `failed` carries the reason the send could not start.
+ * A `queued` run carries `hold` while the owner holds the send for a reason
+ * other than a running turn, such as a lower PR stack layer; without it, the
+ * run waits for the current turn to end. `failed` carries the reason the
+ * send could not start.
  */
 export type ReviewAutoFixRun =
-  | { phase: "queued"; at: number }
+  | { phase: "queued"; at: number; hold?: string }
   | { phase: "running"; at: number }
   | { phase: "finished"; at: number }
   | { phase: "failed"; at: number; reason: string };

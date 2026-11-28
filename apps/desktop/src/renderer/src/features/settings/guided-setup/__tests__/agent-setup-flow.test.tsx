@@ -29,6 +29,7 @@ function snapshot(): DesktopSettingsSnapshot {
   return {
     models: {
       codex: {
+        path: { value: "", source: "default" },
         discovery: { candidates: [] },
         profiles: { profiles: [] },
       },
@@ -114,6 +115,7 @@ describe("guided agent setup", () => {
       entry("gemini", {
         installed: true,
         installStatus: "installed",
+        lastDiscoveredAt: 1_000,
         ...(blocked ? { unavailableReason: "Google ended Gemini CLI access for consumer Google accounts." } : {}),
       }),
     ]);
@@ -123,6 +125,53 @@ describe("guided agent setup", () => {
     next();
     expect(within(dialog).getByText(blocked ? "No agents ready yet" : "1 agent ready")).toBeVisible();
     if (blocked) expect(within(dialog).getByText("Action required")).toBeVisible();
+  });
+
+  it("re-reads settings after a Codex sign-in, so the review sees it", async () => {
+    // The review reads the settings snapshot. Without a re-read, Codex
+    // signed in on the step before still read as signed out there.
+    const api = fakeApi();
+    api.startCodexAuthProfileLogin.mockImplementation(async () => ({ authenticated: true }));
+    api.checkCodexAuthProfileStatus.mockImplementation(async () => ({ authenticated: true }));
+    const state = settings();
+    state.snapshot!.models.codex.discovery = {
+      selectedCommand: "/opt/homebrew/bin/codex",
+      candidates: [{
+        command: "/opt/homebrew/bin/codex", source: "path", executable: true, selected: true, version: "0.159.0",
+      }],
+    } as DesktopSettingsSnapshot["models"]["codex"]["discovery"];
+    await act(async () => {
+      render(
+        <AgentSetupFlow
+          settings={state}
+          desktopApi={api as unknown as DesktopApi}
+          initialAcpEntries={[]}
+          onClose={() => undefined}
+        />,
+      );
+    });
+    const dialog = screen.getByRole("dialog", { name: "Set up an agent" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: /^Codex/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Continue/ }));
+    expect(state.refresh).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Log in" }));
+    });
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // Found on disk is not the same as able to start a thread: an agent that
+  // has never answered a check is reported as such, not as Ready.
+  it("does not count an installed agent that has never answered as ready", async () => {
+    const dialog = await renderFlow(fakeApi(), [
+      entry("gemini", { installed: true, installStatus: "installed" }),
+    ]);
+    fireEvent.click(within(dialog).getByRole("tab", { name: /^Gemini CLI/ }));
+    const next = () => fireEvent.click(within(dialog).getByRole("button", { name: /Continue/ }));
+    next();
+    next();
+    expect(within(dialog).getByText("No agents ready yet")).toBeVisible();
+    expect(within(dialog).getAllByText("Not checked").length).toBeGreaterThan(0);
   });
 
   it("has a tab for every ACP agent, with that agent's own install copy and notice", async () => {

@@ -394,6 +394,11 @@ export type CodexClientOptions = {
   helperExecutionPolicy?: { approvalPolicy: "never"; sandbox: "read-only" };
   /** The host admits ownership before a mutating protocol request. */
   assertOwnerAdmission?: () => void;
+  /** Restore owner-scoped configuration on any operation that loads a thread. */
+  resolveThreadResumeConfig?: (
+    threadId: string,
+    config: CodexThreadResumeParams["config"],
+  ) => Promise<CodexThreadResumeParams["config"]>;
   authenticationRecovery?: boolean;
   /** The profile's helper model settings, read per helper turn. */
   readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
@@ -11501,9 +11506,8 @@ export class CodexAppServerClient {
   }
 
   /**
-   * Restore a PwrAgent-owned director's persisted catalog on stock Codex.
-   * This does not acknowledge or replace it with the current tool catalog.
-   * The registry restricts this path to the remembered Voice manager.
+   * Resume realtime with persisted dynamic tools or a thread's scoped MCP
+   * config. The registry admits only threads whose catalog it can account for.
    */
   async resumeNativeVoiceThread(params: Omit<Parameters<CodexAppServerClient["refreshThreadTools"]>[0], "dynamicTools">): Promise<void> {
     await this.prepareIdleNativeVoiceThread({ ...params, dynamicTools: undefined });
@@ -11788,6 +11792,8 @@ export class CodexAppServerClient {
     config?: CodexThreadResumeParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
+    /** Await successful admission of the thread's required MCP configuration on resume. */
+    requireThreadResume?: boolean;
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
   }): Promise<{
     threadId: string;
@@ -11892,7 +11898,8 @@ export class CodexAppServerClient {
       });
       // Environment overrides are applied by resume; continuing after a
       // failure would silently run the turn with the previous toolchain.
-      resumeResult = params.dynamicTools !== undefined
+      resumeResult = params.requireThreadResume
+        || params.dynamicTools !== undefined
         || params.codexEnvironmentRuntime?.shellEnvironment !== undefined
         || shellEnvironmentChanged
         ? await resume
@@ -11997,6 +12004,7 @@ export class CodexAppServerClient {
    * generation path; the output record is identified by `isMatch`.
    */
   async generateStructuredObject(params: {
+    requireExactModel?: boolean;
     /** Which helper is running, for its per-helper override and effort. */
     signal?: AbortSignal;
     helper: HelperModelId;
@@ -12115,6 +12123,7 @@ export class CodexAppServerClient {
   }
 
   private async runHelperStructuredTurn(params: {
+    requireExactModel?: boolean;
     signal?: AbortSignal;
     helper: HelperModelId;
     model?: string;
@@ -12160,6 +12169,9 @@ export class CodexAppServerClient {
       reasoningEffort: params.reasoningEffort,
     });
     const helperModel = selection.model;
+    if (params.requireExactModel && helperModel !== params.model) {
+      return { status: "unavailable", reason: "configured_helper_model_unavailable" };
+    }
     if (!helperModel) {
       return { status: "unavailable", reason: "codex_helper_no_available_model" };
     }
@@ -12431,6 +12443,7 @@ export class CodexAppServerClient {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadStartParams["config"];
     dynamicTools?: CodexDynamicToolSpec[];
+    requireThreadResume?: boolean;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
@@ -12466,7 +12479,7 @@ export class CodexAppServerClient {
         ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
-      if (params.dynamicTools !== undefined) {
+      if (params.requireThreadResume || params.dynamicTools !== undefined) {
         await resume;
       } else {
         await resume.catch(() => undefined);
@@ -12953,11 +12966,12 @@ export class CodexAppServerClient {
     const [method, payload, ...rest] = resume;
     const params = asRecord(payload);
     const threadId = params && pickString(params, ["threadId"]);
-    if (!params || !threadId || !this.threadSkillExclusionsResolver) return resume;
-    const names = await this.threadSkillExclusionsResolver(threadId);
-    if (!names?.length) return resume;
-    const config = await this.withSkillExclusions(params.config as CodexThreadStartParams["config"], names);
-    return [method, { ...params, config }, ...rest];
+    if (!params || !threadId) return resume;
+    const currentConfig = params.config as CodexThreadResumeParams["config"];
+    const resumeConfig = await this.options.resolveThreadResumeConfig?.(threadId, currentConfig) ?? currentConfig;
+    const names = await this.threadSkillExclusionsResolver?.(threadId);
+    const config = await this.withSkillExclusions(resumeConfig, names);
+    return config === currentConfig ? resume : [method, { ...params, config }, ...rest];
   }
 
   private async withSkillExclusions(

@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { mapTokenMiserFiles, withTokenMiserFileOperation } from "./token-miser-file-io";
 import { TokenMiserOutputCache } from "./token-miser-output-cache";
-import type { TokenMiserObjectRecord, TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
+import type { OrderedTokenMiserMetadata, TokenMiserObjectRecord, TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
 import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   estimateTokenCount,
@@ -28,6 +28,11 @@ const DEFAULT_GROUP_BATCH_OUTPUT_CHARACTERS = 20_000;
 const MAX_GROUP_BATCH_OUTPUT_CHARACTERS = 40_000;
 const RETRIEVAL_DELIVERY_TTL_MS = 2 * 60_000;
 const REPLAY_COUNTER_KEYS = ["parentRequestsObservedAfterGate", "cachedReplayCount", "cachedBaselineTokens", "cachedRevealedTokens"] as const;
+type ParentReplayRequest = {
+  cumulativeInputTokens: number;
+  requestEpoch?: string;
+};
+
 type ReplayCounter = typeof REPLAY_COUNTER_KEYS[number];
 type PendingReplayUpdate = {
   view: TokenMiserObjectMetadata;
@@ -851,9 +856,47 @@ export class TokenMiserStore {
     this.outputs.remove(deliveryId);
   }
 
+  private readonly pricingListeners = new Map<string, Set<(id: string) => void>>();
+
+  watchPricingMetadata(threadId: string, changed: (id: string) => void) {
+    const watcher = this.storage.watchPricingMetadata?.(threadId, changed);
+    if (!watcher) return undefined;
+    const listeners = this.pricingListeners.get(threadId) ?? new Set();
+    this.pricingListeners.set(threadId, listeners);
+    listeners.add(changed);
+    const current = (row: OrderedTokenMiserMetadata<TokenMiserObjectMetadata>) => ({
+      ...row, entry: mergeReplayUpdate(row.entry, this.replayUpdates.get(row.entry.objectId)),
+    });
+    return {
+      dataVersion: () => watcher.dataVersion(),
+      observationCount: () => watcher.observationCount(),
+      all: () => watcher.all().map(current),
+      get: (id: string) => {
+        const row = watcher.get(id);
+        return row && current(row);
+      },
+      close: () => {
+        watcher.close();
+        listeners.delete(changed);
+        if (!listeners.size) this.pricingListeners.delete(threadId);
+      },
+    };
+  }
+
   async listMetadata(threadId?: string): Promise<TokenMiserObjectMetadata[]> {
     return this.storage.listMetadata(threadId).map((entry) =>
       mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
+  }
+
+  *listOpenReplayPages(limit: number, threadId: string): Iterable<TokenMiserObjectRecord[]> {
+    let afterId: string | undefined;
+    for (;;) {
+      const entries = this.storage.readOpenReplayPage(threadId, afterId, limit);
+      if (!entries.length) return;
+      yield entries;
+      if (entries.length < limit) return;
+      afterId = entries[entries.length - 1]!.objectId;
+    }
   }
 
   *listMetadataPages(limit: number, threadId?: string, persistedOnly = false): Iterable<TokenMiserObjectMetadata[]> {
@@ -1293,18 +1336,55 @@ export class TokenMiserStore {
     this.parentRequestUsage.set(params.threadId, { ...params, charged: false });
   }
 
-  async recordParentModelRequest(params: {
-    cumulativeInputTokens: number;
+  async recordParentModelRequest(params: ParentReplayRequest & {
     objectId: string;
-    requestEpoch?: string;
   }): Promise<TokenMiserObjectMetadata | undefined> {
-    return await this.updateMetadata(params.objectId, (metadata) => {
+    return this.applyParentModelRequest(params);
+  }
+
+  /** A page of ready gates can share a cold SQLite snapshot. A gate with an
+   * earlier update queued must read its base after that update, under its own
+   * lock. Buffered replay views need no storage read in either case. */
+  recordParentModelRequests(
+    request: ParentReplayRequest,
+    objectIds: readonly string[],
+    observePrevious?: (index: number, entry: TokenMiserObjectMetadata) => void,
+  ): Promise<(TokenMiserObjectMetadata | undefined)[]> {
+    const ready = new Set(objectIds.filter(id =>
+      isSafeObjectId(id) && !this.updateLocks.has(id) && !this.replayUpdates.has(id)));
+    let rows: Map<string, TokenMiserObjectMetadata> | undefined;
+    const readCold = (id: string) => {
+      if (!ready.has(id)) return this.readPersistedMetadata(id);
+      if (!rows) {
+        try {
+          rows = new Map(this.storage.readMetadataByIds([...ready]).map(entry => [entry.objectId, entry]));
+        } catch {
+          // Isolate a malformed payload to its own update, as individual reads do.
+          ready.clear();
+          return this.readPersistedMetadata(id);
+        }
+      }
+      return rows.get(id);
+    };
+    return Promise.all(objectIds.map((objectId, index) => this.applyParentModelRequest(
+      { ...request, objectId }, readCold,
+      observePrevious && ((entry) => observePrevious(index, entry)),
+    )));
+  }
+
+  private applyParentModelRequest(
+    params: ParentReplayRequest & { objectId: string },
+    readCold?: (id: string) => TokenMiserObjectMetadata | undefined,
+    observePrevious?: (entry: TokenMiserObjectMetadata) => void,
+  ): Promise<TokenMiserObjectMetadata | undefined> {
+    return this.updateMetadata(params.objectId, (metadata) => {
       // The caller owns the request boundary: it holds one cursor for the whole
       // thread, so every gate is offered the same events. This per-gate mark
       // stays as a backstop against a caller that has no cursor, and it can
       // never disagree with one that does — the thread cursor is seeded from
       // the highest gate mark and only ever moves above it, so anything the
       // caller accepts is already above every gate's own mark.
+      observePrevious?.({ ...metadata });
       const requestEpochChanged = Boolean(
         params.requestEpoch
         && params.requestEpoch !== metadata.parentRequestEpoch,
@@ -1342,7 +1422,7 @@ export class TokenMiserStore {
           metadata.replacementCharacters + metadata.retrievedCharacters,
         );
       return true;
-    }, "replay");
+    }, "replay", readCold);
   }
 
   async stopReplayTracking(params: {
@@ -1373,8 +1453,8 @@ export class TokenMiserStore {
       const changed: TokenMiserObjectMetadata[] = [];
       this.storage.runExclusive(() => {
         for (const id of params.objectIds) {
-          const row = this.readPersistedMetadata(id, params.threadId);
-          if (!row) continue;
+          const row = this.readPersistedMetadata(id);
+          if (!row || row.threadId !== params.threadId) continue;
           const current = mergeReplayUpdate(row, this.replayUpdates.get(id));
           if (row.replayTrackingVersion === 2 && row.replayTrackingStoppedAt === undefined
             && row.createdAt < params.stoppedAt) {
@@ -1403,6 +1483,7 @@ export class TokenMiserStore {
     objectId: string,
     update: (metadata: TokenMiserObjectMetadata) => boolean,
     reason: TokenMiserMetadataUpdateReason = "retrieval",
+    readReplayBase?: (id: string) => TokenMiserObjectMetadata | undefined,
   ): Promise<TokenMiserObjectMetadata | undefined> {
     // Swallow the predecessor's rejection: this chain only serializes access,
     // so one failed write must not stop every queued update behind it from
@@ -1414,7 +1495,8 @@ export class TokenMiserStore {
       const apply = () => {
         const pending = this.replayUpdates.get(objectId);
         if (reason === "flushed" && !pending) return;
-        const row = reason === "replay" && pending ? pending.view : this.readPersistedMetadata(objectId);
+        const row = reason === "replay" && pending ? pending.view
+          : readReplayBase ? readReplayBase(objectId) : this.readPersistedMetadata(objectId);
         if (!row) { this.replayUpdates.delete(objectId); return; }
         const current = reason === "replay" ? row : mergeReplayUpdate(row, pending);
         const metadata = { ...current };
@@ -1440,6 +1522,7 @@ export class TokenMiserStore {
       else this.storage.runExclusive(apply);
       if (updated) {
         if (reason !== "replay") this.replayUpdates.delete(objectId);
+        for (const notify of this.pricingListeners.get(updated.threadId) ?? []) notify(objectId);
         await this.options.onMetadataUpdated?.(updated, reason);
       }
     });

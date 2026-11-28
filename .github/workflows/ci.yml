@@ -270,6 +270,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
+        id: lint-toolchain
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
         timeout-minutes: 10
         with:
@@ -351,6 +352,63 @@ jobs:
         run: |
           pnpm exec depcruise-fmt -T markdown cruise-result.json >> "$GITHUB_STEP_SUMMARY"
 
+      # Measure independently of the PR test plan. Only the benchmark uses
+      # these pinned runtimes and isolated model endpoints.
+      - name: Install model request benchmark runtimes
+        id: model-runtimes
+        if: >-
+          !cancelled() && steps.lint-toolchain.outcome == 'success'
+          && (github.base_ref == 'main' || github.ref == 'refs/heads/main')
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          # The desktop spawn guard uses Node's OS temp root, which can differ from RUNNER_TEMP.
+          runtime="$(mktemp -d "$(node -p 'require("node:os").tmpdir()')/pwragent-model-bench.XXXXXX")"
+          npm install --prefix "$runtime" --no-audit --no-fund @openai/codex@0.169.0
+          curl --fail --silent --show-error --retry 2 \
+            --output "$runtime/antigravity.tar.gz" \
+            "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.16-5250855658717184/linux-x64/cli_linux_x64.tar.gz"
+          echo "3dee9f26e298156db673f6ce2a0f5dfed5b30006e04ceb9809c68070e7b717587b33a3da0f8bc2eda45af81a50bc8b14c82b28ae5832bcfe3e7fd49397117b31  $runtime/antigravity.tar.gz" | sha512sum --check
+          tar -xOzf "$runtime/antigravity.tar.gz" antigravity > "$runtime/agy"
+          chmod +x "$runtime/agy"
+          printf 'directory=%s\n' "$runtime" >> "$GITHUB_OUTPUT"
+
+      - name: Check outbound model request budgets
+        id: model-request
+        if: ${{ !cancelled() && steps.model-runtimes.outcome == 'success' }}
+        timeout-minutes: 3
+        env:
+          PWRAGENT_MODEL_BENCH_CODEX: ${{ steps.model-runtimes.outputs.directory }}/node_modules/.bin/codex
+          PWRAGENT_MODEL_BENCH_AGY: ${{ steps.model-runtimes.outputs.directory }}/agy
+          PWRAGENT_MODEL_BENCH_RESULT: ${{ runner.temp }}/model-request-result.json
+          PWRAGENT_MODEL_BENCH_MCP_RESULT: ${{ runner.temp }}/model-request-mcp-result.json
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            PWRAGENT_MODEL_BENCH_BASE_SHA="$(node -e 'process.stdout.write(require("./scripts/ci/model-request-report.cjs").testedMergeBase())')"
+            export PWRAGENT_MODEL_BENCH_BASE_SHA
+          fi
+          pnpm test apps/desktop/src/main/__tests__/model-request-size.test.ts \
+            scripts/ci/model-request-report.property.test.mjs scripts/ci/model-request-report.test.mjs --maxWorkers=2
+
+      - name: Upload model request measurements
+        if: ${{ !cancelled() && (steps.model-request.outcome == 'success' || steps.model-request.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: model-request-results-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/model-request-result.json
+          if-no-files-found: ${{ steps.model-request.outcome == 'success' && 'error' || 'ignore' }}
+          retention-days: 30
+
+      - name: Upload large MCP catalog measurements
+        if: ${{ !cancelled() && (steps.model-request.outcome == 'success' || steps.model-request.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: model-request-mcp-results-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/model-request-mcp-result.json
+          if-no-files-found: ${{ steps.model-request.outcome == 'success' && 'error' || 'ignore' }}
+          retention-days: 30
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -372,6 +430,28 @@ jobs:
       - name: Build
         timeout-minutes: 10
         run: pnpm run build
+
+  renderer-layout:
+    name: Renderer layout (Chromium)
+    runs-on: ubuntu-latest
+    needs: [changes, install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
+
+      - name: Install Chromium headless shell
+        run: pnpm --filter @pwragent/desktop exec playwright install --with-deps --only-shell chromium
+
+      - name: Check renderer layout
+        run: pnpm --filter @pwragent/desktop test:renderer-layout
 
   test:
     # Four shards. The single lane reached its 10-minute step budget on
@@ -519,32 +599,41 @@ jobs:
     # in the step below rather than gating entry to the job.
     name: Test
     runs-on: ubuntu-latest
-    needs: [changes, pr-test-impact-plan, test]
+    needs: [changes, pr-test-impact-plan, test, renderer-layout]
     if: >-
       always() &&
       needs.changes.outputs.code_impacting == 'true'
     timeout-minutes: 5
     steps:
-      - name: Require every Test lane
+      - name: Require the renderer layout check and every selected Test lane
         env:
+          LAYOUT_RESULT: ${{ needs.renderer-layout.result }}
           UNIT_LINUX_LANES: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_linux_lanes || '' }}
           TEST_RESULT: ${{ needs.test.result }}
         run: |
           set -euo pipefail
-          # Mirror the result into the job summary, as the Desktop E2E gate
-          # does, so the checks page says why the gate failed.
+          # Mirror results into the summary so the checks page names the failure.
+          status=0
+          if [[ "$LAYOUT_RESULT" == "success" ]]; then
+            echo "- PASS \`Renderer layout (Chromium)\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- FAIL \`Renderer layout (Chromium)\` ($LAYOUT_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Renderer layout did not succeed ($LAYOUT_RESULT)."
+            status=1
+          fi
+
           if [[ "${UNIT_LINUX_LANES:-}" == "[]" && "$TEST_RESULT" == "skipped" ]]; then
             echo "- SKIP \`Test\` lanes (the test plan found no unit test that this change affects)" >> "$GITHUB_STEP_SUMMARY"
             echo "No Test lane needed for this change."
-            exit 0
-          fi
-          if [[ "$TEST_RESULT" != "success" ]]; then
+          elif [[ "$TEST_RESULT" == "success" ]]; then
+            echo "- PASS \`Test\` lanes ($TEST_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+            echo "Every Test lane succeeded."
+          else
             echo "- FAIL \`Test\` lanes ($TEST_RESULT); see the failing \`Test (lane N of 4)\` job" >> "$GITHUB_STEP_SUMMARY"
             echo "::error::A Test lane did not succeed ($TEST_RESULT)."
-            exit 1
+            status=1
           fi
-          echo "- PASS \`Test\` lanes ($TEST_RESULT)" >> "$GITHUB_STEP_SUMMARY"
-          echo "Every Test lane succeeded."
+          exit "$status"
 
   windows-install-deps:
     name: Setup Windows Dependencies

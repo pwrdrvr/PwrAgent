@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import {
   ReviewAutoFixDispatcher,
@@ -40,6 +41,56 @@ function makeReview(id: string, open = true): ThreadReview {
  * Dispatch suspensions always return to zero.
  */
 describe("review auto-fix dispatcher", () => {
+  it("retries only the review with unavailable evidence without a PR update", async () => {
+    const unavailable = makeReview("unavailable");
+    const held = { ...makeReview("held"), threadId: "other-owner" };
+    const reviews = new Map([[unavailable.id, unavailable], [held.id, held]]);
+    const scheduled = new Set<() => void>();
+    const reads: string[] = [];
+    const starts: string[] = [];
+    let checkoutAvailable = false;
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: (id) => reviews.get(id),
+      isThreadArchived: () => false,
+      readStackHold: async (review, observation) => {
+        reads.push(review.id);
+        const needsRetry = review.id === unavailable.id && !checkoutAvailable;
+        if (needsRetry) observation.unavailable?.();
+        return needsRetry ? "Held while stack settlement is unavailable"
+          : review.id === held.id ? "Held by #1" : undefined;
+      },
+      scheduleStackRetry: (retry) => {
+        scheduled.add(retry);
+        return () => { scheduled.delete(retry); };
+      },
+      submitTurn: async () => { throw new Error("Expected fresh admission"); },
+      submitTurnIfIdle: async ({ canAdmit, threadId }) => {
+        if (!await canAdmit()) return { status: "busy" };
+        starts.push(threadId);
+        return { status: "started" };
+      },
+      recordRun: () => {},
+    });
+    try {
+      await dispatcher.dispatch(unavailable.id);
+      await dispatcher.dispatch(held.id);
+      expect(scheduled.size).toBe(1);
+      scheduled.values().next().value?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts).toEqual([]);
+      expect(scheduled.size).toBe(1);
+      checkoutAvailable = true;
+      scheduled.values().next().value?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts).toEqual([unavailable.threadId]);
+      expect(reads).toEqual([unavailable.id, held.id, unavailable.id, unavailable.id, unavailable.id]);
+      expect(scheduled.size).toBe(0);
+    } finally {
+      dispatcher.dispose();
+    }
+  });
+
+
   it("never strands Auto-fix, leaks suspensions, or violates stack holds across async interleavings", async () => {
     let runCounter = 0;
 
@@ -54,6 +105,7 @@ describe("review auto-fix dispatcher", () => {
           lockDuringReview: fc.boolean(),
           otherTurnAfterReview: fc.constantFrom("none" as const, "completed" as const, "failed" as const, "cancelled" as const),
           flakyHoldFlip: fc.boolean(),
+          stackWake: fc.constantFrom("global", "forge", "repair"),
           outcome: fc.constantFrom("normal" as const, "settle" as const, "archive" as const, "error" as const),
           outcomeDelayTicks: fc.integer({ min: 0, max: 3 }),
         }),
@@ -61,8 +113,19 @@ describe("review auto-fix dispatcher", () => {
           const runId = ++runCounter;
           const reviewId = `rev-${runId}`;
           const reviewTurnId = `review-turn-${runId}`;
-          const review = makeReview(reviewId, true);
+          const review = {
+            ...makeReview(reviewId, true),
+            context: { workspacePath: "/repo", pullRequest: {
+              provider: "github.com", org: "example", repo: "atlas", number: 2,
+              url: "https://github.com/example/atlas/pull/2",
+            } },
+          };
+          const unrelated = { ...makeReview("unrelated"), threadId: "other-thread" };
+          const lower = { backend: "claude" as const, threadId: "lower-repair" };
+          const lowerKey = buildThreadIdentityKey(lower.backend, lower.threadId);
           const runs = new ReviewAutoFixRuns();
+          let unrelatedLookups = 0;
+          let unrelatedTerminalLookups = 0;
 
           let activeTurnId: string | undefined = reviewTurnId;
           let stackHold: string | undefined = scenario.initialStackHold ? "Held by #1: CI running" : undefined;
@@ -75,6 +138,11 @@ describe("review auto-fix dispatcher", () => {
           let sendFailed = false;
 
           let dispatcher!: ReviewAutoFixDispatcher;
+          const wakeStack = () => {
+            if (scenario.stackWake === "repair") dispatcher.onTurnEnded(lower, new Set(["lower-turn"]));
+            else if (scenario.stackWake === "forge") dispatcher.wakeForPullRequest("github.com/example/atlas#1");
+            else dispatcher.wake();
+          };
 
           const drainQueuedUser = () => {
             if (archived || dispatchSuspensions > 0 || locked || activeTurnId !== undefined || queuedUser.length === 0) return;
@@ -90,9 +158,20 @@ describe("review auto-fix dispatcher", () => {
           };
 
           dispatcher = new ReviewAutoFixDispatcher({
-            getReview: (id) => (id === reviewId ? review : undefined),
-            isThreadArchived: () => archived,
-            readStackHold: async () => await s.schedule(Promise.resolve().then(() => stackHold), "readStackHold"),
+            getReview: (id) => {
+              if (id === reviewId) return review;
+              if (id !== unrelated.id) return undefined;
+              unrelatedLookups++;
+              return unrelated;
+            },
+            isThreadArchived: (thread) => thread.threadId === THREAD.threadId && archived,
+            readStackHold: async (candidate, observation) => {
+              if (candidate.id === unrelated.id) return "Other stack is held";
+              if (scenario.stackWake === "repair") observation.readActivity(lowerKey);
+              const hold = await s.schedule(Promise.resolve().then(() => stackHold), "readStackHold");
+              if (hold && scenario.stackWake === "repair") observation.heldBy(lowerKey);
+              return hold;
+            },
             threadHasActiveTurn: () => activeTurnId !== undefined,
             suspendDispatch: () => {
               dispatchSuspensions++;
@@ -144,6 +223,8 @@ describe("review auto-fix dispatcher", () => {
             now: () => 1,
           });
 
+          await dispatcher.dispatch(unrelated.id);
+
           // 1. Review artifact lands while review turn is still active.
           s.scheduleFunction(async () => {
             dispatcher.onReviewLanded(reviewId, THREAD, reviewTurnId);
@@ -160,7 +241,10 @@ describe("review auto-fix dispatcher", () => {
           s.scheduleFunction(async () => {
             activeTurnId = undefined;
             drainQueuedUser();
+            // A terminal event must do no review reads on another thread.
+            const before = unrelatedLookups;
             dispatcher.onTurnEnded(THREAD, new Set([reviewTurnId]));
+            unrelatedTerminalLookups += unrelatedLookups - before;
             if (scenario.emitIdle && !scenario.idleBeforeCompleted) {
               dispatcher.wake(THREAD);
             }
@@ -170,7 +254,7 @@ describe("review auto-fix dispatcher", () => {
           if (scenario.flakyHoldFlip) {
             s.scheduleFunction(async () => {
               stackHold = stackHold ? undefined : "Held by #1: restack";
-              dispatcher.wake();
+              wakeStack();
             })();
           }
           if (scenario.otherTurnAfterReview !== "none") {
@@ -218,10 +302,11 @@ describe("review auto-fix dispatcher", () => {
           }
           if (stackHold) {
             stackHold = undefined;
-            dispatcher.wake();
+            wakeStack();
           }
           await s.waitIdle();
 
+          expect(unrelatedTerminalLookups).toBe(0);
           // No dispatch suspension ever leaks.
           expect(dispatchSuspensions).toBe(0);
           // Auto-fix never runs while a stack hold is active.
@@ -375,6 +460,104 @@ describe("review auto-fix dispatcher", () => {
     expect(autoFixStarts).toBe(1);
   });
 
+  it("reports the stack hold on the queued run, then the current turn once admission resumes", async () => {
+    // Counterexample: an idle thread held by a lower stack layer showed
+    // "sends when the current turn ends" because the run carried no hold.
+    const review = makeReview("rev-stack-hold", true);
+    const runs = new ReviewAutoFixRuns();
+    let stackHold: string | undefined = "Held by #12: CI running";
+    let activeTurn = false;
+    let clock = 1;
+
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => false,
+      readStackHold: async () => stackHold,
+      threadHasActiveTurn: () => activeTurn,
+      submitTurn: async () => ({ status: "started" }),
+      submitTurnIfIdle: async ({ canAdmit }) => {
+        if (activeTurn || !(await canAdmit())) return { status: "busy" };
+        runs.record(THREAD, review.id, { kind: "queue", status: "started", at: clock });
+        return { status: "started" };
+      },
+      recordRun: (thread, id, event) => runs.record(thread, id, event),
+      now: () => clock,
+    });
+
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #12: CI running" });
+
+    // The lower layer's reason changes; the run says so and keeps its time.
+    clock = 2;
+    stackHold = "Held by #12: needs restack";
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #12: needs restack" });
+
+    // The stack clears while a turn runs: the run waits on that turn alone.
+    clock = 3;
+    stackHold = undefined;
+    activeTurn = true;
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1 });
+
+    clock = 4;
+    activeTurn = false;
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "running", at: 4 });
+  });
+
+  it("reports a stack hold that closes again at admission", async () => {
+    // Counterexample: the gate cleared, then closed before admission; the
+    // busy result left an idle thread saying it waits on the current turn.
+    const review = makeReview("rev-admission-hold", true);
+    const runs = new ReviewAutoFixRuns();
+    let stackHold: string | undefined;
+
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => false,
+      readStackHold: async () => stackHold,
+      threadHasActiveTurn: () => false,
+      submitTurn: async () => ({ status: "started" }),
+      submitTurnIfIdle: async ({ canAdmit }) => {
+        stackHold = "Held by #12: CI running";
+        return (await canAdmit()) ? { status: "started" } : { status: "busy" };
+      },
+      recordRun: (thread, id, event) => runs.record(thread, id, event),
+      now: () => 1,
+    });
+
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #12: CI running" });
+  });
+
+  it("does not announce a cleared gate that admission closes again", async () => {
+    // Counterexample from the scaling probe: the first check saw the stack
+    // clear and admission saw it held, so every wake announced two changes.
+    // Viewers must hear only real changes, however many wakes arrive.
+    const review = makeReview("rev-flapping-gate", true);
+    let changes = 0;
+    const runs = new ReviewAutoFixRuns(() => { changes++; });
+    let read = 0;
+
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => false,
+      readStackHold: async () => (read++ % 2 === 0 ? undefined : "Held by #12: CI running"),
+      threadHasActiveTurn: () => false,
+      submitTurn: async () => ({ status: "started" }),
+      submitTurnIfIdle: async ({ canAdmit }) => ((await canAdmit()) ? { status: "started" } : { status: "busy" }),
+      recordRun: (thread, id, event) => runs.record(thread, id, event),
+      now: () => 1,
+    });
+
+    await dispatcher.dispatch(review.id);
+    const afterFirst = changes;
+    for (let wake = 0; wake < 8; wake++) await dispatcher.dispatch(review.id);
+    expect(changes).toBe(afterFirst);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #12: CI running" });
+  });
+
   it("cancels queued run state when a thread is archived while Auto-fix is held", async () => {
     const review = makeReview("rev-archive-held", true);
     const runs = new ReviewAutoFixRuns();
@@ -396,7 +579,7 @@ describe("review auto-fix dispatcher", () => {
     });
 
     await dispatcher.dispatch(review.id);
-    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1 });
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #1: CI running" });
 
     archived = true;
     dispatcher.onThreadArchived(THREAD);
@@ -446,5 +629,31 @@ describe("review auto-fix dispatcher", () => {
     await Promise.resolve();
     expect(submitCalls).toBe(1);
     expect(runs.of(THREAD)[review.id]).toBeUndefined();
+  });
+
+  it("releases a handoff on disposal while a stack check is in flight", async () => {
+    const review = makeReview("rev-dispose");
+    let finishCheck!: (hold: string | undefined) => void;
+    const check = new Promise<string | undefined>((resolve) => { finishCheck = resolve; });
+    let releases = 0;
+    let admissionAttempts = 0;
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => false,
+      readStackHold: () => check,
+      suspendDispatch: () => () => { releases++; },
+      submitTurn: async () => {},
+      submitTurnIfIdle: async () => {
+        admissionAttempts++;
+        return { status: "started" };
+      },
+      recordRun: () => {},
+    });
+    dispatcher.onReviewLanded(review.id, THREAD, "review-turn");
+    dispatcher.dispose();
+    finishCheck(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    dispatcher.wake();
+    expect({ releases, admissionAttempts }).toEqual({ releases: 1, admissionAttempts: 0 });
   });
 });

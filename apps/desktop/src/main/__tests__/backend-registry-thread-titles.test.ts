@@ -387,6 +387,42 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  // A to-do card names its thread right after starting it, while thread/list
+  // still omits the thread and the owner serves its pending-start placeholder.
+  // A single-thread read that already carries the name acknowledges the
+  // rename, so the next listing must not fall back to "Untitled thread".
+  it("keeps a rename on a pending start through every later read", async () => {
+    const name = "Layout property harness in CI";
+    const read = fc.constantFrom("list", "native", "cached");
+    await fc.assert(fc.asyncProperty(fc.array(read, { minLength: 1, maxLength: 6 }), async (reads) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list", "thread/start", "thread/name/set"] },
+        threads: [],
+      });
+      // Codex already reports the name on a point read of the loaded thread.
+      Object.assign(codexClient, {
+        readThreadSummary: async (threadId: string): Promise<AppServerThreadSummary> => ({
+          id: threadId, source: "codex", title: name, titleSource: "explicit", linkedDirectories: [],
+        }),
+      });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const ref = { backend: "codex" as const, threadId: "thread-1" };
+      try {
+        await registry.startThread({ backend: "codex", cwd: "/repo-a" });
+        await registry.renameThread({ ...ref, name });
+        for (const step of reads) {
+          if (step === "native") await registry.refreshNavigationThread(ref, true, false);
+          const title = step === "list"
+            ? (await registry.listThreads({ backend: "codex" })).find((thread) => thread.id === ref.threadId)?.title
+            : registry.getCachedNavigationThread(ref)?.title;
+          expect({ step, title }).toEqual({ step, title: name });
+        }
+        const listed = await registry.listThreads({ backend: "codex" });
+        expect(listed.find((thread) => thread.id === ref.threadId)).toMatchObject({ title: name, titleSource: "explicit" });
+      } finally { await registry.close(); }
+    }), { numRuns: 20, examples: [[["native", "list"]]] });
+  });
+
   it("startup inventory publication cannot overwrite a rename acknowledged after its provider read", async () => {
     await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,12}$/), async suffix => {
       const thread: AppServerThreadSummary = { id: "startup-title", source: "codex", title: `Before ${suffix}`,
