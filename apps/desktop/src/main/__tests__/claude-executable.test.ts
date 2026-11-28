@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claudeEnvironment, inspectClaudeInstallation as inspectInstallation, resolveClaudeExecutable, selectClaudeExecutable, claudeLoginCommand, CLAUDE_SIGN_IN_REQUIRED, signInWithClaudeCode } from "../claude/claude-executable";
+import { claudeEnvironment, inspectClaudeInstallation as inspectInstallation, isClaudeMachOExecutable, resolveClaudeExecutable, selectClaudeExecutable, claudeLoginCommand, CLAUDE_SIGN_IN_REQUIRED, signInWithClaudeCode } from "../claude/claude-executable";
 
 const inspectClaudeInstallation = (options: Parameters<typeof inspectInstallation>[0]) => inspectInstallation({
   resolveBundledExecutable: async () => undefined,
@@ -29,6 +29,22 @@ it("runs the CLI's auth login command and keeps its output private", async () =>
 });
 
 describe("Claude executable discovery", () => {
+  it("selects native Claude launch candidates by header, including extensionless scripts", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-native-"));
+    roots.push(root);
+    const executable = path.join(root, "claude");
+    await expect(isClaudeMachOExecutable(executable)).resolves.toBe(false);
+    for (const [bytes, native] of [
+      [Buffer.from("#!/bin/sh\n"), false],
+      [Buffer.from([0xcf, 0xfa, 0xed]), false],
+      [Buffer.from([0xcf, 0xfa, 0xed, 0xfe]), true],
+      [Buffer.from([0xca, 0xfe, 0xba, 0xbe]), true],
+    ] as const) {
+      await writeFile(executable, bytes);
+      await expect(isClaudeMachOExecutable(executable)).resolves.toBe(native);
+    }
+  });
+
   it.skipIf(process.platform === "win32")("resolves the user's executable symlink without launching it", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-cli-"));
     roots.push(root);

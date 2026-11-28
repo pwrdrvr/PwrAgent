@@ -26,11 +26,11 @@ and Dynamic Tools paths. A requested native configuration requires the relay.
 
 ## Claude and ACP launch support
 
-- On macOS, PwrAgent obtains the actual Claude CLI child from the Agent SDK's
+- On macOS, PwrAgent obtains the actual native Claude CLI child from the Agent SDK's
   local spawn hook. It pins that child before delivering its owned MCP server
   over the SDK control channel. If the proof or connection fails, Claude
-  receives the existing HTTP configuration. Other servers remain in their
-  normal SDK delivery path.
+  receives the existing HTTP configuration, as do script launchers and
+  injected drivers. Other servers remain in their normal SDK delivery path.
 - Antigravity ACP 1.5.18 with `--process-per-session` on macOS lets the owner pin
   the local ACP process before sending `session/new` or `session/load`. The
   session worker launches the relay under that process. The native grant

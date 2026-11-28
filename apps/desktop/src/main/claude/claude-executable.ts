@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, realpath, stat } from "node:fs/promises";
+import { access, open, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -130,6 +130,23 @@ function compareVersions(left: string, right: string): number {
 export function supportsClaudeMcpInitialize(version: string | undefined): boolean {
   // The SDK supports this transport with its bundled CLI or newer.
   return version !== undefined && compareVersions(version, "2.1.330") >= 0;
+}
+
+export async function isClaudeMachOExecutable(executable: string): Promise<boolean> {
+  try {
+    const file = await open(executable, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const header = Buffer.alloc(4);
+      const { bytesRead } = await file.read(header, 0, header.length, 0);
+      // Native 64-bit Mach-O and universal binaries, in either byte order.
+      return bytesRead === header.length && [0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca]
+        .includes(header.readUInt32BE(0));
+    } finally {
+      await file.close();
+    }
+  } catch {
+    return false;
+  }
 }
 
 async function runClaude(command: string, args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal,

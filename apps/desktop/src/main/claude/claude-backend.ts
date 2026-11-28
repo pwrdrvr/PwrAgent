@@ -61,7 +61,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import { ClaudeSessionReaderError, type ClaudeSessionReader, type ClaudeSessionReads } from "./claude-session-reader";
 import { buildClaudeSessionPrimer } from "./claude-session-primer";
-import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable, signInWithClaudeCode, signOutOfClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
+import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable, isClaudeMachOExecutable, signInWithClaudeCode, signOutOfClaudeCode, supportsClaudeMcpInitialize, type ClaudeInstallation } from "./claude-executable";
 import { ClaudeGatewaySignInSession, claudeUserSettingsPath, normalizeClaudeGatewayUrl, restoreClaudeGatewaySettingFile, writeClaudeGatewaySetting, type ClaudeGatewaySpawn } from "./claude-gateway";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import {
@@ -1473,10 +1473,10 @@ export class ClaudeBackend {
       current.usesProviderAuth = sameConfigDir && env.ANTHROPIC_PROFILE === providerEnv.ANTHROPIC_PROFILE
         && env.HOME === providerEnv.HOME && env.USERPROFILE === providerEnv.USERPROFILE;
       const initializeMcp = supportsClaudeMcpInitialize(version);
-      // Only the bundled SDK launch is known to use our spawn hook. An
-      // injected driver keeps its existing MCP delivery contract.
-      const registerOwnedMcp = process.platform === "darwin" && !this.options.query && initializeMcp
-        && config.mcpServers?.[PWRAGENT_TOOL_NAMESPACE]
+      // The native handoff is verified for direct Mach-O launches through
+      // our SDK hook. Script launchers and injected drivers retain HTTP.
+      const registerOwnedMcp = process.platform === "darwin" && !this.options.query && params.registerOwnedMcp
+        && config.mcpServers?.[PWRAGENT_TOOL_NAMESPACE] && await isClaudeMachOExecutable(executable)
         ? params.registerOwnedMcp : undefined;
       const initialMcpServers = registerOwnedMcp && config.mcpServers
         ? Object.fromEntries(Object.entries(config.mcpServers).filter(([name]) => name !== PWRAGENT_TOOL_NAMESPACE))
@@ -1585,13 +1585,13 @@ export class ClaudeBackend {
         // The SDK buffers the prompt during initialize, so its query object
         // alone is not proof that Claude can accept the first message.
         const mcpTimeout = this.options.mcpStartupTimeoutMs ?? CLAUDE_MCP_STARTUP_TIMEOUT_MS;
-        if (initialMcpServers && Object.keys(initialMcpServers).length > 0) {
+        if (initialMcpServers && Object.keys(initialMcpServers).length > 0 && (initializeMcp || !registerOwnedMcp)) {
           await configureClaudeStartupMcp(current.query, initialMcpServers, initializeMcp, controller.signal, mcpTimeout);
         }
         if (registerOwnedMcp && config.mcpServers) {
           // Deliver the owned server only after the SDK's actual local child
           // has been pinned. Modern initialize still delivers other servers.
-          if (!Object.keys(initialMcpServers ?? {}).length) {
+          if (!initializeMcp || !Object.keys(initialMcpServers ?? {}).length) {
             await configureClaudeStartupMcp(current.query, {}, true, controller.signal, mcpTimeout);
           }
           const child = ownedChild;
