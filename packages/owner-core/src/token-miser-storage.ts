@@ -26,6 +26,7 @@ export interface TokenMiserStorage<
   /** Reserve consecutive profile-wide numbers. Unused numbers are never recycled. */
   reserveOutputHandles(count: number): number;
   readMetadata(objectId: string, threadId?: string): Metadata | undefined;
+  readMetadataByIds(objectIds: readonly string[]): Metadata[];
   listMetadata(threadId?: string): Metadata[];
   /** Changes since an open Pricing page's previous read. A reset needs a new baseline. */
   watchPricingMetadata?(threadId: string, changed: (objectId: string) => void): {
@@ -40,6 +41,8 @@ export interface TokenMiserStorage<
     entries: Metadata[];
     next?: TokenMiserObjectRecord;
   };
+  /** Open v2 gates only, in stable object-id order for demand-driven replay recovery. */
+  readOpenReplayPage(threadId: string, afterId: string | undefined, limit: number): TokenMiserObjectRecord[];
   writeMetadata(metadata: Metadata): void;
   removeMetadata(objectId: string): void;
   recordObservation(observation: Observation): void;
