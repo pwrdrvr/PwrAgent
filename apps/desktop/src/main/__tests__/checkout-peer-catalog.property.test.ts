@@ -1,4 +1,5 @@
 import fc from "fast-check";
+import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
 import { expect, it } from "vitest";
 import { CheckoutPeerCatalog, catalogPage, type CheckoutPeers, type CheckoutView } from "../resource-checkouts/checkout-peer-catalog";
 import { projectCheckoutDomain } from "../resource-checkouts/checkout-projection";
@@ -125,4 +126,76 @@ it("fences an older operator response after a subject discovers the owner's new 
   await catalog.refresh();
   expect(catalog.current().get("lab:one")?.view.authority.epoch).toBe(epoch);
   expect(catalog.current().get("lab:one")?.view.resource.actions.release).toBeUndefined();
+});
+
+it("refreshes only newly connected checkout owners after a peer status change", async () => {
+  const peers = new Map<string, "connected" | "disconnected">([["one", "connected"], ["two", "connected"]]);
+  const reads: string[] = [];
+  const service = new DesktopResourceCheckoutService({
+    viewer: { instanceId: "viewer", instanceLabel: "Viewer", profile: "dev" }, bindings: [],
+    now: () => 1, warn: () => {}, checkoutPeers: () => peers,
+    requestPeer: async <T>(id: string) => {
+      reads.push(id);
+      return catalogPage("session", [view(id, `lab:${id}`)], 0, item => item) as T;
+    },
+  });
+  try {
+    await service.refreshPeers();
+    reads.length = 0;
+    peers.set("one", "disconnected");
+    await service.refreshPeers({ instanceId: "one", connected: false });
+    expect(service.read().resources.find(row => row.resourceId === "lab:one")?.condition).toBe("unreachable");
+    expect(reads).toEqual([]);
+    peers.set("one", "connected");
+    const reconnect = { instanceId: "one", connected: true };
+    await Promise.all([service.refreshPeers(reconnect), service.refreshPeers(reconnect)]);
+    expect(reads).toEqual(["one"]);
+    expect(service.read().resources.find(row => row.resourceId === "lab:one")?.condition).toBe("available");
+    reads.length = 0;
+    await service.refreshPeers();
+    expect(reads.sort()).toEqual(["one", "two"]);
+    // A connected notification cannot supply missing membership.
+    peers.delete("one");
+    reads.length = 0;
+    await service.refreshPeers(reconnect);
+    expect(service.read().resources.some(row => row.resourceId === "lab:one")).toBe(false);
+    expect(reads).toEqual([]);
+  } finally { await service.close(); }
+});
+
+it("re-reads a reconnected owner once when its previous session still owes a catalog page", async () => {
+  const peers = new Map<string, "connected" | "disconnected">([["one", "connected"]]);
+  const started = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const pages: string[] = [];
+  let session = "old";
+  const service = new DesktopResourceCheckoutService({
+    viewer: { instanceId: "viewer", instanceLabel: "Viewer", profile: "dev" }, bindings: [],
+    now: () => 1, warn: () => {}, checkoutPeers: () => peers,
+    requestPeer: async <T>(id: string, input: unknown) => {
+      const generation = session;
+      const { offset } = input as { offset: number };
+      pages.push(`${generation}:${offset}`);
+      if (generation === "old") {
+        started.resolve();
+        await resume.promise;
+      }
+      const keys = Array.from({ length: 5 }, (_, i) => `lab:${generation}-${i}`);
+      return catalogPage(generation, keys, offset, key => view(id, key)) as T;
+    },
+  });
+  try {
+    const first = service.refreshPeers();
+    await started.promise;
+    peers.set("one", "disconnected");
+    const disconnect = service.refreshPeers({ instanceId: "one", connected: false });
+    session = "new";
+    peers.set("one", "connected");
+    const reconnect = service.refreshPeers({ instanceId: "one", connected: true });
+    resume.resolve();
+    await Promise.all([first, disconnect, reconnect]);
+    expect(pages).toEqual(["old:0", "new:0", "new:4"]);
+    const rows = service.read().resources.filter(row => row.placement === "external");
+    expect(rows.map(row => row.resourceId)).toEqual(Array.from({ length: 5 }, (_, i) => `lab:new-${i}`));
+  } finally { resume.resolve(); await service.close(); }
 });

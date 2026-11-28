@@ -140,7 +140,7 @@ type RuntimeHarness = {
     notifyPeerConnected: (peerId: FederationInstanceId) => void;
     notifyPeerDisconnected: (peerId: FederationInstanceId) => void;
   };
-  onPeerStatusChanged: (listener: () => void) => () => void;
+  onPeerStatusChanged: DesktopFederationRuntime["onPeerStatusChanged"];
   recordClientConnection: (params: {
     gatewayInstanceId: FederationInstanceId;
     gatewayUrl: string;
@@ -1635,6 +1635,9 @@ describe("DesktopFederationRuntime", () => {
       invalidate: (instanceId) => invalidated.push(instanceId),
     };
 
+    const listener = vi.fn();
+    runtime.onPeerStatusChanged(listener);
+
     runtime.publishPeerStatus(
       "owner_one",
       "disconnected",
@@ -1644,6 +1647,7 @@ describe("DesktopFederationRuntime", () => {
     runtime.publishPeerStatus("owner_one", "connected");
 
     expect(invalidated).toEqual(["owner_one", "owner_one"]);
+    expect(listener.mock.calls).toEqual([["owner_one", "disconnected"], ["owner_one", "connected"]]);
   });
 
   it.each(["thread/dependencies/updated", "federation/eventStream/changed"] as const)(

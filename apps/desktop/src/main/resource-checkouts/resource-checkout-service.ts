@@ -99,6 +99,8 @@ export class DesktopResourceCheckoutService {
   private revision = 0;
   private fingerprint = "";
   private refreshPending?: Promise<void>;
+  private nextRefresh?: "all" | "new_connections";
+  private refreshingAll = false;
   private closed = false;
   private closing?: Promise<void>;
   private machineConflict = false;
@@ -414,15 +416,30 @@ export class DesktopResourceCheckoutService {
     if (!this.closing && !this.closed) this.observe();
   }
 
-  refreshPeers(): Promise<void> {
+  refreshPeers(change?: { instanceId: string; connected: boolean }): Promise<void> {
     if (this.closing || this.closed) return Promise.resolve();
-    this.refreshPending ??= this.refreshRemoteViews().finally(() => { this.refreshPending = undefined; });
-    return this.refreshPending;
-  }
-
-  private async refreshRemoteViews(): Promise<void> {
-    await this.catalog.refresh();
-    this.poll();
+    if (change) {
+      if (!change.connected) this.catalog.connectionLost(change.instanceId);
+      this.nextRefresh ??= "new_connections";
+    } else if (!this.refreshingAll) {
+      this.nextRefresh = "all";
+    }
+    // A directory replacement can notify once per peer. Share one bounded reader pool
+    // and retain changes that arrive while its previous session requests are finishing.
+    return this.refreshPending ??= Promise.resolve().then(async () => {
+      try {
+        while (this.nextRefresh && !this.closing) {
+          const scope = this.nextRefresh;
+          this.nextRefresh = undefined;
+          this.refreshingAll = scope === "all";
+          await this.catalog.refresh(undefined, scope);
+          this.poll();
+        }
+      } finally {
+        this.refreshingAll = false;
+        this.refreshPending = undefined;
+      }
+    });
   }
 
   private readPeerRoster(known: Iterable<string>): CheckoutPeers {

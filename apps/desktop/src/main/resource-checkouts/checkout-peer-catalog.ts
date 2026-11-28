@@ -28,6 +28,7 @@ function stale(view: CheckoutView, agent = false): CheckoutView {
 type Destination = { owner: string; epoch: number; reachable: boolean; counted: boolean };
 type Owner = {
   connected: boolean;
+  needsOperatorRead: boolean;
   emptyUntil: number;
   observation: number;
   destinations: Map<string, Destination>;
@@ -47,25 +48,33 @@ export class CheckoutPeerCatalog {
     private readonly now: () => number,
   ) {}
 
+  private reconcilePeer(id: string, status: "connected" | "disconnected" | undefined): void {
+    const owner = this.owners.get(id);
+    if (status === undefined) {
+      if (this.owners.delete(id)) this.index = undefined;
+    } else if (status === "connected" && !owner?.connected) {
+      this.owners.set(id, { connected: true, needsOperatorRead: true, views: owner?.views ?? [],
+        destinations: owner?.destinations ?? new Map(), observation: 0, emptyUntil: 0 });
+    } else if (status === "disconnected" && owner?.connected) {
+      // Replace the object so a late response from this session cannot repopulate it.
+      this.index = undefined;
+      this.owners.set(id, { ...owner, connected: false, views: owner.views.map(view => stale(view)), emptyUntil: 0 });
+      for (const route of owner.destinations.values()) route.reachable = false;
+    }
+  }
+
+  connectionLost(id: string): void {
+    // This notification only fences the previous session. The authenticated roster decides
+    // removal or rediscovery on every read and when the status batch drains.
+    this.reconcilePeer(id, "disconnected");
+  }
+
   private reconcile(): void {
     const peers = this.peers(this.owners.keys());
-    for (const [id, owner] of this.owners) {
-      if (!peers.has(id)) {
-        this.owners.delete(id);
-        this.index = undefined;
-      } else if (owner.connected && peers.get(id) !== "connected") {
-        // Replace the object so a late response from this session cannot repopulate it.
-        this.index = undefined;
-        this.owners.set(id, { ...owner, connected: false, views: owner.views.map((view) => stale(view)), emptyUntil: 0 });
-        for (const route of owner.destinations.values()) route.reachable = false;
-      }
+    for (const id of this.owners.keys()) {
+      if (!peers.has(id)) this.reconcilePeer(id, undefined);
     }
-    for (const [id, status] of peers) {
-      if (status !== "connected") continue;
-      const old = this.owners.get(id);
-      if (!old?.connected) this.owners.set(id, { connected: true, views: old?.views ?? [],
-        destinations: old?.destinations ?? new Map(), observation: 0, emptyUntil: 0 });
-    }
+    for (const [id, status] of peers) this.reconcilePeer(id, status);
   }
 
   async request<T>(id: string, request: unknown): Promise<T> {
@@ -83,7 +92,7 @@ export class CheckoutPeerCatalog {
     }
   }
 
-  private async readOwner(id: string, subject?: unknown): Promise<CheckoutView[]> {
+  private async readOwner(id: string, owner: Owner, subject?: unknown): Promise<CheckoutView[]> {
     const views: CheckoutView[] = [];
     const keys = new Set<string>();
     let generation: string | undefined;
@@ -97,6 +106,7 @@ export class CheckoutPeerCatalog {
       if (!page.views.length) return views;
       // The headless owner loads the schema only when a peer sends resource rows.
       const { checkoutCatalogView } = await import("./checkout-catalog-view");
+      if (this.owners.get(id) !== owner) throw new Error("Checkout owner connection changed during discovery.");
       for (const row of page.views) {
         const view = checkoutCatalogView.parse(row);
         const key = canonicalKey(view.resource.canonicalKey);
@@ -111,17 +121,21 @@ export class CheckoutPeerCatalog {
     throw new Error("Invalid checkout catalog page.");
   }
 
-  async refresh(subject?: unknown): Promise<Map<string, CheckoutRoute>> {
+  async refresh(subject?: unknown, scope: "all" | "new_connections" = "all"): Promise<Map<string, CheckoutRoute>> {
     this.reconcile();
     const observation = ++this.observation;
     const results = new Map<Owner, CheckoutView[]>();
     const answered = new Set<Owner>();
-    const pending = [...this.owners].values();
-    await Promise.all(Array.from({ length: Math.min(4, this.owners.size) }, async () => {
-      for (const [id, owner] of pending) {
-        if (!owner.connected || owner.emptyUntil > this.now()) continue;
+    const now = this.now();
+    const pending = [...this.owners].filter(([, owner]) => owner.connected
+      && (scope === "all" || owner.needsOperatorRead) && owner.emptyUntil <= now);
+    const entries = pending.values();
+    await Promise.all(Array.from({ length: Math.min(4, pending.length) }, async () => {
+      for (const [id, owner] of entries) {
+        if (this.owners.get(id) !== owner) continue;
+        if (!subject) owner.needsOperatorRead = false;
         try {
-          results.set(owner, await this.readOwner(id, subject));
+          results.set(owner, await this.readOwner(id, owner, subject));
           answered.add(owner);
         } catch {
           results.set(owner, owner.views.map((view) => stale(view, !!subject)));

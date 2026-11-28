@@ -127,7 +127,9 @@ export async function initializeResourceCheckouts(
       })?.title,
   });
   federation.setResourceCheckoutHandler((source, request) => runtime?.receivePeer(source, request));
-  unsubscribe = federation.onPeerStatusChanged(() => { void runtime?.refreshPeers(); });
+  unsubscribe = federation.onPeerStatusChanged((instanceId, status) => {
+    void runtime?.refreshPeers({ instanceId, connected: status === "connected" });
+  });
   void runtime.refreshPeers();
   return runtime;
 }
