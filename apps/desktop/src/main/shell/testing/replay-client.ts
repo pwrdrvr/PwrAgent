@@ -314,7 +314,7 @@ export class ReplayClient {
     for (const listener of pendingListeners) {
       void Promise.resolve(listener(step.request))
         .then(() => {
-          this.controller.resolvePendingRequest(requestId);
+          this.controller.completeRequestStep(step);
         })
         .catch((error: unknown) => {
           console.error(

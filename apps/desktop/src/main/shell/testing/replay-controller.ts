@@ -155,6 +155,14 @@ export class ReplayController {
     return latest;
   }
 
+  completeRequestStep(step: ReplayRequestStep): void {
+    const { requestId } = step.request.params;
+    // An explicit response may have removed this step and freed its ID.
+    if (this.pendingRequests.get(requestId) === step) {
+      this.pendingRequests.delete(requestId);
+    }
+  }
+
   resolvePendingRequest(requestId: string): ReplayRequestStep {
     const current = this.pendingRequests.get(requestId);
     if (!current) {
