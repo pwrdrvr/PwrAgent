@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it, vi } from "vitest";
 import report from "./model-request-report.cjs";
-import { currentSha, mainSha, result, runUrl } from "./fixtures/model-request-report.fixture.mjs";
+import { currentSha, legacyMcpResult, mainSha, mcpResult, result, runUrl } from "./fixtures/model-request-report.fixture.mjs";
 
 function fixtureApi({ associated = true, eventBase = mainSha, exactBase = mainSha } = {}) {
   const pull = {
@@ -26,10 +26,11 @@ function fixtureApi({ associated = true, eventBase = mainSha, exactBase = mainSh
   const withData = (data) => Promise.resolve({ data });
   const artifacts = new Map();
   const downloads = new Map();
-  function upload({ id, run_attempt: attempt }, archive) {
-    const artifactId = id * 100 + attempt;
+  function upload({ id, run_attempt: attempt }, archive, kind = "default") {
+    const artifactId = id * 100 + attempt + (kind === "mcp" ? 50 : 0);
     const retained = artifacts.get(id) ?? [];
-    retained.push({ name: `model-request-results-attempt-${attempt}`, id: artifactId, size_in_bytes: archive.length });
+    const name = kind === "mcp" ? "model-request-mcp-results" : "model-request-results";
+    retained.push({ name: `${name}-attempt-${attempt}`, id: artifactId, size_in_bytes: archive.length });
     artifacts.set(id, retained);
     downloads.set(artifactId, archive);
   }
@@ -188,4 +189,60 @@ it.skipIf(process.platform === "win32")("updates one bot comment, preserving a v
   expect(api.github.rest.issues.createComment).toHaveBeenCalledTimes(1);
   expect(api.github.rest.issues.updateComment).toHaveBeenCalledTimes(1);
   expect(api.github.rest.issues.updateComment).toHaveBeenCalledWith(expect.objectContaining({ comment_id: 99 }));
+});
+
+it.skipIf(process.platform === "win32")("publishes large-catalog deltas from a legacy main upload and flags missing newer history", async () => {
+  const api = fixtureApi();
+  const source = mcpResult(100, 350, 220);
+  source.results[2].fullSchemasAdvertised[1] = true;
+  source.toolUse[0].observed.calls = 4;
+  source.toolUse = source.toolUse.slice(0, 1);
+  const member = "model-request-mcp-result.json";
+  api.upload(api.run, archiveFixture(JSON.stringify({ ...result(100, 200), baseSha: mainSha })));
+  api.upload(api.run, archiveFixture(JSON.stringify(source), member), "mcp");
+  api.upload(api.exact, archiveFixture(JSON.stringify(result(100, 200))));
+  api.upload(api.exact, archiveFixture(JSON.stringify(legacyMcpResult(105, 300, 220)), member), "mcp");
+  await report.publish(api);
+
+  const body = api.comments[0].body;
+  expect(body).toContain("| Claude | First turn total body bytes | 300 B | 350 B | **+50 B (+16.7%)** | 300 B | ❌ |");
+  expect(body).toContain("Antigravity advertised full fixture schemas on the follow-up");
+  expect(body).toContain("The selected main run has no Kimi K3 measurement");
+  expect(body).toContain("This CI attempt has no tool-use measurement for Claude, Antigravity, Codex · Kimi K3");
+  expect(body).toContain("The selected main run has no tool-use measurement for Codex");
+  expect(body).toContain("| Codex | Total model calls | — | 4 | — | 3 | ❌ |");
+
+  api.run.run_attempt = 2;
+  api.upload(api.run, archiveFixture(JSON.stringify({ ...result(100, 200), baseSha: mainSha })));
+  await report.publish(api);
+  expect(api.comments[0].body).toContain("This CI attempt has no usable 240-tool measurement");
+  expect(api.comments[0].body).not.toContain("**+50 B");
+});
+
+it("reports Antigravity catalog deltas across routes and compares scripted calls within one route", () => {
+  const native = { ...mcpResult(100, 200, 240), version: 3, antigravityNative: true };
+  native.results[2].fullSchemasAdvertised = [true, true];
+  const gateway = { ...mcpResult(100, 200, 140), version: 3, antigravityNative: false };
+  const render = (currentMcp, baselineMcp) => report.renderComment({
+    current: result(100, 200), baseline: result(100, 200),
+    currentMcp, baselineMcp, source: { sha: currentSha, id: 20, number: 6, attempt: 1, conclusion: "success" },
+    baselineRun: { id: 10, sha: mainSha }, exactBase: true, runUrl,
+  });
+
+  expect(report.validateMcpResult(native)).toBe(native);
+  expect(report.validateMcpResult(gateway)).toBe(gateway);
+  expect(report.validateMcpResult({ ...native, antigravityNative: "@owner" })).toBeUndefined();
+  const nativeComment = render(native, native);
+  expect(nativeComment).toContain("Antigravity uses native stdio and is expected to advertise a subset");
+  expect(nativeComment).not.toContain("❌ Antigravity advertised");
+  expect(nativeComment).toContain("| Antigravity | Model calls after tool results | 2 | 2 | 0 |");
+
+  const gatewayComment = render(gateway, native);
+  expect(gatewayComment).toContain("| Antigravity | First turn total body bytes | 240 B | 140 B | −100 B");
+  expect(gatewayComment).toContain("Antigravity used a different MCP route");
+  expect(gatewayComment).toContain("| Antigravity | Model calls after tool results | — | 2 | — |");
+  expect(gatewayComment).toContain("| Claude | Model calls after tool results | 2 | 2 | 0 |");
+
+  gateway.results[2].fullSchemasAdvertised[0] = true;
+  expect(render(gateway, native)).toContain("❌ Antigravity advertised full fixture schemas on the first turn.");
 });
