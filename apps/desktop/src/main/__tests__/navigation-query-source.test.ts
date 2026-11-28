@@ -60,6 +60,7 @@ import { StackOperationsService } from "../stacks/stack-operations-service";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import * as worktreeProjects from "../app-server/navigation-worktree-projects";
 import * as checkoutStore from "../git-info/directory-store";
+import * as worktreeStore from "../git-info/worktree-store";
 import { runGitCommand } from "../app-server/git-executable";
 import { configureBundledGit } from "../bundled-git";
 import { gitSubprocessDiagnostics, prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
@@ -320,6 +321,43 @@ it("rejoins legacy worktree attachments when only checkout aliases change", asyn
     mocks.profileStore = undefined;
     db.close();
   }
+});
+
+it("visits each membership once when worktree aliases share a project", async () => {
+  const root = canonicalizeNavigationPath(path.resolve(os.tmpdir(), "synthetic-worktree-memberships"));
+  const primary = `${root}/main`;
+  const dir = (cwd: string, threadKeys: string[], latestUpdatedAt: number): NavigationQueryIndex["directories"][number] => ({
+    key: `directory:${cwd}`, label: path.basename(cwd), path: cwd, kind: "directory", threadKeys,
+    latestUpdatedAt, needsAttentionCount: 1,
+  });
+  const primaryRow = dir(primary, Array.from({ length: 12 }, (_, i) => `codex:audit-primary-${i}`), 50);
+  const aliases = Array.from({ length: 12 }, (_, i) => dir(`${root}/work-${i}`, [
+    primaryRow.threadKeys[0]!, `codex:audit-work-${i}`,
+  ], 50 + i));
+  const owner = vi.spyOn(worktreeStore, "resolveWorktreeRepositoryDirectory").mockImplementation(async (cwd) =>
+    cwd === primary ? undefined : { id: primary, path: primary, kind: "local", label: "main" });
+  const separate = vi.spyOn(worktreeStore, "readSeparateGitProjectCheckout").mockResolvedValue(undefined);
+  const add = Set.prototype.add;
+  let visits = 0;
+  const membership = vi.spyOn(Set.prototype, "add").mockImplementation(function (this: Set<unknown>, value: unknown) {
+    if (typeof value === "string" && value.startsWith("codex:audit-")) visits++;
+    return add.call(this, value);
+  });
+  let result: Awaited<ReturnType<typeof resolveNavigationWorktreeProjects>>;
+  try {
+    result = await resolveNavigationWorktreeProjects([primaryRow, ...aliases], { threads: [] });
+  } finally {
+    membership.mockRestore();
+    separate.mockRestore();
+    owner.mockRestore();
+  }
+  // Keep the primary order, then each unseen member in alias order. Repeated
+  // identities cannot force earlier memberships to be admitted again.
+  expect(result.directories).toEqual([{ ...primaryRow, needsAttentionCount: 13, latestUpdatedAt: 61,
+    threadKeys: [...primaryRow.threadKeys, ...aliases.map(({ threadKeys }) => threadKeys[1])],
+  }]);
+  expect(result.worktreeProjectAliases).toEqual({ [primaryRow.key]: aliases.map(({ key }) => key) });
+  expect(visits).toBe(primaryRow.threadKeys.length + aliases.length * 2);
 });
 
 it("evicts an older live backend scope when several individually admissible inventories exceed the shared byte budget", async () => {
