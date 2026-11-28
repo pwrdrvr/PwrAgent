@@ -47,7 +47,7 @@ export function parseGitHubRemote(remoteUrl: string): GitHubRepoRef | undefined 
   return repo && !repo.owner.includes("/") ? repo : undefined;
 }
 
-/** Resolve a single selected fetch URL using the same SSH host lookup as project discovery. */
+/** Resolve a selected fetch URL without joining an older discovery sample. */
 export async function resolveGitHubFetchUrl(
   url: string, resolve: SshResolver = defaultResolveSshHostname,
 ): Promise<GitHubRepoRef | undefined> {
@@ -55,7 +55,7 @@ export async function resolveGitHubFetchUrl(
   const host = readSshHost(url);
   if (!repo || !host) return repo;
   if (!/^[\w][\w.-]*$/.test(host)) return undefined;
-  const hostname = await resolveSshHostInFlight(host, resolve, {});
+  const hostname = await resolve(host);
   return hostname ? { ...repo, host: hostname.toLowerCase() } : undefined;
 }
 

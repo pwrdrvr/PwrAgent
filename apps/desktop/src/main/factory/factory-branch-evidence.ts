@@ -1,7 +1,7 @@
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import { buildThreadUrl, isThreadLinkId } from "@pwragent/shared/contracts/thread-link";
-import { canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import type { FactoryBranchProjection, FactoryBranchSelection, FactoryReceiptProjection } from "@pwragent/shared/factory-projection";
 import { factoryWorkItemKey, type FactoryWorkItem } from "@pwragent/shared/factory-work-item";
 import { isGitObjectId } from "@pwragent/shared/git-object-id";
@@ -27,75 +27,139 @@ async function checkout(directory: string) {
   return realCommon ? { path: localPath, common: realCommon } : undefined;
 }
 
-async function refOid(root: string, ref: string): Promise<string | undefined> {
+async function readGitHubRemote(root: string, name: string) {
+  const url = await git(root, ["remote", "get-url", "--", name]);
+  return url ? resolveGitHubFetchUrl(url) : undefined;
+}
+
+export function readFactoryOrigin(root: string) {
+  return readGitHubRemote(root, "origin");
+}
+
+async function readRef(root: string, ref: string) {
   if (await git(root, ["check-ref-format", ref]) === undefined) throw new Error("Select a valid Factory Git ref.");
-  const value = await git(root, ["for-each-ref", "--count=1", "--format=%(refname) %(objecttype) %(objectname)", "--", ref]);
-  const [name, type, oid] = value?.split(" ") ?? [];
-  return name === ref && type === "commit" && oid && isGitObjectId(oid) ? oid : undefined;
+  const value = await git(root, ["for-each-ref", "--count=1", "--format=%(refname) %(objecttype) %(objectname) %(symref)", "--", ref]);
+  const [name, type, oid, target] = value?.split(" ") ?? [];
+  return name === ref && type === "commit" && oid && isGitObjectId(oid) ? { oid, ref: target || ref } : undefined;
 }
 
-async function baseRefOid(root: string, ref: string, repository: string): Promise<string | undefined> {
-  const tracking = /^refs\/remotes\/([^/]+)\//.exec(ref)?.[1];
-  if (tracking) {
-    const url = await git(root, ["remote", "get-url", "--", tracking]);
-    const remote = url ? await resolveGitHubFetchUrl(url) : undefined;
-    if (!remote || `${remote.host}/${remote.owner}/${remote.repo}`.toLowerCase() !== repository.toLowerCase()) return undefined;
+function refspecMatch(pattern: string, ref: string): string | undefined {
+  const wildcard = pattern.indexOf("*");
+  if (wildcard === -1) return pattern === ref ? "" : undefined;
+  const prefix = pattern.slice(0, wildcard);
+  const suffix = pattern.slice(wildcard + 1);
+  if (ref.length >= prefix.length + suffix.length && ref.startsWith(prefix) && ref.endsWith(suffix)) {
+    return ref.slice(prefix.length, ref.length - suffix.length);
   }
-  return refOid(root, ref);
+  return undefined;
 }
 
-function reviewReceipt(
-  review: ThreadReview | undefined, roots: Set<string>, branch: string, headOid?: string, mergeBaseOid?: string,
-): FactoryReceiptProjection | undefined {
+function trackingSource(config: string, ref: string) {
+  const negatives = new Map<string, string[]>();
+  let match: { remote: string; source: string } | undefined;
+  for (const row of config.split("\0")) {
+    const entry = /^remote\.(.+)\.fetch\n(.+)$/.exec(row);
+    if (!entry) continue;
+    const [, remote, spec] = entry;
+    if (spec.startsWith("^")) {
+      let patterns = negatives.get(remote);
+      if (!patterns) negatives.set(remote, patterns = []);
+      patterns.push(spec.slice(1));
+      continue;
+    }
+    const mapping = /^\+?([^:\s]+):([^:\s]+)$/.exec(spec);
+    if (!mapping) continue;
+    const [, source, destination] = mapping;
+    const captured = refspecMatch(destination, ref);
+    if (captured === undefined) continue;
+    const mapped = source.replace("*", () => captured);
+    if (source.includes("*") !== destination.includes("*") || mapped.includes("*")) return undefined;
+    // Several sources may have written this ref, even if a source is now excluded.
+    if (match && (match.remote !== remote || match.source !== mapped)) return undefined;
+    match = { remote, source: mapped };
+  }
+  if (!match) return undefined;
+  const { remote, source } = match;
+  return negatives.get(remote)?.some((pattern) => refspecMatch(pattern, source) !== undefined) ? undefined : match;
+}
+
+async function readBaseRef(root: string, ref: string, repository: string) {
+  const tip = await readRef(root, ref);
+  if (!tip) return undefined;
+  if (ref.startsWith("refs/heads/")) return { oid: tip.oid, branch: ref.slice("refs/heads/".length) };
+  const config = await git(root, ["config", "--null", "--get-regexp", "^remote\\..*\\.fetch$"]);
+  const tracking = config && trackingSource(config, tip.ref);
+  const branch = tracking && /^refs\/heads\/(.+)$/.exec(tracking.source)?.[1];
+  if (!tracking || !branch) return undefined;
+  const remote = await readGitHubRemote(root, tracking.remote);
+  if (!remote || `${remote.host}/${remote.owner}/${remote.repo}`.toLowerCase() !== repository.toLowerCase()) return undefined;
+  return { oid: tip.oid, branch };
+}
+
+async function checkoutIdentity(directory: string): Promise<string | undefined> {
+  if (!isAbsolute(directory)) return undefined;
+  const info = await stat(directory, { bigint: true }).catch(() => undefined);
+  if (!info?.isDirectory()) return undefined;
+  return info.ino ? `${info.dev}:${info.ino}` : realpath(directory).catch(() => undefined);
+}
+
+async function reviewReceipt(
+  review: ThreadReview | undefined, matchesCheckout: (directory: string) => Promise<boolean>, branch: string,
+): Promise<FactoryReceiptProjection | undefined> {
   const context = review?.context;
-  if (review?.origin !== "automatic" || !context || !headOid
+  if (review?.origin !== "automatic" || !context
     || !isThreadLinkId(review.threadId) || context.gitBranch !== branch || context.reviewedTree
     || context.pullRequest || context.pullRequests?.length) return;
-  if (!roots.has(canonicalizeNavigationPath(context.workspacePath))
-    && (!context.repositoryPath || !roots.has(canonicalizeNavigationPath(context.repositoryPath)))) return;
-  const head = context.headCommit;
-  const base = context.baseCommit;
-  if (!head || !isGitObjectId(head)) return;
+  if (!context.headCommit || !isGitObjectId(context.headCommit) || !context.baseCommit || !isGitObjectId(context.baseCommit)) return;
+  if (!await matchesCheckout(context.workspacePath)
+    && (!context.repositoryPath || !await matchesCheckout(context.repositoryPath))) return;
   const reference = buildThreadUrl({
     threadId: review.threadId, backend: review.backend,
     messageId: isThreadLinkId(review.sourceKey) ? review.sourceKey : undefined,
   });
   return {
-    kind: "review", source: "owner_review", name: review.id, reference, headOid: head,
-    mergeBaseOid: base && isGitObjectId(base) ? base : undefined,
-    status: head !== headOid ? "stale_head" : base && mergeBaseOid && base !== mergeBaseOid ? "stale_base"
-      : !mergeBaseOid || base !== mergeBaseOid ? "inconclusive"
-        : review.status === "open" || review.items.some((item) => item.status === "open") ? "pending" : "inconclusive",
+    // The recorded commits describe the checkout at review start. A base-branch
+    // reviewer can see staged and unstaged changes that differ from that range.
+    kind: "review", source: "owner_review", name: review.id, reference,
+    status: review.status === "open" || review.items.some((item) => item.status === "open") ? "pending" : "inconclusive",
   };
 }
 
 /** Read the selected branch and recorded review subjects from their local authorities. */
 export async function readFactoryBranch(
   projectPath: string, repository: string, selection: FactoryBranchSelection & { workItem: FactoryWorkItem }, readReview: ReviewLookup, now: () => number,
-): Promise<FactoryBranchProjection> {
+): Promise<{ candidate: FactoryBranchProjection; baseBranch?: string }> {
   const project = await checkout(projectPath);
   if (!project) throw new Error("The registered Factory project checkout could not be verified.");
   const worktree = selection.worktree ? await checkout(selection.worktree) : undefined;
   if (worktree && worktree.common !== project.common) throw new Error("The Factory worktree belongs to a different project.");
   const branchRef = `refs/heads/${selection.branch}`;
-  const [headOid, baseOid, checkedOut] = await Promise.all([
-    refOid(project.path, branchRef),
-    baseRefOid(project.path, selection.baseRef, repository),
+  const [head, base, checkedOut] = await Promise.all([
+    readRef(project.path, branchRef),
+    readBaseRef(project.path, selection.baseRef, repository),
     worktree ? git(worktree.path, ["symbolic-ref", "--quiet", "HEAD"]) : undefined,
   ]);
+  const headOid = head?.oid;
+  const baseOid = base?.oid;
   const active = checkedOut === branchRef && headOid !== undefined && baseOid !== undefined;
-  const roots = new Set([project.path, projectPath].map(canonicalizeNavigationPath));
-  if (worktree && selection.worktree) {
-    roots.add(canonicalizeNavigationPath(worktree.path));
-    roots.add(canonicalizeNavigationPath(selection.worktree));
-  }
   const reviewIds = selection.reviewIds ?? [];
-  const commonAncestor = reviewIds.length && headOid && baseOid
-    ? await git(project.path, ["merge-base", "--all", headOid, baseOid]) : undefined;
-  const mergeBaseOid = commonAncestor && isGitObjectId(commonAncestor) ? commonAncestor : undefined;
-  const receipts = reviewIds.map((id) => reviewReceipt(
-    readReview(id), roots, selection.branch, headOid, mergeBaseOid,
-  )).filter((receipt): receipt is FactoryReceiptProjection => receipt !== undefined);
+  const receipts: FactoryReceiptProjection[] = [];
+  if (headOid && reviewIds.length) {
+    const identities = new Map<string, Promise<string | undefined>>();
+    const identify = (directory: string) => {
+      let identity = identities.get(directory);
+      if (!identity) identities.set(directory, identity = checkoutIdentity(directory));
+      return identity;
+    };
+    const roots = new Set(await Promise.all([identify(project.path), worktree && identify(worktree.path)]));
+    const observed = await Promise.all(reviewIds.map((id) => reviewReceipt(
+      readReview(id), async (directory) => {
+        const identity = await identify(directory);
+        return identity !== undefined && roots.has(identity);
+      }, selection.branch,
+    )));
+    for (const receipt of observed) if (receipt) receipts.push(receipt);
+  }
   const { workItem } = selection;
   const result: FactoryBranchProjection = {
     outcomeId: factoryWorkItemKey(workItem), workItem, branch: selection.branch, baseRef: selection.baseRef,
@@ -106,19 +170,11 @@ export async function readFactoryBranch(
     },
     worktree: worktree?.path, stage: active ? "branch" : "parked", publication: "unobserved", headOid, baseOid, receipts,
   };
-  if (!selection.assessment || !headOid || !baseOid || headOid.length !== baseOid.length) return result;
-  return {
-    ...result,
-    assessment: {
+  if (selection.assessment && headOid && baseOid && headOid.length === baseOid.length) {
+    result.assessment = {
       candidate: { issue: result.outcomeId, repository, branch: selection.branch },
-      headSha: headOid, baseSha: baseOid, ...selection.assessment,
-      evidence: receipts.flatMap((receipt) => mergeBaseOid && receipt.headOid === headOid && receipt.mergeBaseOid === mergeBaseOid && receipt.reference
-        ? [{
-          kind: "review" as const, headSha: headOid, reference: receipt.reference,
-          observation: receipt.status === "pending"
-            ? "The owner review record for this revision is open."
-            : "The owner recorded a review of this revision. Independent correctness is unverified.",
-        }] : []),
-    },
-  };
+      headSha: headOid, baseSha: baseOid, ...selection.assessment, evidence: [],
+    };
+  }
+  return { candidate: result, baseBranch: base?.branch };
 }

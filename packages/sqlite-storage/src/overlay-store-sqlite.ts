@@ -7595,13 +7595,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     }).immediate();
   }
 
-  async readPrStatusCache(): Promise<Record<string, PrStatusCacheEntry>> {
-    const rows = this.stateDb.raw
-      .prepare(
+  async readPrStatusCache(prKey?: string): Promise<Record<string, PrStatusCacheEntry>> {
+    const rows = (prKey === undefined
+      ? this.stateDb.raw.prepare(
         `SELECT pr_key, provider, fetched_at, payload
          FROM pr_status_cache`,
-      )
-      .all() as Array<{
+      ).all()
+      : this.stateDb.raw.prepare(
+        `SELECT pr_key, provider, fetched_at, payload
+         FROM pr_status_cache WHERE pr_key = ?`,
+      ).all(prKey)) as Array<{
         pr_key: string;
         provider: string | null;
         fetched_at: number;

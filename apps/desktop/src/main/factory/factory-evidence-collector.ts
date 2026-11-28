@@ -4,7 +4,7 @@ import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/cont
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import {
   FACTORY_PROJECT_PAGE_LIMIT,
-  type FactoryBranchSelection, type FactoryProjectProjection, type FactoryProjectPullRequest, type FactoryProjectReadRequest,
+  type FactoryBranchSelection, type FactoryEvidenceSnapshot, type FactoryProjectProjection, type FactoryProjectPullRequest, type FactoryProjectReadRequest,
   type FactoryReceiptProjection, type FactoryReceiptStatus,
 } from "@pwragent/shared/factory-projection";
 import { parseFactoryWorkItem, type FactoryWorkItem } from "@pwragent/shared/factory-work-item";
@@ -49,6 +49,7 @@ const SELECTION_QUERY = PROJECT_QUERY.replace(
         }
       } } }
       reviews: latestOpinionatedReviews(last: ${REVIEW_LIMIT}, writersOnly: true) {
+        pageInfo { hasPreviousPage }
         nodes { id state url author { login } commit { oid } }
       }
     }`);
@@ -60,7 +61,7 @@ type CachedStatus = { pr: Pick<PrSummary, "headSha" | "baseSha" | "checkState">;
 interface FactoryEvidencePorts {
   resolveProject: ProjectResolver;
   github: ForgeCiClient["requestGithub"];
-  cachedStatus: (key: string) => CachedStatus | undefined;
+  cachedStatus: (key: string) => CachedStatus | undefined | Promise<CachedStatus | undefined>;
   readReview: (id: string) => ThreadReview | undefined;
   now?: () => number;
 }
@@ -153,11 +154,16 @@ function prRow(node: RecordValue, repository: FactoryProjectProjection["reposito
   };
 }
 
-function safeReference(value: unknown, fallback: string): string {
+function safeReference(value: unknown, fallback: string, reviewLink = false): string {
   if (!text(value, 1024)) return fallback;
   try {
     const url = new URL(String(value));
-    if (url.origin === `https://${HOST}` && !url.username && !url.password) return url.origin + url.pathname;
+    if (url.protocol === "https:" && url.origin === `https://${HOST}` && (reviewLink || (!url.username && !url.password))) {
+      const location = url.origin + url.pathname;
+      const fragment = reviewLink && location.toLowerCase() === fallback.toLowerCase()
+        && /^#pullrequestreview-[1-9][0-9]*$/.test(url.hash) ? url.hash : "";
+      return location + fragment;
+    }
   } catch { /* Keep the canonical GitHub link. */ }
   return fallback;
 }
@@ -195,28 +201,33 @@ function checkObservations(node: RecordValue, headOid: string, url: string) {
       reference: safeReference(check.detailsUrl ?? check.targetUrl, fallback),
     }] : [];
   });
+  const checkContextsComplete = !truncated && Array.isArray(contexts.nodes)
+    && nodes.length <= CHECK_LIMIT && checks.length === nodes.length;
   return {
-    checks, workflowsPending, checksTruncated: truncated || nodes.length > CHECK_LIMIT || checks.length !== nodes.length
+    checks, workflowsPending, checkContextsComplete, checksTruncated: !checkContextsComplete
       || !Array.isArray(suites.nodes) || suiteNodes.length > CHECK_LIMIT || record(suites.pageInfo).hasNextPage !== false,
     checkRollup: text(rollup.state, 32),
   };
 }
 
-function reviewObservations(node: RecordValue, headOid: string, url: string): FactoryReceiptProjection[] {
-  const nodes = record(node.reviews).nodes;
-  if (!Array.isArray(nodes)) return [];
-  return nodes.slice(0, REVIEW_LIMIT).flatMap((raw) => {
+function reviewObservations(node: RecordValue, headOid: string, url: string) {
+  const page = record(node.reviews);
+  const nodes = Array.isArray(page.nodes) ? page.nodes : [];
+  const reviews: FactoryReceiptProjection[] = nodes.slice(0, REVIEW_LIMIT).flatMap((raw) => {
     const review = record(raw);
     const id = text(review.id, 256);
     const reviewed = oid(record(review.commit).oid);
     if (!id || !reviewed || (review.state !== "APPROVED" && review.state !== "CHANGES_REQUESTED")) return [];
     return [{
-      kind: "review", source: "github", name: id, headOid: reviewed, reference: safeReference(review.url, url),
+      kind: "review", source: "github", name: id, headOid: reviewed, reference: safeReference(review.url, url, true),
       actor: text(record(review.author).login, 100),
       status: reviewed !== headOid ? "stale_head"
         : review.state === "CHANGES_REQUESTED" ? "failed" : "inconclusive",
     }];
   });
+  const reviewCoverage: FactoryEvidenceSnapshot["reviewCoverage"] = Array.isArray(page.nodes)
+    && record(page.pageInfo).hasPreviousPage === false && reviews.length === nodes.length ? "complete" : "incomplete";
+  return { reviews, reviewCoverage };
 }
 
 function cacheReceipt(cached: CachedStatus | undefined, revision: { headOid: string; baseOid: string }, now: number, rollup?: string): FactoryReceiptProjection {
@@ -229,7 +240,8 @@ function cacheReceipt(cached: CachedStatus | undefined, revision: { headOid: str
   if (!headOid || !baseOid || !Number.isFinite(cached.fetchedAt) || cached.fetchedAt <= 0
     || cached.fetchedAt > now || now - cached.fetchedAt > STATUS_MAX_AGE_MS) return { ...receipt, status: "stale" };
   const state = cached.pr.checkState;
-  const conflict = (state === "failing" && rollup === "SUCCESS") || (state === "passing" && rollup === "FAILURE");
+  const conflict = (state === "failing" && rollup === "SUCCESS")
+    || (state === "passing" && (rollup === "FAILURE" || rollup === "ERROR"));
   return { ...receipt, status: conflict ? "conflict" : "current" };
 }
 
@@ -241,7 +253,8 @@ export async function collectFactoryProject(value: unknown, ports: FactoryEviden
   if (!project || !remote || remote.host !== HOST || remote.owner.includes("/") || remote.repo.toLowerCase() !== name.toLowerCase()) requestError();
   const owner = remote.owner;
   const now = ports.now ?? Date.now;
-  const candidate = requestedBranch ? await readFactoryBranch(project.path, `${HOST}/${owner}/${remote.repo}`, requestedBranch, ports.readReview, now) : undefined;
+  const branch = requestedBranch ? await readFactoryBranch(project.path, `${HOST}/${owner}/${remote.repo}`, requestedBranch, ports.readReview, now) : undefined;
+  const candidate = branch?.candidate;
   if (candidate && !selection) return {
     projectKey, repository: { host: HOST, owner, name: remote.repo },
     authority: { source: "local_owner_git", observedAt: candidate.authority.observedAt },
@@ -250,6 +263,7 @@ export async function collectFactoryProject(value: unknown, ports: FactoryEviden
 
   const response = record(await ports.github({ ...remote, provider: "github" }, {
     path: "", graphql: true,
+    allowMissingSelectedPullRequest: selection !== undefined,
     body: {
       query: selection ? SELECTION_QUERY : PROJECT_QUERY,
       variables: { owner, name, limit, ...(selection ? { number: selection.number } : {}) },
@@ -268,12 +282,15 @@ export async function collectFactoryProject(value: unknown, ports: FactoryEviden
   const repository = { host: HOST, id, owner, name: canonicalName } as const;
   const observedAt = now();
   const page = record(data.pullRequests);
-  if (!Array.isArray(page.nodes)) throw new Error("GitHub returned an invalid project PR list.");
+  const morePullRequests = record(page.pageInfo).hasNextPage;
+  if (!Array.isArray(page.nodes) || (selection && data.selected === null && typeof morePullRequests !== "boolean")) {
+    throw new Error("GitHub returned an invalid project PR list.");
+  }
   const result: FactoryProjectProjection = {
     projectKey, repository, authority: { source: "local_owner_github", observedAt },
     inventory: "observed",
     pullRequests: page.nodes.slice(0, limit).map((node) => prRow(record(node), repository)),
-    truncated: record(page.pageInfo).hasNextPage !== false || page.nodes.length > limit, candidate,
+    truncated: morePullRequests !== false || page.nodes.length > limit, candidate,
   };
   if (!selection) return result;
   if (data.selected === null) return { ...result, selected: { kind: "absent" } };
@@ -285,21 +302,21 @@ export async function collectFactoryProject(value: unknown, ports: FactoryEviden
   const baseOid = pullRequest.lifecycle === "open" ? oid(record(record(node.baseRef).target).oid) : oid(node.baseRefOid);
   const revision = pullRequest.firstParty && headOid && baseOid && headOid.length === baseOid.length ? { headOid, baseOid } : undefined;
   const checks = revision ? checkObservations(node, revision.headOid, pullRequest.url)
-    : { checks: [], checksTruncated: false, checkRollup: undefined };
-  const cache = revision ? cacheReceipt(ports.cachedStatus(buildPullRequestStatusKey({
+    : { checks: [], checkContextsComplete: false, checksTruncated: false, checkRollup: undefined };
+  const cache = revision ? cacheReceipt(await ports.cachedStatus(buildPullRequestStatusKey({
     provider: HOST, org: owner, repo: canonicalName, number: pullRequest.number,
-  })), revision, observedAt, checks.checkRollup) : undefined;
+  })), revision, now(), checks.checkRollup) : undefined;
   const evidence = deriveFactoryEvidence({
     repositoryId: id, pullRequest, revision, expected: selection.expected,
     ...checks, requiredChecks: selection.requiredChecks ?? [], cache,
-    reviews: revision ? reviewObservations(node, revision.headOid, pullRequest.url) : [],
+    ...(revision ? reviewObservations(node, revision.headOid, pullRequest.url) : { reviews: [], reviewCoverage: "unobserved" }),
     mergeCommitOid: pullRequest.firstParty && pullRequest.lifecycle === "merged" ? oid(record(node.mergeCommit).oid) : undefined,
     assessment: selection.assessment,
   });
   if (!candidate) return { ...result, selected: { kind: "observed", evidence } };
-  const baseBranch = candidate.baseRef.replace(/^refs\/(?:heads|remotes\/[^/]+)\//, "");
+  const baseBranch = branch?.baseBranch;
   const anchor = candidate.workItem;
-  if (!pullRequest.firstParty || node.headRefName !== candidate.branch || node.baseRefName !== baseBranch
+  if (!pullRequest.firstParty || node.headRefName !== candidate.branch || !baseBranch || node.baseRefName !== baseBranch
     || (anchor.provider === "github" && anchor.kind === "pull_request"
       && (anchor.repositoryId !== id || anchor.number !== pullRequest.number))) {
     return { ...result, candidate: { ...candidate, publication: "mismatch" } };

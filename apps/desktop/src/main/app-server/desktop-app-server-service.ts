@@ -39,7 +39,8 @@ import type { ForgePrToolPreflightResult } from "../agent-tools/pwragent-forge-p
 import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { readForgeRepositoryRemotes, resolveGitHubRepoForDirectory, type GitHubRepoRef } from "../pr-status/git-remote";
+import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
+import { readFactoryOrigin } from "../factory/factory-branch-evidence";
 import { collectFactoryProject } from "../factory/factory-evidence-collector";
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
@@ -1248,6 +1249,12 @@ type PrStatusRegistryEntry = {
   lastScheduledRefreshRequestedAt?: number;
   lastUserRefreshRequestedAt?: number;
 };
+
+function isStalePrStatus(current: PrStatusRegistryEntry, pr: PrSummary, fetchedAt: number): boolean {
+  // A merge is irreversible, including across a restart or a racing read.
+  return current.fetchedAt > fetchedAt
+    || (current.pr.lifecycleState === "merged" && pr.lifecycleState !== "merged");
+}
 
 /** Bounded sample of PR keys carried by the stale-observation debug line. */
 const STALE_PR_OBSERVATION_LOG_SAMPLE = 5;
@@ -3862,15 +3869,26 @@ class DesktopAppServerService {
     return this.prStatusRegistry.get(this.prRepositoryAliases.canonicalizeKey(prKey));
   }
 
+  private async readFactoryCachedPrStatus(prKey: string) {
+    if (this.prStatusRegistryLoaded) return this.getCachedPrStatus(prKey);
+    // Read one durable row without hydrating the registry or publishing status.
+    const key = this.prRepositoryAliases.canonicalizeKey(prKey);
+    const persisted = (await this.getOverlayStore().readPrStatusCache(key))[key];
+    const current = this.getCachedPrStatus(prKey);
+    if (this.prStatusRegistryLoaded || !persisted || key !== this.prRepositoryAliases.canonicalizeKey(prKey)
+      || (current && isStalePrStatus(current, persisted.pr, persisted.fetchedAt))) return current;
+    return persisted;
+  }
+
   readFactoryProject(request: unknown) {
     let reviews: ReturnType<typeof createThreadReviewStorage> | undefined;
     return collectFactoryProject(request, {
       resolveProject: async (directoryKey) => {
         const project = await this.getOverlayStore().getDirectoryLaunchpad({ directoryKey });
         if (!project?.registeredAt || !project.directoryPath || project.federationTarget?.scope === "remote") return undefined;
-        return { path: project.directoryPath, origin: await resolveGitHubRepoForDirectory(project.directoryPath, { fresh: true }) };
+        return { path: project.directoryPath, origin: await readFactoryOrigin(project.directoryPath) };
       },
-      cachedStatus: (key) => this.getCachedPrStatus(key),
+      cachedStatus: (key) => this.readFactoryCachedPrStatus(key),
       readReview: (id) => (reviews ??= createThreadReviewStorage()).get(id),
       github: (...args) => this.getForgeCiClient().requestGithub(...args),
     });
@@ -5781,10 +5799,7 @@ class DesktopAppServerService {
       const key = getPrStatusKey(normalized);
       const prFetchedAt = options.fetchedAtByKey?.get(key) ?? fetchedAt;
       const current = this.prStatusRegistry.get(key);
-      // A merge is irreversible. Reads started either side of the write can
-      // briefly report the pre-merge state.
-      if (current && (current.fetchedAt > prFetchedAt
-        || (current.pr.lifecycleState === "merged" && normalized.lifecycleState !== "merged"))) {
+      if (current && isStalePrStatus(current, normalized, prFetchedAt)) {
         staleKeys.push(key);
         continue;
       }

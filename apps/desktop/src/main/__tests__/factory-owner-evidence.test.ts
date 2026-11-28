@@ -1,12 +1,15 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
+import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { FactoryProjectProjection } from "@pwragent/shared/factory-projection";
 import { validateOpenAIDecisionInput } from "@pwragent/shared/openai-decisions";
 import { appServerService, resetAppServerServiceForTests } from "../app-server/desktop-app-server-service";
 import { runGitCommand } from "../app-server/git-executable";
+import * as gitExecutable from "../app-server/git-executable";
+import { resolveReviewProvenance } from "../app-server/review-provenance";
 import { collectFactoryProject } from "../factory/factory-evidence-collector";
 import { handleOutpostCommand } from "../headless/outpost";
 import { FACTORY_PR_DEFINITION, factoryEvidenceProblem } from "../openai-decisions/factory-pr-assessment";
@@ -17,13 +20,13 @@ import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from
 import { createThreadReviewStorage } from "../storage/desktop-runtime-storage";
 import { SqliteOverlayStore } from "../storage/overlay-store-sqlite";
 import { SqliteThreadReviewStorage } from "../storage/thread-review-storage-sqlite";
+import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 import { createTempStateDb, openFreshStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 vi.mock(import("../pr-status/git-remote"), async (load) => {
   const actual = await load();
   return {
     ...actual,
-    resolveGitHubRepoForDirectory: vi.fn(),
     resolveGitHubFetchUrl: (url: string) => actual.resolveGitHubFetchUrl(url,
       async (host) => host === "github-work" ? "github.com" : host),
   };
@@ -39,7 +42,7 @@ const headOid = "a".repeat(40);
 const baseOid = "b".repeat(40);
 const older = "c".repeat(40);
 const check = (conclusion = "SUCCESS") => ({ name: "build", status: "COMPLETED", conclusion });
-const review = (state: string, revision = headOid) => ({ id: state, state, commit: { oid: revision } });
+const review = (state: string, revision = headOid, url?: string) => ({ id: state, state, url, commit: { oid: revision } });
 
 function pull(number = 7, id = repositoryId) {
   return { number, title: `Change ${number}`, state: "OPEN", isDraft: false, headRepository: { id } };
@@ -48,14 +51,14 @@ function pull(number = 7, id = repositoryId) {
 type ForgeFixtureOptions = {
   history?: number; limit?: number; actualHead?: string; actualBase?: string; checkHead?: string;
   checks?: ReturnType<typeof check>[]; checkRollup?: string; reviews?: ReturnType<typeof review>[];
-  truncated?: boolean; selected?: boolean; headRepositoryId?: string;
+  truncated?: boolean; reviewsTruncated?: boolean; selected?: boolean; headRepositoryId?: string;
   suites?: { status: string; workflowRun: { id: string } | null }[]; suitesTruncated?: boolean;
 };
 
 function forgeFixture({
   history = 25, limit = 25, actualHead = headOid, actualBase = baseOid, checkHead = actualHead,
   checks = [check()], checkRollup = "SUCCESS", reviews = [review("APPROVED")],
-  truncated = false, selected = true, headRepositoryId = repositoryId, suites = [], suitesTruncated = false,
+  truncated = false, reviewsTruncated = false, selected = true, headRepositoryId = repositoryId, suites = [], suitesTruncated = false,
 }: ForgeFixtureOptions = {}) {
   return { data: { repository: {
     id: repositoryId, nameWithOwner: "pwrdrvr/Synthetic",
@@ -69,7 +72,7 @@ function forgeFixture({
       commits: { nodes: [{ commit: { oid: checkHead, checkSuites: { nodes: suites, pageInfo: { hasNextPage: suitesTruncated } }, statusCheckRollup: {
         state: checkRollup, contexts: { pageInfo: { hasNextPage: truncated }, nodes: checks },
       } } }] },
-      reviews: { nodes: reviews },
+      reviews: { nodes: reviews, pageInfo: { hasPreviousPage: reviewsTruncated } },
     } : null,
   } } };
 }
@@ -90,7 +93,6 @@ function readEvidence(page: FactoryProjectProjection) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  vi.mocked(resolveGitHubRepoForDirectory).mockReset();
   vi.mocked(createThreadReviewStorage).mockReset();
   resetDesktopOverlayStoreForTests();
 });
@@ -99,15 +101,22 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const root = await mkdtemp(path.join(tmpdir(), "factory-branch-"));
   const projectPath = path.join(root, "project");
-  const worktree = path.join(root, "worktree");
+  const worktree = path.join(root, "literal", "review");
+  const restoreEnv = isolateProcessGitEnvironment(root);
   const dbFixture = createTempStateDb("factory-branch-db-");
   const db = openFreshStateDb(dbFixture.dbPath);
   try {
     await mkdir(projectPath);
     const commit = ["-c", "user.name=Factory", "-c", "user.email=factory@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m"];
     await runGitCommand(projectPath, ["init", "--template=", "-b", "main"]);
+    await writeFile(path.join(projectPath, "answer.txt"), "40\n");
+    await runGitCommand(projectPath, ["add", "--", "answer.txt"]);
     await runGitCommand(projectPath, [...commit, "base"]);
+    await mkdir(path.dirname(worktree));
     await runGitCommand(projectPath, ["worktree", "add", "-b", "factory/fixture", worktree]);
+    const answer = path.join(worktree, "answer.txt");
+    await writeFile(answer, "41\n");
+    await runGitCommand(worktree, ["add", "--", "answer.txt"]);
     await runGitCommand(worktree, [...commit, "candidate"]);
     const actualHead = (await runGitCommand(worktree, ["rev-parse", "HEAD"])).stdout.trim();
     const actualBase = (await runGitCommand(projectPath, ["rev-parse", "HEAD"])).stdout.trim();
@@ -119,16 +128,28 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       directoryKey: key, directoryKind: "directory", directoryLabel: "Synthetic", directoryPath: projectPath,
       registeredAt: 1, backend: "codex", executionMode: "default", workMode: "local", prompt: "", createdAt: 1, updatedAt: 1,
     });
+    // A reviewer reading the checkout saw the unstaged fix. The committed
+    // branch still returns the wrong answer even after that review settles.
+    await writeFile(answer, "42\n");
+    const context = await resolveReviewProvenance({
+      cwd: worktree, target: { type: "baseBranch", branch: "origin/main" },
+    });
+    expect(context).toMatchObject({ headCommit: actualHead, baseCommit: actualBase });
+    expect(context?.reviewedTree).toBeUndefined();
+    expect((await runGitCommand(worktree, ["show", "HEAD:answer.txt"])).stdout.trim()).toBe("41");
+    expect((await runGitCommand(worktree, ["diff", actualBase, "--", "answer.txt"])).stdout).toContain("+42");
+    await writeFile(answer, "41\n");
+    expect(await readFile(answer, "utf8")).toBe("41\n");
+    expect((await runGitCommand(worktree, ["status", "--porcelain"])).stdout).toBe("");
     const reviews = new SqliteThreadReviewStorage(db);
     reviews.insert({
       backend: "codex", threadId: "fixture-thread", id: "fixture-review", origin: "automatic", sourceKey: "fixture-artifact",
       title: "Synthetic review", status: "handled", items: [], createdAt: 1, updatedAt: 1,
-      context: { workspacePath: worktree, repositoryPath: projectPath, gitBranch: "factory/fixture", baseCommit: actualBase, headCommit: actualHead },
+      context: { ...context!, repositoryPath: projectPath },
     });
     setDesktopOverlayStoreForTests(store);
     vi.mocked(createThreadReviewStorage).mockReturnValue(reviews);
     resetAppServerServiceForTests();
-    vi.mocked(resolveGitHubRepoForDirectory).mockResolvedValue(remote);
     const fetcher = vi.fn<typeof fetch>(async () => Response.json(forgeFixture({ actualHead, actualBase })));
     vi.spyOn(appServerService, "getForgeCiClient").mockReturnValue(new ForgeCiClient({
       gitlab: {} as never, enabled: () => true, takeToken: () => true, fetch: fetcher, githubToken: async () => "synthetic-token",
@@ -139,6 +160,23 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       issueId: "10000000-0000-4000-a000-000000000001", branch: "factory/fixture", baseRef: "refs/remotes/origin/main",
       worktree, reviewIds: ["fixture-review"], assessment: request.selection.assessment,
     };
+    const caseVariant = path.join(root, "literal", "Review");
+    const sameDirectory = await stat(caseVariant).then(() => true, () => false);
+    if (!sameDirectory) await mkdir(caseVariant);
+    reviews.insert({
+      backend: "codex", threadId: "fixture-thread", id: "case-review", origin: "automatic", sourceKey: "fixture-case",
+      title: "Review from a case variant", status: "handled", items: [], createdAt: 1, updatedAt: 1,
+      context: { ...context!, workspacePath: caseVariant },
+    });
+    if (process.platform !== "win32") {
+      const different = path.join(root, "literal\\review");
+      await mkdir(different);
+      reviews.insert({
+        backend: "codex", threadId: "fixture-thread", id: "different-path-review", origin: "automatic", sourceKey: "fixture-path",
+        title: "Review from a different directory", status: "handled", items: [], createdAt: 1, updatedAt: 1,
+        context: { ...context!, workspacePath: different },
+      });
+    }
     const params = { projectKey: key, repository: remote.repo, candidate };
     const { writes } = await measureSqliteWrites(async () => {
       await runGitCommand(projectPath, ["remote", "set-url", "origin", "git@github-work:pwrdrvr/Synthetic.git"]);
@@ -146,23 +184,37 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       await runGitCommand(projectPath, ["branch", "target+ipc", actualBase]);
       const plus = await read({ ...params, candidate: { ...candidate, branch: "fixture+ipc", baseRef: "refs/heads/target+ipc" } });
       expect(plus.candidate).toMatchObject({ headOid: actualHead, baseOid: actualBase });
-      await expect(read({ ...params, candidate: { ...candidate, branch: "fixture*ipc" } })).rejects.toThrow();
+      const git = vi.spyOn(gitExecutable, "runGitCommand");
       const unpublished = await read(params);
+      const gitCalls = git.mock.calls.map(([, args]) => args);
+      expect(gitCalls).toHaveLength(10);
+      expect(gitCalls.filter(([command]) => command === "symbolic-ref")).toEqual([["symbolic-ref", "--quiet", "HEAD"]]);
+      expect(gitCalls.every(([command]) =>
+        ["remote", "rev-parse", "check-ref-format", "for-each-ref", "symbolic-ref", "config"].includes(command))).toBe(true);
+      await expect(read({ ...params, candidate: { ...candidate, branch: "fixture*ipc" } })).rejects.toThrow();
       expect(unpublished.authority.source).toBe("local_owner_git");
       expect(unpublished.inventory).toBe("unobserved");
       expect(unpublished.pullRequests).toEqual([]);
       expect(unpublished.selected).toBeUndefined();
-      expect(unpublished.candidate).toMatchObject({
+      expect.soft(unpublished.candidate).toMatchObject({
         stage: "branch", publication: "unobserved", headOid: actualHead, baseOid: actualBase,
         authority: { source: "local_owner_git", runtimeInstanceId: expect.any(String), profile: expect.any(String) },
-        receipts: [{ source: "owner_review", kind: "review", status: "inconclusive", headOid: actualHead, mergeBaseOid: actualBase }],
+        receipts: [{ source: "owner_review", kind: "review", status: "inconclusive" }],
       });
+      expect.soft(unpublished.candidate?.receipts[0]).not.toHaveProperty("headOid");
+      expect.soft(unpublished.candidate?.assessment?.evidence).toEqual([]);
       expect(unpublished.candidate?.assessment).not.toHaveProperty("pullRequest");
       expect(validateOpenAIDecisionInput(FACTORY_PR_DEFINITION.inputSchema, unpublished.candidate?.assessment).ok).toBe(true);
       expect(factoryEvidenceProblem(unpublished.candidate?.assessment)).toBeUndefined();
       const parked = await read({ ...params, candidate: { ...candidate, worktree: undefined } });
       expect(parked.candidate).toMatchObject({ stage: "parked", headOid: actualHead, outcomeId: unpublished.candidate?.outcomeId });
       expect(parked.candidate?.receipts).toHaveLength(1);
+      const caseRead = await read({ ...params, candidate: { ...candidate, reviewIds: ["case-review"] } });
+      expect.soft(caseRead.candidate?.receipts).toHaveLength(sameDirectory ? 1 : 0);
+      if (process.platform !== "win32") {
+        const otherPath = await read({ ...params, candidate: { ...candidate, reviewIds: ["different-path-review"] } });
+        expect.soft(otherPath.candidate?.receipts).toHaveLength(0);
+      }
       await runGitCommand(projectPath, ["update-ref", "refs/tags/refs/heads/missing", actualHead]);
       const absent = await read({ ...params, candidate: { ...candidate, branch: "missing" } });
       expect(absent.candidate?.headOid).toBeUndefined();
@@ -208,33 +260,43 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       const advanced = (await runGitCommand(projectPath, ["rev-parse", "HEAD"])).stdout.trim();
       await runGitCommand(projectPath, ["update-ref", "refs/remotes/origin/main", advanced]);
       const behind = await read(params);
-      expect(behind.candidate?.receipts).toContainEqual(expect.objectContaining({ status: "inconclusive", mergeBaseOid: actualBase }));
-      expect(behind.candidate?.assessment?.evidence).toContainEqual(expect.objectContaining({ kind: "review", headSha: actualHead }));
-      expect(behind.candidate?.assessment?.evidence[0]).not.toHaveProperty("baseSha");
+      expect(behind.candidate?.receipts).toContainEqual(expect.objectContaining({ status: "inconclusive", name: "fixture-review" }));
+      expect.soft(behind.candidate?.assessment?.evidence).toEqual([]);
+      await runGitCommand(projectPath, ["config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/cache/target"]);
+      await runGitCommand(projectPath, ["update-ref", "refs/cache/target", actualBase]);
+      await runGitCommand(projectPath, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/cache/target"]);
+      const symbolic = { ...params, candidate: { ...candidate, baseRef: "refs/remotes/origin/HEAD" }, selection: { repositoryId, number: 7 } };
+      expect.soft((await read(symbolic)).candidate).toMatchObject({ baseOid: actualBase, publication: "confirmed" });
+      await runGitCommand(projectPath, ["config", "--add", "remote.origin.fetch", "+refs/heads/release:refs/cache/target"]);
+      expect.soft((await read(symbolic)).candidate).toMatchObject({ publication: "mismatch", baseOid: undefined });
     });
     expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0 });
   } finally {
     db.close();
     removeTempStateDbDir(dbFixture.tempDir);
+    restoreEnv();
     await rm(root, { recursive: true, force: true });
   }
 });
 
 it("reads unattached project PRs and a selected revision through the Outpost operator command with zero SQLite writes", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const root = await mkdtemp(path.join(tmpdir(), "factory-owner-origin-"));
+  const restoreEnv = isolateProcessGitEnvironment(root);
+  const key = `directory:${root}`;
   const fixture = createTempStateDb("factory-evidence-");
   const db = openFreshStateDb(fixture.dbPath);
   const store = new SqliteOverlayStore(db);
   try {
+    await runGitCommand(root, ["init", "--template=", "-b", "main"]);
+    await runGitCommand(root, ["remote", "add", "origin", "https://github.com/pwrdrvr/Synthetic.git"]);
     setDesktopOverlayStoreForTests(store);
     await store.upsertDirectoryLaunchpad({
-      directoryKey: projectKey, directoryKind: "directory", directoryLabel: "Synthetic",
-      directoryPath: "/synthetic/project", registeredAt: 1, backend: "codex", executionMode: "default",
+      directoryKey: key, directoryKind: "directory", directoryLabel: "Synthetic",
+      directoryPath: root, registeredAt: 1, backend: "codex", executionMode: "default",
       workMode: "local", prompt: "", createdAt: 1, updatedAt: 1,
     });
     expect(readSqliteWriteMetrics()?.commits).toBeGreaterThan(0);
-    resetAppServerServiceForTests();
-    vi.mocked(resolveGitHubRepoForDirectory).mockResolvedValue(remote);
     const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
       const { query, variables } = JSON.parse(String(init?.body));
       expect(query).toContain("repository(owner: $owner, name: $name)");
@@ -245,16 +307,31 @@ it("reads unattached project PRs and a selected revision through the Outpost ope
       gitlab: {} as never, enabled: () => true, takeToken: () => true, fetch: fetcher,
       githubToken: async () => "synthetic-token",
     });
+    const pr: PrSummary = {
+      provider: "github.com", org: remote.owner, repo: remote.repo, number: 7,
+      url: "https://github.com/pwrdrvr/Synthetic/pull/7", state: "unknown",
+      lifecycleState: "open", headSha: headOid, baseSha: baseOid, checkState: "failing",
+    };
+    const prKey = buildPullRequestStatusKey(pr);
+    await store.writePrStatusCacheEntries([
+      { prKey, pr, provider: pr.provider, fetchedAt: Date.now() - 1_000 },
+      ...Array.from({ length: 100 }, (_, i) => {
+        const unrelated = { ...pr, number: i + 8, url: `https://github.com/pwrdrvr/Synthetic/pull/${i + 8}` };
+        return { prKey: buildPullRequestStatusKey(unrelated), pr: unrelated, provider: pr.provider, fetchedAt: Date.now() };
+      }),
+    ]);
+    resetAppServerServiceForTests();
     vi.spyOn(appServerService, "getForgeCiClient").mockReturnValue(client);
     const services = { service: appServerService } as Parameters<typeof handleOutpostCommand>[0];
+    const durable = vi.spyOn(store, "readPrStatusCache");
     const { writes } = await measureSqliteWrites(async () => {
-      const first = await handleOutpostCommand(services, "factory-board", { projectKey, repository: remote.repo }) as FactoryProjectProjection;
+      const first = await handleOutpostCommand(services, "factory-board", { projectKey: key, repository: remote.repo }) as FactoryProjectProjection;
       expect(first.pullRequests).toHaveLength(25);
       expect(first.repository).toEqual({ host: remote.host, id: repositoryId, owner: remote.owner, name: remote.repo });
       expect(first.selected).toBeUndefined();
-      const second = await handleOutpostCommand(services, "factory-board", request) as FactoryProjectProjection;
+      const second = await handleOutpostCommand(services, "factory-board", { ...request, projectKey: key }) as FactoryProjectProjection;
       const evidence = readEvidence(second);
-      expect(evidence).toMatchObject({ revision: { headOid, baseOid }, ci: "passed", review: "inconclusive", candidate: { kind: "none" } });
+      expect(evidence).toMatchObject({ revision: { headOid, baseOid }, ci: "conflict", review: "inconclusive", candidate: { kind: "none" } });
       expect(evidence.assessment?.evidence).toContainEqual(expect.objectContaining({ observation: expect.stringContaining("build") }));
       expect(factoryEvidenceProblem(evidence.assessment)).toBeUndefined();
       expect(validateOpenAIDecisionInput(FACTORY_PR_DEFINITION.inputSchema, evidence.assessment).ok).toBe(true);
@@ -262,10 +339,68 @@ it("reads unattached project PRs and a selected revision through the Outpost ope
         .rejects.toThrow("Select a registered first-party project");
     });
     expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(durable.mock.calls).toEqual([[prKey]]);
+    expect(Object.keys(await durable.mock.results[0]?.value)).toEqual([prKey]);
+    expect(appServerService.getCachedPrStatus(prKey)).toBeUndefined();
     expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
+
+    const readDurable = SqliteOverlayStore.prototype.readPrStatusCache.bind(store);
+    const pointRead = Promise.withResolvers<void>();
+    const releasePoint = Promise.withResolvers<void>();
+    durable.mockImplementationOnce(async (...args) => {
+      const entries = await readDurable(...args);
+      pointRead.resolve();
+      await releasePoint.promise;
+      return entries;
+    });
+    const board = appServerService.readFactoryProject({ ...request, projectKey: key });
+    await Promise.race([pointRead.promise, board]);
+    expect(durable).toHaveBeenCalledTimes(2);
+    await store.writePrStatusCacheEntries([{
+      prKey, pr: { ...pr, checkState: "passing" }, provider: pr.provider, fetchedAt: Date.now(),
+    }]);
+    try {
+      await appServerService.canonicalizeStoredPullRequests([pr], undefined, false);
+    } finally {
+      releasePoint.resolve();
+    }
+    expect(readEvidence(await board)).toEqual(readEvidence(await appServerService.readFactoryProject({ ...request, projectKey: key })));
+    expect(durable.mock.calls.slice(1)).toEqual([[prKey], []]);
+
+    const git = vi.spyOn(gitExecutable, "runGitCommand");
+    const discoverySampled = Promise.withResolvers<void>();
+    const releaseDiscovery = Promise.withResolvers<void>();
+    const staleDiscovery = resolveGitHubRepoForDirectory(root, {
+      readRemotes: async () => {
+        const { stdout } = await runGitCommand(root, ["remote", "get-url", "origin"]);
+        discoverySampled.resolve();
+        await releaseDiscovery.promise;
+        return [{ name: "origin", url: stdout.trim() }];
+      },
+    });
+    await discoverySampled.promise;
+    await runGitCommand(root, ["remote", "add", "upstream", "https://github.com/other/Other.git"]);
+    await runGitCommand(root, ["remote", "set-url", "origin", "git@github-work:second-fork/Synthetic.git"]);
+    git.mockClear();
+    const fork = forgeFixture();
+    fork.data.repository.nameWithOwner = "second-fork/Synthetic";
+    fork.data.repository.id = "R_second_fork";
+    fetcher.mockResolvedValueOnce(Response.json(fork));
+    const switched = appServerService.readFactoryProject({ projectKey: key, repository: remote.repo });
+    // Let the new owner read start while the earlier discovery is still pending.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseDiscovery.resolve();
+    expect(await staleDiscovery).toMatchObject(remote);
+    expect((await switched).repository).toMatchObject({ owner: "second-fork", id: "R_second_fork" });
+    expect(git.mock.calls.map(([, args]) => args)).toEqual([["remote", "get-url", "--", "origin"]]);
+    await runGitCommand(root, ["remote", "remove", "origin"]);
+    await expect(appServerService.readFactoryProject({ projectKey: key, repository: remote.repo }))
+      .rejects.toThrow("Select a registered first-party project");
   } finally {
     db.close();
     removeTempStateDbDir(fixture.tempDir);
+    restoreEnv();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -319,7 +454,7 @@ it("distinguishes empty, failed, skipped, incomplete and conflicting CI receipts
     { checks: [check("SKIPPED")], checkRollup: "SUCCESS", ci: "inconclusive" },
     { checks: [check()], truncated: true, ci: "inconclusive" },
     { checks: [check(), check("FAILURE")], ci: "conflict" },
-    { checkHead: older, ci: "absent" },
+    { checkHead: older, ci: "inconclusive" },
     { suites: [{ status: "QUEUED", workflowRun: { id: "run" } }], ci: "pending" },
     { suites: [{ status: "QUEUED", workflowRun: null }], ci: "passed" },
     { suitesTruncated: true, ci: "inconclusive" },
@@ -397,4 +532,80 @@ it.each([25, 50, 100])("reads one bounded page and one selected PR at a project 
   expect(ports.github).toHaveBeenCalledTimes(1);
   expect(ports.resolveProject).toHaveBeenCalledTimes(1);
   expect(ports.cachedStatus).toHaveBeenCalledTimes(1);
+});
+
+it("accepts only a selected-PR NOT_FOUND partial response through ForgeCiClient", async () => {
+  const missing = forgeFixture({ selected: false });
+  const error = { type: "NOT_FOUND", path: ["repository", "selected"], message: "Could not resolve pull request" };
+  const fetcher = vi.fn<typeof fetch>();
+  const client = new ForgeCiClient({
+    gitlab: {} as never, enabled: () => true, takeToken: () => true, fetch: fetcher, githubToken: async () => "synthetic-token",
+  });
+  const read = () => collectFactoryProject(request, { ...collector(), github: client.requestGithub.bind(client) });
+  for (const errors of [
+    [{ ...error, type: "FORBIDDEN" }],
+    [{ ...error, path: ["repository"] }],
+    [{ ...error, path: ["repository", "selected", "commits"] }],
+    [error, { ...error, path: ["repository", "pullRequests"] }],
+  ]) {
+    fetcher.mockResolvedValueOnce(Response.json({ ...missing, errors }));
+    await expect(read()).rejects.toThrow("GitHub GraphQL refused");
+  }
+  fetcher.mockResolvedValueOnce(Response.json({ ...forgeFixture(), errors: [error] }));
+  await expect(read()).rejects.toThrow("GitHub GraphQL refused");
+  const partial = (repository: object) => Response.json({ data: { repository }, errors: [error] });
+  fetcher.mockResolvedValueOnce(partial({ ...missing.data.repository, id: "incorrect-repository" }));
+  await expect(read()).rejects.toThrow("could not be confirmed");
+  fetcher.mockResolvedValueOnce(partial({ ...missing.data.repository, pullRequests: null }));
+  await expect(read()).rejects.toThrow("invalid project PR list");
+  fetcher.mockResolvedValueOnce(Response.json({ ...missing, errors: [error] }));
+  await expect(read()).resolves.toMatchObject({ inventory: "observed", selected: { kind: "absent" } });
+});
+
+it("qualifies review coverage when GitHub has earlier opinionated reviews", async () => {
+  for (const state of [undefined, "CHANGES_REQUESTED"]) {
+    const ports = collector(forgeFixture({ reviews: state ? [review(state)] : [], reviewsTruncated: true }));
+    const evidence = readEvidence(await collectFactoryProject(request, ports));
+    expect.soft(ports.github.mock.calls[0]).toEqual([
+      expect.anything(),
+      expect.objectContaining({ body: expect.objectContaining({ query: expect.stringContaining("hasPreviousPage") }) }),
+    ]);
+    expect.soft(evidence).toMatchObject({ reviewCoverage: "incomplete", review: state ? "blocked" : "inconclusive" });
+    expect(ports.github).toHaveBeenCalledOnce();
+  }
+});
+
+it.each([64, 65, 128, 256])("distinguishes a missing required check from the unread tail of %s contexts", async (count) => {
+  const checks = Array.from({ length: count }, (_, i) => ({ ...check(), name: i === 64 ? "build" : `extra-${i}` }));
+  const ports = collector(forgeFixture({ checks: checks.slice(0, 64), truncated: count > 64 }));
+  const evidence = readEvidence(await collectFactoryProject(request, ports));
+  expect(ports.github).toHaveBeenCalledOnce();
+  expect(evidence.receipts.find(({ required, name }) => required && name === "build")?.status)
+    .toBe(count > 64 ? "inconclusive" : "absent");
+});
+
+it("treats live ERROR and FAILURE as conflicting with a fresh passing cache for the same revision", async () => {
+  for (const checkRollup of ["FAILURE", "ERROR"]) {
+    const evidence = readEvidence(await collectFactoryProject(request, {
+      ...collector(forgeFixture({ checkRollup })), cachedStatus: () => ({
+        pr: { headSha: headOid, baseSha: baseOid, checkState: "passing" }, fetchedAt: 99_999,
+      }),
+    }));
+    expect(evidence.ci).toBe("conflict");
+  }
+});
+
+it("opens GitHub review permalinks without credentials, query, or arbitrary fragments", async () => {
+  const canonical = "https://github.com/pwrdrvr/Synthetic/pull/7";
+  for (const [url, expected] of [
+    ["https://reader:token@github.com/pwrdrvr/Synthetic/pull/7?private=yes#pullrequestreview-123", canonical + "#pullrequestreview-123"],
+    [canonical + "?private=yes#pullrequestreview-nope", canonical],
+    [canonical + "#unrelated", canonical],
+    ["https://example.invalid/pull/7#pullrequestreview-123", canonical],
+    ["blob:" + canonical + "#pullrequestreview-123", canonical],
+  ]) {
+    const fixture = forgeFixture({ reviews: [review("CHANGES_REQUESTED", headOid, url)] });
+    const evidence = readEvidence(await collectFactoryProject(request, collector(fixture)));
+    expect.soft(evidence.receipts).toContainEqual(expect.objectContaining({ kind: "review", reference: expected }));
+  }
 });

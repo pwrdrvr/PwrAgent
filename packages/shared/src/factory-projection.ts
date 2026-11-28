@@ -79,6 +79,8 @@ export interface FactoryEvidenceSnapshot {
   ci: "passed" | "failed" | "pending" | "inconclusive" | "absent" | "conflict";
   /** GitHub review observations do not establish independent Factory clearance. */
   review: "absent" | "stale_head" | "inconclusive" | "blocked" | "conflict";
+  /** Coverage of GitHub's latest opinionated reviews from repository writers. */
+  reviewCoverage: "complete" | "incomplete" | "unobserved";
   candidate: { kind: "none" };
   mergeCommitOid?: string;
   receipts: FactoryReceiptProjection[];
