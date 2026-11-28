@@ -22847,12 +22847,12 @@ export class DesktopBackendRegistry {
           // nothing can ever retire.
           if (!isAcpBackendId(event.backend)) {
             this.observedThreadNames.set(key, { title: trimmed, titleSource });
+            // A start renamed before the provider lists it (a to-do card names
+            // its thread at once) is served from this placeholder. A point read
+            // can acknowledge the rename above, so the placeholder keeps it too.
+            const pending = this.pendingStartedThreads.get(key);
+            if (pending) this.pendingStartedThreads.set(key, { ...pending, title: trimmed, titleSource });
           }
-          // A start renamed before the provider lists it (a to-do card names
-          // its thread at once) is served from this placeholder. A point read
-          // can acknowledge the rename above, so the placeholder keeps it too.
-          const pending = this.pendingStartedThreads.get(key);
-          if (pending) this.pendingStartedThreads.set(key, { ...pending, title: trimmed, titleSource });
         }
       }
       return;
