@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import type {
   AppServerBackendKind,
   AppServerListSkillsResponse,
@@ -308,11 +309,20 @@ export class ReplayClient {
       return;
     }
 
+    // Interactive listeners can wait for an operator response after advance returns.
+    const { method, params: { requestId } } = step.request;
     const pendingListeners = [...this.requestListeners];
     for (const listener of pendingListeners) {
-      void Promise.resolve(listener(step.request)).then(async () => {
-        this.controller.resolvePendingRequest(step.request.params.requestId);
-      });
+      void Promise.resolve(listener(step.request))
+        .then(() => {
+          this.controller.completeRequestStep(step);
+        })
+        .catch((error: unknown) => {
+          console.error(
+            `Replay request ${requestId} (${method}) failed`,
+            error instanceof Error ? error.stack ?? error.message : error,
+          );
+        });
     }
   }
 
@@ -364,7 +374,9 @@ export class ReplayClient {
   }
 
   async respondToPendingRequest(requestId: string): Promise<void> {
-    this.controller.resolvePendingRequest(requestId);
+    const step = this.controller.requirePendingRequest(requestId);
+    await setImmediate();
+    this.controller.completeRequestStep(step);
   }
 
   private async ensureInitialized(): Promise<InitializeResult> {

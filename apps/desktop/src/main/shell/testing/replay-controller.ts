@@ -155,13 +155,26 @@ export class ReplayController {
     return latest;
   }
 
+  completeRequestStep(step: ReplayRequestStep): void {
+    const { requestId } = step.request.params;
+    // An explicit response may have removed this step and freed its ID.
+    if (this.pendingRequests.get(requestId) === step) {
+      this.pendingRequests.delete(requestId);
+    }
+  }
+
   resolvePendingRequest(requestId: string): ReplayRequestStep {
+    const current = this.requirePendingRequest(requestId);
+    this.completeRequestStep(current);
+    return current;
+  }
+
+  requirePendingRequest(requestId: string): ReplayRequestStep {
     const current = this.pendingRequests.get(requestId);
     if (!current) {
       throw new Error(`Replay has no pending request ${requestId}`);
     }
 
-    this.pendingRequests.delete(requestId);
     return current;
   }
 

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { setImmediate } from "node:timers/promises";
 import { app } from "electron";
 import type {
   AppServerBackendKind,
@@ -221,8 +222,11 @@ export function createReplayClientsFromEnv():
   // for E2E backward-compat with existing replay specs. After the
   // single-instance collapse the param is ignored — there is only one
   // codex replay client serving both modes.
+  // Playwright can enter the driver through the Node inspector during a
+  // synchronous SQLite callback. Dispatch mutations on a fresh event-loop task.
   globalThis.__PWRAGENT_REPLAY_DRIVER__ = {
     advance: async (params) => {
+      await setImmediate();
       const client = getReplayClient(clients, {
         backend: params?.backend,
       });
