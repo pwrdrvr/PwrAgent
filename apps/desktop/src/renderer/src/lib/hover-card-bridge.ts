@@ -119,6 +119,20 @@ export class HoverCardBridge {
     return this.visible?.isPinned?.() === true;
   }
 
+  /**
+   * `card` is about to show from its hover delay: close the visible card now,
+   * in the same update, so the two never paint together. `shown` would close
+   * it too, but only from an effect that runs after the new card's first
+   * paint. A pinned card stays; `shown` refuses `card` instead.
+   */
+  takeOver(card: BridgedHoverCard): void {
+    const current = this.visible;
+    if (!current || current === card || current.isPinned?.()) return;
+    this.cancelGrace();
+    this.visible = undefined;
+    current.hide();
+  }
+
   /** `card` became visible; any other closes. */
   shown(card: BridgedHoverCard): void {
     const current = this.visible;
@@ -234,4 +248,10 @@ if (typeof document !== "undefined") {
   };
   document.addEventListener("mousemove", track, { capture: true, passive: true });
   document.addEventListener("mouseover", track, { capture: true, passive: true });
+  // A hot reload re-runs this module with a new bridge; drop the old
+  // listeners with the old bridge. `import.meta.hot` is dev-only (see main.tsx).
+  (import.meta as ImportMeta & { hot?: { dispose: (callback: () => void) => void } }).hot?.dispose(() => {
+    document.removeEventListener("mousemove", track, { capture: true });
+    document.removeEventListener("mouseover", track, { capture: true });
+  });
 }

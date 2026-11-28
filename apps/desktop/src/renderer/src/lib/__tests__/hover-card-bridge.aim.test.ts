@@ -144,6 +144,27 @@ describe("HoverCardBridge aim", () => {
     ));
   });
 
+  // The property's shrunk counterexample on the pre-fix bridge: one 8 px
+  // trigger, 4 px past the chip, crossed at 2 px per 8 ms frame.
+  it("keeps the card across a single narrow trigger next to the chip", () => {
+    const s = sidebar();
+    s.move(328, 462);
+    s.move(329, 462);
+    s.show("pr");
+    s.leave("pr");
+    for (let x = 332; x <= 342; x += 2) {
+      s.clock.advance(8);
+      s.move(x, 462);
+      if (x === 334) s.enter("stack-tag");
+    }
+    s.leave("stack-tag");
+    for (let x = 344; x <= 820; x += 2) {
+      s.clock.advance(8);
+      s.move(x, 462);
+    }
+    expect([...s.visible]).toEqual(["pr"]);
+  });
+
   // Rule: a pointer that moved on from the open card (down the chip column)
   // swaps to the chip it rests on, but only once it has rested there.
   it("swaps to another chip only after the pointer rests on it", () => {
@@ -160,6 +181,23 @@ describe("HoverCardBridge aim", () => {
       expect([...s.visible]).toEqual(["pr"]);
       s.clock.advance(REST - dwell);
       expect([...s.visible]).toEqual(["next-chip"]);
+    }));
+  });
+
+  // Rule: a card that shows from its delay closes the visible one first, in
+  // the same update, unless the visible one is pinned.
+  it("takes over from the visible card, but never from a pinned one", () => {
+    fc.assert(fc.property(fc.boolean(), (pinned) => {
+      const bridge = new HoverCardBridge(GRACE, fakeTimers().timers, REST);
+      let hidden = false;
+      const open: BridgedHoverCard = { hide: () => { hidden = true; }, isPinned: () => pinned };
+      const next: BridgedHoverCard = { hide: () => undefined };
+      bridge.shown(open);
+      bridge.takeOver(open);
+      expect(hidden).toBe(false);
+      bridge.takeOver(next);
+      expect(hidden).toBe(!pinned);
+      expect(bridge.hasPinnedCard()).toBe(pinned);
     }));
   });
 

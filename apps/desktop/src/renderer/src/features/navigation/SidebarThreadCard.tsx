@@ -217,7 +217,11 @@ export const SidebarThreadCardHost = forwardRef<
       // chip's card shown meanwhile cancels it through the bridge.
       sidebarPrCardBridge.delaying(bridgeCardRef.current);
       pendingRef.current = true;
-      showAfterDelay(target, () => content(threadKey, target), wait);
+      showAfterDelay(target, () => {
+        const node = content(threadKey, target);
+        if (node) sidebarPrCardBridge.takeOver(bridgeCardRef.current);
+        return node;
+      }, wait);
     };
     return {
       enter: (target, threadKey) => open(target, threadKey, true),

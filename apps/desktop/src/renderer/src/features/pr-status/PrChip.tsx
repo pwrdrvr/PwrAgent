@@ -399,7 +399,10 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         }
         tooltipController.showAfterDelay(
           event.currentTarget,
-          () => latestCardRef.current,
+          () => {
+            if (cardActions) sidebarPrCardBridge.takeOver(bridgeCardRef.current);
+            return latestCardRef.current;
+          },
           wait,
         );
       }}

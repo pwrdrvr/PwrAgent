@@ -197,8 +197,14 @@ export function StackTag({ thread, pr, member, onOpen }: StackTagProps) {
             prefetchSelectedStacks(getDesktopApi()?.getNavigationSelectedDetail, thread);
           }
           const wait = sidebarPrCardBridge.enterTrigger(bridge.current, event.currentTarget, TOOLTIP_HOVER_DELAY_MS);
-          if (wait === 0) tooltip.show(event.currentTarget, latest.current);
-          else tooltip.showAfterDelay(event.currentTarget, () => latest.current, wait);
+          if (wait === 0) {
+            tooltip.show(event.currentTarget, latest.current);
+          } else {
+            tooltip.showAfterDelay(event.currentTarget, () => {
+              sidebarPrCardBridge.takeOver(bridge.current);
+              return latest.current;
+            }, wait);
+          }
         }}
         onMouseLeave={() => {
           if (pinned.current) return;

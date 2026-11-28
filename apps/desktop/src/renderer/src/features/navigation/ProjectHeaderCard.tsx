@@ -129,7 +129,10 @@ export const ProjectHeaderCardHost = forwardRef<
         show(target, content());
         return;
       }
-      showAfterDelay(target, content, wait);
+      showAfterDelay(target, () => {
+        sidebarPrCardBridge.takeOver(bridgeCardRef.current);
+        return content();
+      }, wait);
     },
     leave: (target) => {
       if (visibleRef.current && cardIsBesideSidebar(getElement(), target)) {
