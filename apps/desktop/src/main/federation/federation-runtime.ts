@@ -1539,8 +1539,11 @@ export class DesktopFederationRuntime {
           admitTurn: (request) => getDesktopBackendRegistry().assertThreadCodexInferenceAvailable(request),
         } : {}),
         authorize: async (_scope, request) => {
-          const resolved = await backend.resolveThread({ backend: request.backend, threadId: request.threadId });
-          if (!resolved.thread) throw new DurableTurnRequestError("request_destination_unavailable");
+          const thread = await getDesktopBackendRegistry().resolveThread(
+            { backend: request.backend, threadId: request.threadId },
+            "durable-turn-ownership",
+          );
+          if (!thread) throw new DurableTurnRequestError("request_destination_unavailable");
         },
         dispatch: async (request, scope) => {
           const sourceInstanceId = (JSON.parse(scope) as string[])[1]!;

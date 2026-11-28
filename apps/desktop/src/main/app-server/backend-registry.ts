@@ -1067,6 +1067,11 @@ function requiresSuccessfulCodexThreadList(callerReason?: string): boolean {
     || callerReason === "authentication-recovery";
 }
 
+function shouldEnrichThreadEnvironmentOptions(callerReason?: ThreadListCallerReason): boolean {
+  // Ownership and CWD checks only need provider inventory and workspace metadata.
+  return callerReason !== "turn-cwd" && callerReason !== "durable-turn-ownership";
+}
+
 class CompactionRecoveryRevoked extends Error {
   constructor(readonly status: "busy" | "discarded" = "discarded") { super("Compaction recovery admission was revoked"); }
 }
@@ -4674,7 +4679,7 @@ export class DesktopBackendRegistry {
   async resolveThread(params: {
     backend?: AppServerBackendKind;
     threadId: string;
-  }): Promise<AppServerThreadSummary | undefined> {
+  }, callerReason: "thread-id-lookup" | "durable-turn-ownership" = "thread-id-lookup"): Promise<AppServerThreadSummary | undefined> {
     const threadId = params.threadId.trim();
     if (!threadId) {
       return undefined;
@@ -4690,20 +4695,18 @@ export class DesktopBackendRegistry {
       return cached;
     }
     const lookupThreadId = this.retainedOwnerThreadStorage && (!params.backend || params.backend === "codex") ? threadId : undefined;
-    const threads = await this.listThreadsForResolution({
-      backend: params.backend,
-      archived: false,
-      callerReason: "thread-id-lookup",
+    const lookup = {
+      callerReason,
       enrichDirectories: false,
       forceRefresh: true,
-    }, lookupThreadId);
+    };
+    const threads = await this.listThreadsForResolution({ ...lookup, backend: params.backend, archived: false }, lookupThreadId);
     const thread = this.findThreadListRow(threads, threadId);
     if (thread || (params.backend && params.backend !== "codex")
       || !this.retainedOwnerThreadStorage?.has(threadId)) return thread;
     // A retained identity can be archived. Consult native archive authority
     // through the same read policy rather than treating its metadata as active.
-    const archived = await this.listThreadsForResolution({ backend: "codex", archived: true, enrichDirectories: false,
-      callerReason: "thread-id-lookup", forceRefresh: true }, lookupThreadId);
+    const archived = await this.listThreadsForResolution({ ...lookup, backend: "codex", archived: true }, lookupThreadId);
     return this.findThreadListRow(archived, threadId);
   }
 
@@ -5244,8 +5247,7 @@ export class DesktopBackendRegistry {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
     };
-    // Turn admission needs workspace metadata before its own filesystem I/O.
-    const enrichEnvironmentOptions = params.callerReason !== "turn-cwd";
+    const enrichEnvironmentOptions = shouldEnrichThreadEnvironmentOptions(params.callerReason);
     if (
       params.backend === "claude"
       || params.backend === "codex"
@@ -18940,8 +18942,8 @@ export class DesktopBackendRegistry {
       backend: params.backend ?? "all",
       codexDirectoryBackfill,
       enrichDirectories: params.enrichDirectories === true,
-      // A CWD lookup must never join a pending environment-enriched list.
-      enrichEnvironmentOptions: params.enrichEnvironmentOptions ?? (params.callerReason !== "turn-cwd"),
+      // Admission lookups must never join a pending environment-enriched list.
+      enrichEnvironmentOptions: params.enrichEnvironmentOptions ?? shouldEnrichThreadEnvironmentOptions(params.callerReason),
       revalidateDirectories: includesCodex && params.enrichDirectories === true && params.forceRefresh === true,
       filter: params.filter?.trim() ?? "",
       limit: params.limit,
