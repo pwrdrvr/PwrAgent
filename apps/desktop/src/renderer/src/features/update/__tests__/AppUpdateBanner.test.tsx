@@ -61,6 +61,13 @@ function progressBar(): HTMLElement | null {
   return document.querySelector("[role='progressbar']");
 }
 
+/** The status line the strip shows, not the invisible lines that hold its height. */
+function visibleStatusLine(): string | null | undefined {
+  return document.querySelector(
+    ".app-update-banner--progress .progress-strip__status > :not(.progress-strip__reserve)",
+  )?.textContent;
+}
+
 describe("AppUpdateBanner", () => {
   it("keeps Linux fallback instructions visible and copies only the runnable command", () => {
     const manualUpdate = {
@@ -179,7 +186,8 @@ describe("AppUpdateBanner", () => {
     act(() => {
       emit({ status: "available", version: "1.0.0" });
     });
-    expect(screen.getByText("Starting download of v1.0.0...")).toBeInTheDocument();
+    expect(visibleStatusLine()).toBe("Starting the download…");
+    expect(screen.getByText("v1.0.0")).toBeInTheDocument();
     // Cancel is live from `available`, before any byte moves — which is why
     // main registers its cancelable download at that same moment.
     expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
@@ -195,10 +203,7 @@ describe("AppUpdateBanner", () => {
       });
     });
 
-    expect(screen.getByText("PwrAgent v1.0.0 - 42%")).toBeInTheDocument();
-    expect(
-      screen.getByText("48 MB of 113 MB - 3.1 MB/s"),
-    ).toBeInTheDocument();
+    expect(visibleStatusLine()).toBe("48 MB of 113 MB · 3.1 MB/s · about 21 s left");
     expect(progressBar()?.getAttribute("aria-valuenow")).toBe("42");
     // Still nothing in the notice stack to expire.
     expect(notices).toHaveLength(0);
@@ -307,7 +312,9 @@ describe("AppUpdateBanner", () => {
       emitResult({ status: "checking" });
     });
 
-    expect(await screen.findByText("PwrAgent v1.0.0 - 70%")).toBeInTheDocument();
+    expect(await screen.findByText("Downloading update")).toBeInTheDocument();
+    expect(visibleStatusLine()).toBe("70% downloaded");
+    expect(progressBar()?.getAttribute("aria-valuenow")).toBe("70");
     expect(screen.queryByText("Checking for updates")).toBeNull();
   });
 

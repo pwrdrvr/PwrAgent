@@ -76,19 +76,19 @@ type Layout = {
 };
 
 function layout(container: HTMLElement): Layout {
-  const strip = container.querySelector(".managed-progress");
+  const strip = container.querySelector(".progress-strip");
   if (!strip) throw new Error("no strip rendered");
   const rows = [...strip.children].map((row) => row.className.split(" ")[0] ?? "");
-  const slot = strip.querySelector(".managed-progress__status");
+  const slot = strip.querySelector(".progress-strip__status");
   const members = slot ? [...slot.children] : [];
-  const visible = members.filter((member) => !member.classList.contains("managed-progress__reserve"));
+  const visible = members.filter((member) => !member.classList.contains("progress-strip__reserve"));
   return {
     rows,
     shown: visible.map((member) => member.textContent ?? "").join("\n"),
     held: members
-      .filter((member) => member.classList.contains("managed-progress__message"))
+      .filter((member) => member.classList.contains("progress-strip__message"))
       .map((member) => member.textContent ?? ""),
-    holdsMeterLine: members.some((member) => member.classList.contains("managed-progress__meter")),
+    holdsMeterLine: members.some((member) => member.classList.contains("progress-strip__meter")),
   };
 }
 

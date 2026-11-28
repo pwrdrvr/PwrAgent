@@ -59,11 +59,18 @@ describe("updateProgressCopy", () => {
     });
 
     expect(copy.eyebrow).toBe("Downloading update");
-    expect(copy.message).toBe("PwrAgent v1.0.0 - 42%");
+    expect(copy.tag).toBe("v1.0.0");
+    // The meter holds the status line; the bar carries the percent.
+    expect(copy.message).toBeUndefined();
     expect(copy.percent).toBe(42);
-    // Byte figures come from the shared `formatByteCount`, so they round the
-    // same way the federation transfer line and Star Map load card do.
-    expect(copy.meter).toBe("48 MB of 113 MB - 3.1 MB/s");
+    // The shared download meter, so the update card and the managed builds'
+    // strip print the same figures the same way.
+    expect(copy.meter).toBe("48 MB of 113 MB · 3.1 MB/s · about 21 s left");
+    expect(copy.steps.map((step) => `${step.label}:${step.state}`)).toEqual([
+      "Check:done",
+      "Download:now",
+      "Restart:todo",
+    ]);
     expect(copy.cancelable).toBe(true);
   });
 
@@ -94,7 +101,8 @@ describe("updateProgressCopy", () => {
       version: "1.0.0",
     });
 
-    expect(copy.message).toBe("PwrAgent v1.0.0");
+    expect(copy.message).toBe("Downloading…");
+    expect(copy.tag).toBe("v1.0.0");
     expect(copy.percent).toBeUndefined();
     expect(copy.meter).toBeUndefined();
   });
@@ -112,15 +120,13 @@ describe("updateProgressCopy", () => {
 
 describe("downloadMeter", () => {
   it("drops the half it does not know", () => {
-    expect(downloadMeter({ transferred: 2_048 })).toBe("2 KB transferred");
+    expect(downloadMeter({ transferred: 2_048 })).toBe("2 KB");
     expect(downloadMeter({ bytesPerSecond: 500 })).toBe("500 B/s");
     expect(downloadMeter({})).toBeUndefined();
   });
 
   it("does not divide by a total the feed reported as zero", () => {
-    expect(downloadMeter({ transferred: 1_024, total: 0 })).toBe(
-      "1 KB transferred",
-    );
+    expect(downloadMeter({ transferred: 1_024, total: 0 })).toBe("1 KB");
   });
 
   it("ignores a rate of zero rather than printing a stalled one", () => {
@@ -142,7 +148,7 @@ describe("the clamped percent", () => {
     });
 
     expect(copy.percent).toBe(100);
-    expect(copy.message).toBe("PwrAgent v1.0.0 - 100%");
+    expect(copy.message).toBe("100% downloaded");
   });
 });
 

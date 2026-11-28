@@ -5,7 +5,8 @@
 
 import { releaseNotesUrl } from "@pwragent/shared/release-notes";
 import type { AppUpdateStatus } from "../../../../shared/app-metadata";
-import { formatByteCount } from "../../lib/format-bytes";
+import type { ProgressStripStep } from "../../components/ProgressStrip";
+import { formatDownloadMeter } from "../../lib/download-meter";
 
 /**
  * The statuses a check passes through before it has an answer.
@@ -36,11 +37,16 @@ export function isUpdateCheckInProgress(
 
 export type UpdateProgressCopy = {
   eyebrow: string;
-  message: string;
+  /** The version being fetched, once the check has named one. */
+  tag: string | undefined;
+  /** The status line, or `undefined` while the byte meter holds it. */
+  message: string | undefined;
   /** 0-100 for a determinate bar, `undefined` for the indeterminate sweep. */
   percent: number | undefined;
   /** Byte counts and rate, or `undefined` when the feed reports neither. */
   meter: string | undefined;
+  /** Check, Download, Restart: the stages an update passes through. */
+  steps: ProgressStripStep[];
   /** A download is running, so there is something for Cancel to stop. */
   cancelable: boolean;
   /** The release page for the version being fetched, when it names one.
@@ -48,15 +54,42 @@ export type UpdateProgressCopy = {
   notesUrl: string | undefined;
 };
 
+const CHECKING_LINE = "Asking GitHub for the latest release…";
+const STARTING_LINE = "Starting the download…";
+const DOWNLOADING_LINE = "Downloading…";
+
+/**
+ * Every line the live card's status line can show, so the shared strip holds
+ * the longest one from `checking` on. The version sits in the tag, not in
+ * these lines, so they are known before the check names one.
+ */
+export const UPDATE_PROGRESS_STATUS_LINES: readonly string[] = [
+  CHECKING_LINE,
+  STARTING_LINE,
+  DOWNLOADING_LINE,
+  "100% downloaded",
+];
+
+function updateSteps(at: "check" | "download"): ProgressStripStep[] {
+  const download = at === "download";
+  return [
+    { key: "check", label: "Check", state: download ? "done" : "now" },
+    { key: "download", label: "Download", state: download ? "now" : "todo" },
+    { key: "restart", label: "Restart", state: "todo" },
+  ];
+}
+
 export function updateProgressCopy(
   status: AppUpdateProgressStatus,
 ): UpdateProgressCopy {
   if (status.status === "checking") {
     return {
       eyebrow: "Checking for updates",
-      message: "Asking GitHub for the latest release...",
+      tag: undefined,
+      message: CHECKING_LINE,
       percent: undefined,
       meter: undefined,
+      steps: updateSteps("check"),
       cancelable: false,
       // The one in-flight phase with no version yet, so the one card that
       // deliberately offers no link.
@@ -70,25 +103,32 @@ export function updateProgressCopy(
   if (status.status === "available") {
     return {
       eyebrow: switchingBack ? "Switch available" : "Update available",
-      message: `Starting download of v${status.version}...`,
+      tag: `v${status.version}`,
+      message: STARTING_LINE,
       percent: undefined,
       meter: undefined,
+      steps: updateSteps("download"),
       cancelable: true,
       notesUrl: releaseNotesUrl(status.version),
     };
   }
   // A provider that sends no content length gives electron-updater nothing to
   // compute a percent from. Fall back to the sweep rather than pinning the bar
-  // at 0% for the length of the download. The message reads the clamped value
+  // at 0% for the length of the download. The line reads the clamped value
   // too, so an overshooting feed cannot print "104%" beside a full bar.
   const percent = clampPercent(status.percent);
+  const meter = downloadMeter(status);
   return {
     eyebrow: switchingBack ? "Downloading switch" : "Downloading update",
-    message: `PwrAgent v${status.version}${
-      percent === undefined ? "" : ` - ${Math.round(percent)}%`
-    }`,
+    tag: `v${status.version}`,
+    message: meter !== undefined
+      ? undefined
+      : percent === undefined
+        ? DOWNLOADING_LINE
+        : `${Math.round(percent)}% downloaded`,
     percent,
-    meter: downloadMeter(status),
+    meter,
+    steps: updateSteps("download"),
     cancelable: true,
     notesUrl: releaseNotesUrl(status.version),
   };
@@ -101,34 +141,17 @@ function clampPercent(percent: number | undefined): number | undefined {
   return Math.min(100, Math.max(0, percent));
 }
 
-/** `24.1 MB of 113 MB - 3.2 MB/s`, dropping whichever half is unknown.
- *  Byte figures go through the shared `formatByteCount` so this meter cannot
- *  round differently from the rest of the app. */
+/** The shared download meter, fed from electron-updater's field names. */
 export function downloadMeter(status: {
   transferred?: number;
   total?: number;
   bytesPerSecond?: number;
 }): string | undefined {
-  const parts: string[] = [];
-  if (isPositive(status.total) && isCount(status.transferred)) {
-    parts.push(
-      `${formatByteCount(status.transferred)} of ${formatByteCount(status.total)}`,
-    );
-  } else if (isCount(status.transferred)) {
-    parts.push(`${formatByteCount(status.transferred)} transferred`);
-  }
-  if (isPositive(status.bytesPerSecond)) {
-    parts.push(`${formatByteCount(status.bytesPerSecond)}/s`);
-  }
-  return parts.length === 0 ? undefined : parts.join(" - ");
-}
-
-function isCount(value: number | undefined): value is number {
-  return value !== undefined && Number.isFinite(value) && value >= 0;
-}
-
-function isPositive(value: number | undefined): value is number {
-  return isCount(value) && value > 0;
+  return formatDownloadMeter({
+    receivedBytes: status.transferred,
+    totalBytes: status.total,
+    bytesPerSecond: status.bytesPerSecond,
+  });
 }
 
 

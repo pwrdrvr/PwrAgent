@@ -17,7 +17,7 @@ import { formatByteCount } from "../../lib/format-bytes";
 import { openExternalUrl } from "../../lib/open-external-url";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { portalViewportTop, useViewportTooltip } from "../../lib/useViewportTooltip";
-import { downloadMeter } from "../update/update-progress";
+import { formatDownloadMeter } from "../../lib/download-meter";
 import type { PwrSuiteInstaller } from "./usePwrSuiteInstaller";
 
 export type PwrSuiteTileLineTone = "pitch" | "state" | "error";
@@ -332,11 +332,12 @@ export function PwrSuiteInstallAction(props: {
         : undefined;
     const meter = verifying
       ? undefined
-      : downloadMeter({
-          transferred: received,
-          total,
-          bytesPerSecond: state.bytesPerSecond,
-        });
+      // The shared download meter, without the estimate: the tile's line is
+      // 190px and holds "24 MB of 138 MB · 3.2 MB/s" but not the time left.
+      : formatDownloadMeter(
+          { receivedBytes: received, totalBytes: total, bytesPerSecond: state.bytesPerSecond },
+          { eta: false },
+        );
     return (
       <div className="pwrsuite-meter">
         <span

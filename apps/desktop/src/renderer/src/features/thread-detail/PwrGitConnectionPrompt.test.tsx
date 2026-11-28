@@ -135,7 +135,7 @@ describe("PwrGitConnectionPrompt", () => {
       screen.getByRole("progressbar", { name: "Downloading PwrGit" })
         .getAttribute("aria-valuenow"),
     ).toBe("17");
-    expect(screen.getByText("24 MB of 138 MB - 3.2 MB/s")).toBeTruthy();
+    expect(screen.getByText("24 MB of 138 MB · 3.2 MB/s")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel PwrGit download" })).toBeTruthy();
 
     // Another app's events are not this tile's.

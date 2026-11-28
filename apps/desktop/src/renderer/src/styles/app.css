@@ -14333,7 +14333,8 @@ button.stack-display__thread,
   -webkit-app-region: no-drag;
 }
 
-.app-update-banner__content {
+.app-update-banner__content,
+.app-update-banner .progress-strip {
   min-width: 0;
   user-select: text;
 }
@@ -20100,14 +20101,15 @@ button.stack-display__thread,
 }
 
 /* ------------------------------------------------------------------
-   Managed build progress strip (Codex, Grok, Git, Antigravity). One layout
-   for every phase: state line, status line, track, four-step rail. No row
-   comes or goes, and none changes height, between the first busy phase and
-   the ready strip; a phase change swaps text in place. The track copies
+   Download progress strip (`ProgressStrip`): the managed builds (Codex,
+   Grok, Git, Antigravity) and PwrAgent's own update card. One layout for
+   every phase: state line, status line, track, step rail. No row comes or
+   goes, and none changes height, between the first busy phase and the end;
+   a phase change swaps text in place. The track has the measurements of
    `.app-update-banner__track`, so the app keeps one bar language.
    ------------------------------------------------------------------ */
 
-.managed-progress {
+.progress-strip {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -20121,20 +20123,32 @@ button.stack-display__thread,
   background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
 }
 
+/* Inside a card that draws its own frame (the update card): the strip
+   brings its rows, not a second border. */
+.progress-strip--flat,
+.progress-strip--flat.progress-strip--ok,
+.progress-strip--flat.progress-strip--error,
+.progress-strip--flat.progress-strip--notice {
+  max-width: none;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
 /* A settled strip is a neutral card: the eyebrow carries ok, error, and
    notice. A tinted fill read as a salmon or beige box in the cool themes.
    The busy strip keeps the accent wash of the bar it shares with the
    update banner. */
-.managed-progress--ok,
-.managed-progress--error,
-.managed-progress--notice {
+.progress-strip--ok,
+.progress-strip--error,
+.progress-strip--notice {
   border-color: var(--border-subtle);
   background: var(--bg-panel-elevated);
 }
 
 /* One line, whether or not the tag has arrived: it lands after `checking`,
    and a wrapping row would grow a line when it did. */
-.managed-progress__head {
+.progress-strip__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -20142,7 +20156,7 @@ button.stack-display__thread,
   min-width: 0;
 }
 
-.managed-progress__eyebrow {
+.progress-strip__eyebrow {
   overflow: hidden;
   min-width: 0;
   margin: 0;
@@ -20155,19 +20169,19 @@ button.stack-display__thread,
   white-space: nowrap;
 }
 
-.managed-progress--ok .managed-progress__eyebrow {
+.progress-strip--ok .progress-strip__eyebrow {
   color: var(--success-text);
 }
 
-.managed-progress--error .managed-progress__eyebrow {
+.progress-strip--error .progress-strip__eyebrow {
   color: var(--danger-text);
 }
 
-.managed-progress--notice .managed-progress__eyebrow {
+.progress-strip--notice .progress-strip__eyebrow {
   color: var(--info-text);
 }
 
-.managed-progress__tag {
+.progress-strip__tag {
   flex: none;
   color: var(--text-secondary);
   font-family: var(--font-mono);
@@ -20179,21 +20193,21 @@ button.stack-display__thread,
 
 /* Every line the slot can show sits in one grid cell; the current one is
    visible and the rest only hold the cell at the longest one's height. */
-.managed-progress__status {
+.progress-strip__status {
   display: grid;
   min-width: 0;
 }
 
-.managed-progress__status > * {
+.progress-strip__status > * {
   grid-area: 1 / 1;
   min-width: 0;
 }
 
-.managed-progress__reserve {
+.progress-strip__reserve {
   visibility: hidden;
 }
 
-.managed-progress__message {
+.progress-strip__message {
   margin: 0;
   color: var(--text-secondary);
   font-size: 12px;
@@ -20201,7 +20215,7 @@ button.stack-display__thread,
   overflow-wrap: anywhere;
 }
 
-.managed-progress__track {
+.progress-strip__track {
   display: block;
   overflow: hidden;
   height: 5px;
@@ -20209,7 +20223,7 @@ button.stack-display__thread,
   background: color-mix(in srgb, var(--text-primary) 9%, transparent);
 }
 
-.managed-progress__track i {
+.progress-strip__track i {
   display: block;
   width: 0;
   height: 100%;
@@ -20219,12 +20233,12 @@ button.stack-display__thread,
   transition: width 120ms linear;
 }
 
-.managed-progress__track--full i {
+.progress-strip__track--full i {
   width: 100%;
   background: var(--status-ok);
 }
 
-.managed-progress__track--indeterminate i {
+.progress-strip__track--indeterminate i {
   width: 35%;
   animation: app-update-banner-sweep 1.1s ease-in-out infinite;
   transition: none;
@@ -20233,11 +20247,11 @@ button.stack-display__thread,
 /* Fill the track, dimmed, rather than park a 35% bar that reads as a download
    stuck at 35%: "working, extent unknown". */
 @media (prefers-reduced-motion: reduce) {
-  .managed-progress__track i {
+  .progress-strip__track i {
     transition: none;
   }
 
-  .managed-progress__track--indeterminate i {
+  .progress-strip__track--indeterminate i {
     width: 100%;
     animation: none;
     opacity: 0.5;
@@ -20245,7 +20259,7 @@ button.stack-display__thread,
 }
 
 /* The meter's length changes on every report, so it never wraps. */
-.managed-progress__meter {
+.progress-strip__meter {
   overflow: hidden;
   margin: 0;
   color: var(--text-muted);
@@ -20257,7 +20271,7 @@ button.stack-display__thread,
   white-space: nowrap;
 }
 
-.managed-progress__steps {
+.progress-strip__steps {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
@@ -20270,20 +20284,20 @@ button.stack-display__thread,
   letter-spacing: 0.04em;
 }
 
-.managed-progress__steps li {
+.progress-strip__steps li {
   white-space: nowrap;
 }
 
-.managed-progress__steps .is-done {
+.progress-strip__steps .is-done {
   color: var(--success-text);
 }
 
-.managed-progress__steps .is-now {
+.progress-strip__steps .is-now {
   color: var(--accent-bright);
   font-weight: 600;
 }
 
-.managed-progress__steps .is-failed {
+.progress-strip__steps .is-failed {
   color: var(--danger-text);
   font-weight: 600;
 }
@@ -28751,6 +28765,8 @@ button.stack-display__thread,
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -57143,7 +57159,7 @@ button.stepped-bar__tick:focus-visible {
   }
 
   :root[data-motion="calm"] .app-update-banner__track--indeterminate i,
-  :root[data-motion="calm"] .managed-progress__track--indeterminate i {
+  :root[data-motion="calm"] .progress-strip__track--indeterminate i {
     animation:
       app-update-banner-sweep 1.1s ease-in-out 2,
       calm-motion-progress-rest 0s 2.2s forwards;

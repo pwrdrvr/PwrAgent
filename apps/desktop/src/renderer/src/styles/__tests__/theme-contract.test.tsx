@@ -1009,7 +1009,7 @@ describe("Tangerine Terminal theme contract", () => {
     }
     const settled = extractRuleBody(
       css,
-      ".managed-progress--ok,\n.managed-progress--error,\n.managed-progress--notice",
+      ".progress-strip--ok,\n.progress-strip--error,\n.progress-strip--notice",
     );
     expect(settled).toContain("border-color: var(--border-subtle);");
     expect(settled).toContain("background: var(--bg-panel-elevated);");

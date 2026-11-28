@@ -10,7 +10,7 @@ import {
   type ManagedRuntimeInstallPhase,
   type ManagedRuntimeProgress,
 } from "../../../../shared/managed-runtime-progress";
-import { formatByteCount } from "../../lib/format-bytes";
+import { formatDownloadMeter } from "../../lib/download-meter";
 
 /** How long the finished strip stays up before it hands back to the status line. */
 export const MANAGED_RUNTIME_READY_LINGER_MS = 6_000;
@@ -107,27 +107,9 @@ export function managedRuntimeSteps(
 export function managedRuntimeDownloadMeter(
   progress: ManagedRuntimeProgress,
 ): string | undefined {
-  const received = progress.receivedBytes;
-  if (received === undefined) return undefined;
-  const total = progress.totalBytes;
-  const parts = [
-    total !== undefined && total > 0
-      ? `${formatByteCount(received)} of ${formatByteCount(total)}`
-      : formatByteCount(received),
-  ];
-  const rate = progress.bytesPerSecond;
-  if (rate !== undefined && rate > 0) {
-    parts.push(`${formatByteCount(Math.round(rate))}/s`);
-    if (total !== undefined && total > received) {
-      parts.push(`about ${formatEta((total - received) / rate)} left`);
-    }
-  }
-  return parts.join(" · ");
-}
-
-function formatEta(seconds: number): string {
-  if (seconds < 90) return `${Math.max(1, Math.round(seconds))} s`;
-  return `${Math.round(seconds / 60)} min`;
+  // Nothing to meter until the archive stream reports its first count.
+  if (progress.receivedBytes === undefined) return undefined;
+  return formatDownloadMeter(progress);
 }
 
 /**
@@ -151,12 +133,6 @@ export function managedRuntimeStatusLines(runtime: ManagedRuntimeId): string[] {
   }
   return lines;
 }
-
-/**
- * The widest byte meter a download prints, reserved so the meter that replaces
- * the message while bytes arrive cannot wrap the slot to a second line.
- */
-export const MANAGED_RUNTIME_METER_RESERVE = "000.0 MB of 000.0 MB · 00.0 MB/s · about 00 min left";
 
 export function managedRuntimeProgressCopy(
   progress: ManagedRuntimeProgress,

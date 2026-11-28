@@ -3,22 +3,14 @@ import type {
   ManagedRuntimeId,
   ManagedRuntimeProgress,
 } from "../../../../shared/managed-runtime-progress";
+import { ProgressStrip } from "../../components/ProgressStrip";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
-  MANAGED_RUNTIME_METER_RESERVE,
   MANAGED_RUNTIME_READY_LINGER_MS,
   isManagedRuntimeProgressVisible,
   managedRuntimeProgressCopy,
   managedRuntimeStatusLines,
 } from "./managed-runtime-progress-copy";
-
-const STEP_MARK = { done: "✓", now: "●", failed: "✕", todo: "○" } as const;
-const STEP_STATE_LABEL = {
-  done: "done",
-  now: "in progress",
-  failed: "failed",
-  todo: "waiting",
-} as const;
 
 /**
  * The live progress of a managed download, or `undefined` when none is
@@ -98,14 +90,10 @@ export function useManagedRuntimeProgress(
 }
 
 /**
- * One strip for every managed runtime: a state line, a status line, a track,
- * and the four steps an install passes through.
- *
- * Every row keeps its height from the first busy phase to the ready strip.
- * The status line holds the phase message, or the byte meter while the archive
- * downloads, and is sized to the longest line it will ever show; the track and
- * the step rail never come and go. Only a failure, which has an error to say
- * and a button to offer, changes the card's height.
+ * One strip for every managed runtime, drawn by the shared `ProgressStrip`:
+ * a state line, a status line, a track, and the four steps an install passes
+ * through. Only a failure, which has an error to say and a button to offer,
+ * changes the card's height.
  */
 export function ManagedRuntimeProgressStrip(props: {
   progress: ManagedRuntimeProgress;
@@ -113,78 +101,26 @@ export function ManagedRuntimeProgressStrip(props: {
   waitingForIdle?: boolean;
   onRetry?: () => void;
 }) {
-  const waitingForIdle = props.waitingForIdle === true;
-  const copy = managedRuntimeProgressCopy(props.progress, waitingForIdle);
+  const copy = managedRuntimeProgressCopy(props.progress, props.waitingForIdle === true);
   const busy = copy.tone === "busy";
-  const showsMeter = copy.message === undefined && copy.meter !== undefined;
-  const line = copy.message ?? copy.meter;
-  const reserved = managedRuntimeStatusLines(props.progress.runtime)
-    .filter((text) => text !== line);
   return (
-    <div
-      className={`managed-progress managed-progress--${copy.tone}`}
-      data-testid={`managed-progress-${props.progress.runtime}`}
-    >
-      <div className="managed-progress__head">
-        <p className="managed-progress__eyebrow">{copy.eyebrow}</p>
-        {copy.tag ? <span className="managed-progress__tag">{copy.tag}</span> : null}
-      </div>
-      <div className="managed-progress__status">
-        <p
-          className={showsMeter ? "managed-progress__meter" : "managed-progress__message"}
-        >
-          {line ?? "\u00a0"}
-        </p>
-        {/* Invisible copies of the other lines this strip can show, stacked
-            in the same cell so the slot is already as tall as the longest. */}
-        {reserved.map((text) => (
-          <p aria-hidden="true" className="managed-progress__message managed-progress__reserve" key={text}>
-            {text}
-          </p>
-        ))}
-        <p aria-hidden="true" className="managed-progress__meter managed-progress__reserve">
-          {MANAGED_RUNTIME_METER_RESERVE}
-        </p>
-      </div>
-      {busy || copy.full ? (
-        <span
-          aria-hidden={copy.percent === undefined ? true : undefined}
-          aria-label={
-            copy.percent === undefined ? undefined : `Download ${copy.percent}%`
+    <ProgressStrip
+      eyebrow={copy.eyebrow}
+      line={copy.message ?? copy.meter}
+      lineIsMeter={copy.message === undefined && copy.meter !== undefined}
+      reservedLines={managedRuntimeStatusLines(props.progress.runtime)}
+      steps={copy.steps?.map((step) => ({ key: step.phase, label: step.label, state: step.state }))}
+      tag={copy.tag}
+      testId={`managed-progress-${props.progress.runtime}`}
+      tone={copy.tone}
+      track={busy || copy.full
+        ? {
+            percent: copy.percent,
+            full: copy.full,
+            label: copy.percent === undefined ? copy.eyebrow : `Download ${copy.percent}%`,
           }
-          aria-valuemax={copy.percent === undefined ? undefined : 100}
-          aria-valuemin={copy.percent === undefined ? undefined : 0}
-          aria-valuenow={copy.percent}
-          className={`managed-progress__track${
-            busy && copy.percent === undefined
-              ? " managed-progress__track--indeterminate"
-              : ""
-          }${copy.full ? " managed-progress__track--full" : ""}`}
-          role={copy.percent === undefined ? undefined : "progressbar"}
-        >
-          <i
-            style={
-              copy.percent === undefined ? undefined : { width: `${copy.percent}%` }
-            }
-          />
-        </span>
-      ) : null}
-      {copy.steps ? (
-        <ol className="managed-progress__steps">
-          {copy.steps.map((step) => (
-            <li
-              aria-current={step.state === "now" ? "step" : undefined}
-              aria-label={`${step.label}, ${STEP_STATE_LABEL[step.state]}`}
-              className={`is-${step.state}`}
-              key={step.phase}
-            >
-              <span aria-hidden="true">
-                {STEP_MARK[step.state]} {step.label}
-              </span>
-            </li>
-          ))}
-        </ol>
-      ) : null}
+        : undefined}
+    >
       {props.progress.phase === "failed" && props.onRetry ? (
         <div className="settings-inline-actions">
           <button
@@ -196,6 +132,6 @@ export function ManagedRuntimeProgressStrip(props: {
           </button>
         </div>
       ) : null}
-    </div>
+    </ProgressStrip>
   );
 }
