@@ -589,6 +589,7 @@ export function forgeToolApprovalMessage(
       ? `Allow the agent to retry failed and canceled jobs in GitLab pipeline ${args.runId}?`
       : `Allow the agent to rerun failed jobs and their dependents in GitHub Actions run ${args.runId}?`;
     case "create_pull_request": return `Allow the agent to open a ${request} on ${forge}?`;
+    case "create_pull_request_stack": return "Allow the agent to register these pull requests as a GitHub stack? Merging a layer on GitHub can also merge the open layers below it.";
     case "update_pull_request": return `Allow the agent to edit ${request}${pr} on ${forge}?`;
     case "merge_pull_request": if (mergeQueue) {
       const noun = mergeQueue.kind === "merge_train" ? "merge train" : "merge queue";

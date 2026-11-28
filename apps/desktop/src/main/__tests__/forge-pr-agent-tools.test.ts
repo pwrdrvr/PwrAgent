@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
@@ -29,6 +30,13 @@ const pull = (number: number, extra: Record<string, unknown> = {}) => ({
 const stackHistory = (baseRefName: string) => json({ data: { repository: { pullRequest: {
   headRefOid: "a".repeat(40), baseRefName, timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
 } } } });
+const nativeStack = (numbers: number[]) => ({
+  number: 42, open: true, base: { ref: "main" },
+  pull_requests: numbers.map((number, index) => pull(number, {
+    head: { ref: `layer-${index}` },
+    base: { ref: index ? `layer-${index - 1}` : "main" },
+  })),
+});
 
 type Call = { url: string; method: string; body?: unknown; accept?: string };
 function harness(routes: (call: Call) => Response | Promise<Response>, runGh?: GhRunner) {
@@ -129,9 +137,92 @@ describe("GitHub tool catalog", () => {
     expect(result).toMatchObject({ ok: false, code: "invalid_arguments" });
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it("offers a GitHub registration tool when creating a native stack from existing PRs", () => {
+    const dynamic = resolveAgentToolCatalogs({}).flatMap((catalog) => catalog.dynamicTools);
+    const found = searchPwrAgentTools(dynamic, "register an existing GitHub PR chain as a native stack");
+    expect(found[0]?.name).toBe("create_pull_request_stack");
+    const create = searchPwrAgentTools(dynamic, "create_pull_request")[0];
+    expect(create).toMatchObject({ name: "create_pull_request", description: expect.stringContaining("create_pull_request_stack") });
+  });
+
+  it("uses the Stack publishing write policy for registration", () => {
+    expect(forgePrToolGroup("create_pull_request_stack", {})).toBe("stack_publish");
+    expect(DEFAULT_FORGE_AGENT_TOOL_POLICY.access.stack_publish).toBe("ask");
+    const policy: ForgeAgentToolPolicy = { enabled: true, access: { ...DEFAULT_FORGE_AGENT_TOOL_POLICY.access, stack_publish: "off" } };
+    const offered = buildForgeToolDefinitions({ policy }).map((definition) => definition.name);
+    expect(offered).not.toContain("create_pull_request_stack");
+    expect(offered).toContain("create_pull_request");
+  });
+
+  it.each([{}, { pullRequests: [1] }, { pullRequests: [1, 1] }, { pullRequests: [1, "2"] }, { pullRequests: [1, 0] }, { pullRequests: [1, Number.MAX_SAFE_INTEGER + 1] }])("refuses invalid stack registration arguments %j", async (args) => {
+    const handler = vi.fn();
+    const definition = buildForgePrToolDefinitions(handler).find((tool) => tool.name === "create_pull_request_stack")!;
+    expect(await definition.dispatch(args, { backend: "codex", threadId: "t", transport: "codex_dynamic_tool" })).toMatchObject({ ok: false, code: "invalid_arguments" });
+    expect(handler).not.toHaveBeenCalled();
+  });
 });
 
 describe("GitHub tool client", () => {
+  async function expectNativeRegistration(numbers: number[]) {
+    const { calls, client } = harness((call) => call.method === "POST" && call.url.endsWith("/repos/fixture/project/stacks")
+      ? json(nativeStack(numbers), 201)
+      : json({ message: "Unexpected route" }, 500));
+    const service = new ForgePrToolService({
+      enabled: () => true, clients: { github: client, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "squash",
+    });
+    const scope = { remotes: [repo], attached: [], directories: [], privateRoots: [] };
+    const definition = buildForgePrToolDefinitions(async (operation, args) => {
+      const prepared = await service.prepare(operation, args, scope);
+      return await service.execute(operation, { ...prepared.args, repository: prepared.repository }, scope);
+    }).find((entry) => entry.name === "create_pull_request_stack");
+    expect(definition, "A chain of published PRs needs a native GitHub registration tool").toBeDefined();
+    const result = await definition!.dispatch({ pullRequests: numbers }, { backend: "codex", threadId: "t", transport: "codex_dynamic_tool" });
+    expect(result).toMatchObject({ ok: true, data: { created: true, providerRequests: 1, stack: { number: 42, base: "main", pullRequests: numbers } } });
+    expect(calls).toEqual([{ url: "https://api.github.com/repos/fixture/project/stacks", method: "POST", body: { pull_requests: numbers }, accept: "application/vnd.github+json" }]);
+  }
+
+  it("registers the terminal layout PR above its fix PR on GitHub", () => expectNativeRegistration([4658, 4665]));
+
+  it("preserves the requested bottom-first order at a fixed provider request count", async () => {
+    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.integer({ min: 1, max: 10000 }), { minLength: 2, maxLength: 16 }), expectNativeRegistration), { numRuns: 5 });
+    for (const size of [8, 16, 32]) {
+      await expectNativeRegistration(Array.from({ length: size }, (_, index) => size - index));
+    }
+  });
+
+  it("confirms an already registered chain after GitHub rejects a repeat", async () => {
+    const { calls, client } = harness((call) => call.method === "POST"
+      ? json({ message: "PRs already stacked" }, 422)
+      : json([nativeStack([4658, 4665])]));
+    await expect(client.execute("create_pull_request_stack", { pullRequests: [4658, 4665] }, ctx())).resolves.toMatchObject({
+      created: false, providerRequests: 2, stack: { number: 42, base: "main", pullRequests: [4658, 4665] },
+    });
+    expect(calls.map((call) => [call.method, new URL(call.url).search])).toEqual([["POST", ""], ["GET", "?pull_request=4658"]]);
+  });
+
+  it("preserves the rejection when GitHub has different members", async () => {
+    const { calls, client } = harness((call) => call.method === "POST"
+      ? json({ message: "PRs already stacked" }, 422)
+      : json([nativeStack([4658, 4665, 4680])]));
+    await expect(client.execute("create_pull_request_stack", { pullRequests: [4658, 4665] }, ctx()))
+      .rejects.toMatchObject({ code: "rejected", message: expect.stringContaining("PRs already stacked") });
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
+  });
+
+  it("reports GitHub write permission failures after one request", async () => {
+    const { calls, client } = harness(() => json({ message: "Resource not accessible by integration" }, 403));
+    await expect(client.execute("create_pull_request_stack", { pullRequests: [4658, 4665] }, ctx()))
+      .rejects.toMatchObject({ code: "forbidden", message: expect.stringContaining("Pull requests write access") });
+    expect(calls.map((call) => call.method)).toEqual(["POST"]);
+  });
+
+  it("requires GitHub to confirm the ordered members before reporting creation", async () => {
+    const { client } = harness(() => json(nativeStack([4665, 4658]), 201));
+    await expect(client.execute("create_pull_request_stack", { pullRequests: [4658, 4665] }, ctx()))
+      .rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it.each(["github.com", "github.example.test"])("requests only failed jobs through %s and accepts an empty 201 response", async (host) => {
     const { calls, client } = harness(() => new Response(null, { status: 201 }));
     const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx({ repository: { ...repo, host } }));
@@ -396,6 +487,15 @@ describe("GitHub attachments", () => {
 describe("forge tool service", () => {
   const remotes = { github: { host: "github.com", owner: "fixture", repo: "project" }, gitlab: { host: "gitlab.com", owner: "group/sub", repo: "project" } };
   const scope = (list: Array<{ host: string; owner: string; repo: string }>) => ({ remotes: list, attached: [], directories: [], privateRoots: [] });
+  it("rejects GitLab stack registration before requesting approval", async () => {
+    const execute = vi.fn();
+    const service = new ForgePrToolService({
+      enabled: () => true, clients: { github: { execute }, gitlab: { execute } }, defaultMergeMethod: () => "squash",
+    });
+    await expect(service.prepare("create_pull_request_stack", { pullRequests: [1, 2] }, scope([remotes.gitlab])))
+      .rejects.toMatchObject({ code: "unsupported_provider" });
+    expect(execute).not.toHaveBeenCalled();
+  });
   it("blocks a merge on unavailable checkout evidence but accepts a confirmed absent catalog", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "pwragent-forge-stack-merge-evidence-"));
     const execute = vi.fn(async () => ({ merged: true }));

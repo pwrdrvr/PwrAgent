@@ -69,6 +69,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   plan_stack_operation: "stack restack gh stack rebase stack stacked PR adopt remove layer forecast",
   apply_stack_operation: "stack restack sync add branch adopt remove layer",
   publish_stack_layer: "stack publish leased atomic push restack sync retarget merge parent layer",
+  create_pull_request_stack: "github native register registration link associate existing open branch chain stacked PR pull requests gh stack forge",
   manage_stack_operation: "stack undo abort status local stack operation",
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",

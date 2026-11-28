@@ -207,6 +207,24 @@ describe("backend forge tool dispatch", () => {
     );
   });
 
+  it("asks for approval before registering the ordered GitHub stack", async () => {
+    const args = { pullRequests: [4658, 4665] };
+    const repository = { provider: "github" as const, host: "github.com", owner: "fixture", repo: "project" };
+    registry.setForgePrToolHandler(github, async (_operation, input) => ({ repository, args: input }));
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("create_pull_request_stack", args, "call-stack"));
+    const notification = await prompt;
+    expect(notification.params.message).toContain("register these pull requests as a GitHub stack");
+    expect(notification.params._meta).toMatchObject({
+      connector_name: "fixture/project", riskLevel: "high",
+      tool_params_display: [{ name: "pullRequests", value: "[4658,4665]" }],
+    });
+    expect(github).not.toHaveBeenCalled();
+    await answer(notification, "accept");
+    expect((await pending).success).toBe(true);
+    expect(github).toHaveBeenCalledWith("create_pull_request_stack", { ...args, repository }, expect.objectContaining({ threadId: "thread-1" }));
+  });
+
   it("shows the whole body and every inline comment on the approval card", async () => {
     const body = `## Summary\n\n${"Moves every macOS job onto the hosted runner. ".repeat(20)}\n\n<!-- end -->`;
     const pr = nextApproval();

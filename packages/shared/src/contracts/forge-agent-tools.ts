@@ -111,6 +111,7 @@ export const FORGE_AGENT_WRITE_TOOL_GROUPS = {
   rerun_failed_ci_jobs: "ci",
   apply_stack_operation: "stacks",
   publish_stack_layer: "stack_publish",
+  create_pull_request_stack: "stack_publish",
   manage_stack_operation: "stacks",
   merge_pull_request: "approve_merge",
 } as const satisfies Record<string, Exclude<ForgeAgentToolGroup, "read">>;

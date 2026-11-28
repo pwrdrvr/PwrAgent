@@ -182,6 +182,11 @@ Writes:
   Base defaults to the repository's default branch. Draft, labels and
   reviewers are optional. The new PR/MR is attached to the calling thread
   (`attachedToThread`).
+- `create_pull_request_stack`: register existing open GitHub pull requests in
+  one repository. Supply `pullRequests` in order from the trunk-facing PR to
+  the top. The tool returns the confirmed stack number and members. This write
+  follows the **Stack publishing** policy. Merging a layer on GitHub can also
+  merge the open layers below it.
 - `update_pull_request`: title, body, base, open or closed, draft or ready,
   labels and reviewers.
 - `add_issue_comment`, `reply_to_review_comment` (by `reviewThreadId` or a
