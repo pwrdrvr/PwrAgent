@@ -33,8 +33,8 @@ export function ManagedGitUpdates(props: {
   onRefresh: (rescan: boolean) => Promise<void>;
 }) {
   const { desktopApi, managed } = props;
-  const progress = useManagedRuntimeProgress(desktopApi, "git");
   const [pending, setPending] = useState<ManagedGitActionRequest["action"]>();
+  const progress = useManagedRuntimeProgress(desktopApi, "git", { installing: pending === "install" });
   const installingHereRef = useRef(false);
   const [error, setError] = useState<string>();
   const onRefreshRef = useRef(props.onRefresh);

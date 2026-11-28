@@ -130,6 +130,34 @@ function formatEta(seconds: number): string {
   return `${Math.round(seconds / 60)} min`;
 }
 
+/**
+ * Every line the strip's status slot can show between the first busy phase and
+ * the ready strip, for one runtime. The strip stacks them invisibly in the
+ * slot so it is as tall as its longest line from the start: a phase change
+ * swaps text, never the height of the card around it. Both ready lines are
+ * held, because whether a new Codex build waits for idle turns is only known
+ * once it is installed.
+ */
+export function managedRuntimeStatusLines(runtime: ManagedRuntimeId): string[] {
+  const lines: string[] = [];
+  for (const waitingForIdle of [false, true]) {
+    for (const phase of ["checking", "verifying", "unpacking", "activating", "ready"] as const) {
+      const message = managedRuntimeProgressCopy(
+        { runtime, phase, tag: "", updatedAt: 0 },
+        waitingForIdle,
+      ).message;
+      if (message && !lines.includes(message)) lines.push(message);
+    }
+  }
+  return lines;
+}
+
+/**
+ * The widest byte meter a download prints, reserved so the meter that replaces
+ * the message while bytes arrive cannot wrap the slot to a second line.
+ */
+export const MANAGED_RUNTIME_METER_RESERVE = "000.0 MB of 000.0 MB · 00.0 MB/s · about 00 min left";
+
 export function managedRuntimeProgressCopy(
   progress: ManagedRuntimeProgress,
   waitingForIdle: boolean,
@@ -208,6 +236,7 @@ export function managedRuntimeProgressCopy(
           tone: "ok",
           eyebrow: "Downloaded",
           message: "Verified. Not in use until you choose it.",
+          full: true,
         };
       }
       return waitingForIdle
@@ -224,6 +253,7 @@ export function managedRuntimeProgressCopy(
             tone: "ok",
             eyebrow: "Installed",
             message: "Verified and ready.",
+            full: true,
           };
     case "failed":
       return progress.fallbackTag

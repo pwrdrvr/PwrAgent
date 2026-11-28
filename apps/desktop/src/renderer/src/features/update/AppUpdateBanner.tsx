@@ -318,15 +318,17 @@ export function AppUpdateBanner(props: {
                 }
               />
             </span>
-            {progress.meter ? (
-              <p className="app-update-banner__meter" aria-live="off">
-                {progress.meter}
-              </p>
-            ) : null}
+            {/* Present in every phase, blank until bytes arrive, so the
+                card does not grow a line when the download starts. The
+                stack is bottom-anchored: every line the card gains moves
+                its top, and everything above it, up. */}
+            <p className="app-update-banner__meter" aria-live="off">
+              {progress.meter ?? "\u00a0"}
+            </p>
           </div>
           {/* `updateProgressCopy` gives every cancelable phase a version and
-              the one phase without a version (`checking`) no Cancel, so the
-              row is present exactly when Cancel is.
+              the one phase without a version (`checking`) no Cancel. That
+              phase holds the row's space with a hidden copy instead.
 
               The row sits UNDER the track, never beside it, and is laid out
               the same way as the offer card's below: the link leads, the
@@ -356,7 +358,21 @@ export function AppUpdateBanner(props: {
                 </button>
               </div>
             </div>
-          ) : null}
+          ) : (
+            // `checking` has nothing to cancel yet. The row's space is held
+            // anyway, so Cancel arriving with the version does not lift the
+            // card a row.
+            <div
+              aria-hidden="true"
+              className="app-update-banner__actions app-update-banner__actions--reserved"
+            >
+              <div className="app-update-banner__buttons">
+                <button className="button button--ghost" disabled tabIndex={-1} type="button">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </aside>
       ) : null}
       {offered ? (

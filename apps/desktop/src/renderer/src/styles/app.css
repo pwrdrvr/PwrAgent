@@ -14840,6 +14840,10 @@ button.stack-display__thread,
   margin-left: auto;
 }
 
+.app-update-banner__actions--reserved {
+  visibility: hidden;
+}
+
 /* 13px, the card's own body size. Unsized, a `.button` here inherits the
    16px document default, which made Cancel the largest text on the card. */
 .app-update-banner__restart,
@@ -20096,8 +20100,10 @@ button.stack-display__thread,
 }
 
 /* ------------------------------------------------------------------
-   Managed build progress strip (Codex + Grok). One layout for every phase:
-   state line, track, byte meter, four-step rail. The track copies
+   Managed build progress strip (Codex, Grok, Git, Antigravity). One layout
+   for every phase: state line, status line, track, four-step rail. No row
+   comes or goes, and none changes height, between the first busy phase and
+   the ready strip; a phase change swaps text in place. The track copies
    `.app-update-banner__track`, so the app keeps one bar language.
    ------------------------------------------------------------------ */
 
@@ -20126,21 +20132,27 @@ button.stack-display__thread,
   background: var(--bg-panel-elevated);
 }
 
+/* One line, whether or not the tag has arrived: it lands after `checking`,
+   and a wrapping row would grow a line when it did. */
 .managed-progress__head {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 4px 12px;
+  gap: 12px;
+  min-width: 0;
 }
 
 .managed-progress__eyebrow {
+  overflow: hidden;
+  min-width: 0;
   margin: 0;
   color: var(--accent-bright);
   font-size: 11px;
   font-weight: 700;
   line-height: 1.2;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .managed-progress--ok .managed-progress__eyebrow {
@@ -20156,11 +20168,29 @@ button.stack-display__thread,
 }
 
 .managed-progress__tag {
+  flex: none;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* Every line the slot can show sits in one grid cell; the current one is
+   visible and the rest only hold the cell at the longest one's height. */
+.managed-progress__status {
+  display: grid;
+  min-width: 0;
+}
+
+.managed-progress__status > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.managed-progress__reserve {
+  visibility: hidden;
 }
 
 .managed-progress__message {
@@ -20214,20 +20244,17 @@ button.stack-display__thread,
   }
 }
 
-.managed-progress__foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 12px;
-}
-
+/* The meter's length changes on every report, so it never wraps. */
 .managed-progress__meter {
+  overflow: hidden;
   margin: 0;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .managed-progress__steps {

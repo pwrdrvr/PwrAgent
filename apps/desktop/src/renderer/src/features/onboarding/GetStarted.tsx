@@ -892,7 +892,7 @@ function useCodexInstall(params: {
   const { snapshot, discovering, desktopApi, refresh } = params;
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string>();
-  const progress = useManagedRuntimeProgress(desktopApi, "openai-codex");
+  const progress = useManagedRuntimeProgress(desktopApi, "openai-codex", { installing });
   const offer = codexInstallOffer({
     snapshot,
     discovering,

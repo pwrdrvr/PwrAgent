@@ -71,6 +71,34 @@ describe("Antigravity startup notice", () => {
     await waitFor(() => expect(lastNotice(onNoticeChanged)?.id).toBe("antigravity-update:1.5.16"));
   });
 
+  it("goes from the running update straight to the success notice, never back to the offer", async () => {
+    let version = "1.5.15";
+    const { api } = noticeApi({
+      activeCommand: `${ROOT}/active`,
+      setup: async (request) => {
+        if (request.action === "install") {
+          version = "1.5.16";
+          return installed("1.5.16");
+        }
+        return request.action === "check-update"
+          ? { ...installed(version), release: { latestVersion: "1.5.16", checkedAt: 1 } }
+          : installed(version);
+      },
+    });
+    const onNoticeChanged = vi.fn();
+    render(<AntigravityUpdateNotice desktopApi={api} onNoticeChanged={onNoticeChanged} onOpenSettings={vi.fn()} />);
+    await waitFor(() => expect(lastNotice(onNoticeChanged)?.actions?.length).toBe(2));
+    const clickedAt = onNoticeChanged.mock.calls.length;
+    await act(async () => {
+      lastNotice(onNoticeChanged)?.actions?.[0]?.onClick();
+    });
+    await waitFor(() => expect(lastNotice(onNoticeChanged)?.title).toBe("Antigravity updated"));
+    // Once Update is clicked, the offer's buttons do not come back: each
+    // return re-grew the card under the pointer before the success notice.
+    const after = onNoticeChanged.mock.calls.slice(clickedAt).map(([notice]) => notice as AppNoticeToastNotice | undefined);
+    expect(after.filter((notice) => notice?.id === "antigravity-update:1.5.16" && (notice.actions?.length ?? 0) > 0)).toEqual([]);
+  });
+
   it("lets a check begun before an install never restore the old runtime", async () => {
     let version = "1.5.15";
     let releaseStale: (() => void) | undefined;

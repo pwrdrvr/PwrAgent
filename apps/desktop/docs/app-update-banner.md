@@ -68,6 +68,11 @@ v1.1.0-beta.3 the live card put Cancel and Release notes in a column beside
 the content, whose 236px `min-width` then overflowed under Cancel. The card
 was also 266px, 420px and 303px wide across one check.
 
+The live card's height holds steady too. The meter row is present, blank,
+before bytes arrive, and `checking` holds the action row's space with a
+hidden, disabled Cancel. Without them the card grew a row at `available`
+and another at the first byte report, and each one lifted the card's top.
+
 In the action row, `Release notes` leads, the buttons trail, and **the
 dismissing button is last**: Cancel on the live card, Dismiss on the offer,
 with Restart before it. That last slot is a safety rule, not a style
