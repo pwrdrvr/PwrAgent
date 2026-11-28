@@ -746,6 +746,8 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           }${props.attachmentThread || !chipRollup ? "" : `, ${chipRollup.summary}`}${waitingForCi ? ", waiting for CI" : ""}`}
         className={className}
         data-pr-rollup=""
+        // Opens its own card: the thread row's card waits while the pointer is here.
+        data-hover-card-trigger=""
         draggable={false}
         onClick={handleTriggerActivate}
         onDragStart={(event) => event.preventDefault()}

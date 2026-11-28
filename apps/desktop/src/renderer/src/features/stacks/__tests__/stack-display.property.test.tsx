@@ -160,3 +160,29 @@ it("draws the bottom PR's base as the trunk for older compact rows", () => {
   const rollup = screen.getByRole("group", { name: /^Pull requests for/ });
   expect(rollup.querySelector(".stack-display__trunk")?.textContent).toBe("main");
 });
+
+// A thread row re-asks for its own card when the pointer moves from a chip
+// onto the rest of the row, so every part of a stacked pill (number, stack
+// tag, ✕) and the PR rollup must count as one chip that opens its own card.
+it("marks every part of a stacked PR pill and the rollup as a chip with its own card", () => {
+  const { prs, thread } = fixture(3, false);
+  const view = render(
+    <>
+      <PrChip stackThread={thread} pr={prs.at(-1)!} onOpen={vi.fn()} onDetach={vi.fn()}
+        showRepoPrefix={false} showStackTag />
+      <PrRollupChip stackThread={thread} prs={prs} onOpen={vi.fn()} threadTitle={thread.title}
+        repoPrefixedUrls="" onDetachAll={vi.fn()} />
+    </>,
+  );
+  const pill = view.container.querySelector(".pr-chip--stacked")!;
+  const parts = [
+    pill.querySelector("[data-pr-chip]"),
+    pill.querySelector(".pr-chip__stack"),
+    pill.querySelector(".pr-chip__detach"),
+    view.container.querySelector("[data-pr-rollup]"),
+  ];
+  for (const part of parts) {
+    expect(part).not.toBeNull();
+    expect(part!.closest("[data-hover-card-trigger]")).not.toBeNull();
+  }
+});

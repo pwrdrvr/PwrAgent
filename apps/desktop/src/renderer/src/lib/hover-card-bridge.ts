@@ -11,8 +11,8 @@ import { HOVER_TRANSITION_GRACE_MS } from "./useHoverTransitionGrace";
 export const HOVER_CARD_SWAP_REST_MS = 150;
 
 /**
- * Pointer samples further apart than this say nothing about where it is
- * heading: it rested in between, so the next move starts a new path.
+ * Pointer samples further apart than this, or this old, say nothing about
+ * where it is heading: it rested, so the next move starts a new path.
  */
 const POINTER_AIM_STALE_MS = 100;
 
@@ -33,16 +33,26 @@ export type BridgedHoverCard = {
    * the way (the safe triangle, `pointerAimsAtRect`) is not a destination.
    */
   getRect?: () => TooltipRect | undefined;
+  /**
+   * For one card shared by many triggers (every thread row, every project
+   * header): whether it is showing for `trigger` now. Another trigger of the
+   * same card is a swap like any other card's, not a re-entry.
+   */
+  showsFor?: (trigger: Element) => boolean;
 };
 
 type Timers = {
   set: (callback: () => void, ms: number) => number;
   clear: (id: number) => void;
+  /** The clock pointer timestamps are on. Without it, a trail never goes stale by age. */
+  now?: () => number;
 };
 
 const windowTimers: Timers = {
   set: (callback, ms) => window.setTimeout(callback, ms),
   clear: (id) => window.clearTimeout(id),
+  // Event timestamps count from the same origin as `performance.now()`.
+  now: () => performance.now(),
 };
 
 type TimedPoint = AimPoint & { at: number };
@@ -80,13 +90,15 @@ export class HoverCardBridge {
    * card is up or the pointer is only passing on its way to the visible one,
    * and the shorter swap rest when the pointer has moved on from it. Never
    * closes the visible card itself: the card that shows does. `trigger` is
-   * the element entered, which the visible card may hold.
+   * the element entered, which the visible card may hold. A shared card
+   * entered from a trigger it is not showing for (`showsFor`) is a swap,
+   * but the pointer is still on one of its triggers: it keeps the card.
    */
   enterTrigger(card: BridgedHoverCard, trigger: Element | undefined, hoverDelayMs: number): number {
     const current = this.visible;
     if (current === card) {
       this.cancelGrace();
-      return 0;
+      if (!trigger || card.showsFor?.(trigger) !== false) return 0;
     }
     if (!current || current.isPinned?.()) return hoverDelayMs;
     if (trigger && current.holds?.(trigger)) return hoverDelayMs;
@@ -108,11 +120,27 @@ export class HoverCardBridge {
   }
 
   /**
+   * Keep the visible `card` without a grace running: the pointer is crossing
+   * toward it, or the card just moved to the trigger the pointer rests on.
+   */
+  keep(card: BridgedHoverCard): void {
+    if (this.visible === card) this.cancelGrace();
+  }
+
+  /**
    * `card` waits out its hover delay. A card that shows meanwhile (a chip's,
    * on the way to it) is where the pointer rests: it cancels `card`.
    */
   delaying(card: BridgedHoverCard): void {
     this.delayed = card;
+  }
+
+  /**
+   * Whether `card` is the visible card now. Unlike a component's own render
+   * state, this changes at once when another card takes over.
+   */
+  isShowing(card: BridgedHoverCard): boolean {
+    return this.visible === card;
   }
 
   hasPinnedCard(): boolean {
@@ -185,6 +213,9 @@ export class HoverCardBridge {
     const from = this.trail[0];
     const to = this.trail[this.trail.length - 1];
     if (!from || !to || to.at - from.at > POINTER_AIM_STALE_MS) return false;
+    // A pointer resting since its last sample is not heading anywhere.
+    const now = this.timers.now?.();
+    if (now !== undefined && now - to.at > POINTER_AIM_STALE_MS) return false;
     const rect = card.getRect?.();
     return Boolean(rect && rect.right > rect.left && pointerAimsAtRect(from, to, rect));
   }

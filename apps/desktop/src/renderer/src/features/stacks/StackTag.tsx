@@ -176,7 +176,7 @@ export function StackTag({ thread, pr, member, onOpen }: StackTagProps) {
 
   return (
     <>
-      <span ref={trigger} className="pr-chip__stack" data-warning={warn || undefined}
+      <span ref={trigger} className="pr-chip__stack" data-warning={warn || undefined} data-hover-card-trigger=""
         role="button" tabIndex={0} aria-label={`Stack position ${member.position} of ${member.count} for #${pr.number}`}
         aria-haspopup="dialog" aria-expanded={visible} aria-controls={visible ? tooltip.tooltipId : undefined}
         onClick={(event) => {

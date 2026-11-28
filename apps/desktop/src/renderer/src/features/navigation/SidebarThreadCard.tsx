@@ -96,6 +96,11 @@ export type SidebarThreadCardHandle = {
   enter: (target: HTMLElement, threadKey: string) => void;
   /** Keyboard focus reached a thread row: no hover delay. */
   focus: (target: HTMLElement, threadKey: string) => void;
+  /**
+   * The pointer stopped on a row it crossed toward the card: it has rested,
+   * so the card moves there without a further wait while it is up.
+   */
+  rest: (target: HTMLElement, threadKey: string) => void;
   /** The pointer left a thread row. */
   leave: (target: HTMLElement) => void;
   /**
@@ -148,6 +153,22 @@ export const SidebarThreadCardHost = forwardRef<
   // The row whose card is up (or about to be): its own chips are on the way
   // to the card, so crossing one keeps this card (`HoverCardBridge.holds`).
   const heldRowRef = useRef<HTMLElement | null>(null);
+  // The row the card is showing for: another row is a swap (`showsFor`).
+  const shownRowRef = useRef<HTMLElement | null>(null);
+  bridgeCardRef.current.showsFor = (trigger) => shownRowRef.current === trigger;
+  // A move to another row while the card is up waits here, not in the
+  // tooltip's delay, which would re-anchor the visible card at once.
+  const swapTimerRef = useRef<number | undefined>(undefined);
+  const cancelSwap = (): void => {
+    window.clearTimeout(swapTimerRef.current);
+    swapTimerRef.current = undefined;
+  };
+  useEffect(() => {
+    if (visible) return;
+    window.clearTimeout(swapTimerRef.current);
+    swapTimerRef.current = undefined;
+  }, [visible]);
+  useEffect(() => () => window.clearTimeout(swapTimerRef.current), []);
   const crossingRowRef = useRef<HTMLElement | null>(null);
   bridgeCardRef.current.holds = (trigger) =>
     Boolean(heldRowRef.current?.contains(trigger) || crossingRowRef.current?.contains(trigger));
@@ -201,18 +222,39 @@ export const SidebarThreadCardHost = forwardRef<
     const open = (target: HTMLElement, threadKey: string, delayed: boolean): void => {
       // A dragged row passes over others; none of them is being asked about.
       if (isNativeDragInteractionActive()) return;
+      cancelSwap();
       const node = content(threadKey, target);
       if (!node) return;
-      setShown({ threadKey, row: target });
-      heldRowRef.current = target.closest(ROW_SELECTOR) ?? target;
-      crossingRowRef.current = null;
+      const card = bridgeCardRef.current;
       // Focus opens at once; a pointer waits as long as the bridge says, so a
-      // row crossed on the way to another sidebar card never takes it.
-      const wait = sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, target, PROJECT_CARD_HOVER_DELAY_MS);
+      // row crossed on the way to another sidebar card never takes it, and
+      // neither does a row the pointer only slides across.
+      const wait = sidebarPrCardBridge.enterTrigger(card, target, PROJECT_CARD_HOVER_DELAY_MS);
+      const aboutRow = (): void => {
+        setShown({ threadKey, row: target });
+        shownRowRef.current = target;
+        heldRowRef.current = target.closest(ROW_SELECTOR) ?? target;
+        crossingRowRef.current = null;
+      };
       if (!delayed || wait === 0) {
+        aboutRow();
         show(target, node);
         return;
       }
+      if (visibleRef.current) {
+        // Up for another row: it stays there until the pointer rests here.
+        swapTimerRef.current = window.setTimeout(() => {
+          swapTimerRef.current = undefined;
+          const next = target.isConnected ? content(threadKey, target) : null;
+          // Render state lags a card that took over this frame; the bridge does not.
+          if (!next || !visibleRef.current || !sidebarPrCardBridge.isShowing(card)) return;
+          aboutRow();
+          show(target, next);
+          sidebarPrCardBridge.keep(card);
+        }, wait);
+        return;
+      }
+      aboutRow();
       // The tooltip's own delay, so a press, scroll or Escape cancels it; a
       // chip's card shown meanwhile cancels it through the bridge.
       sidebarPrCardBridge.delaying(bridgeCardRef.current);
@@ -226,7 +268,11 @@ export const SidebarThreadCardHost = forwardRef<
     return {
       enter: (target, threadKey) => open(target, threadKey, true),
       focus: (target, threadKey) => open(target, threadKey, false),
+      // Only a card still up skips the delay: one closed meanwhile (Escape,
+      // blur) opens again like any other hover.
+      rest: (target, threadKey) => open(target, threadKey, !visibleRef.current),
       leave: (target) => {
+        cancelSwap();
         if (visibleRef.current && cardIsBesideSidebar(getElement(), target)) {
           sidebarPrCardBridge.leaveTrigger(bridgeCardRef.current);
           return;
@@ -235,11 +281,15 @@ export const SidebarThreadCardHost = forwardRef<
       },
       hold: (row) => {
         crossingRowRef.current = row;
-        if (row) sidebarPrCardBridge.enterTrigger(bridgeCardRef.current, row, PROJECT_CARD_HOVER_DELAY_MS);
+        if (row) sidebarPrCardBridge.keep(bridgeCardRef.current);
       },
-      hide,
+      hide: () => {
+        cancelSwap();
+        hide();
+      },
       getElement,
       cancelPending: () => {
+        cancelSwap();
         if (!pendingRef.current) return;
         pendingRef.current = false;
         if (!visibleRef.current) hide();
@@ -252,6 +302,13 @@ export const SidebarThreadCardHost = forwardRef<
 });
 
 const ROW_SELECTOR = ".thread-row-shell[data-thread-key]";
+
+/** A control inside a row that opens its own card: a PR chip, a stack tag, the PR rollup. */
+const NESTED_CARD_TRIGGER_SELECTOR = "[data-hover-card-trigger]";
+
+function inNestedCardTrigger(node: EventTarget | null): boolean {
+  return node instanceof Element && node.closest(NESTED_CARD_TRIGGER_SELECTOR) !== null;
+}
 
 /** Keys that move focus between rows: Tab, and the list's own keys. */
 const NAVIGATION_KEYS = new Set(["Tab", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
@@ -271,7 +328,8 @@ function rowTarget(shell: HTMLElement): HTMLElement {
  * nested controls (PR chips, the pin) open their own cards or tooltips over
  * it. A row crossed while the pointer heads for the open card (the safe
  * triangle, `pointerAimsAtRect`) is on the way, not a destination: it takes
- * the card only once the pointer stops or turns away. Focus opens the card only when the operator moved it there with a
+ * the card once the pointer stops there, or like any other row (after the
+ * swap rest) once it turns away. Focus opens the card only when the operator moved it there with a
  * navigation key: a click focuses the row on its way to opening the thread,
  * and focus handed back after a rename or a menu is not an arrival.
  */
@@ -289,9 +347,11 @@ export function useSidebarThreadCardTriggers(
     let hovered: HTMLElement | null = null;
     let crossed: HTMLElement | undefined;
     let aimTimer: number | undefined;
-    const enterRow = (shell: HTMLElement): void => {
+    const enterRow = (shell: HTMLElement, rested = false): void => {
       const key = shell.dataset.threadKey;
-      if (key) card.current?.enter(rowTarget(shell), key);
+      if (!key) return;
+      if (rested) card.current?.rest(rowTarget(shell), key);
+      else card.current?.enter(rowTarget(shell), key);
     };
     const forgetCrossed = (): void => {
       window.clearTimeout(aimTimer);
@@ -299,14 +359,15 @@ export function useSidebarThreadCardTriggers(
       if (crossed) card.current?.hold(null);
       crossed = undefined;
     };
-    const settleCrossed = (): void => {
+    // `rested`: the pointer stopped on the crossed row, rather than turned away.
+    const settleCrossed = (rested: boolean): void => {
       const row = crossed;
       forgetCrossed();
-      if (row?.isConnected && row === hovered) enterRow(row);
+      if (row?.isConnected && row === hovered) enterRow(row, rested);
     };
     const waitToSettle = (): void => {
       window.clearTimeout(aimTimer);
-      aimTimer = window.setTimeout(settleCrossed, POINTER_AIM_SETTLE_MS);
+      aimTimer = window.setTimeout(() => settleCrossed(true), POINTER_AIM_SETTLE_MS);
     };
     // Measured from the oldest recent sample, so one jittery move does not decide it.
     const aimsAtCard = (point: AimPoint): boolean => {
@@ -318,14 +379,29 @@ export function useSidebarThreadCardTriggers(
       const point = { x: event.clientX, y: event.clientY };
       if (crossed) {
         if (aimsAtCard(point)) waitToSettle();
-        else settleCrossed();
+        else settleCrossed(false);
       }
       trail.push(point);
       if (trail.length > POINTER_AIM_TRAIL) trail.shift();
     };
     const onMouseOver = (event: MouseEvent): void => {
       const shell = rowShellOf(event.target);
-      if (!shell || shell === rowShellOf(event.relatedTarget)) return;
+      if (!shell) return;
+      if (shell === rowShellOf(event.relatedTarget)) {
+        // Back on the row from one of its own chips: the chip's card took
+        // over from (or cancelled) this row's card, so ask for it again.
+        if (crossed === shell) return;
+        const fromChip = inNestedCardTrigger(event.relatedTarget);
+        const toChip = inNestedCardTrigger(event.target);
+        if (fromChip && !toChip) {
+          enterRow(shell);
+        } else if (toChip && !fromChip) {
+          // Onto one of its chips: the chip's card is what the pointer is
+          // asking about, so the row's card still waiting never opens over it.
+          card.current?.cancelPending();
+        }
+        return;
+      }
       hovered = shell;
       if (aimsAtCard({ x: event.clientX, y: event.clientY })) {
         crossed = shell;
@@ -334,6 +410,10 @@ export function useSidebarThreadCardTriggers(
         return;
       }
       forgetCrossed();
+      // Arriving straight on one of its chips (a fast move, or back from the
+      // chip's own card) asks about the chip; the row's card waits until the
+      // pointer moves off the chip onto the row.
+      if (inNestedCardTrigger(event.target)) return;
       enterRow(shell);
     };
     const onMouseOut = (event: MouseEvent): void => {
