@@ -139,7 +139,7 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
             kind: "response",
             method: "thread/list",
             // A startup refresh must not list the new thread before the
-            // launchpad creates it. Unpinned, it opens Directory threads.
+            // launchpad creates it. Unpinned, it opens the Unpinned section.
             afterResponseId: "thread-start-1",
             result: [
               keptThread,
@@ -298,7 +298,7 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
 
   try {
     await app.window.getByRole("tab", { name: "directories" }).click();
-    await expect(app.window.getByText("Directory threads", { exact: true })).toHaveCount(0);
+    await expect(app.window.getByText("Unpinned", { exact: true })).toHaveCount(0);
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -345,11 +345,11 @@ test("directory launchpad preserves all-pinned placement and rereads an initiall
         .getByText("captured after refresh"),
     ).toBeVisible();
     // Capture the final state even against the regression, where the new
-    // thread appears below a newly created Directory threads disclosure.
+    // thread appears below a newly created Unpinned disclosure.
     await directory.screenshot({ path: testInfo.outputPath("all-pinned-creation.png") });
     await expect(directory.locator('.thread-row-shell[data-thread-pin-state="pinned"] .thread-row__title'))
       .toHaveText(["Always at top", "hello from launchpad", "Existing directory thread"]);
-    await expect(directory.getByText("Directory threads", { exact: true })).toHaveCount(0);
+    await expect(directory.getByText("Unpinned", { exact: true })).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();

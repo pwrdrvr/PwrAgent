@@ -1715,7 +1715,7 @@ function DesktopAppShell(props: {
   const revealSelectedThreadInList = useCallback(
     (options?: { instant?: boolean }) => {
       // A selected row can be unmounted behind a collapsed directory,
-      // Directory threads divider, overflow cap, or parent-thread group. The
+      // Unpinned divider, overflow cap, or parent-thread group. The
       // request nonce lets the active sidebar lens open those containers
       // before ThreadRow's mount effect performs the final nearest-edge
       // scroll. A mounted row that is off screen is centered right away; one

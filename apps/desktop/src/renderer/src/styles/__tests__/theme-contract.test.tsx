@@ -399,7 +399,7 @@ describe("Tangerine Terminal theme contract", () => {
       /min-height:\s*24px;/,
     );
 
-    // The Directories lane's "Directory threads" disclosure is an 11px
+    // The Directories lane's "Unpinned" disclosure is an 11px
     // uppercase label, which left the button 13px tall — under the floor,
     // with 23px of safe clickable space between the rows above and below it.
     // Pinned because the CSS comment says "do not trade this back for
@@ -608,7 +608,7 @@ describe("Tangerine Terminal theme contract", () => {
     expect(extractRuleBody(css, ".directory-row__header")).toMatch(/\btop:\s*0;/);
   });
 
-  it("sticks the Directory threads divider under its project header", () => {
+  it("sticks the Unpinned divider under its project header", () => {
     // With a long project open, the disclosure that closes it scrolled away
     // with the first rows and was lost among 150 others. It sticks at the
     // header's measured height, opaque and as wide as the header so rows
@@ -628,6 +628,19 @@ describe("Tangerine Terminal theme contract", () => {
       Number(/\bz-index:\s*(\d+);/.exec(extractRuleBody(css, rule))?.[1]);
     expect(zIndex(".directory-row__thread-divider")).toBeLessThan(zIndex(".directory-row__header"));
     expect(zIndex(".directory-row__thread-divider")).toBeGreaterThan(zIndex(".thread-row__subthread-toggle"));
+  });
+
+  it("sticks the Unpinned divider to the lane's bottom edge while the pins run past", () => {
+    // In a project with 100+ pins the Unpinned section, open or closed,
+    // was hundreds of rows down. The divider also sticks to the bottom.
+    // A sticky box stops short of the scroller's end pad, which left a
+    // strip of pins showing under the rail, so the inset cancels the pad
+    // the lane itself declares.
+    const list = extractRuleBody(css, ".directory-list");
+    const divider = extractRuleBody(css, ".directory-row__thread-divider");
+    expect(list).toMatch(/--directory-list-end-pad:\s*16px;/);
+    expect(list).toMatch(/\bpadding-bottom:\s*var\(--directory-list-end-pad\);/);
+    expect(divider).toMatch(/\bbottom:\s*calc\(-1 \* var\(--directory-list-end-pad, 0px\)\);/);
   });
 
   it("does not leave unresolved theme token references in app.css", () => {
@@ -650,6 +663,8 @@ describe("Tangerine Terminal theme contract", () => {
       "directory-row-header-height",
       "directory-thread-row-gap",
       "directory-thread-divider-margin",
+      // The Directories lane's end pad — defined on `.directory-list`.
+      "directory-list-end-pad",
       // Pane resize seams — defined on the two resize handles, not `:root`.
       // How far the 11px hit band reaches over the scrolling neighbour's
       // edge; both seams read it so their geometry cannot drift apart.
@@ -2399,7 +2414,7 @@ describe("Tangerine Terminal theme contract", () => {
       expect(directoriesDivider).toContain(fragment);
     }
 
-    // The Directory threads disclosure reuses the divider primitive.
+    // The Unpinned disclosure reuses the divider primitive.
     // A late `font:` shorthand would reset the inherited 11px divider
     // size to the sidebar row size, making this label visibly oversized.
     const directoryThreadsDivider = extractRuleBody(

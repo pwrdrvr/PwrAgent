@@ -644,7 +644,7 @@ it.each([true, false])("nests a handoff from a local creator whose parent is on 
   // A peer's thread handed off to a local Claude thread, which the operator
   // pinned. That thread then handed off a grouped sub-thread. The created
   // thread must stay with its creator, never fall out as an unpinned root
-  // under a collapsed Directory threads.
+  // under a collapsed Unpinned section.
   const overlays: Record<string, ThreadOverlayState> = {
     "claude:creator": { backend: "claude", threadId: "creator", executionMode: "auto", extraLinkedDirectories: [],
       pinnedRank: "-79872", parentThreadId: "peer-root", parentThreadBackend: "codex", parentThreadInstanceId: "peer" },

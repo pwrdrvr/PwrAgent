@@ -1740,7 +1740,7 @@ export type NavigationDirectorySummary = {
   pinnedRank?: string;
   /**
    * Sticky per-directory preference for hiding the unpinned
-   * "Directory threads" section while keeping pinned threads visible.
+   * "Unpinned" section while keeping pinned threads visible.
    */
   directoryThreadsCollapsed?: boolean;
   /**

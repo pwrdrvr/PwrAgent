@@ -769,7 +769,7 @@ describe("Sidebar", () => {
 
       expect(
         screen.getByRole("button", {
-          name: "Show directory threads for PwrAgent",
+          name: "Show unpinned threads for PwrAgent",
         }),
       ).toBeInTheDocument();
       expect(
@@ -6859,7 +6859,7 @@ describe("Sidebar", () => {
 
     const directoryThreads = screen
       .getByRole("button", {
-        name: "Hide directory threads for PwrAgent",
+        name: "Hide unpinned threads for PwrAgent",
       })
       .closest(".directory-row__threads") as HTMLElement;
     expect(
@@ -6924,7 +6924,7 @@ describe("Sidebar", () => {
     const { rerender } = render(renderSidebar(false));
 
     const hideDirectoryThreads = screen.getByRole("button", {
-      name: "Hide directory threads for PwrAgent",
+      name: "Hide unpinned threads for PwrAgent",
     });
     const expandedDividerLabel = hideDirectoryThreads.querySelector(
       ".directory-row__thread-divider-label",
@@ -6934,7 +6934,7 @@ describe("Sidebar", () => {
       "is-open",
     );
     expect(expandedDividerLabel?.children[1]).toHaveTextContent(
-      "Directory threads",
+      "Unpinned",
     );
 
     await clickElement(hideDirectoryThreads);
@@ -6948,7 +6948,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("Updated thread")).toBeInTheDocument();
     expect(screen.queryByText("Cross-project cleanup")).not.toBeInTheDocument();
     const showDirectoryThreads = screen.getByRole("button", {
-      name: "Show directory threads for PwrAgent",
+      name: "Show unpinned threads for PwrAgent",
     });
     expect(showDirectoryThreads).toHaveAttribute("aria-expanded", "false");
     expect(
@@ -6962,7 +6962,7 @@ describe("Sidebar", () => {
     );
     expect(collapsedDividerLabel?.firstElementChild).not.toHaveClass("is-open");
     expect(collapsedDividerLabel?.children[1]).toHaveTextContent(
-      "Directory threads",
+      "Unpinned",
     );
   });
 
@@ -7004,7 +7004,7 @@ describe("Sidebar", () => {
       },
     });
     const divider = screen.getByRole("button", {
-      name: "Hide directory threads for PwrAgent",
+      name: "Hide unpinned threads for PwrAgent",
     });
     const rectAt = (top: number) => ({
       x: 0, y: top, top, bottom: top + 24, left: 0, right: 300, width: 300, height: 24,
@@ -7023,7 +7023,7 @@ describe("Sidebar", () => {
     rerender(renderSidebar(true));
 
     expect(screen.getByRole("button", {
-      name: "Show directory threads for PwrAgent",
+      name: "Show unpinned threads for PwrAgent",
     })).toBe(divider);
     expect(scrollTop).toBe(500);
     // One correction per click: later renders leave the list alone.
@@ -7031,11 +7031,83 @@ describe("Sidebar", () => {
     expect(scrollTop).toBe(500);
   });
 
-  it("keeps the Directory threads count open or closed, and scrolls to the start of the threads from the bar", async () => {
+  it.each([
+    { name: "stuck to the bottom", stuck: true },
+    { name: "in its place", stuck: false },
+  ])("opens Unpinned from the divider $name", async ({ stuck }) => {
+    // A project with hundreds of pins keeps its Unpinned divider stuck to
+    // the bottom of the list while the pins run past. Opening it there
+    // added every row out of sight below the divider, so the project
+    // scrolls to the start of the section once the owner renders it open.
+    // Opened in its place, the rows appear right under it: nothing moves.
+    const pinnedThread = { ...updatedSinceSeenThread, pinnedRank: "1024" };
+    const directoryWithPinnedThread = {
+      ...directories[0],
+      threadKeys: ["codex:thread-1", "codex:thread-updated"],
+    };
+    const renderSidebar = (directoryThreadsCollapsed: boolean) => (
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[{ ...directoryWithPinnedThread, directoryThreadsCollapsed }]}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-updated"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryThreadsCollapsed={async () => undefined}
+      />
+    );
+    const { container, rerender } = render(renderSidebar(true));
+    const list = container.querySelector<HTMLElement>(".directory-list")!;
+    const section = container.querySelector<HTMLElement>(".directory-row")!;
+    const header = section.querySelector<HTMLElement>(".directory-row__header")!;
+    const scrollTo = vi.fn();
+    list.scrollTo = scrollTo as typeof list.scrollTo;
+    Object.defineProperty(list, "scrollTop", { configurable: true, value: 900 });
+    const rectAt = (top: number, height: number) => ({
+      x: 0, y: top, top, bottom: top + height, left: 0, right: 300, width: 300, height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    // The lane runs from y=80 to 480 with the project's header stuck at its
+    // top. The divider's place in the flow is 2400px down, below its pins;
+    // stuck, it is drawn at the lane's bottom, 456.
+    const restingTop = stuck ? 2400 : 300;
+    vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rectAt(80, 400));
+    vi.spyOn(header, "getBoundingClientRect").mockReturnValue(rectAt(80, 24));
+    const divider = screen.getByRole("button", { name: "Show unpinned threads for PwrAgent" });
+    const origin = divider.previousElementSibling!;
+    vi.spyOn(origin, "getBoundingClientRect").mockReturnValue(rectAt(restingTop, 0));
+    vi.spyOn(divider, "getBoundingClientRect").mockImplementation(() =>
+      divider.style.position === "static" || !stuck ? rectAt(restingTop, 24) : rectAt(456, 24));
+
+    await clickElement(divider);
+    // The owner has not opened it yet: nothing moves.
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    rerender(renderSidebar(false));
+    expect(screen.getByRole("button", { name: "Hide unpinned threads for PwrAgent" })).toBe(divider);
+    if (stuck) {
+      // The divider rests right under the header: 900 + 2400 - (80 + 24).
+      expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 3196, behavior: "smooth" });
+      expect(divider.style.position).toBe("");
+    } else {
+      expect(scrollTo).not.toHaveBeenCalled();
+    }
+    // One scroll per click: later renders leave the list alone.
+    rerender(renderSidebar(false));
+    expect(scrollTo).toHaveBeenCalledTimes(stuck ? 1 : 0);
+  });
+
+  it("keeps the Unpinned count open or closed, and scrolls to the start of the threads from the bar", async () => {
     // The count showed only while closed, so the label and the rules beside
     // it changed width on every toggle. And from deep in a long list the bar
-    // beside the label is the way back to the start of the Directory
-    // threads (not the project's top, above its pins); the label (and
+    // beside the label is the way back to the start of the Unpinned
+    // section (not the project's top, above its pins); the label (and
     // the keyboard) still toggles.
     const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
     const pinnedThread = { ...updatedSinceSeenThread, pinnedRank: "1024" };
@@ -7063,9 +7135,9 @@ describe("Sidebar", () => {
     const { container, rerender } = render(renderSidebar(false));
     const countOf = (name: string) => screen.getByRole("button", { name })
       .querySelector(".directory-row__thread-divider-count")?.getAttribute("data-count");
-    expect(countOf("Hide directory threads for PwrAgent")).toBe("1");
+    expect(countOf("Hide unpinned threads for PwrAgent")).toBe("1");
     rerender(renderSidebar(true));
-    expect(countOf("Show directory threads for PwrAgent")).toBe("1");
+    expect(countOf("Show unpinned threads for PwrAgent")).toBe("1");
     rerender(renderSidebar(false));
 
     const list = container.querySelector<HTMLElement>(".directory-list")!;
@@ -7084,7 +7156,7 @@ describe("Sidebar", () => {
     vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rectAt(80, 400));
     vi.spyOn(section, "getBoundingClientRect").mockReturnValue(rectAt(-620, 2000));
     vi.spyOn(header, "getBoundingClientRect").mockReturnValue(rectAt(80, 24));
-    const divider = screen.getByRole("button", { name: "Hide directory threads for PwrAgent" });
+    const divider = screen.getByRole("button", { name: "Hide unpinned threads for PwrAgent" });
     vi.spyOn(divider, "getBoundingClientRect").mockImplementation(() =>
       divider.style.position === "static" ? rectAt(-500, 24) : rectAt(104, 24));
 
@@ -7370,7 +7442,7 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Hide directory threads for PwrAgent",
+        name: "Hide unpinned threads for PwrAgent",
       }),
     ).not.toBeInTheDocument();
   });
@@ -7409,7 +7481,7 @@ describe("Sidebar", () => {
     );
 
     const directoryThreads = screen.getByRole("button", {
-      name: "Hide directory threads for PwrAgent",
+      name: "Hide unpinned threads for PwrAgent",
     });
     const unpinnedRow = screen
       .getByRole("button", { name: /Cross-project cleanup/i })
@@ -8376,7 +8448,7 @@ describe("Sidebar", () => {
     fireEvent.click(projectBSummary!);
     fireEvent.drop(
       screen.getByRole("button", {
-        name: "Hide directory threads for ProjectB",
+        name: "Hide unpinned threads for ProjectB",
       }),
       { dataTransfer: createDataTransfer("codex:thread-1") },
     );

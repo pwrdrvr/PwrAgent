@@ -129,7 +129,7 @@ export function buildPagedDirectoryPresentation(params: {
     const before = directoryPinnedThreads.findIndex((thread) => comparePinnedThreads(selectedThread, thread) < 0);
     directoryPinnedThreads.splice(before < 0 ? directoryPinnedThreads.length : before, 0, selectedThread);
   }
-  // An all-pinned project has no Directory threads disclosure. Keep a new
+  // An all-pinned project has no Unpinned disclosure. Keep a new
   // starting row with the pins, matching the owner's automatic pin decision.
   const directoryThreadsCollapsed = params.directory.directoryThreadsCollapsed === true
     || ((params.directory.pinnedRootCount ?? 0) > 0 && params.directory.unpinnedRootCount === 0);

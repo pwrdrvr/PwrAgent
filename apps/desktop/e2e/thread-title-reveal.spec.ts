@@ -303,7 +303,7 @@ test("thread title reveals a linked child hidden by collapsed directory sections
     await expect(directorySummary).toHaveAttribute("aria-expanded", "true");
 
     const hideDirectoryThreads = threadBrowser.getByRole("button", {
-      name: "Hide directory threads for RevealFixture",
+      name: "Hide unpinned threads for RevealFixture",
     });
     await expect(hideDirectoryThreads).toBeVisible();
     const collapseSubthreads = threadBrowser.getByRole("button", {
@@ -318,7 +318,7 @@ test("thread title reveals a linked child hidden by collapsed directory sections
     await hideDirectoryThreads.click();
     await expect(
       threadBrowser.getByRole("button", {
-        name: "Show directory threads for RevealFixture",
+        name: "Show unpinned threads for RevealFixture",
       }),
     ).toBeVisible();
 
@@ -340,7 +340,7 @@ test("thread title reveals a linked child hidden by collapsed directory sections
     await expect(directorySummary).toHaveAttribute("aria-expanded", "true");
     await expect(
       threadBrowser.getByRole("button", {
-        name: "Hide directory threads for RevealFixture",
+        name: "Hide unpinned threads for RevealFixture",
       }),
     ).toBeVisible();
     await expect(
@@ -523,7 +523,7 @@ test("quick jump reveals a hidden child before restoring a hidden sidebar", asyn
       .locator(".directory-row__summary")
       .filter({ hasText: "RevealFixture" });
     const hideDirectoryThreads = threadBrowser.getByRole("button", {
-      name: "Hide directory threads for RevealFixture",
+      name: "Hide unpinned threads for RevealFixture",
     });
     const collapseSubthreads = threadBrowser.getByRole("button", {
       name: "Collapse sub-threads for Parent thread with child link",
@@ -561,7 +561,7 @@ test("quick jump reveals a hidden child before restoring a hidden sidebar", asyn
     await expect(directorySummary).toHaveAttribute("aria-expanded", "true");
     await expect(
       threadBrowser.getByRole("button", {
-        name: "Hide directory threads for RevealFixture",
+        name: "Hide unpinned threads for RevealFixture",
       }),
     ).toBeVisible();
     await expect(

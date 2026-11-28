@@ -7723,7 +7723,7 @@ describe("app server ipc", () => {
     setRemoteThreadLocalPin.mockClear();
     // The visibility check reads the CACHED directory summaries from the
     // last snapshot build (never a fresh snapshot) — warm the cache with a
-    // snapshot whose "app" group reports Directory Threads collapsed.
+    // snapshot whose "app" group reports Unpinned collapsed.
     reconcileNavigationSnapshot.mockImplementationOnce(async (params: unknown) => ({
       backend: (params as { backend: "all" | "codex" | "acp:grok" }).backend,
       fetchedAt: 1234,

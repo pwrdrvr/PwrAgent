@@ -14579,7 +14579,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("persists and optimistically applies the Directory threads disclosure", async () => {
+  it("persists and optimistically applies the Unpinned disclosure", async () => {
     const directory = {
       key: "directory:/Users/me/repos/PwrAgent",
       kind: "directory" as const,
@@ -14628,7 +14628,7 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.directoryThreadsCollapsed).toBe(true);
   });
 
-  it("keeps a remote viewer's Directory threads disclosure independent of the owner", async () => {
+  it("keeps a remote viewer's Unpinned disclosure independent of the owner", async () => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "remote-instance",

@@ -5278,7 +5278,7 @@ describe("DesktopBackendRegistry", () => {
     { name: "all remaining roots are pinned", unpinnedThreadIds: [], pinned: true },
     { name: "the new root is already indexed", unpinnedThreadIds: ["thread-1"], pinned: true },
     { name: "an older unpinned root remains", unpinnedThreadIds: ["older-unpinned"], pinned: false },
-  ])("places a new thread when $name and Directory threads is open", async ({ unpinnedThreadIds, pinned }) => {
+  ])("places a new thread when $name and Unpinned is open", async ({ unpinnedThreadIds, pinned }) => {
     const directoryPath = expectedDir(path.join(os.tmpdir(), "pwragent-all-pinned-project"));
     const directoryKey = `directory:${directoryPath}`;
     const overlayStore = createOverlayStoreMock();

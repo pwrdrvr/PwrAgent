@@ -125,7 +125,7 @@ it.each(["local", "remote", "mounted"] as const)("retains expanded pins after cr
 });
 
 it.each(["codex", "claude", "acp:grok", "acp:antigravity"] as const)(
-  "keeps a newly pinned thread visible above Directory threads instead of folding it under Load more pinned threads (%s)",
+  "keeps a newly pinned thread visible above Unpinned instead of folding it under Load more pinned threads (%s)",
   async (backend) => {
     const { buildPrependPinRank, KEEP_AT_TOP_RANK_BOUNDARY } = await import("@pwragent/shared/thread-pins");
     const home = { key: "directory:/fixture/project", kind: "directory" as const, label: "Fixture project", path: "/fixture/project" };

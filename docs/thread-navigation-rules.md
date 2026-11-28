@@ -141,7 +141,7 @@ Read this before changing thread lenses, Attention membership/order, unread stat
     Every rank sort, store, and federation hop already orders it first.
   - A new pin, including an auto-pinned new thread, lands at the top of the
     ordinary pins and never above a kept pin.
-  - A new root thread in a project with **Directory threads** collapsed is
+  - A new root thread in a project with **Unpinned** collapsed is
     auto-pinned using the saved fold, even while navigation is loading.
     Allocate the rank against the saved local and peer pins in the same
     transaction as the pin. Keep any pin the operator already gave the row.
@@ -157,6 +157,18 @@ Read this before changing thread lenses, Attention membership/order, unread stat
   - The **Pinned** and **Keep at Top** check items toggle in place and keep
     the menu open. Return or a click outside closes it.
 - Sort unpinned directory threads by thread creation time.
+- A project with pins shows its other threads under an **Unpinned**
+  divider: the disclosure that opens and closes them. It sticks under the
+  project header while the unpinned rows scroll past, and to the bottom of
+  the list while the project's pinned rows run past it, so in a project
+  with hundreds of pins the section is one click away, open or closed.
+  - The label (caret, name, count) toggles. Opening it from the bottom of
+    the list scrolls the project to the section's start once the owner
+    renders it open; otherwise the new rows would land out of sight below.
+  - A pointer press on the bar beside the label scrolls to the section's
+    start without toggling.
+  - The selected thread's dock and row reveal treat rows behind the stuck
+    divider as hidden, at the bottom as at the top.
 - Project folders, sub-threads, and pins all use one pointer drag:
   a 4px lift, the tilted held card, the dimmed source, Escape to cancel.
   Never native HTML drag (see `pointer-reorder-drag.ts`).

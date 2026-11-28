@@ -7835,7 +7835,7 @@ async function resolveFederatedWorktreeGitReadContext(request: {
  * remote parent is mounted beside it. Import that parent as part of accepting
  * the child creation request, or a link a viewer moves one of this instance's
  * threads into, then mirror the normal created-thread visibility rule when the
- * child's Directory Threads section is collapsed.
+ * child's Unpinned section is collapsed.
  */
 async function mountRemoteParentForLocalChild(
   request: Pick<MaterializeDirectoryLaunchpadRequest,

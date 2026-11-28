@@ -69,7 +69,7 @@ describe("large collapsed directory rendering", () => {
     expect(screen.getByText(pinned.title)).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: "Show directory threads for Project 1",
+        name: "Show unpinned threads for Project 1",
       }).querySelector(".directory-row__thread-divider-count"),
     ).toHaveAttribute("data-count", "107");
     expect(screen.getAllByTestId("fixture-thread-row")).toHaveLength(1);

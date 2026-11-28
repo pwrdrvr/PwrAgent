@@ -323,7 +323,7 @@ describe("a thread that is still starting", () => {
   });
 
   it.each([
-    { name: "Directory threads is collapsed", collapsed: true, hasUnpinned: true, hasKept: true, hasOrdinary: true },
+    { name: "Unpinned is collapsed", collapsed: true, hasUnpinned: true, hasKept: true, hasOrdinary: true },
     { name: "archiving leaves only pins", collapsed: false, hasUnpinned: false, hasKept: true, hasOrdinary: true },
     { name: "no pin is kept at top", collapsed: true, hasUnpinned: true, hasKept: false, hasOrdinary: true },
     { name: "every pin is kept at top", collapsed: false, hasUnpinned: false, hasKept: true, hasOrdinary: false },
@@ -361,11 +361,11 @@ describe("a thread that is still starting", () => {
     const after = hasOrdinary ? ["Pinned thread, pinned"] : [];
     expect(rowNames(project)).toEqual([...before, "Add a crop tool, starting in PwrSnap", ...after]);
     if (hasUnpinned) {
-      const divider = screen.getByRole("button", { name: "Show directory threads for PwrSnap" });
+      const divider = screen.getByRole("button", { name: "Show unpinned threads for PwrSnap" });
       expect(within(project).getByRole("button", { name: "Add a crop tool, starting in PwrSnap" })
         .compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     } else {
-      expect(screen.queryByText("Directory threads")).not.toBeInTheDocument();
+      expect(screen.queryByText("Unpinned")).not.toBeInTheDocument();
     }
 
     fireEvent.pointerOver(within(project).getAllByRole("button")[0]!, { pointerType: "mouse" });
@@ -381,7 +381,7 @@ describe("a thread that is still starting", () => {
     }
     fireEvent.pointerLeave(project.closest<HTMLElement>(".sidebar__scroll-region")!, { pointerType: "mouse" });
     expect(rowNames(project)).toEqual([...before, ...after, "Crop tool implementation, pinned"]);
-    if (!hasUnpinned) expect(screen.queryByText("Directory threads")).not.toBeInTheDocument();
+    if (!hasUnpinned) expect(screen.queryByText("Unpinned")).not.toBeInTheDocument();
   });
 
   it("opens the parent's project for a starting sub-thread", () => {
