@@ -2,6 +2,7 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
+import { routeIntegratedTerminalOutput } from "../../lib/integrated-terminal-output-router";
 import {
   discoverNerdFontFamily,
   discoveredNerdFontFamily,
@@ -260,7 +261,16 @@ export function IntegratedTerminal({
         // terminal opened under a dark theme kept dark-theme ink on the light
         // canvas after the window switched scheme. A color change repaints
         // every row, scrollback included.
+        //
+        // Appearance writes every attribute whenever any appearance setting
+        // changes, and re-setting `data-color-theme` to its current value
+        // still queues a mutation. Without the key check, a density or text
+        // size change re-read the palette and repainted every terminal.
+        let themeKey = terminalThemeKey();
         const themeObserver = new MutationObserver(() => {
+          const nextKey = terminalThemeKey();
+          if (nextKey === themeKey) return;
+          themeKey = nextKey;
           terminal.options.theme = readTerminalTheme();
         });
         themeObserver.observe(document.documentElement, {
@@ -289,7 +299,7 @@ export function IntegratedTerminal({
         const queued: { sessionId: string; data: string; seq?: number }[] = [];
         // Subscribe before attach. Main may emit while its snapshot parses or
         // while the IPC response is in flight; the watermark removes duplicates.
-        const unsubscribeOutput = desktopApi.onIntegratedTerminalOutput?.((event) => {
+        const outputRoute = routeIntegratedTerminalOutput(desktopApi, requestedSessionId, (event) => {
           const expectedId = sessionIdRef.current ?? requestedSessionId;
           if (expectedId && event.sessionId !== expectedId) return;
           if (!attached) {
@@ -336,6 +346,7 @@ export function IntegratedTerminal({
         const applyResponse = (response: Awaited<ReturnType<typeof createIntegratedTerminal>>) => {
           if (disposed) return;
           sessionIdRef.current = response.sessionId;
+          outputRoute?.setSessionId(response.sessionId);
           writableRef.current = !response.status || response.status === "running";
           setStatus(response.status === "restored"
             ? "Saved output · process ended when the app closed"
@@ -382,7 +393,7 @@ export function IntegratedTerminal({
         void attach().then(applyResponse).catch(reportError);
 
         cleanupTerminal = () => {
-          unsubscribeOutput?.();
+          outputRoute?.unsubscribe();
           resizeObserver.disconnect();
           themeObserver.disconnect();
           if (resizeFrame !== undefined) window.cancelAnimationFrame(resizeFrame);
@@ -565,6 +576,12 @@ export function IntegratedTerminal({
 /** 1 is xterm's "leave every color alone". */
 function minimumContrastRatio(enabled: boolean): number {
   return enabled ? TERMINAL_MINIMUM_CONTRAST_RATIO : 1;
+}
+
+/** The two attributes the palette's CSS variables are keyed on. */
+function terminalThemeKey(): string {
+  const root = document.documentElement;
+  return `${root.getAttribute("data-theme") ?? ""}|${root.getAttribute("data-color-theme") ?? ""}`;
 }
 
 function readTerminalTheme(): ITheme {

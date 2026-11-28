@@ -115,6 +115,18 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
   const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  /** What the panel paints, which a short window can hold below `height`. */
+  const [painted, setPainted] = useState<number>();
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!visible || !section || typeof ResizeObserver === "undefined") return;
+    const measure = () => setPainted(Math.round(section.getBoundingClientRect().height));
+    const observer = new ResizeObserver(measure);
+    observer.observe(section);
+    measure();
+    return () => observer.disconnect();
+  }, [visible]);
   const cancelRenameRef = useRef(false);
   const menuIndex = menu ? panes.findIndex((pane) => pane.sessionId === menu.sessionId) : -1;
   // The menu's terminal can go away under it (closed elsewhere, or a remote
@@ -183,13 +195,26 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
   const focusTab = (index: number) =>
     listRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]?.focus();
   const changeHeight = (value: number) => terminals.setHeight(threadKey, Math.max(140, Math.min(560, value)));
+  /** In a short window the panel paints shorter than its remembered height.
+   *  Resizing starts from what is on screen, or a drag down would move
+   *  nothing until it had covered the difference. */
+  const paintedHeight = (grip: HTMLElement) =>
+    Math.round(grip.parentElement?.getBoundingClientRect().height ?? height);
+  /** Shrinking goes from the painted height. Growing never drops below the
+   *  remembered height: the panel cannot paint taller in this window, and
+   *  pressing the grip or asking it to grow must not forget that height. */
+  const resizeFrom = (painted: number, delta: number) => {
+    const next = painted + delta;
+    changeHeight(delta >= 0 ? Math.max(next, height) : next);
+  };
   const resize = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const start = event.clientY;
     const target = event.currentTarget;
-    const move = (next: globalThis.PointerEvent) => changeHeight(height + start - next.clientY);
+    const startHeight = paintedHeight(target);
+    const move = (next: globalThis.PointerEvent) => resizeFrom(startHeight, start - next.clientY);
     const end = () => {
       target.removeEventListener("pointermove", move);
       target.removeEventListener("lostpointercapture", end);
@@ -232,13 +257,13 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
   const editingIndex = panes.findIndex((pane) => pane.sessionId === editing);
 
   return (
-    <section className="thread-terminal-panel" aria-label="Thread terminals" hidden={!visible}
+    <section ref={sectionRef} className="thread-terminal-panel" aria-label="Thread terminals" hidden={!visible}
       style={{ "--integrated-terminal-height": `${height}px` } as CSSProperties}>
       <div className="integrated-terminal__resize-handle" role="separator" tabIndex={0}
-        aria-label="Resize terminal" aria-orientation="horizontal" aria-valuemin={140} aria-valuemax={560} aria-valuenow={height}
+        aria-label="Resize terminal" aria-orientation="horizontal" aria-valuemin={140} aria-valuemax={560} aria-valuenow={Math.min(height, painted ?? height)}
         onPointerDown={resize} onKeyDown={(event) => {
           if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-            event.preventDefault(); changeHeight(height + (event.key === "ArrowUp" ? 16 : -16));
+            event.preventDefault(); resizeFrom(paintedHeight(event.currentTarget), event.key === "ArrowUp" ? 16 : -16);
           }
         }} />
       <div className="thread-terminal-panel__body">

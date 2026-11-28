@@ -893,6 +893,87 @@ describe("IntegratedTerminal", () => {
     expect(xtermState.fit).toHaveBeenCalledTimes(1);
     expect(api.resizeIntegratedTerminal).toHaveBeenCalledExactlyOnceWith({ sessionId: "session-1", cols: 80, rows: 30 });
   });
+
+  it("takes one bridge crossing per output chunk however many panes are mounted", async () => {
+    // Every pane of every thread stays mounted. Each one used to register its
+    // own output listener, so one shell's chunk was copied across the
+    // context bridge once per mounted pane before all but one dropped it.
+    const bridge = new Set<(event: { sessionId: string; data: string; seq?: number }) => void>();
+    let crossings = 0;
+    const api = {
+      ...terminalApiStub(),
+      createIntegratedTerminal: vi.fn(async (request: { sessionId?: string }) => ({
+        sessionId: request.sessionId!, threadKey: "codex:thread-a", cwd: "/repo/a", shell: "/bin/zsh",
+      })),
+      onIntegratedTerminalOutput: (listener: (event: { sessionId: string; data: string; seq?: number }) => void) => {
+        bridge.add(listener);
+        return () => { bridge.delete(listener); };
+      },
+    } as unknown as DesktopApi;
+    const sessions = ["s0", "s1", "s2", "s3"];
+    const panes = (count: number) => <>{sessions.slice(0, count).map((sessionId) => (
+      <IntegratedTerminal key={sessionId} desktopApi={api} sessionId={sessionId} threadKey="codex:thread-a"
+        height={260} visible={sessionId === "s0"} onClose={() => undefined} onExit={() => undefined} />
+    ))}</>;
+    // One pane at a time, as threads gain terminals. Panes mounted in the
+    // same tick race Vitest's module mock and load the real xterm.
+    const { unmount, rerender } = render(panes(1));
+    for (let count = 1; count <= sessions.length; count++) {
+      if (count > 1) rerender(panes(count));
+      await waitFor(() => expect(xtermState.instances[count - 1]?.write).toHaveBeenCalled());
+    }
+
+    act(() => {
+      for (const listener of [...bridge]) { crossings += 1; listener({ sessionId: "s2", data: "only s2", seq: 1 }); }
+    });
+    expect(bridge.size).toBe(1);
+    expect(crossings).toBe(1);
+    const wrote = xtermState.instances.map((terminal) =>
+      terminal.write.mock.calls.some(([data]) => data === "only s2"));
+    expect(wrote).toEqual([false, false, true, false]);
+
+    unmount();
+    expect(bridge.size).toBe(0);
+  });
+
+  it("keeps its palette when an appearance write leaves the theme attributes as they were", async () => {
+    // Appearance re-sets every attribute when any appearance setting changes.
+    // Re-setting `data-color-theme` to its value still queues a mutation, and
+    // each terminal re-read its palette and repainted every row for a
+    // density or text size change.
+    const root = document.documentElement;
+    root.setAttribute("data-color-theme", "blue-dark");
+    try {
+      render(<IntegratedTerminal desktopApi={terminalApiStub()} threadKey="codex:thread-a" height={260}
+        onClose={() => undefined} onExit={() => undefined} />);
+      await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+      const options = xtermState.instances[0]!.options as { theme?: unknown };
+      let themeWrites = 0;
+      let theme = options.theme;
+      Object.defineProperty(options, "theme", {
+        configurable: true,
+        get: () => theme,
+        set: (next) => { themeWrites += 1; theme = next; },
+      });
+
+      await act(async () => {
+        root.setAttribute("data-color-theme", "blue-dark");
+        root.setAttribute("data-density", "compact");
+        await Promise.resolve();
+      });
+      expect(themeWrites).toBe(0);
+
+      await act(async () => {
+        root.setAttribute("data-color-theme", "gray-dark");
+        await Promise.resolve();
+      });
+      expect(themeWrites).toBe(1);
+    } finally {
+      // Later tests read the palette off these attributes.
+      root.removeAttribute("data-color-theme");
+      root.removeAttribute("data-density");
+    }
+  });
 });
 
 function mockAnimationFrames() {
