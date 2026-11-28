@@ -1,11 +1,11 @@
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
 import { LiveNavigationIndex } from "../app-server/live-navigation-index";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
-import { createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
+import { createDeferred, createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
 
 // Raise MBT_RUNS locally to search; CI uses five generated cases.
 const RUNS = Number(process.env.MBT_RUNS ?? 5);
@@ -238,3 +238,80 @@ describe("started thread titles", () => {
     await fc.assert(fc.asyncProperty(scenario, replay), { numRuns: RUNS });
   });
 });
+
+async function replayPointRead(startsBeforeRename: boolean) {
+  const ref = { backend: "codex" as const, threadId: "point-read" };
+  const native: AppServerThreadSummary = {
+    id: ref.threadId, source: ref.backend, title: "Shared profile name", titleSource: "explicit", linkedDirectories: [],
+  };
+  const codexClient = new MockBackendClient({ threads: [{ ...native, title: "Prompt", titleSource: "derived" }] });
+  const readStarted = createDeferred<void>();
+  const releaseRead = createDeferred<void>();
+  Object.assign(codexClient, {
+    readThreadSummary: async () => {
+      readStarted.resolve();
+      await releaseRead.promise;
+      return native;
+    },
+  });
+  const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+  const rename = () => registry.publishLocalEvent({ backend: ref.backend, notification: {
+    method: "thread/name/updated", params: { threadId: ref.threadId, threadName: "Owner rename", titleSource: "explicit" },
+  } });
+  try {
+    if (!startsBeforeRename) await rename();
+    const read = registry.refreshNavigationThread(ref, true, false);
+    await readStarted.promise;
+    if (startsBeforeRename) await rename();
+    releaseRead.resolve();
+    expect((await read)?.title).toBe(startsBeforeRename ? "Owner rename" : native.title);
+    // A listing that still sees a prompt needs the pending owner name.
+    const listed = await registry.listThreads({ backend: ref.backend });
+    expect(listed.find((row) => row.id === ref.threadId)?.title).toBe("Owner rename");
+  } finally {
+    releaseRead.resolve();
+    await registry.close();
+  }
+}
+
+async function replayAggregateSearch(unrelated: { backend: "codex" | "claude"; threadId: string }) {
+  const claudeRow: AppServerThreadSummary = {
+    id: "claude-search", source: "claude", title: "Before", titleSource: "explicit", linkedDirectories: [],
+  };
+  const codexClient = new MockBackendClient({ threads: [] });
+  const codexStarted = createDeferred<void>();
+  const releaseCodex = createDeferred<void>();
+  vi.spyOn(codexClient, "listThreads").mockImplementation(async () => {
+    codexStarted.resolve();
+    await releaseCodex.promise;
+    return [];
+  });
+  const registry = createDesktopBackendRegistry({
+    codexClient, overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => [],
+  });
+  const listClaude = vi.spyOn(registry["claudeBackend"], "listThreads").mockResolvedValue([claudeRow]);
+  try {
+    const pending = registry.listThreadSearchCandidates({});
+    await codexStarted.promise;
+    await registry.listThreads({ backend: "claude" });
+    expect(registry.getThreadInfo({ backend: "claude", threadId: claudeRow.id })?.title).toBe("Before");
+    listClaude.mockResolvedValue([{ ...claudeRow, title: "After" }]);
+    await registry.publishLocalEvent({ backend: unrelated.backend, notification: {
+      method: "thread/name/updated", params: { threadId: unrelated.threadId, threadName: "Unrelated rename" },
+    } });
+    releaseCodex.resolve();
+    expect((await pending).find((row) => row.source === "claude")?.title).toBe("After");
+  } finally {
+    releaseCodex.resolve();
+    await registry.close();
+  }
+}
+
+it("keeps a fresh Codex point title while the listing still lags", () => replayPointRead(false));
+it("keeps an owner rename over an older Codex point read", () => replayPointRead(true));
+
+it.each([
+  { backend: "codex" as const, threadId: "codex-other" },
+  { backend: "codex" as const, threadId: "claude-search" },
+  { backend: "claude" as const, threadId: "claude-other" },
+])("keeps the aggregate search title when $backend/$threadId is renamed", replayAggregateSearch);

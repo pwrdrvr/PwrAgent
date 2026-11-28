@@ -12,6 +12,7 @@ import {
  */
 export type ThreadInfoSource =
   | "lifecycle-notification"
+  | "name-notification"
   | "local-rename"
   | "provider-list"
   | "remote-navigation"
@@ -72,6 +73,7 @@ type ThreadInfoEntry = {
   identity: ThreadInfoIdentity;
   /** Highest sequence any accepted field on this entry carries. */
   lastObservedSequence: number;
+  lastNameNotificationSequence?: number;
   summary?: ThreadInfoSummaryEntry;
   /**
    * The latest row from a listing that ran directory enrichment, kept in its
@@ -231,6 +233,9 @@ export class ThreadInfoStore {
     // a fallback source from arriving without its title and downgrading a name
     // the store already holds.
     const titleIsUsable = isUsableTitle(observation.title, observation.titleSource);
+    if (observation.source === "name-notification" && titleIsUsable) {
+      entry.lastNameNotificationSequence = Math.max(entry.lastNameNotificationSequence ?? 0, observation.observationSequence);
+    }
     const changed: ThreadInfoFieldName[] = [];
 
     for (const field of TRACKED_FIELDS) {
@@ -325,14 +330,16 @@ export class ThreadInfoStore {
     return info;
   }
 
-  /** Keep a newer local title on a provider row that was already in flight. */
-  projectTitleObservedAfter(
+  /** Keep a newer local title when this thread was renamed during the read. */
+  projectTitleAfterNameNotification(
     thread: AppServerThreadSummary,
     sequence: number,
   ): AppServerThreadSummary {
-    const fields = this.entries.get(identityKey({ backend: thread.source, threadId: thread.id.trim() }))?.fields;
-    if (!fields?.title || fields.title.observationSequence <= sequence) return thread;
-    return projectKnownTitle(thread, fields.title.value, fields.titleSource?.value);
+    const entry = this.entries.get(identityKey({ backend: thread.source, threadId: thread.id.trim() }));
+    if (!entry || (entry.lastNameNotificationSequence ?? 0) <= sequence) return thread;
+    const { title, titleSource } = entry.fields;
+    if (!title || title.observationSequence <= sequence) return thread;
+    return projectKnownTitle(thread, title.value, titleSource?.value);
   }
 
   /**

@@ -4773,7 +4773,8 @@ export class DesktopBackendRegistry {
         // answer it from the store their rename wrote.
         summary = this.withObservedThreadName(
           { ...(summary ?? native), title, titleSource, updatedAt: native.updatedAt ?? summary?.updatedAt },
-          ref.backend !== "codex" ? observation : undefined,
+          observation,
+          ref.backend !== "codex",
         );
       }
     }
@@ -20976,10 +20977,13 @@ export class DesktopBackendRegistry {
     if (params.backend === "codex" && this.codexClient.readThreadSummary) {
       // Eligibility is checked before and after helper work. Read this identity
       // each time so a late operator rename still cancels generated naming.
+      const observationSequence = this.reserveThreadInfoObservation();
       return await this.withCodexThreadClient(params.threadId, async (client) => {
         const thread = await client.readThreadSummary!(params.threadId);
         const metadata = await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: params.threadId });
-        return thread.archivedAt === undefined ? this.withObservedThreadName({ ...thread, ...projectOwnerThreadTitle(thread, metadata) }) : undefined;
+        return thread.archivedAt === undefined ? this.withObservedThreadName(
+          { ...thread, ...projectOwnerThreadTitle(thread, metadata) }, observationSequence, false,
+        ) : undefined;
       }).catch(() => undefined);
     }
     if (isAcpBackendId(params.backend)) {
@@ -22955,7 +22959,7 @@ export class DesktopBackendRegistry {
           this.threadInfoStore.observe({
             identity: { backend: event.backend, threadId },
             observationSequence,
-            source: "lifecycle-notification",
+            source: "name-notification",
             title: trimmed,
             titleSource,
           });
@@ -22992,12 +22996,13 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * A Codex point read can carry the name before thread/list does. Only an
-   * authoritative read started after the event can acknowledge or supersede it.
+   * A fresh Codex point read can see a newer explicit name, but the pending
+   * observation stays until the provider listing catches up.
    */
   private withObservedThreadName(
     thread: AppServerThreadSummary,
     providerObservationSequence?: number,
+    acknowledge = true,
   ): AppServerThreadSummary {
     const key = buildThreadIdentityKey(thread.source, thread.id);
     const observed = this.observedThreadNames.get(key);
@@ -23005,7 +23010,7 @@ export class DesktopBackendRegistry {
       // A newer listing may already have acknowledged the rename. The name
       // still applies to provider reads that started before the event.
       if (providerObservationSequence !== undefined && providerObservationSequence < this.lastThreadNameEventSequence) {
-        return this.threadInfoStore.projectTitleObservedAfter(thread, providerObservationSequence);
+        return this.threadInfoStore.projectTitleAfterNameNotification(thread, providerObservationSequence);
       }
       return thread;
     }
@@ -23024,7 +23029,7 @@ export class DesktopBackendRegistry {
       // leaving listThreads and getThreadInfo permanently disagreeing. A
       // different `derived` text is the provider's prompt preview, not a
       // rename, so only the same text acknowledges a generated title.
-      this.observedThreadNames.delete(key);
+      if (acknowledge) this.observedThreadNames.delete(key);
       return thread;
     }
     return {
