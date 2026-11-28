@@ -21,7 +21,7 @@ const grants = ["turn_control", "durable_turn_requests_v1"] as const;
 type Lane = "status" | "review" | "inbound" | "outbound";
 export type Cadence = Record<Lane, number>;
 type Trace = {
-  queries: Array<{ kind: string; start: number; end: number }>;
+  queries: Array<{ kind: string; start: number; end: number; rows?: number }>;
   events: Array<{ method: string; at: number; threadId?: string; pricingRows?: number }>;
   deliveries: Array<{ lane: Lane; due: number; start: number; end: number }>;
 };
@@ -53,12 +53,12 @@ declare global {
 let active: Trace | undefined;
 const holdChecks = new Set<string>();
 
-async function timeAuditQuery<T>(kind: string, query: () => Promise<T>): Promise<T> {
+async function timeAuditQuery<T>(kind: string, query: () => Promise<T>, rows?: number): Promise<T> {
   const phase = active;
   if (!phase) return query();
   const start = now();
   try { return await query(); }
-  finally { phase.queries.push({ kind, start, end: now() }); }
+  finally { phase.queries.push({ kind, start, end: now(), rows }); }
 }
 
 export async function auditStackHold(review: { threadId: string }, read: () => Promise<string | undefined>) {
@@ -110,6 +110,14 @@ export function installActivePaintAudit({ registry, service }: OwnerServices) {
     timeAuditQuery("navigation:" + request.query.kind, () => readNavigation(request, options));
   const readThread = registry.readThread.bind(registry);
   registry.readThread = (request) => timeAuditQuery("thread:" + request.threadId, () => readThread(request));
+  const resolveThread = registry.resolveThread.bind(registry);
+  registry.resolveThread = (request) => timeAuditQuery("resolve-thread", () => resolveThread(request));
+  const environments = registry as unknown as {
+    withThreadEnvironmentOptions(rows: unknown[]): Promise<unknown[]>;
+  };
+  const readEnvironments = environments.withThreadEnvironmentOptions.bind(environments);
+  environments.withThreadEnvironmentOptions = (rows) =>
+    timeAuditQuery("environment-options", () => readEnvironments(rows), rows.length);
   let forbiddenFixes = 0;
   let countedReviews = 0;
   let readReviewCalls = 0;
