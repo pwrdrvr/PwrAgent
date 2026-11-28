@@ -14,8 +14,8 @@ Read the [property, model and oracle testing policy](../../../docs/property-mode
 3. **Generate operations the system can produce.** Replay starts, renames, provider echoes, listing updates, failing point reads, lifecycle redeliveries, and reads. Deliberately include possible stale and duplicate events. Use a replay guard such as `continue` for an impossible operation, such as generating a title after an explicit rename. Put provider behavior in the generated input so it survives shrinking. For example, generate whether the listing can lag behind the point read.
 4. **Take the oracle from the promise.** Once the owner names a thread, every settled read should show that name. Compare the live index, listing, cache, and thread info as one labeled object so the diff identifies the first layer that diverges. When the design allows a transient gap, loop on the index's own `isCurrent` check with a bounded number of attempts. Use readiness signals or event-loop yields without wall-clock sleeps.
 5. **Document permitted outcomes and scope.** Before the first name, allow the placeholders the design permits and explain why in the assertion. A different explicit provider name can win when another process renames the thread. For a property about the local rename, restrict the generator to exclude competing explicit renames and document that scope. Preserve the assertion for every generated case within it.
-6. **Search wide locally and keep CI cheap.** Try `MBT_RUNS=200` or `2000` locally. Use about five generated runs by default for a cross-layer model that fits the policy. Pin each shrunk counterexample in fast-check's `examples`, with a comment stating what it caught. Keep the regressions as named examples under the repository policy, including when the generated property stays local.
-7. **Verify each pinned case against broken code.** In a scratch checkout with the fix committed, save the exact fixed source, then load the pre-fix source from `git show <base>:<path>` (write it to a temporary file first), or remove one fix at a time. Confirm that the mutation changed the source with `git diff --stat -- <path>`. Run each named case in isolation and verify the expected assertion fails. Restore the source and verify it with `cmp`, then confirm the cases pass. Keep `numRuns` positive when replaying fast-check examples. Zero runs skip them too.
+6. **Search wide locally and keep CI cheap.** Try `MBT_RUNS=200` or `2000` locally. Use about five generated runs by default for a cross-layer model that fits the policy. Pin each shrunk counterexample as a named Vitest test that calls the same replay helper. Comment on what each case caught and keep the named tests even when the generated property stays local. Reserve the property's `numRuns` for generated cases.
+7. **Verify each pinned case against broken code.** In a scratch checkout with the fix committed, save the exact fixed source, then load the pre-fix source from `git show <base>:<path>` (write it to a temporary file first), or remove one fix at a time. Confirm that the mutation changed the source with `git diff --stat -- <path>`. Run each named case in isolation and verify the expected assertion fails. Restore the source and verify it with `cmp`, then confirm the cases pass.
 8. **Report the evidence.** List the pinned cases, the broken variants that each case caught, and the post-fix results. In the PR, identify modeled provider behavior that lacks a protocol capture. #4633 observed the sidebar symptom and modeled listing lag. Use a capture to answer questions about actual wire behavior. [Desktop capture rules](../../../apps/desktop/AGENTS.md#capturing-agent-protocol-traffic)
 
 ## Test skeleton
@@ -93,7 +93,6 @@ it("keeps a rename visible while the listing lags", () => replay(laggingListing)
 it("agrees across settled read layers", async () => {
   await fc.assert(fc.asyncProperty(scenario, replay), {
     numRuns: Number(process.env.MBT_RUNS ?? 5),
-    examples: [[laggingListing]],
   });
 });
 ```
@@ -101,6 +100,7 @@ it("agrees across settled read layers", async () => {
 ## Gotchas
 
 - In fast-check 4, `maxLength` only clamps the generated length. Use `size: "max"` or a suitable `minLength` when long sequences matter.
+- Fast-check 4.10.2 counts `examples` toward `numRuns`. If you use `examples` for a local replay, set `numRuns` at least as high as the number of examples. Zero runs skip them all.
 - With `fc.scheduler`, a scheduled function awaiting another scheduled function deadlocks `waitFor`. Schedule leaf steps and drain them with `waitOne`.
 - For layout and overflow, assert that the content is visible as well as checking its bounds. Clipped-away content can pass an overflow check.
 - CI lanes have run about 2.3× slower than a fast local Mac. Stay within the policy's file budget and well under the default 5 s timeout. Lower the run count when needed.
