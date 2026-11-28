@@ -114,9 +114,11 @@ function queuedNote(baseRef: string | undefined, autoMerge: boolean): string {
 
 const QUEUE_NEXT_STEP = "Nothing has merged yet. watch_thread_pull_request with notifyOn [\"merged\"] wakes this thread when the queue lands the PR, or if the queue removes it.";
 
-function confirmedGithubStack(repository: ForgeRepository, value: Payload, requested: readonly number[]) {
-  const number = num(value.number);
-  if (value.open !== true || number === undefined || !Number.isSafeInteger(number) || number < 1) return undefined;
+function confirmedGithubStack(repository: ForgeRepository, value: unknown, requested: readonly number[]) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { open, number: rawNumber } = value as Payload;
+  const number = num(rawNumber);
+  if (open !== true || number === undefined || !Number.isSafeInteger(number) || number < 1) return undefined;
   const stack = parseGithubForgeStack(repository, number, value);
   if (!stack || stack.layers.length !== requested.length) return undefined;
   const pullRequests = stack.layers.map((layer) => layer.number);
@@ -185,29 +187,37 @@ export class GithubPrToolClient {
 
     if (operation === "create_pull_request_stack") {
       const requested = args.pullRequests!;
-      let response: unknown;
+      const verifyBeforeRetry = "GitHub did not confirm the requested stack membership. Use list_stacks to verify before retrying.";
+      let failure: ForgeReadError | undefined;
+      let created: boolean | null = true;
       try {
-        response = await call("POST", "/stacks", { pull_requests: requested });
+        const response = await call("POST", "/stacks", { pull_requests: requested });
+        const stack = confirmedGithubStack(r, response, requested);
+        if (stack) return done({ created: true, stack });
       } catch (error) {
         if (!(error instanceof ForgeReadError)) throw error;
         if (error.code === "forbidden" || error.code === "unauthenticated") {
           throw new ForgeReadError(error.code, `${error.message} GitHub stack registration requires Pull requests write access.`);
         }
-        if (error.code !== "rejected" && error.code !== "conflict") throw error;
-        // A previous call may have succeeded before its response reached the caller.
-        const existing = await call("GET", `/stacks?pull_request=${requested[0]}`)
-          .then(items).catch(() => []);
-        ctx.signal?.throwIfAborted();
-        for (const candidate of existing) {
-          const stack = confirmedGithubStack(r, candidate, requested);
-          if (stack) return done({ created: false, stack });
+        if (error.code === "rejected" || error.code === "conflict") {
+          created = false;
+          failure = error;
+        } else if (["invalid_response", "response_too_large", "provider_error"].includes(error.code)) {
+          created = null;
+          failure = new ForgeReadError(error.code, `${error.message} ${verifyBeforeRetry}`);
+        } else {
+          throw error;
         }
-        throw error;
       }
-      const stack = response && typeof response === "object" && !Array.isArray(response)
-        ? confirmedGithubStack(r, response as Payload, requested) : undefined;
-      if (!stack) throw new ForgeReadError("invalid_response", "GitHub did not confirm the requested stack membership. Use list_stacks to verify before retrying.");
-      return done({ created: true, stack });
+      // A replay or an incomplete receipt can leave the requested stack on GitHub.
+      const existing = await call("GET", `/stacks?pull_request=${requested[0]}`)
+        .then(items).catch(() => []);
+      ctx.signal?.throwIfAborted();
+      for (const candidate of existing) {
+        const stack = confirmedGithubStack(r, candidate, requested);
+        if (stack) return done({ created, stack });
+      }
+      throw failure ?? new ForgeReadError("invalid_response", verifyBeforeRetry);
     }
 
     if (operation === "rerun_failed_ci_jobs") {

@@ -55,6 +55,55 @@ const ctx = (extra: Partial<ForgePrToolContext> = {}): ForgePrToolContext => ({
   repository: repo, branch: "topic", directories: [], attached: [], privateRoots: [], defaultMergeMethod: () => "squash", ...extra,
 });
 
+type StackReceipt = "complete" | "empty" | "server_error" | "disconnect";
+type StackAttempt = { chain: "pair" | "longer"; receipt: StackReceipt };
+
+async function replayStackRegistration(numbers: number[], attempts: readonly StackAttempt[]) {
+  const chains = { pair: numbers.slice(0, 2), longer: numbers };
+  // The fixture commits one of these overlapping chains at the forge, before
+  // returning any response. A second write that overlaps it is rejected.
+  let registered: number[] | undefined;
+  const { calls, client } = harness((call) => {
+    if (call.method === "GET") {
+      expect(new URL(call.url).searchParams.get("pull_request")).toBe(String(numbers[0]));
+      return json(registered ? [nativeStack(registered)] : []);
+    }
+    expect(call.method).toBe("POST");
+    expect(call.body).toEqual({ pull_requests: chains[attempt.chain] });
+    if (registered) return json({ message: "PRs already stacked" }, 422);
+    registered = chains[attempt.chain];
+    if (attempt.receipt === "empty") return new Response(null, { status: 201 });
+    if (attempt.receipt === "server_error") return json({ message: "GitHub could not deliver the receipt" }, 500);
+    if (attempt.receipt === "disconnect") throw new TypeError("connection closed before response");
+    return json(nativeStack(registered), 201);
+  });
+  const definition = buildForgePrToolDefinitions((operation, args) => client.execute(operation, args, ctx()))
+    .find((tool) => tool.name === "create_pull_request_stack")!;
+  const winner = attempts[0]!;
+  let attempt: StackAttempt;
+  for (const [index, step] of attempts.entries()) {
+    attempt = step;
+    const before = calls.length;
+    const result = await definition.dispatch({ pullRequests: chains[step.chain] }, { backend: "codex", threadId: "t", transport: "codex_dynamic_tool" });
+    const context = { index, step, calls: calls.slice(before).map((call) => call.method), result };
+    if (winner.receipt === "disconnect") {
+      // The shared transport's cooldown stops all subsequent HTTP calls.
+      expect(context).toMatchObject(index === 0 ? { calls: ["POST"], result: { ok: false, code: "provider_error" } }
+        : { calls: [], result: { ok: false, code: "rate_limited" } });
+    } else if (step.chain !== winner.chain) {
+      expect(context).toMatchObject({ calls: ["POST", "GET"], result: { ok: false, code: "rejected" } });
+    } else {
+      const needsReadback = index !== 0 || step.receipt !== "complete";
+      const created = index !== 0 ? false : step.receipt === "server_error" ? null : true;
+      expect(context).toMatchObject({
+        calls: needsReadback ? ["POST", "GET"] : ["POST"],
+        result: { ok: true, data: { created, providerRequests: needsReadback ? 2 : 1, stack: { number: 42, pullRequests: chains[step.chain] } } },
+      });
+    }
+  }
+  expect(registered).toEqual(chains[winner.chain]);
+}
+
 describe("GitHub tool contract", () => {
   it("rejects unknown fields, missing requirements and cross-repository search", () => {
     expect(() => validateForgePrToolArgs("create_pull_request", { title: "x", head: "topic", threadId: "other" })).toThrow(/Unknown argument/);
@@ -191,6 +240,54 @@ describe("GitHub tool client", () => {
     }
   });
 
+  it("reads membership after GitHub creates the stack with an empty receipt", () =>
+    replayStackRegistration([4658, 4665, 4680], [{ chain: "pair", receipt: "empty" }]));
+
+  it("confirms membership after a server error without claiming which write created it", () =>
+    replayStackRegistration([1, 2, 3], [
+      { chain: "pair", receipt: "server_error" },
+      { chain: "pair", receipt: "complete" },
+      { chain: "longer", receipt: "complete" },
+    ]));
+
+  it("matches GitHub membership across failed receipts, repeat calls and overlapping chains", async () => {
+    const step = fc.record({
+      chain: fc.constantFrom("pair", "longer"),
+      receipt: fc.constantFrom("complete", "empty", "server_error", "disconnect"),
+    });
+    await fc.assert(fc.asyncProperty(
+      fc.uniqueArray(fc.integer({ min: 1, max: 10000 }), { minLength: 3, maxLength: 3 }),
+      fc.array(step, { minLength: 1, maxLength: 8, size: "max" }),
+      replayStackRegistration,
+    ), { numRuns: Number(process.env.MBT_RUNS ?? 5) });
+  });
+
+  it.each([false, true])("settles racing registrations while the winning receipt is pending (same chain %s)", async (sameChain) => {
+    const firstCommitted = Promise.withResolvers<void>();
+    const firstReceipt = Promise.withResolvers<Response>();
+    const pair = [4658, 4665];
+    const { calls, client } = harness((call) => {
+      if (call.method === "GET") return json([nativeStack(pair)]);
+      if (calls.length > 1) return json({ message: "PRs already stacked" }, 422);
+      firstCommitted.resolve();
+      return firstReceipt.promise;
+    });
+    const create = (pullRequests: number[]) => client.execute("create_pull_request_stack", { pullRequests }, ctx());
+    const winner = create(pair);
+    try {
+      await firstCommitted.promise;
+      if (sameChain) {
+        await expect(create(pair)).resolves.toMatchObject({ created: false, stack: { number: 42, pullRequests: pair } });
+      } else {
+        await expect(create([...pair, 4680])).rejects.toMatchObject({ code: "rejected" });
+      }
+    } finally {
+      firstReceipt.resolve(new Response(null, { status: 201 }));
+    }
+    await expect(winner).resolves.toMatchObject({ created: true, stack: { number: 42, pullRequests: pair } });
+    expect(calls.map((call) => call.method)).toEqual(["POST", "POST", "GET", "GET"]);
+  });
+
   it("confirms an already registered chain after GitHub rejects a repeat", async () => {
     const { calls, client } = harness((call) => call.method === "POST"
       ? json({ message: "PRs already stacked" }, 422)
@@ -218,9 +315,11 @@ describe("GitHub tool client", () => {
   });
 
   it("requires GitHub to confirm the ordered members before reporting creation", async () => {
-    const { client } = harness(() => json(nativeStack([4665, 4658]), 201));
+    const reversed = nativeStack([4665, 4658]);
+    const { calls, client } = harness((call) => call.method === "POST" ? json(reversed, 201) : json([reversed]));
     await expect(client.execute("create_pull_request_stack", { pullRequests: [4658, 4665] }, ctx()))
       .rejects.toMatchObject({ code: "invalid_response" });
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
   });
 
   it.each(["github.com", "github.example.test"])("requests only failed jobs through %s and accepts an empty 201 response", async (host) => {

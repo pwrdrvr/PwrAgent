@@ -184,9 +184,10 @@ Writes:
   (`attachedToThread`).
 - `create_pull_request_stack`: register existing open GitHub pull requests in
   one repository. Supply `pullRequests` in order from the trunk-facing PR to
-  the top. The tool returns the confirmed stack number and members. This write
-  follows the **Stack publishing** policy. Merging a layer on GitHub can also
-  merge the open layers below it.
+  the top. The tool returns the confirmed stack number and members. If GitHub
+  confirms membership after an ambiguous write, `created` is `null`. This
+  write follows the **Stack publishing** policy. Merging a layer on GitHub can
+  also merge the open layers below it.
 - `update_pull_request`: title, body, base, open or closed, draft or ready,
   labels and reviewers.
 - `add_issue_comment`, `reply_to_review_comment` (by `reviewThreadId` or a
