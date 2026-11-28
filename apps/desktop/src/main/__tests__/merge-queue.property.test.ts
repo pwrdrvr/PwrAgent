@@ -472,7 +472,10 @@ describe("merge_pull_request and merge queues", () => {
         .resolves.toBeDefined();
       expect(assertCanMerge.mock.calls.flat()).toEqual([oldUrl, currentUrl]);
       expect(requests).toEqual(["/repos/fixture/old/pulls/7", "/repos/fixture/project/pulls/7", "/graphql"]);
-      expect(ran).toEqual([["pr", "view", oldUrl, "--json", "url", "--jq", ".url"], ["pr", "merge", currentUrl, "--squash"]]);
+      expect(ran).toEqual([
+        ["pr", "view", oldUrl, "--json", "url", "--jq", ".url"],
+        ["pr", "merge", currentUrl, "--squash", "--match-head-commit", head],
+      ]);
     } finally { uninstall(); }
   });
 

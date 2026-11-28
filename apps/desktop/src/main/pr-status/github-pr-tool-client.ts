@@ -487,6 +487,10 @@ export class GithubPrToolClient {
         ctx.assertCanMerge?.(r, args.number!);
         const checked = await checkGithubStackMerge(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route), graphql);
         const checkedBase = checked.base;
+        const expectedHead = args.expectedHeadSha ?? checked.headSha;
+        if (checked.headSha && expectedHead !== checked.headSha) {
+          throw new ForgeReadError("head_changed", `The pull request's head is no longer ${expectedHead}. Read it again before merging.`);
+        }
         // Read the queue only when it can matter. A queue read that fails
         // never blocks a merge: GitHub itself refuses a direct merge past one.
         const readGate = async () => {
@@ -501,8 +505,8 @@ export class GithubPrToolClient {
         const enqueue = async (gate: GithubMergeQueueGate) => {
           // Never a direct merge here, with or without bypass rights.
           if (!gate.open) throw new ForgeReadError("invalid_arguments", `Pull request #${args.number} is not open.`);
-          if (gate.headSha && args.expectedHeadSha && gate.headSha !== args.expectedHeadSha) {
-            throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
+          if (gate.headSha && expectedHead && gate.headSha !== expectedHead) {
+            throw new ForgeReadError("head_changed", `The pull request's head is no longer ${expectedHead}. Read it again before merging.`);
           }
           const url = `${repositoryUrl(r)}/pull/${args.number}`;
           const queued = (status: PrMergeQueueStatus | undefined, extra: Record<string, unknown>) => writeResult({
@@ -516,7 +520,7 @@ export class GithubPrToolClient {
             ...extra,
             url, nextStep: QUEUE_NEXT_STEP,
           });
-          const result = await runGithubQueueMerge(gate, graphql, args.expectedHeadSha);
+          const result = await runGithubQueueMerge(gate, graphql, expectedHead);
           if (result.action === "already_queued") {
             return queued(result.status, { alreadyQueued: true, note: `The PR is already in the merge queue (${describeMergeQueueState(result.status) ?? "queued"}). Nothing was changed.` });
           }
@@ -534,7 +538,7 @@ export class GithubPrToolClient {
           // The stack, with its members when they were read, for the agent to account for.
           const githubStack = stack ? { githubStack: stack } : {};
           const outcome = await runGithubAsyncMerge({
-            number: args.number!, method, ...(args.expectedHeadSha ? { sha: args.expectedHeadSha } : {}),
+            number: args.number!, method, ...(expectedHead ? { sha: expectedHead } : {}),
             request: async (verb, route, body) => await call(verb, route, body),
             isAlreadyRequested: (error) => error instanceof ForgeReadError && error.code === "conflict",
             // Polls share the forge budget: the agent can watch the PR past this.
@@ -542,7 +546,7 @@ export class GithubPrToolClient {
           }).catch((error: unknown) => {
             // A conflict that is no merge in progress: the head moved past expectedHeadSha.
             if (error instanceof ForgeReadError && error.code === "conflict") {
-              throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
+              throw new ForgeReadError("head_changed", `The pull request's head is no longer ${expectedHead}. Read it again before merging.`);
             }
             throw error;
           });
@@ -571,7 +575,7 @@ export class GithubPrToolClient {
         }
         let result: Payload;
         try {
-          result = object(await call("PUT", `/pulls/${args.number}/merge`, { merge_method: method, sha: args.expectedHeadSha, ...(args.commitTitle ? { commit_title: args.commitTitle } : {}), ...(args.commitMessage !== undefined ? { commit_message: args.commitMessage } : {}) }));
+          result = object(await call("PUT", `/pulls/${args.number}/merge`, { merge_method: method, sha: expectedHead, ...(args.commitTitle ? { commit_title: args.commitTitle } : {}), ...(args.commitMessage !== undefined ? { commit_message: args.commitMessage } : {}) }));
         } catch (error) {
           // A stack GitHub formed after the order check read the pull request.
           if (error instanceof ForgeReadError && GITHUB_ASYNC_MERGE_REQUIRED.test(error.message)) {
@@ -580,9 +584,12 @@ export class GithubPrToolClient {
             const recheck = await checkGithubStackMerge(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route), graphql,
               undefined, { readLayers: true });
             assertStackMergeBaseUnchanged(checkedBase, recheck.base);
+            if (expectedHead && recheck.headSha !== expectedHead) {
+              throw new ForgeReadError("head_changed", `The pull request's head is no longer ${expectedHead}. Read it again before merging.`);
+            }
             return await mergeAsynchronously(recheck.nativeStack);
           }
-          if (error instanceof ForgeReadError && error.code === "conflict") throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
+          if (error instanceof ForgeReadError && error.code === "conflict") throw new ForgeReadError("head_changed", `The pull request's head is no longer ${expectedHead}. Read it again before merging.`);
           // GitHub refused because the branch merges through a queue: learn
           // the repository and queue the PR instead.
           if (error instanceof ForgeReadError && mentionsMergeQueue(error.message)) {

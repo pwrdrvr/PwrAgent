@@ -66,7 +66,9 @@ async function expectOperatorMergeWithEmptySharedBudget(number: number, saturate
     await expect(merge).resolves.toMatchObject({ mergedUrl: pullRequest });
     await Promise.all(holds);
     expect(requests).toEqual([...heldPaths, `/${path}`, "/graphql"]);
-    expect(runGhCommand).toHaveBeenCalledExactlyOnceWith("/fixture/gh", ["pr", "merge", pullRequest, "--squash"], { timeout: 60_000 });
+    expect(runGhCommand).toHaveBeenCalledExactlyOnceWith(
+      "/fixture/gh", ["pr", "merge", pullRequest, "--squash", "--match-head-commit", headSha], { timeout: 60_000 },
+    );
   } finally {
     uninstall();
   }

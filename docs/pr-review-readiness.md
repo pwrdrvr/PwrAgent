@@ -164,8 +164,8 @@ separate poll or repository scan for merge offers.
 - **Stack evidence.** After CI and review coverage qualify the head, an
   offer checks stack order through the same GitHub guard as merge execution.
   An ordinary uncatalogued PR costs a PR read and one filtered timeline
-  read. The timeline is limited to 16 retarget events, four branch lookups,
-  and eight commit comparisons. The offer leaves four shared request tokens
+  read. The evidence is limited to 16 retarget events, 16 head rewrites,
+  four branch lookups, and eight commit comparisons. The offer leaves four shared request tokens
   available to the poller and foreground tools. A confirmed hold withdraws a merge offer.
   A transient read failure defers a new offer. A same-head card revalidates
   before executing, and a card for an older head is withdrawn.
@@ -173,8 +173,15 @@ separate poll or repository scan for merge offers.
   PwrAgent matches a same-repository PR whose lifetime overlaps that base
   window and checks commit ancestry before indexing its number. A fork or
   a PR that opened after the retarget cannot become the prior parent.
+  For a standalone PR retargeted to trunk, GitHub's force-push timeline
+  can show that the PR was rebuilt without its former parent's commits.
+  The guard compares the current head, the former parent's head, and
+  the relevant pre-rewrite heads against the same trunk commit. Each
+  comparison must return its complete range within one page of 64 commits.
+  A retarget alone cannot clear a plausible unmerged parent. The merge
+  uses the head checked by preflight.
   Truncated or inconsistent history, and a plausible parent whose ancestry
-  cannot be verified, hold the merge. On older GitHub Enterprise schemas,
+  cannot be resolved, hold the merge. On older GitHub Enterprise schemas,
   a bounded REST timeline can establish there was no retarget. It cannot
   establish old and new refs for a retarget, so that case holds the merge
   unless a local catalog establishes the ordering.
