@@ -1301,6 +1301,14 @@ export class DesktopSettingsService {
           false,
         ),
         tokenMiserBoundedCommands: this.resolveConfigBoolean(config.experimental?.tokenMiserBoundedCommands, false),
+        tokenMiserGate: {
+          value: config.experimental?.tokenMiserGate ?? "none",
+          source: config.experimental?.tokenMiserGate === undefined ? "default" : "config",
+        },
+        tokenMiserSummarizer: {
+          value: config.experimental?.tokenMiserSummarizer ?? "off",
+          source: config.experimental?.tokenMiserSummarizer === undefined ? "default" : "config",
+        },
         tokenMiserBoundedHelper: {
           value: config.experimental?.tokenMiserBoundedHelper ?? "deterministic",
           source: config.experimental?.tokenMiserBoundedHelper === undefined ? "default" : "config",
@@ -2398,6 +2406,14 @@ export class DesktopSettingsService {
         return resolved;
       },
     });
+  }
+
+  resolveTokenMiserGate() {
+    return this.configStore.read("experimental").tokenMiserGate ?? "none";
+  }
+
+  resolveTokenMiserSummarizer() {
+    return this.configStore.read("experimental").tokenMiserSummarizer ?? "off";
   }
 
   resolveTokenMiserBoundedHelper() {

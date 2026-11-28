@@ -246,6 +246,8 @@ export function createProviderRuntimeClient(
     if (generation !== startedAtGeneration) throw new Error("Codex runtime pool closed during routing.");
     const provider = method === "forkThread" ? requested ?? owner : owner ?? requested;
     const settings = options.resolveProviders().find(entry => entry.id === provider);
+    const exactProviderModel = method === "generateStructuredObject" && params?.requireExactModel === true && requested;
+    if (exactProviderModel && !settings) return { status: "unavailable", reason: "configured_helper_provider_unavailable" };
     if (restricted) {
       assertOutpostCodexProvider(provider);
       if (!settings) throw new Error(`Codex model provider ${provider} is no longer configured on this Outpost.`);
@@ -257,7 +259,8 @@ export function createProviderRuntimeClient(
     }
     // Persisted history remains manageable when the inference server is offline.
     const client = provider && PERSISTED_OPERATIONS.has(method) && !runtimes.has(provider) ? primary : runtime(provider, selectedModel);
-    const result = await invoke(client, method, args);
+    // The qualifier selects the runtime. Its own model catalog contains upstream IDs.
+    const result = await invoke(client, method, exactProviderModel ? [{ ...params, model: selectedModel }, ...args.slice(1)] : args);
     observe(result, client === primary ? undefined : provider);
     return result;
   };

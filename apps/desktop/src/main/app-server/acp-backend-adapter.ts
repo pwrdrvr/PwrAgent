@@ -3047,6 +3047,7 @@ export class AcpBackendAdapter {
     try {
       const agent = await this.resolveInstalledAgent(backend);
       if (this.closed) throw new Error("ACP backend adapter is closed");
+      if (request.allowPrompt?.() === false) throw new Error("The helper provider was disabled.");
       if (!agent.launchDescriptor) {
         throw new Error(`ACP backend ${backend} has no launch descriptor`);
       }

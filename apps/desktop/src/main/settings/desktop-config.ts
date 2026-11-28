@@ -1,3 +1,4 @@
+import { BOUNDED_COMMAND_HELPER_MODES, TOKEN_MISER_GATE_PROVIDERS, TOKEN_MISER_SUMMARIZER_MODES } from "@pwragent/shared/contracts/settings";
 import {
   codexSkillProfileNameError,
   type CodexSkillProfile,
@@ -30,6 +31,7 @@ import {
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { isThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
 import {
+  CAPTURE_HELPER_IDS,
   normalizeTaskMonitorModelChoice,
   type DesktopTaskMonitorModelChoice,
 } from "@pwragent/shared/helper-models";
@@ -90,6 +92,8 @@ import type {
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   BoundedCommandHelperMode,
+  TokenMiserGateProvider,
+  TokenMiserSummarizerMode,
   DesktopSettingsConfigPatch,
   DesktopSpendAlertPolicy,
   DesktopTextSize,
@@ -238,6 +242,8 @@ export type DesktopSettingsConfig = {
     tokenMiserDefaultEnabled?: boolean;
     tokenMiserBoundedCommands?: boolean;
     tokenMiserBoundedHelper?: BoundedCommandHelperMode;
+    tokenMiserGate?: TokenMiserGateProvider;
+    tokenMiserSummarizer?: TokenMiserSummarizerMode;
     codexToolDiscovery?: boolean;
     codexAgentToolsMcp?: boolean;
     researchEnabled?: boolean;
@@ -737,7 +743,12 @@ export type LegacySettingRetirement = Readonly<{
   migrate?: (tables: TomlTables) => TomlEdit[];
 }>;
 
+const LEGACY_CAPTURE_HELPER = ["experimental", "token_miser_bounded_helper"] as const;
+const LEGACY_CAPTURE_HELPER_LAST_VERSION = "1.5.2";
+const LEGACY_CAPTURE_HELPER_SHAPE = "excerpt-selector";
 export const LEGACY_SETTINGS_RETIREMENTS: readonly LegacySettingRetirement[] = [
+  // The retired selector never authorized either broader inference policy. Both default off.
+  { legacy: LEGACY_CAPTURE_HELPER, keptThroughSeries: "1.6" },
   { ...LEGACY_EXPERIMENTAL_MARKDOWN_KEYS.incrementalRendering, keptThroughSeries: "1.5" },
   { ...LEGACY_EXPERIMENTAL_MARKDOWN_KEYS.mathRendering, keptThroughSeries: "1.5" },
   {
@@ -828,6 +839,37 @@ export type DesktopSettingsPatchWriteResult = Readonly<{
   changed: boolean;
   text: string;
 }>;
+
+function appendCaptureInferenceEdits(
+  edits: TomlEdit[],
+  experimental: DesktopSettingsConfigPatch["experimental"],
+  current: TomlTables[string] | undefined,
+): void {
+  if (experimental?.tokenMiserGate === undefined && experimental?.tokenMiserSummarizer === undefined
+    && experimental?.tokenMiserBoundedHelper === undefined) return;
+
+  const legacy = readBoundedCommandHelper(experimental.tokenMiserBoundedHelper);
+  if (experimental.tokenMiserBoundedHelper !== undefined && !legacy) throw new Error("Unknown bounded command helper.");
+  const gate = readCaptureGate(experimental.tokenMiserGate ?? current?.token_miser_gate) ?? "none";
+  const summarizer = readCaptureSummarizer(experimental.tokenMiserSummarizer ?? current?.token_miser_summarizer) ?? "off";
+  if ((experimental.tokenMiserGate !== undefined && gate !== experimental.tokenMiserGate)
+    || (experimental.tokenMiserSummarizer !== undefined && summarizer !== experimental.tokenMiserSummarizer)) {
+    throw new Error("Unknown Token Miser capture setting.");
+  }
+  edits.push(
+    { op: "set", path: ["experimental", "token_miser_gate"], value: gate },
+    { op: "set", path: ["experimental", "token_miser_summarizer"], value: summarizer },
+  );
+  if (readBoundedCommandHelper(current?.token_miser_bounded_helper)) {
+    const projection = gate !== "none" ? gate : summarizer === "configured" ? "configured" : "deterministic";
+    const legacyOnly = experimental.tokenMiserGate === undefined && experimental.tokenMiserSummarizer === undefined;
+    edits.push(
+      { op: "set", path: LEGACY_CAPTURE_HELPER, value: legacyOnly && legacy ? legacy : projection },
+      { op: "ensureCommentBefore", path: LEGACY_CAPTURE_HELPER, marker: LEGACY_SETTINGS_MARKER,
+        comment: `# ${LEGACY_SETTINGS_MARKER} key=${LEGACY_CAPTURE_HELPER[1]} shape=${LEGACY_CAPTURE_HELPER_SHAPE} used_through=${LEGACY_CAPTURE_HELPER_LAST_VERSION} kept_for_older_clients` },
+    );
+  }
+}
 
 export function desktopSettingsPatchToEdits(
   patch: DesktopSettingsConfigPatch,
@@ -1167,11 +1209,7 @@ export function desktopSettingsPatchToEdits(
   if (patch.experimental?.tokenMiserBoundedCommands !== undefined) {
     set(["experimental", "token_miser_bounded_commands"], patch.experimental.tokenMiserBoundedCommands);
   }
-  if (patch.experimental?.tokenMiserBoundedHelper !== undefined) {
-    const helper = readBoundedCommandHelper(patch.experimental.tokenMiserBoundedHelper);
-    if (!helper) throw new Error("Unknown bounded command helper.");
-    set(["experimental", "token_miser_bounded_helper"], helper);
-  }
+  appendCaptureInferenceEdits(edits, patch.experimental, currentTables.experimental);
   if (patch.experimental?.tokenMiserFocusedSummariesEnabled !== undefined) {
     set(
       ["experimental", "token_miser_focused_summaries_enabled"],
@@ -2740,6 +2778,10 @@ function normalizeDesktopConfig(
       tokenMiserPollingReviewsEnabled:
         readBoolean(experimental?.token_miser_polling_reviews_enabled),
       tokenMiserBoundedHelper: readBoundedCommandHelper(experimental?.token_miser_bounded_helper),
+      tokenMiserGate: readCaptureGate(experimental?.token_miser_gate)
+        ?? (readBoundedCommandHelper(experimental?.token_miser_bounded_helper) ? "none" : undefined),
+      tokenMiserSummarizer: readCaptureSummarizer(experimental?.token_miser_summarizer)
+        ?? (readBoundedCommandHelper(experimental?.token_miser_bounded_helper) ? "off" : undefined),
       tokenMiserBoundedCommands: readBoolean(experimental?.token_miser_bounded_commands),
       tokenMiserDefaultEnabled:
         readBoolean(experimental?.token_miser_default_enabled),
@@ -3653,8 +3695,16 @@ function isDesktopChatReplyComposer(
   );
 }
 
+function readCaptureGate(value: unknown) {
+  return TOKEN_MISER_GATE_PROVIDERS.find(mode => mode === value);
+}
+
+function readCaptureSummarizer(value: unknown) {
+  return TOKEN_MISER_SUMMARIZER_MODES.find(mode => mode === value);
+}
+
 function readBoundedCommandHelper(value: unknown): BoundedCommandHelperMode | undefined {
-  return value === "deterministic" || value === "decision" || value === "codex" ? value : undefined;
+  return BOUNDED_COMMAND_HELPER_MODES.find((mode) => mode === value);
 }
 
 function readToolUpdateMode(
@@ -4279,6 +4329,7 @@ export function readGithubEnterpriseHostsSetting(raw: TomlScalar | undefined): D
 }
 
 function normalizeHelperModelChoice(
+  helper: string,
   value: {
     backend?: unknown;
     model?: unknown;
@@ -4290,7 +4341,9 @@ function normalizeHelperModelChoice(
   const backend = trim(value.backend);
   const model = trim(value.model);
   const reasoningEffort = trim(value.reasoningEffort);
-  if (!model && !reasoningEffort) return undefined;
+  // A capture backend without a model is an explicit, incomplete choice.
+  // Keep it so the resolver cannot substitute the global Codex model.
+  if (!model && !reasoningEffort && !(backend && Object.values(CAPTURE_HELPER_IDS).some(id => id === helper))) return undefined;
   return {
     ...(backend ? { backend } : {}),
     ...(model ? { model } : {}),
@@ -4563,7 +4616,7 @@ function normalizeHelperModelSettings(
   for (const [helper, choice] of Object.entries(value.helpers)) {
     const id = helper.trim();
     if (id === RETIRED_DIFF_CONDENSATION_HELPER_ID) continue;
-    const normalized = id ? normalizeHelperModelChoice(choice) : undefined;
+    const normalized = id ? normalizeHelperModelChoice(id, choice) : undefined;
     if (normalized) helpers[id] = normalized;
   }
   return {
@@ -4593,7 +4646,7 @@ function readHelperModelSettings(
       }
       const helper = typeof item.helper === "string" ? item.helper.trim() : "";
       if (!helper || helper === RETIRED_DIFF_CONDENSATION_HELPER_ID || helpers[helper]) continue;
-      const choice = normalizeHelperModelChoice({
+      const choice = normalizeHelperModelChoice(helper, {
         backend: item.backend,
         model: item.model,
         reasoningEffort: item.reasoning_effort,

@@ -8,7 +8,14 @@ import type { BackendModelOption } from "./contracts/backend";
  *
  * Ids are persisted in the profile `config.toml`; never rename one.
  */
+export const CAPTURE_HELPER_IDS = {
+  codex: "token_miser_capture_codex",
+  claude: "token_miser_capture_claude",
+  "acp:antigravity": "token_miser_capture_antigravity",
+} as const;
+
 export const HELPER_MODEL_IDS = [
+  ...Object.values(CAPTURE_HELPER_IDS),
   "thread_titles",
   "task_monitors",
   "token_miser_evaluation",
@@ -33,6 +40,12 @@ export type HelperModelDefinition = {
 };
 
 export const HELPER_MODEL_DEFINITIONS: readonly HelperModelDefinition[] = [
+  ...Object.entries(CAPTURE_HELPER_IDS).map(([origin, id]) => ({
+    id,
+    label: `Token Miser v2 · ${origin === "acp:antigravity" ? "Antigravity" : origin === "claude" ? "Claude" : "Codex"} threads`,
+    defaultReasoningEffort: "low",
+    backends: origin === "claude" ? ["claude", "codex", "acp:grok"] : ["codex", "claude", "acp:grok"],
+  })),
   {
     id: "thread_titles",
     label: "Thread titles",

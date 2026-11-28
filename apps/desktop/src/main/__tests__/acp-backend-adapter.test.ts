@@ -1143,6 +1143,26 @@ describe("AcpBackendAdapter", () => {
     });
   });
 
+  it("skips process launch when helper admission changes during installed-agent lookup", async () => {
+    const agent = buildAntigravityQuotaAgent("/fixture/agent");
+    const lookup = Promise.withResolvers<AcpInstalledAgentRecord>();
+    const createAcpTransport = vi.fn(() => new FakeAcpAgentTransport());
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [], createAcpTransport, emit: async () => {}, handleServerRequest: async () => ({}),
+    });
+    vi.spyOn(adapter, "resolveInstalledAgent").mockReturnValue(lookup.promise);
+    let enabled = true;
+    try {
+      const run = adapter.runEphemeralPrompt(agent.backendId, {
+        cwd: "/fixture", prompt: "fixture", timeoutMs: 5000, maxOutputChars: 100, allowPrompt: () => enabled,
+      });
+      enabled = false;
+      lookup.resolve(agent);
+      await expect(run).rejects.toThrow("disabled");
+      expect(createAcpTransport).not.toHaveBeenCalled();
+    } finally { await adapter.close(); }
+  });
+
   it("remembers failed ephemeral disposal after the prompt has already settled", async () => {
     const agent = { ...buildInstalledAgent(), launchDescriptor: {
       backendId: "acp:gemini" as const, registryId: "gemini", distributionKind: "local" as const,

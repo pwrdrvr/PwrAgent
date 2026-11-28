@@ -59,6 +59,7 @@ export type OpenAIDecisionsHttpOptions = {
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
   timeoutMs?: number;
+  maxRetries?: 0;
   sleep?: (ms: number, signal: AbortSignal | undefined) => Promise<void>;
 };
 
@@ -134,7 +135,7 @@ export async function postOpenAIDecision(
       retryable
       && retryAfterMs !== undefined
       && retryAfterMs <= OPENAI_DECISIONS_MAX_RETRY_AFTER_MS
-      && attempt < OPENAI_DECISIONS_MAX_RETRIES
+      && attempt < (options.maxRetries ?? OPENAI_DECISIONS_MAX_RETRIES)
     ) {
       try {
         await sleep(retryAfterMs, options.signal);

@@ -66,7 +66,10 @@ if (helperMode) {
   installOwnerHostServices({ application: { getVersion: () => "1", isPackaged: false, getPath: () => artifact } });
   helperClient = new CodexAppServerClient({ command: executable || "codex" });
   helperClient.onRequest(() => ({ decision: "decline" }));
-  helper = boundedCommandHelper({ resolveTokenMiserBoundedHelper: () => "codex" }, {
+  helper = boundedCommandHelper({
+    resolveTokenMiserGate: () => "none", resolveTokenMiserSummarizer: () => "configured",
+    resolveHelperModelSettings: () => ({ helpers: { token_miser_capture_codex: { backend: "codex", model: "gpt-6-luna" } } }),
+  }, {
     generateStructuredObject: async (params) => {
       const started = Date.now();
       const result = await helperClient.generateStructuredObject(params);
@@ -74,7 +77,7 @@ if (helperMode) {
         evidenceBytes: Buffer.byteLength(params.prompt), elapsedMs: Date.now() - started });
       return result;
     },
-  });
+  }, undefined, { origin: "codex", threadId: "benchmark", claude: {} });
 }
 const original = ["git diff", "node --test passing.test.cjs", "node --test sticky.test.cjs"];
 const captureMode = !raw && variant !== "bounded";
@@ -324,6 +327,9 @@ async function runRpc() {
     }
     if (m.method === "rawResponseItem/completed" && p.item?.type === "custom_tool_call" && p.item.name === "exec") codeCells++;
     if (m.method === "turn/started") activate(p.threadId, p.turn.id);
+    if (helperMode && ["turn/started", "item/agentMessage/delta", "item/completed"].includes(m.method)) {
+      capture.observeIntent({ backend, notification: m }, () => true);
+    }
     if (m.method === "item/started" || m.method === "item/completed") observe(m);
     if (m.method === "session/update" && caller) {
       if (p.update.name === "run_workflow" && p.update.status === "completed") workflowCompleted = true;
@@ -515,7 +521,13 @@ try {
   if (!managedHandles && (variant === "capture" || (provider === "codex" && variant.startsWith("code-mode") && !raw)) && !original.every((cmd) => results.some((r) => r.command === cmd && r.bytes > 0))) throw new Error("Missing captured fixture output.");
   await writeFile(path.join(artifact, "result.json"), JSON.stringify({ cwd, provider, executable, variant, codeMode, directTools, codeCells, results, modelReferences, helperRuns }, null, 2), { mode: 0o600 });
   console.log(artifact);
-  if (helperMode && (helperRuns.length !== 1 || helperRuns[0].status !== "ok")) throw new Error("Expected one successful isolated Codex helper call.");
+  if (helperMode) {
+    const large = results.filter(result => result.bytes >= 8192);
+    if (helperRuns.length !== large.length || helperRuns.some(run => run.status !== "ok")
+      || large.some(result => !/^Summary: \S/mu.test(result.summary))) {
+      throw new Error("Expected one delivered Codex summary per large capture.");
+    }
+  }
 } finally {
   caller = undefined;
   await capture.close();

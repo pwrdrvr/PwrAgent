@@ -76,7 +76,8 @@ import { getTokenMiserBridgeDescriptorPath, TokenMiserHookBridge } from "../toke
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import { TOKEN_MISER_DIAGNOSTICS_DIRNAME } from "../token-miser/token-miser-types";
 import { TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
-import { boundedCommandHelper } from "../token-miser/bounded-command-helper";
+import { generateAcpStructuredObject } from "./acp-structured-generation";
+import { boundedCommandHelper, BOUNDED_HELPER_TIMEOUT_MS } from "../token-miser/bounded-command-helper";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { AgentToolMcpServer } from "../agent-tools/agent-tool-mcp-server";
 import { createScratchProjectDirectory as defaultCreateScratchProjectDirectory } from "./scratch-projects";
@@ -1119,6 +1120,12 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     ...options?.claudeBackendOptions,
     assertOwnerAdmission: () => ports.assertThreadOwnership(),
   });
+  const isAcpAgentEnabled = options?.isAcpAgentEnabled ?? (options?.configStore ? (registryId: string) => {
+    const providers = options.configStore?.read("providers");
+    return providers ? acpProviderEnabledFromSnapshot(providers, registryId) : true;
+  } : undefined);
+  const grokHelperEnabled = () => (isAcpAgentEnabled?.("grok") ?? true)
+    && (getOwnerHostServices().runtimePolicy?.enabledBackends.includes("acp:grok") ?? true);
   const acpBackend = new AcpBackendAdapter({
     assertOwnerAdmission: () => ports.assertThreadOwnership(),
     planLimits: planLimits,
@@ -1155,16 +1162,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
             },
           )
         : noLocalAcpAgentDiscovery),
-    isAcpAgentEnabled:
-      options?.isAcpAgentEnabled
-      ?? (options?.configStore
-        ? (registryId) => {
-            const providers = options.configStore?.read("providers");
-            return providers
-              ? acpProviderEnabledFromSnapshot(providers, registryId)
-              : true;
-          }
-        : undefined),
+    isAcpAgentEnabled,
     resolveProviderDependencyFingerprint: options?.configStore
       ? (registryId) =>
           providerProjectionForRegistryId(
@@ -1786,10 +1784,30 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolveTokenMiserBoundedCommands,
     resolveBoundedCommandHelper: (caller) => {
       try {
+        const origin = caller.backend;
+        if (origin !== "codex" && origin !== "claude" && origin !== "acp:antigravity") return;
         return boundedCommandHelper(settingsService ?? getDesktopSettingsService(), codexClient, async (usage) => {
           if (caller.turnId) await threadUsageLedger.recordTokenMiserHelperInference({
             threadId: caller.threadId, turnId: caller.turnId, inferenceId: randomUUID(), usage,
           }, caller.backend);
+        }, {
+          origin, threadId: caller.threadId,
+          decisions: { profileId: resolveActiveProfileName(), recordUsageLines: ports.recordOpenAIDecisionsUsageLines },
+          grokEnabled: grokHelperEnabled,
+          grok: { generateStructuredObject: async (request) => {
+            const accountKey = await ports.captureUsageAccount("acp:grok");
+            const result = await generateAcpStructuredObject({
+              ...request, backend: "acp:grok", cwd: await resolveAcpHelperWorkspace(),
+              system: request.system ?? "", turnTimeoutMs: BOUNDED_HELPER_TIMEOUT_MS, maxOutputChars: 1024,
+              run: (prompt) => acpBackend.runEphemeralPrompt("acp:grok", { ...prompt, allowPrompt: grokHelperEnabled }),
+            });
+            return { ...result, accountKey };
+          } },
+          claude: { generateStructuredObject: async (request) => {
+            const accountKey = await ports.captureUsageAccount("claude");
+            const result = await claudeBackend.summarizeCapture(request, await resolveAcpHelperWorkspace());
+            return { ...result, accountKey };
+          } },
         });
       } catch {
         return undefined;
