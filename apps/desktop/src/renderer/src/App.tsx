@@ -1803,32 +1803,14 @@ function DesktopAppShell(props: {
       await navigation.refresh?.("action/messaging-unbind");
     },
   );
-  const pendingSpendAlertCapacity = Math.max(0, 10 - appNotices.durable.filter((notice) =>
-    notice.id.startsWith("spend-alert:thread:")).length);
-  useEffect(() => {
-    if (!normalAppEnabled || readRendererFederationTarget() || !desktopApi?.listPendingThreadSpendAlerts
-      || !pendingSpendAlertCapacity) return;
-    let disposed = false;
-    let pending = false;
-    const read = async () => {
-      if (pending || disposed) return;
-      pending = true;
-      try {
-        const page = await desktopApi.listPendingThreadSpendAlerts!({ limit: pendingSpendAlertCapacity });
-        if (disposed) return;
-        for (const { alert, backend } of page.alerts) {
-          dispatchAppNotice({ type: "show", notice: buildSpendAlertNotice({ alert, backend,
-            threadLink: { backend, threadId: alert.threadId, title: alert.threadId, inThreadList: false, linkedDirectories: [] } }) });
-          acknowledgeThreadSpendAlert({ alert, backend });
-        }
-      } catch {
-        // Undelivered alerts remain durable on the owner. Focus retries the read.
-      } finally { pending = false; }
-    };
-    void read();
-    const unsubscribe = desktopApi.onWindowFocus?.(() => { void read(); });
-    return () => { disposed = true; unsubscribe?.(); };
-  }, [acknowledgeThreadSpendAlert, desktopApi, normalAppEnabled, pendingSpendAlertCapacity]);
+  usePendingThreadSpendAlerts({
+    acknowledge: acknowledgeThreadSpendAlert,
+    desktopApi,
+    durableNotices: appNotices.durable,
+    // The owner also gates reads made before the settings snapshot arrives.
+    enabled: normalAppEnabled && settings.snapshot?.general.spendAlerts?.threadSpendEnabled.value !== false,
+    show: showAppNotice,
+  });
 
   // Help → Copy Diagnostics Info reports the selected thread; the sidebar's
   // thread menu reports the thread it was opened on, without selecting it.
@@ -5828,6 +5810,52 @@ function useMainView() {
 }
 
 // Own the authentication/configuration notice producers and login dialog state.
+function usePendingThreadSpendAlerts({
+  acknowledge,
+  desktopApi,
+  durableNotices,
+  enabled,
+  show,
+}: {
+  acknowledge: (params: { alert: ThreadSpendAlert; backend: AppServerBackendKind }) => void;
+  desktopApi?: DesktopApi;
+  durableNotices: readonly AppNoticeToastNotice[];
+  enabled: boolean;
+  show: (notice: AppNoticeToastNotice) => void;
+}) {
+  const capacity = Math.max(0, 10 - durableNotices.filter((notice) =>
+    notice.id.startsWith("spend-alert:thread:")).length);
+  useEffect(() => {
+    if (!enabled || readRendererFederationTarget() || !desktopApi?.listPendingThreadSpendAlerts
+      || !capacity) return;
+    let disposed = false;
+    let pending = false;
+    const read = async () => {
+      if (pending || disposed) return;
+      pending = true;
+      try {
+        const page = await desktopApi.listPendingThreadSpendAlerts!({ limit: capacity });
+        if (disposed) return;
+        for (const { alert, backend } of page.alerts) {
+          show(buildSpendAlertNotice({
+            alert,
+            backend,
+            threadLink: { backend, threadId: alert.threadId, title: alert.threadId, inThreadList: false, linkedDirectories: [] },
+          }));
+          acknowledge({ alert, backend });
+        }
+      } catch {
+        // Undelivered alerts remain durable on the owner. Focus retries the read.
+      } finally {
+        pending = false;
+      }
+    };
+    void read();
+    const unsubscribe = desktopApi.onWindowFocus?.(() => { void read(); });
+    return () => { disposed = true; unsubscribe?.(); };
+  }, [acknowledge, capacity, desktopApi, enabled, show]);
+}
+
 function useAppNoticeProducers(props: {
   desktopApi?: DesktopApi;
   settings: DesktopSettingsState;

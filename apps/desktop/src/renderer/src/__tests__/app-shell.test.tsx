@@ -2728,7 +2728,7 @@ describe("App", () => {
         spendAlerts: {
           activeTurnSpendEnabled: { value: true, source: "config" },
           activeTurnSpendThresholdUsd: { value: 5, source: "default" },
-          threadSpendEnabled: { value: true, source: "default" },
+          threadSpendEnabled: { value: false, source: "default" },
           threadSpendThresholdUsd: { value: 25, source: "default" },
         },
         appearance: {

@@ -227,7 +227,7 @@ function createSnapshot(
       spendAlerts: {
         activeTurnSpendEnabled: { value: true, source: "config" },
         activeTurnSpendThresholdUsd: { value: 5, source: "default" },
-        threadSpendEnabled: { value: true, source: "default" },
+        threadSpendEnabled: { value: false, source: "default" },
         threadSpendThresholdUsd: { value: 25, source: "default" },
       },
       appearance: {
@@ -2525,14 +2525,15 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    fireEvent.click(
-      getLabeledSwitch("Total thread spend"),
-    );
+    const threadSpend = getLabeledSwitch("Total thread spend");
+    expect(threadSpend).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("spinbutton", { name: "Total thread spend threshold" })).toBeDisabled();
+    fireEvent.click(threadSpend);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           spendAlerts: {
-            threadSpendEnabled: false,
+            threadSpendEnabled: true,
           },
         },
       });

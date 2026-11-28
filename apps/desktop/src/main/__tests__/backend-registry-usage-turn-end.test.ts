@@ -11,7 +11,7 @@ import { estimateHistoricalThreadUsageGapLines } from "@pwragent/shared/thread-p
 import { FederationAccountingStream } from "../federation/federation-event-stream";
 import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
-import type { DesktopSpendAlertPolicy } from "@pwragent/shared/contracts/settings";
+import { DESKTOP_SPEND_ALERT_POLICY_DEFAULT, type DesktopSpendAlertPolicy } from "@pwragent/shared/contracts/settings";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -405,7 +405,10 @@ describe("DesktopBackendRegistry usage turn ends", () => {
   });
 
   it("agrees with full ledger spend through cumulative gaps, replacements, and late turn corrections", async () => {
-    const registry = createRegistry();
+    const registry = createRegistry([], { spendAlertPolicy: {
+      ...DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
+      threadSpendEnabled: true,
+    } });
     const thread = { backend: "acp:antigravity", threadId: "thread-1" } as const;
     const checkSpend = async () => {
       const spend = await store.readThreadSpendMicros({ ...thread, localModelIds: [], liveLines: [] });

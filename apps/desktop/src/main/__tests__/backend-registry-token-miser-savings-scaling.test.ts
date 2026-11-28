@@ -1,4 +1,5 @@
 import * as pricingDisplay from "@pwragent/shared/thread-pricing-display";
+import { DESKTOP_SPEND_ALERT_POLICY_DEFAULT } from "@pwragent/shared/contracts/settings";
 import { readThreadForPeer } from "../federation/federation-owner-thread-reads";
 import { LivePricingLines } from "../app-server/live-pricing-lines";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
@@ -102,6 +103,11 @@ describe("Token Miser savings scaling", () => {
         onPendingRequest: () => () => {},
       } as never,
       overlayStore: store,
+      // The spend-publication tests exercise the alert's live gate adjustments.
+      resolveSpendAlertPolicy: () => ({
+        ...DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
+        threadSpendEnabled: true,
+      }),
     });
     internals = registryModules(registry).threadUsageLedger as unknown as Internals;
     tokenMiserStore = new TestTokenMiserStore(
