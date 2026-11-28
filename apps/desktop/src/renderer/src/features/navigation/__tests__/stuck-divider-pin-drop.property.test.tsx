@@ -401,7 +401,9 @@ it.each<[string, Release]>([
 
 it("never drops on, or draws over, what a band or the lane's edge hides", async () => {
   mount();
+  // A mounted tree, so CI keeps five runs. Raise numRuns locally to search
+  // (300 runs were clean on the fix).
   await fc.assert(fc.asyncProperty(release, async (input) => {
     await holdAndRelease(input);
-  }), { numRuns: Number(process.env.MBT_RUNS ?? 5) });
+  }), { numRuns: 5 });
 });
