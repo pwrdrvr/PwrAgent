@@ -1570,7 +1570,9 @@ select_for_new_threads = true
         requestInit: { headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) },
       }));
       const listed = (await client.listTools()).tools.map(({ name }) => name);
-      expect(listed).toContain("handoff_task");
+      expect(listed).not.toContain("handoff_task");
+      await expect(client.callTool({ name: "tool_search", arguments: { query: "handoff_task", limit: 1 } }))
+        .resolves.toMatchObject({ structuredContent: { tools: [expect.objectContaining({ name: "handoff_task" })] } });
       expect(listed).not.toContain("write_file");
       expect(listed).not.toContain(oversized.name);
 

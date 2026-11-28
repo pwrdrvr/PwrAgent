@@ -203,6 +203,7 @@ export interface RegistryHostPorts {
     mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
     managedReview?: boolean;
+    taskMonitor?: true;
     requiredAntigravityMode?: string;
   }): Promise<{
     threadId: string;

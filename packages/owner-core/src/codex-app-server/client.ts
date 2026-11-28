@@ -7625,6 +7625,7 @@ function formatCodexFileReference(
 
 function buildTurnStartPayload(params: {
   threadId: string;
+  additionalContext?: CodexTurnStartParams["additionalContext"];
   parentTurnId?: string;
   rootTurnId?: string;
   input: CodexUserInput[];
@@ -7645,6 +7646,7 @@ function buildTurnStartPayload(params: {
   const base: CodexTurnStartPayload = {
     threadId: params.threadId,
     input: params.input,
+    ...(params.additionalContext ? { additionalContext: params.additionalContext } : {}),
   };
 
   if (compatibility.supportsTurnAncestry && params.parentTurnId) {
@@ -11774,6 +11776,7 @@ export class CodexAppServerClient {
       turn: { id: string; status: "completed" | "failed" | "interrupted"; error?: { message: string } };
     }) => void;
     agentMemoryContext?: string;
+    additionalContext?: CodexTurnStartParams["additionalContext"];
     /** Delegation attribution only. */
     parentTurnId?: string;
     rootTurnId?: string;
@@ -11933,6 +11936,7 @@ export class CodexAppServerClient {
         buildTurnStartPayload(
           {
             threadId: params.threadId,
+            additionalContext: params.additionalContext,
             input: params.agentMemoryContext
               ? [...codexInput, { type: "text", text: params.agentMemoryContext, text_elements: [] }]
               : codexInput,

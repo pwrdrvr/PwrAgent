@@ -182,12 +182,37 @@ therefore delivers a manager's persona once, from the file. See
 Only an Agent that owns its working directory may use a workspace file. An
 Agent working in a repository never has files written into that repository.
 
+## PwrAgent capability orientation
+
+Ordinary threads receive a short orientation for the handoff and Job Monitor
+actions exposed by their PwrAgent catalog. Search loads their schemas on
+demand. The existing `read_tool_guide` tool serves the authored workflow guide.
+
+| Route | Delivery | Discovery and invocation |
+|---|---|---|
+| Codex native and Codex with a third-party model | Keyed application context on `turn/start`, independent of developer instructions | Native `tool_search` and the returned tool. When using Code Mode, call `tools.tool_search` inside `exec` and invoke the selected callable. |
+| Codex portable Code Mode, including Kimi K3 | Same application context through the portable Responses adapter | Use `tools.tool_search` inside the bridged `exec`, then invoke the selected callable. |
+| Claude Agent SDK | Appended ahead of any Agent persona in the `claude_code` preset | Claude `ToolSearch` loads the named PwrAgent MCP tool when deferred. |
+| Antigravity with negotiated system append | `session/new._meta.antigravity.systemPrompt.append` | Use the PwrAgent MCP `tool_search` and `call_pwragent_tool` over the registered HTTP or stdio route. |
+| Gemini CLI, Grok, Kimi Code, Qwen Code and other ACP agents | Marked first-prompt block, also used for existing Antigravity sessions and agents without the extension | Use the same PwrAgent MCP search and call tools. Registered HTTP catalogs can offer direct calls when the discovery pair is unavailable. |
+
+Antigravity retains the appended system text across session reloads. The
+owner sends it once per new session and uses the live MCP catalog as the
+authority for current availability. Search hides disabled Job Monitor
+creation, and a call based on an earlier result is rejected. The stdio
+bridge exposes only its scoped catalog. A Job Monitor's own session exposes
+its progress and completion calls through that bridge.
+
+The ACP fallback keeps a receipt alongside the persona's digest. A successful
+prompt records both in the existing terminal write. Live compaction resets the
+prompt receipt, so the first eligible subsequent prompt restores the hint.
+The system-append receipt survives that reset.
+
 ## Writes
 
 Delivery adds no SQLite write per turn. The Codex resolver reads the overlay.
-The ACP client writes the session row once per delivered block: on the first
-prompt of an agent session and on the first prompt after an edit, and clears
-it once per detected compaction (budget
+The ACP client records successful prompt delivery in the turn's idle write
+and clears the prompt receipts once per detected live compaction (budget
 `acp-compaction-instruction-redelivery`). The context fill is kept in memory. A manager thread created before
 `instructionsDelivery` existed gets the marker in one write the next time it is
 opened.

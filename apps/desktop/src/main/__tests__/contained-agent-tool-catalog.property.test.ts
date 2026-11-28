@@ -193,12 +193,25 @@ it("uses the ACP owner's saved catalog and denies cached monitor calls through t
     const turn = { backend, threadId, turnId: "running-turn" } as const;
     turnState.registerTurn(turn);
     const original = transport.sessions.get(threadId)!;
-    expect(original.tools).toContain("create_monitor_delegation");
+    expect(original.tools).toContain("tool_search");
+    expect(original.tools).not.toContain("create_monitor_delegation");
+    const searchMonitor = () => original.client.callTool({
+      name: "tool_search", arguments: { query: "create_monitor_delegation", limit: 1 },
+    });
+    await expect(searchMonitor()).resolves.toMatchObject({
+      structuredContent: { tools: [expect.objectContaining({ name: "create_monitor_delegation" })] },
+    });
     const toggle = (enabled: boolean) => registry.setThreadJobMonitorCreation({ backend, threadId, enabled });
+    // Older sessions may still issue direct calls from their cached schema.
     const staleCall = () => original.client.callTool({
       name: "create_monitor_delegation", arguments: { task: "Watch the fixture build." },
     });
     await toggle(false);
+    const disabledSearch = await searchMonitor();
+    expect(disabledSearch).toMatchObject({ structuredContent: { tools: expect.any(Array) } });
+    expect(disabledSearch.structuredContent).not.toMatchObject({
+      tools: expect.arrayContaining([expect.objectContaining({ name: "create_monitor_delegation" })]),
+    });
     await expect(staleCall()).resolves.toMatchObject({ isError: true,
       content: [expect.objectContaining({ text: expect.stringContaining("Job Monitors are off") })] });
     await toggle(true);

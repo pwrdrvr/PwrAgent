@@ -15,24 +15,20 @@ export function readPwrAgentCallTarget(input: unknown): { name: string; args: Re
 }
 
 // Antigravity can cache a large catalog but omit its tools from model turns.
-// Keep thread creation, Agent memory, Job Monitor availability and the managed
-// MCP gateway directly visible. The discovery pair reaches the other tools.
+// Keep Agent memory and the managed MCP gateway directly visible.
 export const ANTIGRAVITY_DIRECT_MCP_TOOLS: ReadonlySet<string> = new Set([
   "agent_memory",
   "call_mcp_tool",
-  "create_monitor_delegation",
   GET_CURRENT_TURN_INPUT_SOURCE,
-  "handoff_task",
-  "read_tool_guide",
   "search_mcp_tools",
 ]);
 
-export const ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS =
+export const ACP_MCP_TOOL_DISCOVERY_INSTRUCTIONS =
   "For other PwrAgent actions, use tool_search for the exact schema and invoke it with call_pwragent_tool.";
 export const ANTIGRAVITY_MCP_CONNECTION_INSTRUCTIONS =
   "For selected managed MCP connections, use search_mcp_tools to discover tools and routes to resources, skills, and prompts. Invoke upstream tools with call_mcp_tool.";
 
-export const ANTIGRAVITY_TOOL_DISCOVERY: readonly AgentMcpTool[] = [
+export const ACP_MCP_TOOL_DISCOVERY: readonly AgentMcpTool[] = [
   {
     name: PWRAGENT_TOOL_SEARCH,
     description: "Find PwrAgent tools by action or exact name, including to-dos, Federation, thread management, and pull requests. Returns input schemas for call_pwragent_tool. For external connections such as Linear, use search_mcp_tools.",
@@ -42,6 +38,7 @@ export const ANTIGRAVITY_TOOL_DISCOVERY: readonly AgentMcpTool[] = [
   {
     name: CALL_PWRAGENT_TOOL,
     description: "Run a PwrAgent tool by the exact name from tool_search. Pass an arguments object matching its returned input schema.",
+    annotations: { readOnlyHint: false },
     inputSchema: {
       type: "object",
       additionalProperties: false,

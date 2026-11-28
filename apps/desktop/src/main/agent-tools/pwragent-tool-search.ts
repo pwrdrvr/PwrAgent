@@ -19,7 +19,7 @@ export const PWRAGENT_TOOL_SEARCH_INPUT_SCHEMA = {
 export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
 Search when the user wants to:
 - Find, read, inspect, open/mount/navigate to threads in the graphical UI, rename, pin, lock/unlock, archive/close, restore, or change settings on threads; mark projects read in bulk; clean up old threads and worktrees; check status, activity, usage, model, fast mode, or reasoning effort; list which threads need attention on every machine.
-- Delegate or hand off work to child threads, split work into parallel tasks, create a Job Monitor for a long command or repeated checks, collect results, send follow-ups, steer active work, or urgently stop a thread.
+- Collect results, send follow-ups, steer active work, or urgently stop a thread.
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
 - Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, list/export received original files for saving, or inspect/render PDF attachments. Search does not authorize sending messages.
@@ -32,7 +32,7 @@ Search when the user wants to:
 - Read or navigate the Star Map, locate thread cards or project clouds, highlight threads, change the map lens or filters.
 - Retrieve exact output preserved by Token Miser, including searching, reading lines, or reading grouped results.
 Use a short action query, or exact tool names. Each exact tool name is always returned. Search separately for unrelated tasks. Otherwise returns up to 3 matching tools (maximum 5), within an 8,000-character budget; a single larger definition stays complete. No match means the catalog lacks a matching capability. Follow returned instructions and permissions. Search performs no action.
-In Code Mode: text(await tools.pwragent__tool_search({query: "handoff child thread"})). Emit the returned string directly so schemas stay intact. Then call the returned codeModeName on tools with arguments matching inputSchema. Deferred tools remain callable. Prefer a bulk tool when available; otherwise batch repeated calls in one cell and print compact aggregate results. Respect noMatchReason; do not invent tool names.`;
+In Code Mode: text(await tools.pwragent__tool_search({query: "read thread"})). Emit the returned string directly so schemas stay intact. Then call the returned codeModeName on tools with arguments matching inputSchema. Deferred tools remain callable. Prefer a bulk tool when available; otherwise batch repeated calls in one cell and print compact aggregate results. Respect noMatchReason; do not invent tool names.`;
 
 // Small domain vocabulary supplies words users use that need not appear in a
 // tool's literal name. Ranking otherwise follows the live catalog, not a copy.

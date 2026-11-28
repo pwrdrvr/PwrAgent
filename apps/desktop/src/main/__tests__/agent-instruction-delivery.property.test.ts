@@ -236,7 +236,7 @@ describe("a turn on a designated Agent carries its instructions to the provider"
       .not.toContain("FIRST-INSTRUCTIONS");
     const prompt = acpTransport.requests.find((request) => request.method === "session/prompt")!.params!.prompt as Array<{ type: string; text: string }>;
     expect(prompt).toEqual([
-      { type: "text", text: buildAcpAgentInstructionBlock(FIRST) },
+      { type: "text", text: expect.stringMatching(/^\[PwrAgent Agent instructions.*\n\nPwrAgent capabilities\. .+call_pwragent_tool/su) },
       { type: "text", text: "hello" },
       { type: "text", text: buildAgentMemoryContext("") },
     ]);
@@ -249,6 +249,7 @@ describe("a turn on a designated Agent carries its instructions to the provider"
     await vi.waitFor(() => expect(acpTransport.prompts()).toHaveLength(2));
     // The session already holds them: a second copy would only spend context.
     expect(acpTransport.prompts()[1]).not.toContain("FIRST-INSTRUCTIONS");
+    expect(acpTransport.prompts()[1]).not.toContain("PwrAgent capabilities.");
   });
 
   it("Claude: appended to the system prompt", async () => {
@@ -258,7 +259,10 @@ describe("a turn on a designated Agent carries its instructions to the provider"
     await registry.startTurn({ backend: "claude", threadId: started.threadId, input: text("hello") });
     await vi.waitFor(() => expect(completedClaudeTurns.count).toBe(1));
     expect(claudeLaunches).toHaveLength(1);
-    expect(claudeLaunches[0]!.systemPrompt).toEqual({ type: "preset", preset: "claude_code", append: FIRST });
+    expect(claudeLaunches[0]!.systemPrompt).toEqual({
+      type: "preset", preset: "claude_code",
+      append: expect.stringMatching(/^PwrAgent capabilities\. .*ToolSearch.*\n\nFIRST-INSTRUCTIONS answer only in haiku$/u),
+    });
   });
 });
 
@@ -371,13 +375,15 @@ describe("an instruction edit reaches the next turn and not the running one", ()
     await registry.setThreadAgent({ ...identity, agent: agent(SECOND) });
     // The system prompt is fixed for a running process, so nothing changes yet.
     expect(claudeLaunches.map((launch) => launch.systemPrompt)).toEqual([
-      { type: "preset", preset: "claude_code", append: FIRST },
+      { type: "preset", preset: "claude_code", append: expect.stringContaining(`\n\n${FIRST}`) },
     ]);
     await vi.waitFor(async () => {
       await registry.startTurn({ ...identity, input: text("next") });
     });
     await vi.waitFor(() => expect(completedClaudeTurns.count).toBe(2));
-    expect(claudeLaunches.at(-1)!.systemPrompt).toEqual({ type: "preset", preset: "claude_code", append: SECOND });
+    expect(claudeLaunches.at(-1)!.systemPrompt).toEqual({
+      type: "preset", preset: "claude_code", append: expect.stringContaining(`\n\n${SECOND}`),
+    });
     expect(claudeLaunches.at(-1)!.prompts).toBe(1);
   });
 });
@@ -493,6 +499,7 @@ describe("the ACP instruction block", () => {
       let compactNext: Compaction = "none";
       let replayCompaction = false;
       let fill = 40_000;
+      const orientation = "PwrAgent capabilities. Search for the live catalog.";
       const connect = async () => {
         const transport = new FakeAcpAgentTransport({
           initialize: { protocolVersion: 1, agentCapabilities: {
@@ -518,7 +525,10 @@ describe("the ACP instruction block", () => {
           }
           return await request(method, params, timeoutMs);
         });
-        const client = new AcpAgentClient({ backendId: ACP, store, transport, ...settlement.callbacks });
+        const client = new AcpAgentClient({
+          backendId: ACP, store, transport, ...settlement.callbacks,
+          mcpServers: () => ({ servers: [], readCapabilityOrientation: async () => orientation }),
+        });
         await client.initialize();
         return { client, transport };
       };
@@ -527,6 +537,7 @@ describe("the ACP instruction block", () => {
         const { sessionId } = await client.startSession({ cwd: "/repo", executionMode: "default" });
         let current = "";
         let held = "";
+        let heldOrientation = false;
         let fillSeen = false;
         for (const next of steps) {
           if (next.kind === "edit") {
@@ -552,13 +563,21 @@ describe("the ACP instruction block", () => {
             expect(transport.requests.length).toBeGreaterThan(sent);
             const prompt = transport.requests.at(-1)!.params!.prompt as Array<{ type: string; text: string }>;
             expect(prompt.at(-1)).toEqual({ type: "text", text: "operator text" });
-            expect(prompt.slice(0, -1)).toEqual(current === held
+            expect(prompt.slice(0, -1)).toEqual(current === held && heldOrientation
               ? []
-              : [{ type: "text", text: buildAcpAgentInstructionBlock(current) }]);
+              : [{ type: "text", text: buildAcpAgentInstructionBlock(
+                  current === held ? undefined : current,
+                  heldOrientation ? undefined : orientation,
+                ) }]);
             const compacted = next.compaction === "reported" || (next.compaction === "halved" && fillSeen);
             fillSeen = true;
-            if (compacted) held = "";
-            else if (!next.fails) held = current;
+            if (compacted) {
+              held = "";
+              heldOrientation = false;
+            } else if (!next.fails) {
+              held = current;
+              heldOrientation = true;
+            }
           }
         }
       } finally {
@@ -636,7 +655,7 @@ describe("the ACP instruction block", () => {
     }
   });
 
-  it("costs one write per reported compaction, and none for a repeated report", async () => {
+  it("costs one write when reported compaction invalidates an orientation-only receipt", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const { dbPath, tempDir } = createTempStateDb("pwragent-agent-instructions-budget-");
     roots.push(tempDir);
@@ -647,13 +666,16 @@ describe("the ACP instruction block", () => {
       "session/prompt": { stopReason: "end_turn" },
     });
     const settlement = createAcpPromptSettlement();
-    const client = new AcpAgentClient({ backendId: ACP, store, transport, ...settlement.callbacks });
+    const client = new AcpAgentClient({
+      backendId: ACP, store, transport, ...settlement.callbacks,
+      mcpServers: () => ({ servers: [], readCapabilityOrientation: async () => "PwrAgent capabilities. Search for the live catalog." }),
+    });
     try {
       await client.initialize();
       const { sessionId } = await client.startSession({ cwd: "/repo", executionMode: "default" });
       const protocolSessionId = store.getSession(ACP, sessionId)!.agentSessionId ?? sessionId;
       const turn = async () => {
-        await settlement.finish(client, { sessionId, prompt: "operator text", agentInstructions: "alpha" });
+        await settlement.finish(client, { sessionId, prompt: "operator text" });
         expect(client.hasActiveTurns()).toBe(false);
       };
       await turn();
@@ -666,14 +688,13 @@ describe("the ACP instruction block", () => {
           });
         }
       });
-      // The prompt after it carries the block and records it with the write
-      // every delivery already makes.
+      // The next prompt restores the orientation and records it in the idle write.
       await turn();
       expect(transport.requests.filter((request) => request.method === "session/prompt")
         .map((request) => JSON.stringify(request.params)).at(-1)).toContain(ACP_AGENT_INSTRUCTIONS_OPEN_MARKER);
       expectSqliteWriteBudget({
         budgetFile: "acp-agent-instruction-write-budgets.json",
-        note: "Two reports of one Grok compaction: the first clears the session's delivery record, the second finds nothing to clear; one commit (~12 KB WAL) per compaction, ~0.12 MB/day at 10 compactions a day",
+        note: "Two reports of one Grok compaction clear one orientation-only receipt. One commit (~12 KB WAL) per compaction, ~0.12 MB/day at 10 compactions a day.",
         scenario: "acp-compaction-instruction-redelivery",
         writes,
       });
