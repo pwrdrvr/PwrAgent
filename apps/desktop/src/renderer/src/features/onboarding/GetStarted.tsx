@@ -17,12 +17,12 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { mergeRecentProjectDiscoveries } from "@pwragent/shared/recent-project-discovery";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { ipcErrorMessage } from "../../lib/open-path-failure";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { ClaudeSignInControls } from "../notifications/useClaudeSignIn";
 import { findCodexLaunchFailure } from "../notifications/CodexLaunchNotice";
-import { ManagedRuntimeProgressStrip, useManagedRuntimeProgress } from "../settings/ManagedRuntimeProgress";
+import { ManagedRuntimeProgressStrip } from "../settings/ManagedRuntimeProgress";
+import { useOpenAiCodexInstall } from "../settings/useOpenAiCodexInstall";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import type { ManagedRuntimeProgress } from "../../../../shared/managed-runtime-progress";
 import {
@@ -890,40 +890,17 @@ function useCodexInstall(params: {
   refresh: () => Promise<void>;
 }): CodexInstallModel {
   const { snapshot, discovering, desktopApi, refresh } = params;
-  const [installing, setInstalling] = useState(false);
-  const [error, setError] = useState<string>();
-  const progress = useManagedRuntimeProgress(desktopApi, "openai-codex");
   const offer = codexInstallOffer({
     snapshot,
     discovering,
     launchFailure: findCodexLaunchFailure(snapshot?.models?.codex?.discovery),
   });
-  const install = useCallback(async (): Promise<void> => {
-    setInstalling(true);
-    setError(undefined);
-    try {
-      if (!desktopApi?.refreshCodexDiscovery) {
-        setError("PwrAgent couldn't install Codex. Install it yourself instead.");
-        return;
-      }
-      await desktopApi.refreshCodexDiscovery({
-        discoveryIntent: "setup-user-action",
-        installOpenAiCodex: true,
-      });
-      await refresh();
-    } catch (caught) {
-      setError(ipcErrorMessage(caught));
-    } finally {
-      setInstalling(false);
-    }
-  }, [desktopApi, refresh]);
-  return {
-    offer,
-    installing,
-    ...(error ? { error } : {}),
-    ...(progress ? { progress } : {}),
-    install,
-  };
+  const install = useOpenAiCodexInstall({
+    desktopApi,
+    discoveryIntent: "setup-user-action",
+    onInstalled: refresh,
+  });
+  return { offer, ...install };
 }
 
 export function AgentList(props: {

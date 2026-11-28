@@ -774,6 +774,7 @@ function DesktopAppShell(props: {
     syncCodexLaunchNotice,
     changeCodexManagedBuilds,
     checkCodexManagedBuildUpdates,
+    refreshAfterOpenAiCodexInstall,
   } = useAppOwnerNotifications(claudeSignIn.controls.onSignIn);
 
   function useAppOwnerNotifications(onClaudeLogin: (() => void) | undefined) {
@@ -1070,6 +1071,11 @@ function DesktopAppShell(props: {
     const checkCodexManagedBuildUpdates = useCallback(async () => {
       await checkForManagedCodexUpdates(desktopApi);
       await refreshSettings();
+    }, [desktopApi, refreshSettings]);
+    // Discovery has already selected the new Codex; read it and its models.
+    const refreshAfterOpenAiCodexInstall = useCallback(async () => {
+      await refreshSettings();
+      await refreshManagedCodexModelCatalog(desktopApi);
     }, [desktopApi, refreshSettings]);
 
     useEffect(() => {
@@ -1718,6 +1724,7 @@ function DesktopAppShell(props: {
       syncCodexLaunchNotice,
       changeCodexManagedBuilds,
       checkCodexManagedBuildUpdates,
+      refreshAfterOpenAiCodexInstall,
     };
   }
 
@@ -5273,6 +5280,7 @@ function DesktopAppShell(props: {
             onOpenCodexSettings={openCodexSettings}
             onManagedBuildsChange={changeCodexManagedBuilds}
             onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
+            onOpenAiCodexInstalled={refreshAfterOpenAiCodexInstall}
           />
           <CodexLaunchNotice
             discovery={settings.snapshot?.models?.codex?.discovery}

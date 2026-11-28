@@ -125,8 +125,9 @@ export function codexInstallOffer(params: {
   launchFailure?: { command: string };
 }): CodexInstallOffer | undefined {
   const codex = params.snapshot?.models?.codex;
-  if (!codex || codex.path?.source === "env") return undefined;
-  if (!selectedCodexCandidate(params.snapshot)) {
+  if (!codex?.discovery || codex.path?.source === "env") return undefined;
+  const selected = selectedCodexCandidate(params.snapshot);
+  if (!selected) {
     if (params.discovering) return undefined;
     return params.launchFailure
       ? { reason: "broken", command: params.launchFailure.command }
@@ -134,7 +135,9 @@ export function codexInstallOffer(params: {
   }
   const advisory = codex.versionAdvisory;
   const managedOn = codex.managedBuildsRequiredBy !== undefined || codex.managedBuilds?.value === true;
-  if (advisory && advisory.installer !== "pwragent" && !managedOn) {
+  // A path the operator chose keeps winning over the install (main's
+  // `applyOpenAiCodexFallback`), so installing would change nothing.
+  if (advisory && advisory.installer !== "pwragent" && !managedOn && selected.source !== "config") {
     return { reason: "outdated", version: advisory.version, minimumVersion: advisory.minimumVersion };
   }
   return undefined;

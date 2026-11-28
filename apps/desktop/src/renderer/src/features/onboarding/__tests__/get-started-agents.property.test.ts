@@ -128,6 +128,8 @@ describe("Get started agent rules", () => {
 describe("Get started Codex install offer", () => {
   const arbCodex = fc.record({
     candidate: fc.constantFrom("none", "working", "unversioned"),
+    /** Where discovery found the selected Codex. */
+    candidateSource: fc.constantFrom("path", "application", "config"),
     pathSource: fc.constantFrom("default", "config", "env"),
     advisory: fc.constantFrom("none", "homebrew", "pwragent"),
     managedOn: fc.boolean(),
@@ -158,6 +160,7 @@ describe("Get started Codex install offer", () => {
               ? []
               : [{
                   command: "/opt/contrived/codex",
+                  source: codex.candidateSource,
                   executable: true,
                   selected: true,
                   ...(codex.candidate === "working" ? { version: "0.150.0" } : {}),
@@ -167,6 +170,22 @@ describe("Get started Codex install offer", () => {
       },
     } as unknown as DesktopSettingsSnapshot;
   }
+
+  it("offers no install over an old Codex at a path the operator chose", () => {
+    // The property's shrunk counterexample against the pre-fix offer.
+    expect(codexInstallOffer({
+      snapshot: codexSnapshot({
+        candidate: "working",
+        candidateSource: "config",
+        pathSource: "default",
+        advisory: "homebrew",
+        managedOn: false,
+        discovering: false,
+        launchFailure: false,
+      }),
+      discovering: false,
+    })).toBeUndefined();
+  });
 
   it("offers PwrAgent's Codex for every dead end a new user can hit, and only those", () => {
     fc.assert(
@@ -185,8 +204,12 @@ describe("Get started Codex install offer", () => {
             codex.discovering ? undefined : codex.launchFailure ? "broken" : "missing",
           );
         } else {
+          // Main fills in the install only over a Codex it may replace: a
+          // path the operator chose keeps winning, so it gets no offer.
           expect(offer?.reason).toBe(
-            codex.advisory === "homebrew" && !codex.managedOn ? "outdated" : undefined,
+            codex.advisory === "homebrew" && !codex.managedOn && codex.candidateSource !== "config"
+              ? "outdated"
+              : undefined,
           );
         }
       }),
