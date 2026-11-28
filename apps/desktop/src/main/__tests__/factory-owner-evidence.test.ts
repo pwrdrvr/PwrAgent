@@ -152,6 +152,10 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       const parked = await read({ ...params, candidate: { ...candidate, worktree: undefined } });
       expect(parked.candidate).toMatchObject({ stage: "parked", headOid: actualHead, outcomeId: unpublished.candidate?.outcomeId });
       expect(parked.candidate?.receipts).toHaveLength(1);
+      await runGitCommand(projectPath, ["update-ref", "refs/tags/refs/heads/missing", actualHead]);
+      const absent = await read({ ...params, candidate: { ...candidate, branch: "missing" } });
+      expect(absent.candidate?.headOid).toBeUndefined();
+      expect(absent.candidate?.assessment).toBeUndefined();
       expect(fetcher).not.toHaveBeenCalled();
       const { issueId, ...branch } = candidate;
       const workItems = [

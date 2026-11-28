@@ -28,8 +28,9 @@ async function checkout(directory: string) {
 }
 
 async function refOid(root: string, ref: string): Promise<string | undefined> {
-  const value = await git(root, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]);
-  return value && isGitObjectId(value) ? value : undefined;
+  const value = await git(root, ["for-each-ref", "--count=1", "--format=%(refname) %(objecttype) %(objectname)", "--", ref]);
+  const [name, type, oid] = value?.split(" ") ?? [];
+  return name === ref && type === "commit" && oid && isGitObjectId(oid) ? oid : undefined;
 }
 
 async function baseRefOid(root: string, ref: string, repository: string): Promise<string | undefined> {
