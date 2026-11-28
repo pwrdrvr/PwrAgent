@@ -5323,6 +5323,24 @@ describe("SettingsScreen", () => {
     expect(section().queryByText(/That no longer runs/)).not.toBeInTheDocument();
   });
 
+  it("says nothing is summarized while the chosen decision model is not ready", () => {
+    const snapshot = createSnapshot();
+    snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
+    snapshot.experimental.tokenMiserBoundedCommands = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserGate = { value: "openai", source: "config" };
+    snapshot.experimental.tokenMiserSummarizer = { value: "configured", source: "config" };
+    snapshot.models.openaiDecisions = { apiKey: { configured: false, source: "unset", writable: true } };
+    const view = render(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState(snapshot)} onClose={() => undefined} />);
+    const section = () => within(screen.getByRole("region", { name: "Token Miser (v2)" }));
+    expect(section().getByText("Nothing is summarized until the decision model above is ready.")).toBeInTheDocument();
+
+    snapshot.models.openaiDecisions = { apiKey: { configured: true, source: "keychain", writable: true } };
+    view.rerender(<SettingsScreen desktopApi={{} as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+      initialSection="experimental" settings={createSettingsState({ ...snapshot })} onClose={() => undefined} />);
+    expect(section().queryByText(/Nothing is summarized until/)).not.toBeInTheDocument();
+  });
+
   it("names the decision provider, its model, readiness and cost without falling back to another", () => {
     const snapshot = createSnapshot();
     snapshot.runtime.tokenMiser = { boundedCommandsSupported: true };
@@ -5426,7 +5444,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(screen.getByText("Waiting for idle")).toBeInTheDocument();
+    expect(screen.getAllByRole("status").map((status) => status.textContent)).toContain("Waiting for idle");
     expect(screen.queryByText("Default on")).not.toBeInTheDocument();
   });
 
@@ -5881,7 +5899,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(screen.getByText("Waiting for idle")).toBeInTheDocument();
+    expect(screen.getAllByRole("status").map((status) => status.textContent)).toContain("Waiting for idle");
     expect(screen.queryByText("Codex could not load the gate")).not.toBeInTheDocument();
   });
 
@@ -5908,7 +5926,9 @@ describe("SettingsScreen", () => {
     });
     fireEvent.click(availabilitySwitch);
 
-    expect(screen.getByText("Installing")).toBeInTheDocument();
+    // Announced through a status region, not only the card's chip.
+    expect(within(screen.getByRole("region", { name: "Token Miser (Legacy)" })).getAllByRole("status")
+      .map((status) => status.textContent)).toContain("Installing");
     expect(availabilitySwitch).toHaveAttribute("aria-checked", "true");
     expect(availabilitySwitch).toBeDisabled();
     finishWrite?.();

@@ -194,7 +194,7 @@ function CaptureOriginRow(props: {
     models: [],
     requestedModel: state.model ?? "pending",
   }).reasoningEffort ?? "low";
-  const save =(next: { backend?: string; model?: string; reasoningEffort?: string }) => {
+  const save = (next: { backend?: string; model?: string; reasoningEffort?: string }) => {
     props.onSave(withCaptureRow(props.helperModels, state.helper, next));
   };
   const savedModel = saved?.model;
@@ -362,6 +362,7 @@ export function TokenMiserV2Settings(props: {
   const captureEnabled = captureSupported && boundedCommands.value;
   const helperModels = props.snapshot.models.helperModels ?? { helpers: {} };
   const { gate, summarizer, earlier } = tokenMiserModelChoices(experimental);
+  const gateStatus = gate.value === "none" ? undefined : decisionProviderStatus(gate.value, props.snapshot);
   const controlsDisabled = props.saving || !captureEnabled;
 
   return (
@@ -395,7 +396,7 @@ export function TokenMiserV2Settings(props: {
                 <p className="settings-token-miser__example-title">A test prints 1,100 progress lines and fails twice</p>
                 <p>
                   The digest: the exit status, each failing test with the lines around its error, and the first and last lines,
-                  with repeats collapsed. Rules on this Mac write it. No model is needed.
+                  with repeats collapsed. Rules on this Mac write the digest; no model writes it.
                 </p>
               </div>
               <div className="settings-token-miser__example">
@@ -408,8 +409,8 @@ export function TokenMiserV2Settings(props: {
               <div className="settings-token-miser__example">
                 <p className="settings-token-miser__example-title">The command missed what the agent wanted</p>
                 <p>
-                  With a decision model, the agent gets its scores and a note: read exact lines with the handle, or run a
-                  corrected command. Nothing is summarized.
+                  With a decision model, the agent gets the digest plus its scores and a note: read exact lines with the
+                  handle, or run a corrected command. Nothing is summarized.
                 </p>
               </div>
             </div>
@@ -442,9 +443,9 @@ export function TokenMiserV2Settings(props: {
                   model here or a summarizer below to use a model again.
                 </Line>
               ) : null}
-              {gate.value === "none"
-                ? <Line key="state">No check runs. Free, and nothing leaves this Mac.</Line>
-                : decisionProviderStatus(gate.value, props.snapshot).lines}
+              {gateStatus
+                ? gateStatus.lines
+                : <Line key="state">No check runs. Free, and nothing leaves this Mac.</Line>}
             </div>
           }
         />
@@ -472,6 +473,10 @@ export function TokenMiserV2Settings(props: {
             <div className="settings-field__help settings-token-miser__status">
               {summarizer.value === "configured" ? (
                 <>
+                  {gateStatus && !gateStatus.ready ? (
+                    // The owner summarizes only what a working gate recommends.
+                    <Line warn>Nothing is summarized until the decision model above is ready.</Line>
+                  ) : null}
                   <Line>
                     Reads up to 2 KB of the output and writes a summary of at most 640 bytes, in its own turn on the backend you
                     choose, not in the thread. If a thread type has no model that can run, that thread type gets the digest only.
@@ -647,12 +652,14 @@ export function TokenMiserLegacySettings(props: {
           sub="Download PwrAgent's verified Codex build to summarize large tool results, including in Code Mode."
           help="PwrAgent checks for updates while this setting is on and switches builds after active Codex turns finish. If a summary is unavailable, the thread receives the original output."
           source={sourceBadge(tokenMiserEnabled)}
-          // The card's chip names Installing, Starting or Waiting for idle.
           actions={managedCodexProgress ? (
             <ManagedRuntimeProgressStrip
               progress={managedCodexProgress}
               waitingForIdle={managedCodex?.state === "pending-switch"}
             />
+          ) : status ? (
+            // The chip shows it too, but only a status region is announced.
+            <span role="status">{status}</span>
           ) : undefined}
           onChange={(enabled) => {
             props.legacy.setWriteTarget(enabled);
