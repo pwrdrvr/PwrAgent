@@ -1,7 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
@@ -9,100 +8,20 @@ import {
   type ForgeAgentToolPolicy,
 } from "@pwragent/shared/contracts/forge-agent-tools";
 import { permissionForDynamicTool } from "@pwragent/shared/contracts/rbac";
-import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { ForgeReadError, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { GithubPrToolClient, type GhRunner } from "../pr-status/github-pr-tool-client";
-import { validateForgeAttachments, type ForgePrToolContext } from "../pr-status/forge-pr-tool-shared";
+import type { GhRunner } from "../pr-status/github-pr-tool-client";
+import { validateForgeAttachments } from "../pr-status/forge-pr-tool-shared";
 import { FORGE_PR_WRITE_OPERATIONS, forgePrToolGroup, validateForgePrToolArgs } from "../pr-status/forge-pr-tool-contract";
 import { ForgePrToolService } from "../pr-status/forge-pr-tool-service";
 import * as gitExecutable from "../app-server/git-executable";
 import { buildForgeToolDefinitions, buildForgePrToolDefinitions } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { searchPwrAgentTools } from "../agent-tools/pwragent-tool-search";
+import { ctx, harness, json, pull, repo } from "./github-pr-tool-test-fixture";
 
-const repo: ForgeRepository = { provider: "github", host: "github.com", owner: "fixture", repo: "project" };
-const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
-const pull = (number: number, extra: Record<string, unknown> = {}) => ({
-  number, node_id: `PR_${number}`, title: "Fixture change", state: "open", draft: false, body: "Body text", user: { login: "octo" },
-  head: { ref: "topic", sha: "a".repeat(40), repo: { full_name: "fixture/project" } }, base: { ref: "main", sha: "b".repeat(40) },
-  labels: [{ name: "bug" }], requested_reviewers: [], assignees: [], html_url: `https://github.com/fixture/project/pull/${number}`, ...extra,
-});
 const stackHistory = (baseRefName: string) => json({ data: { repository: { pullRequest: {
   headRefOid: "a".repeat(40), baseRefName, timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
 } } } });
-const nativeStack = (numbers: number[]) => ({
-  number: 42, open: true, base: { ref: "main" },
-  pull_requests: numbers.map((number, index) => pull(number, {
-    head: { ref: `layer-${index}` },
-    base: { ref: index ? `layer-${index - 1}` : "main" },
-  })),
-});
-
-type Call = { url: string; method: string; body?: unknown; accept?: string };
-function harness(routes: (call: Call) => Response | Promise<Response>, runGh?: GhRunner) {
-  const calls: Call[] = [];
-  const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const headers = (init?.headers ?? {}) as Record<string, string>;
-    const call: Call = { url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined, accept: headers.Accept };
-    calls.push(call);
-    return await routes(call);
-  }) as unknown as typeof fetch;
-  const ci = new ForgeCiClient({ fetch: fetcher, githubToken: async () => "fixture-secret", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true });
-  const client = new GithubPrToolClient({ ci, runGh, tempRoots: [os.tmpdir()] });
-  return { calls, client };
-}
-const ctx = (extra: Partial<ForgePrToolContext> = {}): ForgePrToolContext => ({
-  repository: repo, branch: "topic", directories: [], attached: [], privateRoots: [], defaultMergeMethod: () => "squash", ...extra,
-});
-
-type StackReceipt = "complete" | "empty" | "server_error" | "disconnect";
-type StackAttempt = { chain: "pair" | "longer"; receipt: StackReceipt };
-
-async function replayStackRegistration(numbers: number[], attempts: readonly StackAttempt[]) {
-  const chains = { pair: numbers.slice(0, 2), longer: numbers };
-  // The fixture commits one of these overlapping chains at the forge, before
-  // returning any response. A second write that overlaps it is rejected.
-  let registered: number[] | undefined;
-  const { calls, client } = harness((call) => {
-    if (call.method === "GET") {
-      expect(new URL(call.url).searchParams.get("pull_request")).toBe(String(numbers[0]));
-      return json(registered ? [nativeStack(registered)] : []);
-    }
-    expect(call.method).toBe("POST");
-    expect(call.body).toEqual({ pull_requests: chains[attempt.chain] });
-    if (registered) return json({ message: "PRs already stacked" }, 422);
-    registered = chains[attempt.chain];
-    if (attempt.receipt === "empty") return new Response(null, { status: 201 });
-    if (attempt.receipt === "server_error") return json({ message: "GitHub could not deliver the receipt" }, 500);
-    if (attempt.receipt === "disconnect") throw new TypeError("connection closed before response");
-    return json(nativeStack(registered), 201);
-  });
-  const definition = buildForgePrToolDefinitions((operation, args) => client.execute(operation, args, ctx()))
-    .find((tool) => tool.name === "create_pull_request_stack")!;
-  const winner = attempts[0]!;
-  let attempt: StackAttempt;
-  for (const [index, step] of attempts.entries()) {
-    attempt = step;
-    const before = calls.length;
-    const result = await definition.dispatch({ pullRequests: chains[step.chain] }, { backend: "codex", threadId: "t", transport: "codex_dynamic_tool" });
-    const context = { index, step, calls: calls.slice(before).map((call) => call.method), result };
-    if (winner.receipt === "disconnect") {
-      // The shared transport's cooldown stops all subsequent HTTP calls.
-      expect(context).toMatchObject(index === 0 ? { calls: ["POST"], result: { ok: false, code: "provider_error" } }
-        : { calls: [], result: { ok: false, code: "rate_limited" } });
-    } else if (step.chain !== winner.chain) {
-      expect(context).toMatchObject({ calls: ["POST", "GET"], result: { ok: false, code: "rejected" } });
-    } else {
-      const needsReadback = index !== 0 || step.receipt !== "complete";
-      const created = index !== 0 ? false : step.receipt === "server_error" ? null : true;
-      expect(context).toMatchObject({
-        calls: needsReadback ? ["POST", "GET"] : ["POST"],
-        result: { ok: true, data: { created, providerRequests: needsReadback ? 2 : 1, stack: { number: 42, pullRequests: chains[step.chain] } } },
-      });
-    }
-  }
-  expect(registered).toEqual(chains[winner.chain]);
-}
 
 describe("GitHub tool contract", () => {
   it("rejects unknown fields, missing requirements and cross-repository search", () => {
@@ -213,115 +132,6 @@ describe("GitHub tool catalog", () => {
 });
 
 describe("GitHub tool client", () => {
-  async function expectNativeRegistration(numbers: number[]) {
-    const { calls, client } = harness((call) => call.method === "POST" && call.url.endsWith("/repos/fixture/project/stacks")
-      ? json(nativeStack(numbers), 201)
-      : json({ message: "Unexpected route" }, 500));
-    const service = new ForgePrToolService({
-      enabled: () => true, clients: { github: client, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "squash",
-    });
-    const scope = { remotes: [repo], attached: [], directories: [], privateRoots: [] };
-    const definition = buildForgePrToolDefinitions(async (operation, args) => {
-      const prepared = await service.prepare(operation, args, scope);
-      return await service.execute(operation, { ...prepared.args, repository: prepared.repository }, scope);
-    }).find((entry) => entry.name === "create_pull_request_stack");
-    expect(definition, "A chain of published PRs needs a native GitHub registration tool").toBeDefined();
-    const result = await definition!.dispatch({ pullRequests: numbers }, { backend: "codex", threadId: "t", transport: "codex_dynamic_tool" });
-    expect(result).toMatchObject({ ok: true, data: { created: true, providerRequests: 1, stack: { number: 42, base: "main", pullRequests: numbers } } });
-    expect(calls).toEqual([{ url: "https://api.github.com/repos/fixture/project/stacks", method: "POST", body: { pull_requests: numbers }, accept: "application/vnd.github+json" }]);
-  }
-
-  it("registers the terminal layout PR above its fix PR on GitHub", () => expectNativeRegistration([4658, 4665]));
-
-  it("preserves the requested bottom-first order at a fixed provider request count", async () => {
-    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.integer({ min: 1, max: 10000 }), { minLength: 2, maxLength: 16 }), expectNativeRegistration), { numRuns: 5 });
-    for (const size of [8, 16, 32]) {
-      await expectNativeRegistration(Array.from({ length: size }, (_, index) => size - index));
-    }
-  });
-
-  it("reads membership after GitHub creates the stack with an empty receipt", () =>
-    replayStackRegistration([4658, 4665, 4680], [{ chain: "pair", receipt: "empty" }]));
-
-  it("confirms membership after a server error without claiming which write created it", () =>
-    replayStackRegistration([1, 2, 3], [
-      { chain: "pair", receipt: "server_error" },
-      { chain: "pair", receipt: "complete" },
-      { chain: "longer", receipt: "complete" },
-    ]));
-
-  it("matches GitHub membership across failed receipts, repeat calls and overlapping chains", async () => {
-    const step = fc.record({
-      chain: fc.constantFrom("pair", "longer"),
-      receipt: fc.constantFrom("complete", "empty", "server_error", "disconnect"),
-    });
-    await fc.assert(fc.asyncProperty(
-      fc.uniqueArray(fc.integer({ min: 1, max: 10000 }), { minLength: 3, maxLength: 3 }),
-      fc.array(step, { minLength: 1, maxLength: 8, size: "max" }),
-      replayStackRegistration,
-    ), { numRuns: Number(process.env.MBT_RUNS ?? 5) });
-  });
-
-  it.each([false, true])("settles racing registrations while the winning receipt is pending (same chain %s)", async (sameChain) => {
-    const firstCommitted = Promise.withResolvers<void>();
-    const firstReceipt = Promise.withResolvers<Response>();
-    const pair = [4658, 4665];
-    const { calls, client } = harness((call) => {
-      if (call.method === "GET") return json([nativeStack(pair)]);
-      if (calls.length > 1) return json({ message: "PRs already stacked" }, 422);
-      firstCommitted.resolve();
-      return firstReceipt.promise;
-    });
-    const create = (pullRequests: number[]) => client.execute("create_pull_request_stack", { pullRequests }, ctx());
-    const winner = create(pair);
-    try {
-      await firstCommitted.promise;
-      if (sameChain) {
-        await expect(create(pair)).resolves.toMatchObject({ created: false, stack: { number: 42, pullRequests: pair } });
-      } else {
-        await expect(create([...pair, 4680])).rejects.toMatchObject({ code: "rejected" });
-      }
-    } finally {
-      firstReceipt.resolve(new Response(null, { status: 201 }));
-    }
-    await expect(winner).resolves.toMatchObject({ created: true, stack: { number: 42, pullRequests: pair } });
-    expect(calls.map((call) => call.method)).toEqual(["POST", "POST", "GET", "GET"]);
-  });
-
-  it("confirms an already registered chain after GitHub rejects a repeat", async () => {
-    const { calls, client } = harness((call) => call.method === "POST"
-      ? json({ message: "PRs already stacked" }, 422)
-      : json([nativeStack([4658, 4665])]));
-    await expect(client.execute("create_pull_request_stack", { pullRequests: [4658, 4665] }, ctx())).resolves.toMatchObject({
-      created: false, providerRequests: 2, stack: { number: 42, base: "main", pullRequests: [4658, 4665] },
-    });
-    expect(calls.map((call) => [call.method, new URL(call.url).search])).toEqual([["POST", ""], ["GET", "?pull_request=4658"]]);
-  });
-
-  it("preserves the rejection when GitHub has different members", async () => {
-    const { calls, client } = harness((call) => call.method === "POST"
-      ? json({ message: "PRs already stacked" }, 422)
-      : json([nativeStack([4658, 4665, 4680])]));
-    await expect(client.execute("create_pull_request_stack", { pullRequests: [4658, 4665] }, ctx()))
-      .rejects.toMatchObject({ code: "rejected", message: expect.stringContaining("PRs already stacked") });
-    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
-  });
-
-  it("reports GitHub write permission failures after one request", async () => {
-    const { calls, client } = harness(() => json({ message: "Resource not accessible by integration" }, 403));
-    await expect(client.execute("create_pull_request_stack", { pullRequests: [4658, 4665] }, ctx()))
-      .rejects.toMatchObject({ code: "forbidden", message: expect.stringContaining("Pull requests write access") });
-    expect(calls.map((call) => call.method)).toEqual(["POST"]);
-  });
-
-  it("requires GitHub to confirm the ordered members before reporting creation", async () => {
-    const reversed = nativeStack([4665, 4658]);
-    const { calls, client } = harness((call) => call.method === "POST" ? json(reversed, 201) : json([reversed]));
-    await expect(client.execute("create_pull_request_stack", { pullRequests: [4658, 4665] }, ctx()))
-      .rejects.toMatchObject({ code: "invalid_response" });
-    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
-  });
-
   it.each(["github.com", "github.example.test"])("requests only failed jobs through %s and accepts an empty 201 response", async (host) => {
     const { calls, client } = harness(() => new Response(null, { status: 201 }));
     const result = await client.execute("rerun_failed_ci_jobs", { runId: 42 }, ctx({ repository: { ...repo, host } }));

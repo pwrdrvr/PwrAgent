@@ -187,7 +187,8 @@ export class GithubPrToolClient {
 
     if (operation === "create_pull_request_stack") {
       const requested = args.pullRequests!;
-      const verifyBeforeRetry = "GitHub did not confirm the requested stack membership. Use list_stacks to verify before retrying.";
+      const pullUrl = `${repositoryUrl(r)}/pull/${requested[0]}`;
+      const verifyBeforeRetry = `GitHub did not confirm the requested stack membership. Check the PR on GitHub for the native stack before retrying. ${pullUrl}`;
       let failure: ForgeReadError | undefined;
       let created: boolean | null = true;
       try {
