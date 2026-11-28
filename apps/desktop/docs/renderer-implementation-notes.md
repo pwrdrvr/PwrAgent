@@ -66,9 +66,14 @@ says when to read this document. Relative links were updated for this location.
   - **An enterable card passes `interactive`.** The sidebar's PR cards
     (`PrChip` `cardActions`) open beside the sidebar and carry Copy URL and
     Detach. `lib/hover-card-bridge.ts` owns them: leaving a chip or its card
-    keeps the card for the 300 ms bridge, and entering any chip closes it
-    at once and shows the new one without the hover delay, so a sweep across
-    chips reads as before. A card that falls back over the rows does not
+    keeps the card for the 300 ms bridge, renewed by every move that still
+    heads for the card. Entering another trigger never closes the card by
+    itself; the card that shows next does. While the pointer heads for the
+    open card (the safe triangle, `pointerAimsAtRect`), a trigger it crosses
+    (a stack tag, a ✕, another thread row) waits its full hover delay, so a
+    pass never swaps. Otherwise it swaps after `HOVER_CARD_SWAP_REST_MS` of
+    rest, so a sweep down the chips stays quick without letting a slide
+    across one steal the card. A card that falls back over the rows does not
     bridge. Its buttons stay out of the Tab order and the chip's description;
     the chip keeps Delete and its menu for the keyboard. The card stops React
     propagation of presses, since its portal sits in the row's React tree.
@@ -76,8 +81,8 @@ says when to read this document. Relative links were updated for this location.
     passes `interactive.bridge`: a transparent strip of the card fills the
     10px gap (`tooltipBridgeRect`), so the pointer crosses into the card
     without passing over anything else. The grace period alone is not enough:
-    entering another bridged trigger in the gap, such as a project index row
-    under the Attention tab, closes the card at once.
+    a pointer that rests on another bridged trigger in the gap, such as a
+    project index row under the Attention tab, swaps to that trigger's card.
   - **A held card ignores layout under it.** While the pointer is in an
     enterable card, or focus is on one of its controls, its anchor moving,
     scrolling or leaving does not close it: the sidebar keeps reflowing
