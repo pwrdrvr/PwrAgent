@@ -201,7 +201,6 @@ it("admits ACP MCP calls during their own prompt and rejects them after completi
       expect(resolutionWarnings()).toEqual([]);
     }
     expect(callRejections()).toEqual([]);
-    const idleWarningCount = resolutionWarnings().length;
 
     for (const [provider, source] of [[antigravity, "desktop"], [grok, "automation"]] as const) {
       const turn = await registry.startTurn({
@@ -212,7 +211,7 @@ it("admits ACP MCP calls during their own prompt and rejects them after completi
       expect(await readSource(provider.mcp)).toMatchObject({ structuredContent: { source } });
     }
     expect(await readSource(antigravity.mcp)).toMatchObject({ structuredContent: { source: "desktop" } });
-    expect(resolutionWarnings()).toHaveLength(idleWarningCount);
+    expect(resolutionWarnings()).toEqual([]);
 
     for (const provider of fixture.providers) {
       const ended = nextTurnEnd(registry);

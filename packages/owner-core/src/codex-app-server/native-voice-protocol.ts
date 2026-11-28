@@ -7,14 +7,14 @@ import { codexVersionFromUserAgent } from "./protocol-compatibility";
 export type NativeVoiceNotification = Extract<ServerNotification, {
   method: `thread/realtime/${string}`;
 }>;
-/** A dynamic tool call that settled on some Codex thread. */
+/** A PwrAgent tool call that settled on a Codex thread. */
 export type NativeVoiceToolCall = {
   threadId: string;
   tool: string;
   namespace?: string;
   /** The arguments Codex passed to the tool. */
   arguments?: unknown;
-  /** The `DynamicToolCallResponse` returned to Codex. */
+  /** The settled result in `DynamicToolCallResponse` format. */
   response: unknown;
 };
 /** The lease keeps the selected App Server alive and its tool catalog attached. */

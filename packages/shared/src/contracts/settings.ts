@@ -1604,6 +1604,7 @@ export type DesktopSettingsSnapshot = {
     tokenMiserDefaultEnabled?: DesktopSettingsValue<boolean>;
     /** Load PwrAgent tool schemas on demand in Codex Code Mode. */
     codexToolDiscovery?: DesktopSettingsValue<boolean>;
+    codexAgentToolsMcp?: DesktopSettingsValue<boolean>;
     /** Opt-in native research UI and tools. Defaults to off. */
     researchEnabled?: DesktopSettingsValue<boolean>;
     /** Opt-in Federation and local resource checkout tools for agents. Defaults to off. */
@@ -2011,6 +2012,7 @@ export type DesktopSettingsConfigPatch = {
     tokenMiserBoundedHelper?: BoundedCommandHelperMode;
     tokenMiserDefaultEnabled?: boolean;
     codexToolDiscovery?: boolean;
+    codexAgentToolsMcp?: boolean;
     researchEnabled?: boolean;
     resourceCheckoutsEnabled?: boolean;
     tokenMiserFocusedSummariesEnabled?: boolean;
