@@ -189,6 +189,38 @@ describe("harness setup status", () => {
       expect(status).toMatchObject({ label: "Sign-in required", dot: "warn", ready: false, action: "sign-in" });
     });
 
+    it("a fresh machine's missing ~/.codex reads as not signed in, not a missing profile", () => {
+      // Seen on the macOS E2E VM: Codex had never run, so the System default
+      // folder did not exist yet, and Setup said the folder "is gone".
+      const codex = {
+        path: { value: "", source: "default" },
+        discovery: {
+          selectedCommand: "/opt/homebrew/bin/codex",
+          candidates: [{
+            command: "/opt/homebrew/bin/codex", source: "path", executable: true, selected: true, version: "0.159.0",
+          }],
+        },
+        profiles: {
+          profileRoot: "/Users/me/.codex/profiles",
+          effectiveCodexHome: "/Users/me/.codex",
+          profiles: [{
+            name: "", displayName: "System default", codexHome: "/Users/me/.codex", source: "default",
+            exists: false, selected: true, hasAuthFile: false, hasConfigFile: false,
+          }],
+        },
+      } as unknown as CodexSnapshot;
+      const status = codexSetupStatus({ codex });
+      expect(status).toMatchObject({ label: "Sign-in required", action: "sign-in" });
+      expect(status.steps[1]).toMatchObject({ label: "Not signed in" });
+
+      // A named profile whose folder is gone still needs repair.
+      const named = structuredClone(codex);
+      named.profiles.profiles[0] = {
+        ...named.profiles.profiles[0]!, name: "work", displayName: "work", codexHome: "/Users/me/.codex/profiles/work",
+      };
+      expect(codexSetupStatus({ codex: named })).toMatchObject({ label: "Action required", action: "manage-account" });
+    });
+
     it("a failed download of PwrAgent's Codex build is a warning, not a grey Not found", () => {
       const codex = {
         path: { value: "", source: "default" },

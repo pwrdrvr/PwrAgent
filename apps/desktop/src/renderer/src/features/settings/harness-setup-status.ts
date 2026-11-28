@@ -703,7 +703,10 @@ export function codexSetupStatus(params: {
       facts: [login.email, login.planType, profileName].filter((fact): fact is string => Boolean(fact)),
       action: "manage-account",
     };
-  } else if (profile && !profile.exists) {
+  } else if (profile && !profile.exists && profile.name !== "") {
+    // A named profile whose folder is gone needs repair. The System default
+    // folder (~/.codex) simply does not exist until Codex first signs in, so
+    // on a fresh machine it falls through to Not signed in below.
     account = {
       id: "account",
       state: "attention",
