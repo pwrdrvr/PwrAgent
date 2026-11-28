@@ -256,6 +256,14 @@ it("reads a parked or checked-out issue candidate without a forge call and keeps
       fetcher.mockResolvedValueOnce(Response.json(forgeFixture({ actualHead, actualBase: older })));
       const movedBase = await read({ ...params, selection: { repositoryId, number: 7 } });
       expect(movedBase.candidate).toMatchObject({ publication: "revision_changed", outcomeId: unpublished.candidate?.outcomeId });
+      await runGitCommand(projectPath, ["symbolic-ref", "refs/heads/local-default", "refs/heads/main"]);
+      const localDefault = await read({ ...params, candidate: { ...candidate, baseRef: "refs/heads/local-default" },
+        selection: { repositoryId, number: 7 } });
+      expect(localDefault.candidate).toMatchObject({ baseOid: actualBase, publication: "confirmed" });
+      await runGitCommand(projectPath, ["symbolic-ref", "refs/remotes/unregistered/HEAD", "refs/heads/main"]);
+      const unregistered = await read({ ...params, candidate: { ...candidate, baseRef: "refs/remotes/unregistered/HEAD" },
+        selection: { repositoryId, number: 7 } });
+      expect(unregistered.candidate).toMatchObject({ baseOid: undefined, publication: "mismatch" });
       await runGitCommand(projectPath, [...commit, "advance target"]);
       const advanced = (await runGitCommand(projectPath, ["rev-parse", "HEAD"])).stdout.trim();
       await runGitCommand(projectPath, ["update-ref", "refs/remotes/origin/main", advanced]);

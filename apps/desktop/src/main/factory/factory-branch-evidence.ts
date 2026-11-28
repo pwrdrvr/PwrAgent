@@ -86,7 +86,9 @@ function trackingSource(config: string, ref: string) {
 async function readBaseRef(root: string, ref: string, repository: string) {
   const tip = await readRef(root, ref);
   if (!tip) return undefined;
-  if (ref.startsWith("refs/heads/")) return { oid: tip.oid, branch: ref.slice("refs/heads/".length) };
+  if (ref.startsWith("refs/heads/") && tip.ref.startsWith("refs/heads/")) {
+    return { oid: tip.oid, branch: tip.ref.slice("refs/heads/".length) };
+  }
   const config = await git(root, ["config", "--null", "--get-regexp", "^remote\\..*\\.fetch$"]);
   const tracking = config && trackingSource(config, tip.ref);
   const branch = tracking && /^refs\/heads\/(.+)$/.exec(tracking.source)?.[1];
