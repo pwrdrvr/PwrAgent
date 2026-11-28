@@ -1,6 +1,7 @@
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type {
+  AgentNoticeRef,
   AgentNotificationItem,
   AgentNotificationsSnapshot,
   ManageAgentNotificationsRequest,
@@ -38,6 +39,8 @@ type OwnerState = {
   announced: Set<string> | undefined;
   reading?: Promise<void>;
   stale: boolean;
+  /** What windows last saw of this peer's notices, to tell them only of a change. */
+  signature: string;
   /** Requests sent to this peer, numbered in order. */
   sent: number;
   /** The newest request whose reply is stored. */
@@ -84,7 +87,7 @@ export class FederatedAgentNotifications {
         owner.peer = peer;
         continue;
       }
-      this.owners.set(peer.target.instanceId, { peer, snapshot: EMPTY, announced: undefined, stale: false, sent: 0, applied: 0 });
+      this.owners.set(peer.target.instanceId, { peer, snapshot: EMPTY, announced: undefined, stale: false, signature: "", sent: 0, applied: 0 });
       added.push(peer.target.instanceId);
     }
     this.deps.watch([...connected]);
@@ -92,12 +95,20 @@ export class FederatedAgentNotifications {
     for (const instanceId of added) void this.refresh(instanceId);
   }
 
-  /** A peer's notices changed, or its event stream restarted. */
+  /**
+   * A peer's notices changed, or its event stream restarted after a gap. A
+   * stream also restarts when this viewer opens another of the peer's
+   * threads; with nothing missed (`navigationContinuous`) that is not read.
+   */
   onRemoteEvent(event: AgentEvent): void {
     const target = event.federationTarget;
     if (target?.scope !== "remote") return;
     const method = event.notification.method;
-    if (method !== "agentNotifications/updated" && method !== "federation/eventStream/changed") return;
+    if (method === "federation/eventStream/changed") {
+      if ((event.notification.params as { navigationContinuous?: boolean }).navigationContinuous) return;
+    } else if (method !== "agentNotifications/updated") {
+      return;
+    }
     if (this.owners.has(target.instanceId)) void this.refresh(target.instanceId);
   }
 
@@ -141,13 +152,13 @@ export class FederatedAgentNotifications {
       const owners = window ? [window.instanceId] : [...this.owners.keys()];
       // Only the notices the window listed, each on its own owner. This
       // machine's notices and each peer's are dismissed independently.
-      const listed = Array.isArray(request.ids) ? request.ids : undefined;
+      const listed = Array.isArray(request.ids) ? byOwner(request.ids) : undefined;
       const local = window ? undefined : await this.deps.local(listed
-        ? { action: "dismiss_all", ids: listed.filter((ref) => !ref.federationTarget) }
+        ? { action: "dismiss_all", ids: listed.get(undefined) ?? [] }
         : request);
       await Promise.all(owners.map(async (instanceId) => {
         const owner = this.owners.get(instanceId);
-        const ids = listed?.filter((ref) => ref.federationTarget?.instanceId === instanceId).map((ref) => ({ id: ref.id }));
+        const ids = listed ? listed.get(instanceId) ?? [] : undefined;
         if (!owner || (ids ? ids.length === 0 : owner.snapshot.unread.length === 0)) return;
         try {
           const { seq, response } = await this.ask(owner, ids ? { action: "dismiss_all", ids } : { action: "dismiss_all" });
@@ -179,8 +190,7 @@ export class FederatedAgentNotifications {
     }
     const { seq, response } = await this.ask(owner, { ...request, federationTarget: undefined });
     if (!response.ok) return response;
-    this.apply(owner, response, seq);
-    this.deps.changed();
+    if (this.apply(owner, response, seq)) this.deps.changed();
     return await this.snapshot(window);
   }
 
@@ -218,6 +228,8 @@ export class FederatedAgentNotifications {
    * unread. A reply to an older request than the stored one is dropped; the
    * stored snapshot is newer. So is a reply for a peer this viewer has since
    * dropped: its banners were withdrawn, and nothing would withdraw new ones.
+   * Returns whether windows should read again: only when what they show
+   * changed.
    */
   private apply(owner: OwnerState, response: ManageAgentNotificationsResponse, seq: number): boolean {
     if (!response.ok || seq <= owner.applied || this.owners.get(owner.peer.target.instanceId) !== owner) return false;
@@ -231,9 +243,12 @@ export class FederatedAgentNotifications {
     };
     const unread = new Set(snapshot.unread.map((item) => item.id));
     const announced = owner.announced;
+    const signature = snapshotSignature(snapshot);
+    const changed = signature !== owner.signature;
+    owner.signature = signature;
     owner.snapshot = snapshot;
     owner.announced = unread;
-    if (!announced) return true;
+    if (!announced) return changed;
     for (const id of announced) {
       if (!unread.has(id)) this.deps.clearNative(nativeKey(target.instanceId, id));
     }
@@ -251,7 +266,7 @@ export class FederatedAgentNotifications {
         },
       });
     }
-    return true;
+    return changed;
   }
 
   private merged(local: AgentNotificationsSnapshot): AgentNotificationsSnapshot {
@@ -265,6 +280,26 @@ export class FederatedAgentNotifications {
       earlier: all.flatMap((snapshot) => snapshot.earlier).sort(newestFirst),
     };
   }
+}
+
+/** Groups a dismiss-all list by owner in one pass; this machine's under `undefined`. */
+function byOwner(refs: readonly AgentNoticeRef[]): Map<string | undefined, Array<{ id: string }>> {
+  const groups = new Map<string | undefined, Array<{ id: string }>>();
+  for (const ref of refs) {
+    const owner = ref.federationTarget?.instanceId;
+    let group = groups.get(owner);
+    if (!group) groups.set(owner, group = []);
+    group.push({ id: ref.id });
+  }
+  return groups;
+}
+
+/** What a window shows of a peer's notices, as one comparable string. */
+function snapshotSignature(snapshot: AgentNotificationsSnapshot): string {
+  const section = (items: AgentNotificationItem[]) => items
+    .map((item) => `${item.id}:${item.status}:${item.scheduledFor}:${item.deliveredAt ?? ""}:${item.threadTitle ?? ""}`)
+    .join(",");
+  return `${section(snapshot.unread)}|${section(snapshot.scheduled)}|${section(snapshot.earlier)}`;
 }
 
 function hasItems(snapshot: AgentNotificationsSnapshot): boolean {

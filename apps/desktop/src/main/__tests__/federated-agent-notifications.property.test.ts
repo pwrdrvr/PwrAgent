@@ -468,6 +468,69 @@ describe("FederatedAgentNotifications", () => {
     expect(local.filter((request) => request.action === "dismiss_all")).toEqual([{ action: "dismiss_all", ids: [{ id: "mine" }] }]);
   });
 
+  // Scaling audit: opening another of a peer's threads renews its event
+  // stream. Each switch read the peer's whole notice snapshot and told every
+  // window to read again, though nothing was missed.
+  it("re-reads a peer after a stream gap, not when a thread switch renews its stream", async () => {
+    const h = harness();
+    h.connected.add("peer-a");
+    h.notices.syncPeers();
+    await settle();
+    const streamChanged = (navigationContinuous: boolean) => h.notices.onRemoteEvent({
+      backend: "codex",
+      federationTarget: target("peer-a"),
+      notification: { method: "federation/eventStream/changed", params: { instanceId: "peer-a", epoch: "e", ...(navigationContinuous ? { navigationContinuous } : {}) } },
+    } as AgentEvent);
+    const before = h.remoteCalls.length;
+    for (let i = 0; i < 10; i++) streamChanged(true);
+    await settle();
+    expect(h.remoteCalls.length - before).toBe(0);
+    streamChanged(false);
+    await settle();
+    expect(h.remoteCalls.length - before).toBe(1);
+  });
+
+  // Scaling audit: every read told every window to read again, even when the
+  // peer's notices had not changed.
+  it("tells windows to read again only when a peer's notices change", async () => {
+    const h = harness();
+    h.owners.get("peer-a")!.unread.push(item("one"));
+    h.connected.add("peer-a");
+    h.notices.syncPeers();
+    await settle();
+    const before = h.changes();
+    for (let i = 0; i < 5; i++) {
+      h.notices.onRemoteEvent(updated("peer-a"));
+      await settle();
+    }
+    expect(h.changes() - before).toBe(0);
+    h.owners.get("peer-a")!.unread.push(item("two"));
+    h.notices.onRemoteEvent(updated("peer-a"));
+    await settle();
+    expect(h.changes() - before).toBe(1);
+  });
+
+  // Scaling audit: dismiss all scanned the whole list once per peer, so its
+  // work grew with peers times listed notices.
+  it("splits a dismiss-all list by owner in one pass", async () => {
+    const h = harness();
+    for (const peer of PEERS) {
+      for (let i = 0; i < 20; i++) h.owners.get(peer)!.unread.push(item(`${peer}-${i}`));
+      h.connected.add(peer);
+    }
+    h.notices.syncPeers();
+    await settle();
+    let visits = 0;
+    const listed = (await snapshotOf(h.notices, undefined)).unread.map((entry) => {
+      const ref = { id: entry.id } as { id: string; federationTarget?: FederationRemoteTarget };
+      Object.defineProperty(ref, "federationTarget", { enumerable: true, get: () => { visits++; return entry.federationTarget; } });
+      return ref;
+    });
+    await h.notices.manage({ action: "dismiss_all", ids: listed }, undefined);
+    expect(visits).toBe(listed.length);
+    for (const peer of PEERS) expect(h.owners.get(peer)!.unread).toEqual([]);
+  });
+
   it("keeps a peer's last notices through a failed read", async () => {
     const h = harness();
     h.owners.get("peer-a")!.unread.push(item("kept"));

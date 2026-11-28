@@ -314,8 +314,10 @@ delivered, dismissed, scheduled, cancelled or fails.
 
 The viewer's main process (`FederatedAgentNotifications`) keeps the last
 snapshot of each connected peer that advertises the capability, reads it
-again on each event and on a stream restart, and keeps it through a failed
-read. Every reply carries the peer's whole snapshot. Requests reach the
+again on each event and after a stream gap, and keeps it through a failed
+read. A stream that restarts because this viewer opened another of the
+peer's threads (`navigationContinuous`) is not read, and windows are told
+to read again only when a peer's notices changed. Every reply carries the peer's whole snapshot. Requests reach the
 peer in the order they were sent, on the one connection to it, but replies
 can return in any order, so each request is numbered when it is sent and a
 reply older than the stored one is dropped. So is a reply for a peer the
