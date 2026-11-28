@@ -5,7 +5,10 @@ import { ReviewAutoFixRuns, type ReviewAutoFixRunEvent } from "../thread-reviews
 /**
  * Rule: a review's Auto-fix run shows what its turn last did, as the owner's
  * queue reported it: waiting behind a running turn, running, finished, or
- * refused with the reason; a cancelled turn leaves no run. Once an agent or
+ * refused with the reason; a cancelled turn leaves no run. A queued run
+ * names the owner's stack hold until the owner reports the gate open, a queue
+ * update that keeps it queued leaves the hold alone, and leaving the queued
+ * phase drops it. Once an agent or
  * the operator settles a finding, a failed send is dropped, while a run that
  * is still going or has ended stays. Viewers are told
  * exactly when what they show changes, so a queue position update that keeps
@@ -15,14 +18,20 @@ import { ReviewAutoFixRuns, type ReviewAutoFixRunEvent } from "../thread-reviews
  * from the reducer.
  */
 
-type Shown = { phase: string; reason?: string } | undefined;
+type Shown = { phase: string; reason?: string; hold?: string } | undefined;
 
 const QUEUE_STATUSES = ["queued", "held", "started", "failed", "blocked", "cancelled", "terminal", "updated"];
 
 function shownAfter(current: Shown, event: ReviewAutoFixRunEvent): Shown {
   if (event.kind === "sendFailed") return { phase: "failed", reason: event.reason };
   if (event.kind === "reviewUpdated") return current?.phase === "failed" ? undefined : current;
-  if (event.status === "queued" || event.status === "held") return { phase: "queued" };
+  if (event.kind === "stackHold") {
+    if (event.reason) return { phase: "queued", hold: event.reason };
+    return current?.phase === "queued" ? { phase: "queued" } : current;
+  }
+  if (event.status === "queued" || event.status === "held") {
+    return current?.phase === "queued" ? current : { phase: "queued" };
+  }
   if (event.status === "started") return { phase: "running" };
   if (event.status === "failed" || event.status === "blocked") {
     return { phase: "failed", reason: event.errorMessage ?? "The turn could not start." };
@@ -54,6 +63,14 @@ const eventFor = (reviewArb: fc.Arbitrary<string>): fc.Arbitrary<{ reviewId: str
     reviewId: reviewArb,
     event: fc.record({ kind: fc.constant("reviewUpdated" as const), at: fc.nat() }),
   }),
+  fc.record({
+    reviewId: reviewArb,
+    event: fc.record({
+      kind: fc.constant("stackHold" as const),
+      reason: fc.option(fc.constantFrom("Held by #12: CI running", "Held by #12: needs restack"), { nil: undefined }),
+      at: fc.nat(),
+    }).map(({ reason, ...event }) => (reason ? { ...event, reason } : event)),
+  }),
 );
 const eventArb = eventFor(fc.constantFrom("r1", "r2"));
 
@@ -84,7 +101,11 @@ describe("review auto-fix runs", () => {
         expect(notices - noticesBefore).toBe(changed ? 1 : 0);
         const actual = runs.of(thread)[reviewId];
         expect(actual === undefined ? undefined
-          : { phase: actual.phase, ...(actual.phase === "failed" ? { reason: actual.reason } : {}) })
+          : {
+            phase: actual.phase,
+            ...(actual.phase === "failed" ? { reason: actual.reason } : {}),
+            ...(actual.phase === "queued" && actual.hold ? { hold: actual.hold } : {}),
+          })
           .toEqual(after);
       }
     }), { numRuns: 1000 });
@@ -119,6 +140,11 @@ describe("review auto-fix runs", () => {
     const thread = { backend: "codex" as const, threadId: "owner" };
     runs.record(thread, "r1", { kind: "queue", status: "queued", at: 10 });
     runs.record(thread, "r1", { kind: "queue", status: "queued", at: 20 });
+    expect(runs.of(thread).r1).toEqual({ phase: "queued", at: 10 });
+    runs.record(thread, "r1", { kind: "stackHold", reason: "Held by #12: CI running", at: 30 });
+    runs.record(thread, "r1", { kind: "queue", status: "held", at: 40 });
+    expect(runs.of(thread).r1).toEqual({ phase: "queued", at: 10, hold: "Held by #12: CI running" });
+    runs.record(thread, "r1", { kind: "stackHold", at: 50 });
     expect(runs.of(thread).r1).toEqual({ phase: "queued", at: 10 });
   });
 });

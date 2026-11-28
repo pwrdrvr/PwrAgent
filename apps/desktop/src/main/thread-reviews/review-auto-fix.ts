@@ -173,7 +173,12 @@ export type ReviewAutoFixRunEvent =
   /** The Auto-fix turn's queue entry moved, as `thread/turnQueue/updated` says. */
   | { kind: "queue"; status: string; errorMessage?: string; at: number }
   /** An agent or the operator settled a finding or resolved the review. */
-  | { kind: "reviewUpdated"; at: number };
+  | { kind: "reviewUpdated"; at: number }
+  /**
+   * The owner checked the send's stack gate: `reason` while it holds the
+   * send, none once admission may proceed.
+   */
+  | { kind: "stackHold"; reason?: string; at: number };
 
 /**
  * A run's next state. The queue entry carries the review's id in its message
@@ -183,17 +188,27 @@ export type ReviewAutoFixRunEvent =
  * finding or resolves the review, a failed send is old news: someone took
  * the findings on, so the failure is dropped. A run that is still going
  * settles findings itself, so it stays.
+ *
+ * A queued run keeps its first time. A stack hold marks the queued run with
+ * its reason until the owner reports the gate open; a queue update that
+ * keeps the run queued leaves the hold as it was, and leaving the queued
+ * phase drops it.
  */
 export function nextReviewAutoFixRun(
   current: ReviewAutoFixRun | undefined,
   event: ReviewAutoFixRunEvent,
 ): ReviewAutoFixRun | undefined {
+  const queuedSince = current?.phase === "queued" ? current.at : event.at;
   if (event.kind === "sendFailed") return { phase: "failed", at: event.at, reason: event.reason };
   if (event.kind === "reviewUpdated") return current?.phase === "failed" ? undefined : current;
+  if (event.kind === "stackHold") {
+    if (event.reason) return { phase: "queued", at: queuedSince, hold: event.reason };
+    return current?.phase === "queued" ? { phase: "queued", at: current.at } : current;
+  }
   switch (event.status) {
     case "queued":
     case "held":
-      return { phase: "queued", at: event.at };
+      return current?.phase === "queued" ? current : { phase: "queued", at: event.at };
     case "started":
       return { phase: "running", at: event.at };
     case "failed":
@@ -206,6 +221,17 @@ export function nextReviewAutoFixRun(
     default:
       return current;
   }
+}
+
+/** Whether two runs show viewers the same step. */
+function sameReviewAutoFixRunStep(
+  a: ReviewAutoFixRun | undefined,
+  b: ReviewAutoFixRun | undefined,
+): boolean {
+  if (a?.phase !== b?.phase) return false;
+  if (a?.phase === "failed" && b?.phase === "failed") return a.reason === b.reason;
+  if (a?.phase === "queued" && b?.phase === "queued") return a.hold === b.hold;
+  return true;
 }
 
 /** Runs kept per thread; older ones belong to reviews long since settled. */
@@ -223,8 +249,7 @@ export class ReviewAutoFixRuns {
     const current = runs.get(reviewId);
     const next = nextReviewAutoFixRun(current, event);
     // A queue position update repeats the phase; the run keeps its first time.
-    if (next?.phase === current?.phase
-      && (next?.phase !== "failed" || current?.phase !== "failed" || next.reason === current.reason)) return;
+    if (sameReviewAutoFixRunStep(current, next)) return;
     runs.delete(reviewId);
     if (next) runs.set(reviewId, next);
     while (runs.size > RUNS_PER_THREAD) runs.delete(runs.keys().next().value!);
@@ -476,6 +501,8 @@ export class ReviewAutoFixDispatcher {
           return;
         }
         if (hold) {
+          // The card names the stack hold until admission decides otherwise.
+          this.deps.recordRun(current, id, { kind: "stackHold", reason: hold, at: this.now() });
           if (this.heldReviews.get(id) !== hold) {
             this.deps.onHeld?.(current, hold);
           }
@@ -495,9 +522,13 @@ export class ReviewAutoFixDispatcher {
           // Keep ownership until admission. A queued start could otherwise
           // outlive the observation that cleared the gate.
           const hasHandoff = this.handoffSuspensions.has(id);
+          let admissionHold: string | undefined;
           const result = await this.deps.submitTurnIfIdle({
             ...request,
-            canAdmit: async () => !await this.deps.readStackHold?.(current),
+            canAdmit: async () => {
+              admissionHold = await this.deps.readStackHold?.(current);
+              return !admissionHold;
+            },
             ...(hasHandoff ? { reviewAutoFixHandoff: true } : {}),
           });
           if (result.status === "busy") {
@@ -506,7 +537,14 @@ export class ReviewAutoFixDispatcher {
               this.cancelReview(id, afterBusy ?? current);
               return;
             }
-            this.heldReviews.set(id, "Waiting for turn admission");
+            // Record the gate once admission answers, so a hold that closes
+            // again at admission does not flash the current-turn wording.
+            this.deps.recordRun(afterBusy, id, {
+              kind: "stackHold",
+              ...(admissionHold ? { reason: admissionHold } : {}),
+              at: this.now(),
+            });
+            this.heldReviews.set(id, admissionHold ?? "Waiting for turn admission");
             const handoff = this.handoffSuspensions.get(id);
             const reviewTurnStillActive = handoff !== undefined
               && !handoff.reviewTurnEnded
@@ -516,6 +554,7 @@ export class ReviewAutoFixDispatcher {
             }
             continue;
           }
+          this.deps.recordRun(current, id, { kind: "stackHold", at: this.now() });
         } else {
           await this.deps.submitTurn(request);
         }

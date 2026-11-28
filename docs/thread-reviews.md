@@ -361,7 +361,9 @@ the owner's memory, so a viewer never infers them.
   setting and later reviews keep their own choice.
 - **Run.** The review card shows a line under its head for the fix turn:
   **Auto-fixing** while the turn runs, **Auto-fix queued** while it waits
-  behind a running turn, and **Auto-fix left N open** when the turn ends
+  behind a running turn, **Auto-fix waiting** with the owner's reason while
+  a stack hold, such as a lower PR layer, keeps the send back, and
+  **Auto-fix left N open** when the turn ends
   with findings still open. A cancelled fix turn shows nothing. When the
   send fails or the queue refuses the turn, the line says **Auto-fix could
   not start** with the reason. The failure goes away once an agent or the

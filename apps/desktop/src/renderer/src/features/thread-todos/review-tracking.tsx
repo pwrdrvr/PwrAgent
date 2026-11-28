@@ -445,8 +445,9 @@ export function ReviewAutoFixArmedRow(props: { busy: boolean; error?: string; on
 }
 
 /**
- * The review card's line for its Auto-fix turn: queued behind a running
- * turn, running, finished with findings still open, or refused before it
+ * The review card's line for its Auto-fix turn: held by the owner for a
+ * stated reason such as a lower stack layer, queued behind a running turn,
+ * running, finished with findings still open, or refused before it
  * started. Nothing once a finished run left nothing open.
  */
 export function ReviewAutoFixLine(props: { run: ReviewAutoFixRun | undefined; openCount: number }) {
@@ -457,6 +458,14 @@ export function ReviewAutoFixLine(props: { run: ReviewAutoFixRun | undefined; op
       <p className="review-todo__auto" data-phase="running">
         <PendingSpinner pairing="paired" size="sm" />
         <span><strong>Auto-fixing</strong> · started when the review finished</span>
+      </p>
+    );
+  }
+  if (run.phase === "queued" && run.hold) {
+    return (
+      <p className="review-todo__auto" data-phase="queued" data-held="">
+        <ClockIcon size={12} />
+        <span><strong>Auto-fix waiting</strong> · {run.hold}</span>
       </p>
     );
   }
