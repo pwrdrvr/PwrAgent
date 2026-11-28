@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
-import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { StateDb } from "../state/state-db";
@@ -17,6 +18,7 @@ import {
   readReviewAutoFixStatus,
   resetReviewAutoFixArmingForTests,
   ReviewAutoFixDispatcher,
+  type ReviewStackHoldObservation,
 } from "../thread-reviews/review-auto-fix";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -48,7 +50,7 @@ describe("review tracking runtime eligibility", () => {
   const submitTurn = vi.fn(async () => ({ status: "queued" }));
   const submitTurnIfIdle = vi.fn(async ({ canAdmit }: { canAdmit: () => Promise<boolean> }) =>
     await canAdmit() ? { status: "started", turnId: "fix-turn" } : { status: "busy" });
-  function install(readReviewStackHold?: () => Promise<string | undefined>) {
+  function install(readReviewStackHold?: Parameters<typeof installThreadTodoRuntime>[0]["readReviewStackHold"]) {
     submitTurn.mockClear();
     submitTurnIfIdle.mockClear();
     const registry = {
@@ -308,6 +310,64 @@ describe("review tracking runtime eligibility", () => {
         checks.resolve(hold);
         await settle();
         dispatch.mockRestore();
+      }
+    });
+
+    it.each([
+      { inFlight: false, queued: false },
+      { inFlight: true, queued: false },
+      { inFlight: false, queued: true },
+    ])("wakes only the upper review after its lower layer completes ($inFlight in flight, $queued queued)", async ({ inFlight, queued }) => {
+      const lower = { backend: "claude" as const, threadId: "lower-repair" };
+      const blocker = buildThreadIdentityKey(lower.backend, lower.threadId);
+      const unrelated = { ...THREAD, threadId: "unrelated-stack" };
+      const finishObservation = Promise.withResolvers<void>();
+      const reason = "Held by #6: repair in progress";
+      let repairing = true;
+      const readHold = vi.fn(async (review: ThreadReview, observation?: ReviewStackHoldObservation) => {
+        if (review.threadId !== THREAD.threadId) return "Held by #20: CI running";
+        observation?.readActivity(blocker);
+        const wasRepairing = repairing;
+        if (inFlight) await finishObservation.promise;
+        if (wasRepairing) {
+          observation?.heldBy(blocker);
+          return reason;
+        }
+      });
+      install(readHold);
+      for (const thread of [THREAD, unrelated]) {
+        getReviewAutoFixArming().starting(thread, "auto-fix").accepted("review-turn");
+        onEvent(findingsOutput("review-turn", thread.threadId, thread, PR));
+      }
+      const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+      await settle();
+      expect(readHold).toHaveBeenCalledTimes(2);
+      const lookup = vi.spyOn(getThreadReviewService(), "get");
+      try {
+        const notification: AgentEvent["notification"] = queued
+          ? { method: "thread/turnQueue/updated", params: {
+            threadId: lower.threadId, queueEntryId: "repair-entry", origin: "automation", status: "cancelled",
+          } }
+          : { method: "turn/completed", params: {
+            threadId: lower.threadId, turnId: "repair", turn: { id: "repair", status: "completed", output: [] },
+          } };
+        // Identical thread IDs on other providers cannot settle this lower layer.
+        onEvent({ backend: "codex", notification });
+        await settle();
+        expect(lookup).not.toHaveBeenCalled();
+        expect(submitTurnIfIdle).not.toHaveBeenCalled();
+
+        repairing = false;
+        onEvent({ backend: lower.backend, notification });
+        finishObservation.resolve();
+        await settle();
+        expect(submitTurnIfIdle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(THREAD));
+        expect(readHold.mock.calls.slice(2).map(([review]) => review.threadId)).toEqual([THREAD.threadId, THREAD.threadId]);
+        expect(lookup.mock.calls.length).toBe(inFlight ? 3 : 2);
+      } finally {
+        finishObservation.resolve();
+        await settle();
+        lookup.mockRestore();
       }
     });
 

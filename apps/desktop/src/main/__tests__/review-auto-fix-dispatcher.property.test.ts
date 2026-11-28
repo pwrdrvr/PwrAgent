@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import {
   ReviewAutoFixDispatcher,
@@ -54,7 +55,7 @@ describe("review auto-fix dispatcher", () => {
           lockDuringReview: fc.boolean(),
           otherTurnAfterReview: fc.constantFrom("none" as const, "completed" as const, "failed" as const, "cancelled" as const),
           flakyHoldFlip: fc.boolean(),
-          scopedForgeWake: fc.boolean(),
+          stackWake: fc.constantFrom("global", "forge", "repair"),
           outcome: fc.constantFrom("normal" as const, "settle" as const, "archive" as const, "error" as const),
           outcomeDelayTicks: fc.integer({ min: 0, max: 3 }),
         }),
@@ -70,6 +71,8 @@ describe("review auto-fix dispatcher", () => {
             } },
           };
           const unrelated = { ...makeReview("unrelated"), threadId: "other-thread" };
+          const lower = { backend: "claude" as const, threadId: "lower-repair" };
+          const lowerKey = buildThreadIdentityKey(lower.backend, lower.threadId);
           const runs = new ReviewAutoFixRuns();
           let unrelatedLookups = 0;
           let unrelatedTerminalLookups = 0;
@@ -86,7 +89,8 @@ describe("review auto-fix dispatcher", () => {
 
           let dispatcher!: ReviewAutoFixDispatcher;
           const wakeStack = () => {
-            if (scenario.scopedForgeWake) dispatcher.wakeForPullRequest("github.com/example/atlas#1");
+            if (scenario.stackWake === "repair") dispatcher.onTurnEnded(lower, new Set(["lower-turn"]));
+            else if (scenario.stackWake === "forge") dispatcher.wakeForPullRequest("github.com/example/atlas#1");
             else dispatcher.wake();
           };
 
@@ -111,9 +115,13 @@ describe("review auto-fix dispatcher", () => {
               return unrelated;
             },
             isThreadArchived: (thread) => thread.threadId === THREAD.threadId && archived,
-            readStackHold: async (candidate) => candidate.id === unrelated.id
-              ? "Other stack is held"
-              : await s.schedule(Promise.resolve().then(() => stackHold), "readStackHold"),
+            readStackHold: async (candidate, observation) => {
+              if (candidate.id === unrelated.id) return "Other stack is held";
+              if (scenario.stackWake === "repair") observation.readActivity(lowerKey);
+              const hold = await s.schedule(Promise.resolve().then(() => stackHold), "readStackHold");
+              if (hold && scenario.stackWake === "repair") observation.heldBy(lowerKey);
+              return hold;
+            },
             threadHasActiveTurn: () => activeTurnId !== undefined,
             suspendDispatch: () => {
               dispatchSuspensions++;

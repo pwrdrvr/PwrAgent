@@ -61,6 +61,7 @@ import {
 import { describePrReviewReadiness } from "../pr-status/pr-review-readiness";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 import { reviewContextPullRequests, type ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
+import type { ReviewStackHoldObservation } from "../thread-reviews/review-auto-fix";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import {
@@ -3915,7 +3916,7 @@ class DesktopAppServerService {
     }))];
   }
 
-  private createPrStackScopeReader(demand: PrMetadataDemand = {}) {
+  private createPrStackScopeReader(demand: PrMetadataDemand = {}, observeActivity?: ReviewStackHoldObservation["readActivity"]) {
     const scopes = new Map<string, {
       catalogs: ReturnType<StackReader["preflightCatalogs"]>;
       project: () => ReturnType<StackReader["read"]>;
@@ -3934,7 +3935,7 @@ class DesktopAppServerService {
         const { threads } = await (listing ??= this.listThreads({}));
         await observation.revalidateAfterListing();
         return await this.projectScopedStackInventory(
-          directories, observation, inventory ??= this.readScopedStackInventory(threads),
+          directories, observation, inventory ??= this.readScopedStackInventory(threads), undefined, observeActivity,
         );
       };
       const scope = {
@@ -3963,12 +3964,21 @@ class DesktopAppServerService {
     return scoped.stacks.filter(matches);
   }
 
-  private async prStackHoldEvidence(pr: PrSummary, readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>): Promise<{ reason: string; lowerKey?: string } | undefined> {
+  private async prStackHoldEvidence(
+    pr: PrSummary,
+    readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>,
+    observeRepairBlocker?: ReviewStackHoldObservation["heldBy"],
+  ): Promise<{ reason: string; lowerKey?: string } | undefined> {
     try {
       for (const stack of await this.readPrStacks(pr, readScope)) {
         const layer = stack.layers.find((entry) => entry.pullRequest?.number === pr.number);
         const block = layer && stackDispatchBlock(layer);
-        if (block) return {
+        if (!block) continue;
+        if (observeRepairBlocker && block.reason === "repair in progress") {
+          const lower = stack.layers.find(({ branch }) => branch === block.branch);
+          if (lower?.thread) observeRepairBlocker(lower.thread.key);
+        }
+        return {
           reason: describeStackAutomationBlock(block),
           ...(layer?.heldBy?.number !== undefined && {
             lowerKey: getPrStatusKey({ provider: pr.provider, org: pr.org, repo: pr.repo, number: layer.heldBy.number }),
@@ -3981,11 +3991,18 @@ class DesktopAppServerService {
     }
   }
 
-  private async prStackHold(pr: PrSummary, readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>): Promise<string | undefined> {
-    return (await this.prStackHoldEvidence(pr, readScope))?.reason;
+  private async prStackHold(
+    pr: PrSummary,
+    readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>,
+    observeRepairBlocker?: ReviewStackHoldObservation["heldBy"],
+  ): Promise<string | undefined> {
+    return (await this.prStackHoldEvidence(pr, readScope, observeRepairBlocker))?.reason;
   }
 
-  async automationStackHold(review: Pick<ThreadReview, "backend" | "threadId" | "context">): Promise<string | undefined> {
+  async automationStackHold(
+    review: Pick<ThreadReview, "backend" | "threadId" | "context">,
+    observation?: ReviewStackHoldObservation,
+  ): Promise<string | undefined> {
     const reviewed = reviewContextPullRequests(review.context);
     const reviewedKeys = new Set(reviewed.map((pr) => this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(pr))));
     const observed = review.context ? undefined : getDesktopBackendRegistry().getCachedThreadSummary(review);
@@ -4001,7 +4018,7 @@ class DesktopAppServerService {
     let threadPaths: string[] | undefined;
     // Share one observation per checkout scope within this admission. The
     // final admission guard creates a fresh reader and rechecks live state.
-    const readScope = this.createPrStackScopeReader();
+    const readScope = this.createPrStackScopeReader({}, observation?.readActivity);
     for (const pr of this.canonicalizePrs(attachment?.prs ?? [])) {
       if (isTerminalPullRequest(pr) || !this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey)) continue;
       if (reviewedKeys.size ? !reviewedKeys.has(getPrStatusKey(pr)) : branch && pr.headRefName !== branch) continue;
@@ -4011,7 +4028,7 @@ class DesktopAppServerService {
             ?? getDesktopBackendRegistry().getCachedThreadSummary(review) ?? { linkedDirectories: [] });
         if (!paths.some((value) => workspacePaths.has(pathKey(value)))) continue;
       }
-      const hold = await this.prStackHold(pr, readScope);
+      const hold = await this.prStackHold(pr, readScope, observation?.heldBy);
       if (hold) return hold;
     }
   }
@@ -4184,10 +4201,14 @@ class DesktopAppServerService {
     directories: readonly string[], observation: StackReadObservation,
     inventory: ReturnType<DesktopAppServerService["readScopedStackInventory"]>,
     publishingPrs?: readonly PrSummary[],
+    observeActivity?: ReviewStackHoldObservation["readActivity"],
   ) {
     const { rows, knownPrs } = inventory;
     return this.stackReader.read(rows, knownPrs, directories,
-      (key) => this.stackThreadActivity(key), observation, undefined, publishingPrs);
+      (key) => {
+        observeActivity?.(key);
+        return this.stackThreadActivity(key);
+      }, observation, undefined, publishingPrs);
   }
 
   private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {

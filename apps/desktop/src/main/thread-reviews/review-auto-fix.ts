@@ -8,7 +8,7 @@ import type {
   ReviewAutoFixStatus,
   ThreadReview,
 } from "@pwragent/shared/contracts/thread-reviews";
-import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { reviewContextPullRequests, threadReviewDisplayTitle } from "@pwragent/shared/contracts/thread-reviews";
 import { autoFixReviewFindingsPrompt, orderReviewItems } from "../../shared/review-fix-prompts";
 
@@ -322,10 +322,17 @@ export type ReviewAutoFixTurnRequest = {
   messageOrigin: AppServerThreadMessageOrigin;
 };
 
+export type ReviewStackHoldObservation = {
+  /** Subscribe before the asynchronous activity read can observe a stale repair. */
+  readActivity: (threadKey: string) => void;
+  /** Keep the dependency on the repair that actually blocked the review. */
+  heldBy: (threadKey: string) => void;
+};
+
 export type ReviewAutoFixDispatcherDeps = {
   getReview: (id: string) => ThreadReview | undefined;
   isThreadArchived: (thread: ReviewAutoFixThread) => boolean;
-  readStackHold?: (review: ThreadReview) => Promise<string | undefined>;
+  readStackHold?: (review: ThreadReview, observation: ReviewStackHoldObservation) => Promise<string | undefined>;
   threadHasActiveTurn?: (thread: ReviewAutoFixThread) => boolean;
   suspendDispatch?: (thread: ReviewAutoFixThread) => () => void;
   submitTurn: (request: ReviewAutoFixTurnRequest) => Promise<unknown>;
@@ -351,6 +358,9 @@ type PendingAutoFix = {
   id: string;
   thread: ReviewAutoFixThread;
   forgeScopes: readonly ForgeWakeScope[];
+  repairThreads: Set<string>;
+  changedRepairThreads: Set<string>;
+  repairBlocker?: string;
   checking: boolean;
   recheck: boolean;
   hold?: string;
@@ -396,6 +406,7 @@ export class ReviewAutoFixDispatcher {
   private readonly pending = new Map<string, PendingAutoFix>();
   private readonly byThread = new Map<string, Set<PendingAutoFix>>();
   private readonly byRepository = new Map<string | undefined, ForgeWakeScope>();
+  private readonly byRepairThread = new Map<string, Set<PendingAutoFix>>();
   private readonly now: () => number;
   private forgeWakeSequence = 0;
   private disposed = false;
@@ -409,14 +420,23 @@ export class ReviewAutoFixDispatcher {
   }
 
   onTurnEnded(thread: ReviewAutoFixThread, endedTurnIds: ReadonlySet<string>): void {
-    const pendingForThread = this.byThread.get(threadKey(thread));
-    if (!pendingForThread) return;
-    for (const { handoff } of pendingForThread) {
+    for (const { handoff } of this.byThread.get(threadKey(thread)) ?? []) {
       if (handoff && (!handoff.reviewTurnId || endedTurnIds.has(handoff.reviewTurnId))) {
         handoff.reviewTurnEnded = true;
       }
     }
-    this.wakePending(pendingForThread);
+    this.onThreadAvailable(thread);
+  }
+
+  onThreadAvailable(thread: ReviewAutoFixThread): void {
+    const key = buildThreadIdentityKey(thread.backend, thread.threadId);
+    const own = this.byThread.get(threadKey(thread));
+    this.wakePending(own ?? []);
+    for (const pending of [...this.byRepairThread.get(key) ?? []]) {
+      if (own?.has(pending) || !this.isCurrent(pending)) continue;
+      if (pending.checking) pending.changedRepairThreads.add(key);
+      else void this.dispatch(pending.id);
+    }
   }
 
   wake(thread?: ReviewAutoFixThread): void {
@@ -470,6 +490,7 @@ export class ReviewAutoFixDispatcher {
     const thread = { backend, threadId };
     const pending: PendingAutoFix = {
       id, thread, forgeScopes: reviewRepositories(review).map((repository) => this.joinForgeScope(repository)),
+      repairThreads: new Set(), changedRepairThreads: new Set(),
       checking: false, recheck: false,
     };
     this.pending.set(id, pending);
@@ -494,6 +515,7 @@ export class ReviewAutoFixDispatcher {
       scope.idle.delete(pending);
       if (--scope.reviewCount === 0) this.byRepository.delete(scope.repository);
     }
+    for (const thread of pending.repairThreads) removePending(this.byRepairThread, thread, pending);
     this.releaseHandoffSuspension(pending);
   }
 
@@ -570,7 +592,32 @@ export class ReviewAutoFixDispatcher {
   }
 
   private needsRecheck(pending: PendingAutoFix, forgeSnapshot: number): boolean {
-    return pending.recheck || pending.forgeScopes.some((scope) => scope.lastWake > forgeSnapshot);
+    return pending.recheck
+      || (pending.repairBlocker !== undefined && pending.changedRepairThreads.has(pending.repairBlocker))
+      || pending.forgeScopes.some((scope) => scope.lastWake > forgeSnapshot);
+  }
+
+  private observeStackHold(pending: PendingAutoFix) {
+    pending.changedRepairThreads.clear();
+    let blocker: string | undefined;
+    const observe = (key: string) => {
+      if (!this.isCurrent(pending) || pending.repairThreads.has(key)) return;
+      pending.repairThreads.add(key);
+      addPending(this.byRepairThread, key, pending);
+    };
+    return {
+      readActivity: observe,
+      heldBy: (key) => { blocker = key; observe(key); },
+      finish: (hold: string | undefined) => {
+        if (!this.isCurrent(pending)) return;
+        pending.repairBlocker = hold ? blocker : undefined;
+        for (const key of pending.repairThreads) {
+          if (key === pending.repairBlocker) continue;
+          removePending(this.byRepairThread, key, pending);
+          pending.repairThreads.delete(key);
+        }
+      },
+    } satisfies ReviewStackHoldObservation & { finish: (hold: string | undefined) => void };
   }
 
   private async checkReview(pending: PendingAutoFix, review: ThreadReview, forgeSnapshot: number): Promise<void> {
@@ -582,7 +629,9 @@ export class ReviewAutoFixDispatcher {
     if (this.deps.readStackHold) {
       this.deps.recordRun(review, id, { kind: "queue", status: "held", at: this.now() });
     }
-    const hold = await this.deps.readStackHold?.(review);
+    const observation = this.observeStackHold(pending);
+    const hold = await this.deps.readStackHold?.(review, observation);
+    observation.finish(hold);
     if (!this.isCurrent(pending)) return;
     const current = this.deps.getReview(id);
     const latest = current && reviewAutoFixMessage(current);
@@ -614,7 +663,9 @@ export class ReviewAutoFixDispatcher {
         ...request,
         canAdmit: async () => {
           if (!this.isCurrent(pending)) return false;
-          admissionHold = await this.deps.readStackHold?.(current);
+          const observation = this.observeStackHold(pending);
+          admissionHold = await this.deps.readStackHold?.(current, observation);
+          observation.finish(admissionHold);
           return this.isCurrent(pending) && !admissionHold;
         },
         ...(pending.handoff ? { reviewAutoFixHandoff: true } : {}),

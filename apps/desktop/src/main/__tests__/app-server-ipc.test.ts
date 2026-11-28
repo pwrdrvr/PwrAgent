@@ -50,7 +50,7 @@ import type {
 } from "@pwragent/shared/contracts/thread-tools";
 import type { ThreadPrWatchesResponse } from "@pwragent/shared/contracts/thread-pr-watches";
 import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
-import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import { buildPullRequestStatusKey, buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { buildDirectorySummaries, canonicalizeNavigationPath } from "@pwragent/shared/directory-navigation";
 import type { PrStatusObservations } from "../app-server/thread-pull-request-summaries";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
@@ -12522,7 +12522,7 @@ describe("app server ipc", () => {
     }));
     const thread = { backend: "codex" as const, threadId: "review-stack-read" };
     const service = appServerService as unknown as {
-      setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
+      setThreadPrAttachment: (key: string, attachment: { backend: AppServerBackendKind; primaryRepoKey: string; prs: PrSummary[] }) => void;
     };
     const attach = (rows: PrSummary[]) => service.setThreadPrAttachment(`codex:${thread.threadId}`, {
       backend: thread.backend, primaryRepoKey: "github.com/fixture/review-stack-read", prs: rows,
@@ -12559,6 +12559,37 @@ describe("app server ipc", () => {
     expect(listing).toHaveBeenCalledTimes(1);
     expect(readNavigationPullRequests).toHaveBeenCalledTimes(1);
     expect(project.mock.calls.map(([, , directories]) => directories)).toEqual([[cwd], [linked]]);
+
+    // A real projection binds the lower repair to its own thread. When its
+    // activity clears, the same PRs and Git refs allow the upper review.
+    await runGitCommand(cwd, ["switch", "lower"]);
+    const lowerKey = buildThreadIdentityKey("claude", "review-stack-lower");
+    service.setThreadPrAttachment(lowerKey, {
+      backend: "claude", primaryRepoKey: "github.com/fixture/review-stack-read", prs: [prs[0]!],
+    });
+    attach([{ ...prs[1]!, linkedDirectoryPaths: [linked] }]);
+    listing.mockResolvedValue({
+      backend: thread.backend, fetchedAt: 1, threads: [{
+        id: thread.threadId, source: thread.backend, title: "Upper review", titleSource: "explicit",
+        linkedDirectories: [{ id: linked, path: linked, kind: "local", label: "Upper" }],
+      }, {
+        id: "review-stack-lower", source: "claude", title: "Lower repair", titleSource: "explicit",
+        linkedDirectories: [{ id: cwd, path: cwd, kind: "local", label: "Lower" }],
+      }],
+    });
+    const observation = { readActivity: vi.fn(), heldBy: vi.fn() };
+    let repairing = true;
+    const activity = vi.spyOn(appServerService, "stackThreadActivity").mockImplementation(async (key) => {
+      expect(observation.readActivity).toHaveBeenCalledWith(key);
+      return { repair: key === lowerKey && repairing };
+    });
+    onTestFinished(() => activity.mockRestore());
+    await expect(appServerService.automationStackHold(review, observation)).resolves.toBe("Held by #1: repair in progress");
+    expect(observation.heldBy).toHaveBeenCalledExactlyOnceWith(lowerKey);
+    repairing = false;
+    observation.heldBy.mockClear();
+    await expect(appServerService.automationStackHold(review, observation)).resolves.toBeUndefined();
+    expect(observation.heldBy).not.toHaveBeenCalled();
   });
 
   it("rechecks late PR attachments for the workspace and branch captured by the review", async () => {
