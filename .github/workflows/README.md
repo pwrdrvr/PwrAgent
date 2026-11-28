@@ -113,22 +113,23 @@ Scripted model replies drive discovery and one approved MCP call through each
 harness, including the Kimi K3 configuration. The suite has a separate
 Antigravity gateway script for when the expected route switches away from
 native stdio. It also checks schema validation and an approval denial. The
-tests compare the invocation arguments at the model endpoint and stdio fixture, and confirm the
-matching results reach the model. Separate ceilings cover the total turn, the
-largest conversation request, peak tool definition bytes, continuation bytes,
-and number of model calls. Continuations are model requests after tool results
-and exclude title generation.
+tests compare the invocation arguments at the model endpoint and stdio fixture
+and confirm the matching results reach the model. Separate ceilings cover the
+total turn, the largest conversation request, peak tool definition bytes,
+continuation bytes, and number of model calls. Peak tool definition bytes
+include schema-bearing discovery results. Continuations are model requests after
+tool results and exclude title generation.
 
 The job uploads `model-request-results-attempt-N` for the default case and
 `model-request-mcp-results-attempt-N` for the large catalog and tool-use cases.
-Budget violations remain visible in the artifacts. The trusted publisher on
-`main` updates one numeric report per PR into `main`. It compares both
-artifacts with the first parent of the tested merge when
-that commit has a successful `main` measurement. Otherwise it uses a recent
-successful `main` push. The report identifies missing measurements, including
-fields that older artifacts did not record. Catalog deltas span Antigravity
-routes. Scripted tool-use deltas require the same route in both runs. Docs-only PRs that skip Lint do not
-produce measurements.
+Completed MCP cases and budget violations remain visible when another case
+fails. The trusted publisher on `main` updates one numeric report per PR into
+`main`. Each artifact uses the first parent of the tested merge as its baseline
+when a successful `main` run has that measurement. Otherwise it uses a recent
+successful `main` push. The report identifies missing cases and historical
+measurements. Catalog deltas span Antigravity routes. Scripted tool-use deltas
+require the same route in both runs. Docs-only PRs that skip Lint have no
+measurements.
 
 For a local run, set `PWRAGENT_MODEL_BENCH_CODEX` and `PWRAGENT_MODEL_BENCH_AGY`
 to the pinned executables in the OS temp directory. Use the full Codex npm

@@ -77,27 +77,31 @@ it("requires every provider and rejects a primary body larger than its whole tur
   expect(report.validateResult(current)).toBeUndefined();
 });
 
-it("selects artifacts only from the completed attempt across full and partial reruns", () => {
+it("selects each artifact independently from the completed attempt", () => {
+  const kinds = ["default", "mcp"];
+  const names = { default: "model-request-results", mcp: "model-request-mcp-results" };
   fc.assert(fc.property(
-    fc.array(fc.constantFrom("partial-rerun", "full-without-upload", "full-with-upload"), { minLength: 1, maxLength: 8 }),
+    fc.array(fc.subarray(kinds), { minLength: 1, maxLength: 8 }),
     (reruns) => {
       const artifacts = [];
       const completed = new Map();
-      for (const [index, kind] of ["full-with-upload", ...reruns].entries()) {
+      for (const [index, uploads] of [kinds, ...reruns].entries()) {
         const attempt = index + 1;
-        if (kind === "full-with-upload") {
-          const id = attempt * 100;
-          artifacts.unshift({ id, name: `model-request-results-attempt-${attempt}`, size_in_bytes: 500 });
-          completed.set(attempt, id);
+        for (const kind of uploads) {
+          const id = attempt * 100 + kinds.indexOf(kind);
+          artifacts.unshift({ id, name: `${names[kind]}-attempt-${attempt}`, size_in_bytes: 500 });
+          completed.set(`${attempt}:${kind}`, id);
         }
-        // GitHub retains prior uploads under the same run ID. Even a
-        // redelivered event can describe only what that attempt uploaded.
+        // GitHub retains prior uploads under the same run ID. A redelivery
+        // can describe only what that attempt uploaded for each kind.
         for (let delivered = attempt; delivered > 0; delivered--) {
-          expect(report.findAttemptArtifact(artifacts, delivered)?.id).toBe(completed.get(delivered));
+          for (const kind of kinds) {
+            expect(report.findAttemptArtifact(artifacts, delivered, kind)?.id).toBe(completed.get(`${delivered}:${kind}`));
+          }
         }
       }
     },
-  ), { examples: [[["partial-rerun", "full-without-upload", "full-with-upload"]]] });
+  ), { examples: [[[[], ["mcp"], ["default"]]]] });
 });
 
 it("matches MCP catalog deltas to the same provider, turn and metric in historical uploads", () => {

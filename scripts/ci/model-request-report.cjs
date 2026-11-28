@@ -56,6 +56,10 @@ function hasKeys(value, keys) {
     && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
+function validBaseSha(value) {
+  return value === null || (typeof value === "string" && GIT_SHA.test(value));
+}
+
 function validMetrics(value, keys = METRIC_KEYS) {
   return hasKeys(value, keys)
     && keys.every((key) => Number.isSafeInteger(value[key]) && value[key] > 0);
@@ -63,7 +67,7 @@ function validMetrics(value, keys = METRIC_KEYS) {
 
 function validateResult(result) {
   if (!hasKeys(result, ["version", "baseSha", "results"]) || result.version !== 2
-    || (result.baseSha !== null && (typeof result.baseSha !== "string" || !GIT_SHA.test(result.baseSha)))
+    || !validBaseSha(result.baseSha)
     || !Array.isArray(result.results) || result.results.length !== Object.keys(PROVIDERS).length) {
     return undefined;
   }
@@ -113,6 +117,10 @@ function validateMcpResult(result) {
   switch (result?.version) {
     case 1:
       break;
+    case 4:
+      if (!validBaseSha(result.baseSha)) return undefined;
+      keys.push("baseSha");
+      // Falls through to the route-tagged format.
     case 3:
       if (typeof result.antigravityNative !== "boolean") return undefined;
       keys.push("antigravityNative", "thirdParty", "toolUse");
@@ -123,10 +131,12 @@ function validateMcpResult(result) {
     default:
       return undefined;
   }
-  if (!hasKeys(result, keys) || !validRows(result.results, PROVIDERS, validCatalogRow)) return undefined;
+  if (!hasKeys(result, keys) || !validRows(result.results, PROVIDERS, validCatalogRow, result.version < 4)) return undefined;
   if (result.version === 1) return result;
   if (result.thirdParty !== null && (!validCatalogRow(result.thirdParty) || result.thirdParty.provider !== KIMI)) return undefined;
-  return validRows(result.toolUse, TOOL_USE_PROVIDERS, validToolUseRow, false) ? result : undefined;
+  if (!validRows(result.toolUse, TOOL_USE_PROVIDERS, validToolUseRow, false)) return undefined;
+  if (result.version === 4 && !result.results.length && !result.thirdParty && !result.toolUse.length) return undefined;
+  return result;
 }
 
 function testedMergeBase(cwd = process.cwd()) {
@@ -206,11 +216,21 @@ function addMcpReport(lines, current, baseline) {
   }
   if (!baseline) lines.push("> The selected main run has no usable 240-tool measurement. Deltas are unavailable.", "");
   const results = current.results.map(catalogTableRow);
+  const availableCatalogs = new Set(results.map(({ provider }) => provider));
+  const historicalCatalogs = new Set(baseline?.results.map(({ provider }) => provider));
+  const missingCatalogs = Object.entries(PROVIDERS).filter(([provider]) => !availableCatalogs.has(provider));
+  if (missingCatalogs.length) {
+    lines.push(`> This CI attempt has no 240-tool measurement for ${missingCatalogs.map(([, name]) => name).join(", ")}.`, "");
+  }
+  const missingCatalogBaselines = results.filter(({ provider }) => !historicalCatalogs.has(provider));
+  if (baseline && missingCatalogBaselines.length) {
+    lines.push(`> The selected main run has no 240-tool measurement for ${missingCatalogBaselines.map(({ name }) => name).join(", ")}.`, "");
+  }
   const catalogs = [...results, ...(current.thirdParty ? [catalogTableRow(current.thirdParty)] : [])];
   const violations = catalogs.filter(({ observed, ceilings }) => Object.keys(LARGE_METRICS)
     .some((key) => observed[key] > ceilings[key]));
   if (violations.length) lines.push(`❌ Budget exceeded by ${violations.map(({ name }) => name).join(", ")}.`, "");
-  lines.push(...renderTable(results, baseline?.results.map(catalogTableRow) ?? [], LARGE_METRICS, options), "");
+  if (results.length) lines.push(...renderTable(results, baseline?.results.map(catalogTableRow) ?? [], LARGE_METRICS, options), "");
   if (current.antigravityNative) {
     lines.push("> Antigravity uses native stdio and is expected to advertise a subset of fixture schemas up front.", "");
   }
@@ -247,24 +267,27 @@ function addMcpReport(lines, current, baseline) {
       lines.push("> Antigravity used a different MCP route from the selected main run. Scripted tool-use deltas are unavailable for that case.", "");
     }
     if (missingBaseline.length) lines.push(`> The selected main run has no tool-use measurement for ${missingBaseline.map(([, name]) => name).join(", ")}. Deltas are unavailable for those cases.`, "");
+    if ((current.version === 4) !== (baseline?.version === 4)) {
+      const affected = [KIMI, ...(!current.antigravityNative ? [ANTIGRAVITY] : [])]
+        .filter((provider) => available.has(provider) && historical.has(provider));
+      for (const provider of affected) {
+        const row = historical.get(provider);
+        historical.set(provider, { ...row, observed: { ...row.observed, toolBytes: undefined } });
+      }
+      if (affected.length) {
+        lines.push(`> Peak tool definition deltas for ${affected.map((provider) => TOOL_USE_PROVIDERS[provider]).join(", ")} require matching discovery accounting.`, "");
+      }
+    }
     lines.push(...renderTable(Object.entries(TOOL_USE_PROVIDERS).flatMap(([provider, name]) =>
       available.has(provider) ? [{ ...available.get(provider), name }] : []),
     [...historical.values()], TOOL_USE_METRICS, options), "",
-    "Continuations count requests carrying tool results. Peak tool definition bytes cover the conversation requests.", "");
+    "Continuations count requests carrying tool results. Peak tool definition bytes include schema-bearing discovery results in the conversation requests.", "");
   } else {
     lines.push("> This CI attempt has no scripted tool-use measurements.", "");
   }
 }
 
-function renderComment({ current, currentMcp, baseline, baselineMcp, source, baselineRun, exactBase, runUrl }) {
-  const stamp = `<!-- model-request-run ${source.sha} ${source.number} ${source.attempt} ${current ? "result" : "missing"} -->`;
-  const lines = [MARKER, stamp, "## Model request impact", ""];
-  const sourceLink = `[\`${source.sha.slice(0, 7)}\`](${runUrl(source.id)})`;
-  if (!current) {
-    lines.push(`⚠️ [CI](${runUrl(source.id)}) did not produce a usable model request measurement for \`${source.sha.slice(0, 7)}\`.`);
-    return lines.join("\n");
-  }
-
+function addDefaultReport(lines, current, baseline, exactBase) {
   const measurements = new Map(current.results.map((row) => [row.provider, row]));
   const baselineMeasurements = new Map(baseline?.results.map((row) => [row.provider, row]));
   const providers = Object.entries(PROVIDERS);
@@ -274,7 +297,7 @@ function renderComment({ current, currentMcp, baseline, baselineMcp, source, bas
     ? "✅ Default outbound model requests stayed within their ceilings."
     : "❌ Default outbound model requests exceeded one or more ceilings.", "");
   if (!baseline) {
-    lines.push("> A successful, usable `main` baseline is unavailable. CI still checks the PR ceilings.", "");
+    lines.push("> A successful, usable default `main` baseline is unavailable. CI still checks the PR ceilings.", "");
   } else if (!exactBase) {
     lines.push("> Deltas use the latest available successful `main` measurement. The exact base has no usable measurement.", "");
   }
@@ -293,10 +316,36 @@ function renderComment({ current, currentMcp, baseline, baselineMcp, source, bas
     });
     if (changes.length) lines.push("**Ceiling changes**", "", ...changes, "");
   }
+}
+
+function renderComment({
+  current, currentMcp, baseline, baselineMcp, source, baselineRun, baselineMcpRun, exactBase, exactMcpBase, runUrl,
+}) {
+  const hasMeasurement = current || currentMcp;
+  const stamp = `<!-- model-request-run ${source.sha} ${source.number} ${source.attempt} ${hasMeasurement ? "result" : "missing"} -->`;
+  const lines = [MARKER, stamp, "## Model request impact", ""];
+  const sourceLink = `[\`${source.sha.slice(0, 7)}\`](${runUrl(source.id)})`;
+  if (!hasMeasurement) {
+    lines.push(`⚠️ [CI](${runUrl(source.id)}) did not produce a usable model request measurement for \`${source.sha.slice(0, 7)}\`.`);
+    return lines.join("\n");
+  }
+
+  if (current) {
+    addDefaultReport(lines, current, baseline, exactBase);
+  } else {
+    lines.push(`⚠️ [CI](${runUrl(source.id)}) did not produce a usable default model request measurement.`, "");
+  }
+  if (baselineMcpRun && !exactMcpBase && (!baselineRun || baselineRun.id !== baselineMcpRun.id || exactBase)) {
+    lines.push("> MCP deltas use a recent successful `main` measurement. The tested base has no usable MCP measurement or is unavailable.", "");
+  }
   addMcpReport(lines, currentMcp, baselineMcp);
   lines.push("Real agent processes sent these HTTP request bodies to local fake model endpoints. Totals include PwrAgent and native title generation. First turn and follow-up breakdowns measure JSON fields in the primary conversation request. Bold deltas mark increases in the MCP tables.", "");
   if (currentMcp) lines.push(`The \`${MCP_ARTIFACT}-attempt-${source.attempt}\` artifact is in the [CI run](${runUrl(source.id)}).`, "");
-  lines.push(`Baseline ${baseline ? `[\`${baselineRun.sha.slice(0, 7)}\`](${runUrl(baselineRun.id)})` : "unavailable"} · PR ${sourceLink} · CI attempt ${source.attempt} · ${source.conclusion}`);
+  const baselineLink = ({ id, sha }) => `[\`${sha.slice(0, 7)}\`](${runUrl(id)})`;
+  const baselines = baselineRun && baselineMcpRun && baselineRun.id !== baselineMcpRun.id
+    ? `Default baseline ${baselineLink(baselineRun)} · MCP baseline ${baselineLink(baselineMcpRun)}`
+    : `Baseline ${baselineRun || baselineMcpRun ? baselineLink(baselineRun ?? baselineMcpRun) : "unavailable"}`;
+  lines.push(`${baselines} · PR ${sourceLink} · CI attempt ${source.attempt} · ${source.conclusion}`);
   return lines.join("\n");
 }
 
@@ -348,7 +397,8 @@ async function downloadMeasurement(github, repo, run, core, kind = "default") {
   }
 }
 
-async function findBaseline(github, repo, source, baseSha, core) {
+async function findBaseline(github, repo, source, current, currentMcp, core) {
+  const baseSha = current?.baseSha ?? currentMcp?.baseSha;
   const runs = async (filters) => {
     const { data } = await github.rest.actions.listWorkflowRuns({
       ...repo, workflow_id: source.workflow_id, branch: "main", event: "push",
@@ -357,19 +407,27 @@ async function findBaseline(github, repo, source, baseSha, core) {
     return data.workflow_runs;
   };
   const [exactRuns, recentRuns] = await Promise.all([
-    runs({ head_sha: baseSha }),
+    baseSha ? runs({ head_sha: baseSha }) : [],
     runs({}),
   ]);
   const candidates = new Map([...exactRuns, ...recentRuns].map((run) => [run.id, run]));
+  const comparison = {};
   for (const run of candidates.values()) {
-    const baseline = await downloadMeasurement(github, repo, run, core);
+    const [baseline, baselineMcp] = await Promise.all([
+      current && !comparison.baseline ? downloadMeasurement(github, repo, run, core) : undefined,
+      currentMcp && !comparison.baselineMcp ? downloadMeasurement(github, repo, run, core, "mcp") : undefined,
+    ]);
+    const selected = { id: run.id, sha: run.head_sha };
+    const exact = run.head_sha === baseSha;
     if (baseline?.baseSha === null) {
-      return {
-        baseline, baselineMcp: await downloadMeasurement(github, repo, run, core, "mcp"), baselineRun: { id: run.id, sha: run.head_sha }, exactBase: run.head_sha === baseSha,
-      };
+      Object.assign(comparison, { baseline, baselineRun: selected, exactBase: exact });
     }
+    if (baselineMcp && baselineMcp.baseSha == null) {
+      Object.assign(comparison, { baselineMcp, baselineMcpRun: selected, exactMcpBase: exact });
+    }
+    if ((!current || comparison.baseline) && (!currentMcp || comparison.baselineMcp)) break;
   }
-  return {};
+  return comparison;
 }
 
 async function publish({ github, context, core }) {
@@ -377,9 +435,14 @@ async function publish({ github, context, core }) {
   const matchedPull = await findPull(github, context, run);
   if (!matchedPull) return core.info("No current pull request into main matches this CI run.");
   const pullNumber = matchedPull.number;
-  const measurement = await downloadMeasurement(github, context.repo, run, core);
+  const [measurement, mcpMeasurement] = await Promise.all([
+    downloadMeasurement(github, context.repo, run, core),
+    downloadMeasurement(github, context.repo, run, core, "mcp"),
+  ]);
   const current = measurement?.baseSha ? measurement : undefined;
-  if (!current && run.conclusion === "success") {
+  const currentMcp = mcpMeasurement?.baseSha === null ? undefined : mcpMeasurement;
+  const hasMeasurement = current || currentMcp;
+  if (!hasMeasurement && run.conclusion === "success") {
     return core.info("This successful CI attempt has no usable model request measurement.");
   }
   const source = { sha: run.head_sha, id: run.id, number: run.run_number, attempt: run.run_attempt, conclusion: run.conclusion };
@@ -389,15 +452,12 @@ async function publish({ github, context, core }) {
   const existing = comments.find((comment) => comment.user?.login === "github-actions[bot]" && comment.body?.startsWith(MARKER));
   const previous = existing?.body.match(/<!-- model-request-run ([a-f0-9]{40}) (\d+) (\d+) (result|missing) -->/);
   if (previous && previous[1] === source.sha
-    && ((!current && previous[4] === "result") || Number(previous[2]) > source.number
+    && ((!hasMeasurement && previous[4] === "result") || Number(previous[2]) > source.number
       || (Number(previous[2]) === source.number && Number(previous[3]) > source.attempt))) {
     return core.info("The comment already has a newer or more complete measurement for this head.");
   }
 
-  const [comparison, currentMcp] = current ? await Promise.all([
-    findBaseline(github, context.repo, run, current.baseSha, core),
-    downloadMeasurement(github, context.repo, run, core, "mcp"),
-  ]) : [];
+  const comparison = hasMeasurement ? await findBaseline(github, context.repo, run, current, currentMcp, core) : {};
   const body = renderComment({ current, currentMcp, source, runUrl, ...comparison });
   const { data: pull } = await github.rest.pulls.get({ ...context.repo, pull_number: pullNumber });
   if (!matchesPull(pull, run, context.payload.repository.id)) {

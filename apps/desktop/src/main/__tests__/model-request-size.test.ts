@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import fc from "fast-check";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -105,6 +106,9 @@ type Sample = { bytes: number; route: string; body: RequestBody };
 type TurnMetrics = { bytes: number; calls: number; primaryBytes: number; inputBytes: number; instructionBytes: number; toolBytes: number };
 type Metrics = { [K in keyof TurnMetrics as `first${Capitalize<K>}` | `next${Capitalize<K>}`]: number };
 
+const searchId = "fixture_search";
+const antigravitySearch = "mcp_pwragent_search_mcp_tools";
+
 const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
 function isToolInventory(item: unknown): item is { tools?: unknown[] } {
@@ -113,9 +117,52 @@ function isToolInventory(item: unknown): item is { tools?: unknown[] } {
 }
 
 function toolDefinitionBytes(body: RequestBody): number {
-  return jsonBytes([...(body.tools ?? []), ...(body.input ?? []).filter(isToolInventory)
-    .flatMap(({ tools }) => tools ?? [])]);
+  const input = body.input ?? [];
+  const inventories = input.filter(isToolInventory).flatMap(({ tools }) => tools ?? []);
+  let bytes = jsonBytes([...(body.tools ?? []), ...inventories]);
+  // These two scripted searches deliver schemas as encoded tool output.
+  // Charge each copy on the wire, excluding the lookup result itself.
+  for (const item of input) {
+    if (item && typeof item === "object" && "type" in item && item.type === "function_call_output"
+      && "call_id" in item && item.call_id === searchId && "output" in item && item.output !== undefined) {
+      bytes += jsonBytes(item.output);
+    }
+  }
+  for (const { parts } of body.contents ?? []) {
+    for (const { functionResponse } of parts ?? []) {
+      if (functionResponse?.name === antigravitySearch && functionResponse.response.output !== undefined) {
+        bytes += jsonBytes(functionResponse.response.output);
+      }
+    }
+  }
+  return bytes;
 }
+
+it("charges every encoded schema-bearing discovery payload to tool definition bytes", () => {
+  const installed = [{ type: "function", name: "exec" }];
+  fc.assert(fc.property(fc.string({ minLength: 1, maxLength: 32 }), fc.integer({ min: 1, max: 4 }), (description, copies) => {
+    const codexDiscovery = [{ type: "input_text", text: JSON.stringify({ tools: [{ description }] }) }];
+    const geminiDiscovery = JSON.stringify({ tools: [{ definition: { description } }] });
+    const codex = {
+      tools: installed,
+      input: [
+        ...Array.from({ length: copies }, () => ({ type: "function_call_output", call_id: "fixture_search", output: codexDiscovery })),
+        { type: "function_call_output", call_id: "fixture_lookup", output: "tool result" },
+      ],
+    };
+    const gemini = {
+      tools: installed,
+      contents: [{ parts: [
+        ...Array.from({ length: copies }, () => ({
+          functionResponse: { id: "search", name: "mcp_pwragent_search_mcp_tools", response: { output: geminiDiscovery } },
+        })),
+        { functionResponse: { id: "lookup", name: "mcp_pwragent_call_mcp_tool", response: { output: "tool result" } } },
+      ] }],
+    };
+    expect(toolDefinitionBytes(codex) - jsonBytes(installed)).toBe(copies * jsonBytes(codexDiscovery));
+    expect(toolDefinitionBytes(gemini) - jsonBytes(installed)).toBe(copies * jsonBytes(geminiDiscovery));
+  }), { examples: [['A \"quote\" and é', 2]] });
+});
 
 function turnMetrics(samples: Sample[], prompt: string, agentInstructions?: string): TurnMetrics {
   const primary = samples.filter(({ body }) => !isTitleHelperRequest(body)
@@ -306,7 +353,7 @@ async function exerciseAntigravityGatewayTools(
   mcp: Awaited<ReturnType<typeof createLargeMcpCatalog>>,
   runTurn: () => Promise<Capture>,
 ) {
-  const search = "mcp_pwragent_search_mcp_tools";
+  const search = antigravitySearch;
   const call = "mcp_pwragent_call_mcp_tool";
   const query = selectedTool;
   const approvals: unknown[] = [];
@@ -435,7 +482,6 @@ async function exerciseAntigravityNativeTools(
   } finally { stop(); }
 }
 
-const searchId = "fixture_search";
 const callId = "fixture_lookup";
 type WireObject = Record<string, unknown>;
 function object(value: unknown): WireObject {
@@ -854,9 +900,9 @@ const toolUseCeilings: Record<BenchmarkCase, ToolUseMetrics> = {
   codex: { bytes: 193_000, primaryBytes: 57_000, toolBytes: 18_500, continuationBytes: 115_000, calls: 4, roundTripCalls: 2 },
   claude: { bytes: 270_000, primaryBytes: 91_000, toolBytes: 40_000, continuationBytes: 181_000, calls: 3, roundTripCalls: 2 },
   [antigravity]: antigravityUsesGateway
-    ? { bytes: 347_000, primaryBytes: 62_000, toolBytes: 33_000, continuationBytes: 239_000, calls: 8, roundTripCalls: 4 }
+    ? { bytes: 347_000, primaryBytes: 62_000, toolBytes: 35_500, continuationBytes: 239_000, calls: 8, roundTripCalls: 4 }
     : { bytes: 289_000, primaryBytes: 120_000, toolBytes: 100_000, continuationBytes: 120_000, calls: 5, roundTripCalls: 1 },
-  [kimi]: { bytes: 136_000, primaryBytes: 42_000, toolBytes: 23_000, continuationBytes: 81_000, calls: 4, roundTripCalls: 2 },
+  [kimi]: { bytes: 136_000, primaryBytes: 42_000, toolBytes: 25_500, continuationBytes: 81_000, calls: 4, roundTripCalls: 2 },
 };
 
 function budget<T extends Record<string, number>>(description: string, observed: T, limits: T) {
@@ -913,9 +959,10 @@ describe.runIf(Boolean(mcpArtifactPath || artifactPath || (codexExecutable && an
 
   afterAll(async () => {
     const results = providers.flatMap((provider) => catalogs.get(provider) ?? []);
-    if (mcpArtifactPath && results.length === providers.length) {
+    if (mcpArtifactPath && (catalogs.size || toolUse.size)) {
+      const baseSha = process.env.PWRAGENT_MODEL_BENCH_BASE_SHA ?? null;
       await writeFile(mcpArtifactPath, JSON.stringify({
-        version: 3, antigravityNative: !antigravityUsesGateway,
+        version: 4, baseSha, antigravityNative: !antigravityUsesGateway,
         results, thirdParty: catalogs.get(kimi) ?? null, toolUse: [...toolUse.values()],
       }) + "\n");
     }

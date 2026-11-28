@@ -246,3 +246,56 @@ it("reports Antigravity catalog deltas across routes and compares scripted calls
   gateway.results[2].fullSchemasAdvertised[0] = true;
   expect(render(gateway, native)).toContain("❌ Antigravity advertised full fixture schemas on the first turn.");
 });
+
+it.skipIf(process.platform === "win32").each(["missing", "invalid"])(
+  "publishes MCP separately when the default upload is %s",
+  async (defaultUpload) => {
+    const api = fixtureApi();
+    api.run.conclusion = "failure";
+    const member = "model-request-mcp-result.json";
+    const mcp = { ...mcpResult(100, 350, 220), version: 4, antigravityNative: false, baseSha: mainSha };
+    if (defaultUpload === "invalid") api.upload(api.run, archiveFixture("{}"));
+    api.upload(api.run, archiveFixture(JSON.stringify(mcp), member), "mcp");
+    // The exact base also has only the MCP artifact.
+    api.upload(api.exact, archiveFixture(JSON.stringify(legacyMcpResult(105, 300, 220)), member), "mcp");
+
+    await report.publish(api);
+    const body = api.comments[0]?.body;
+    expect(body).toContain("did not produce a usable default model request measurement");
+    expect(body).toContain("| Claude | First turn total body bytes | 300 B | 350 B | **+50 B (+16.7%)** | 300 B | ❌ |");
+    expect(body).toContain(runUrl(api.exact.id));
+
+    // A newer attempt with zero uploads preserves the useful report for this head.
+    api.run.run_attempt = 2;
+    await report.publish(api);
+    expect(api.comments[0]?.body).toBe(body);
+  },
+);
+
+it.skipIf(process.platform === "win32")("publishes completed MCP catalog and exercise rows from a partial artifact", async () => {
+  const api = fixtureApi();
+  api.run.conclusion = "failure";
+  const member = "model-request-mcp-result.json";
+  const partial = { ...mcpResult(100, 350, 220), version: 4, antigravityNative: false, baseSha: mainSha };
+  partial.results = partial.results.filter(({ provider }) => provider === "claude");
+  partial.toolUse[0].observed.calls = 4;
+  api.upload(api.run, archiveFixture(JSON.stringify({ ...result(100, 200), baseSha: mainSha })));
+  api.upload(api.run, archiveFixture(JSON.stringify(partial), member), "mcp");
+  api.upload(api.exact, archiveFixture(JSON.stringify(result(100, 200))));
+  const legacy = legacyMcpResult(100, 300, 220);
+  expect(report.validateMcpResult({ ...legacy, results: [] })).toBeUndefined();
+  expect(report.validateMcpResult({ ...partial, results: [], thirdParty: null, toolUse: [] })).toBeUndefined();
+  expect(report.validateMcpResult({ ...partial, results: [partial.results[0], partial.results[0]] })).toBeUndefined();
+  expect(report.validateMcpResult({ ...partial, results: [], thirdParty: null })).toBeDefined();
+  api.upload(api.exact, archiveFixture(JSON.stringify({
+    ...partial, baseSha: null, results: legacy.results.filter(({ provider }) => provider === "codex"),
+  }), member), "mcp");
+
+  await report.publish(api);
+  const body = api.comments[0]?.body;
+  expect(body).toContain("This CI attempt has no 240-tool measurement for Codex, Antigravity.");
+  expect(body).toContain("The selected main run has no 240-tool measurement for Claude.");
+  expect(body).toContain("| Claude | First turn total body bytes | — | 350 B | — | 300 B | ❌ |");
+  expect(body).toContain("Codex with Kimi K3");
+  expect(body).toContain("| Codex | Total model calls | 4 | 4 | 0 | 3 | ❌ |");
+});
