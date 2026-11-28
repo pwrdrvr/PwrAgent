@@ -27,6 +27,44 @@ function resolveNoticeProvider(
 }
 
 /**
+ * Why no provider can start a thread, as one line naming the provider, or
+ * `undefined` when none reported a reason.
+ */
+export function noStartupBackendDetail(
+  backends: readonly BackendSummary[],
+): string | undefined {
+  const provider = resolveNoticeProvider(backends);
+  const reason = provider?.unavailableReason?.trim();
+  return reason && provider ? `${provider.label}: ${reason}` : undefined;
+}
+
+/**
+ * Where startup's landing decision stands for a window. `pane-shown`: the
+ * empty main pane is the agent setup and no notice is up; `notice-shown`: a
+ * thread covers that pane, so the no-backend notice is up.
+ */
+export type StartupLandingState = "pending" | "pane-shown" | "notice-shown" | "complete";
+
+/**
+ * The landing step once discovery has answered that no provider can start a
+ * thread. The main pane's agent setup is the landing whenever nothing is
+ * selected, so the notice is for a selected thread only: a thread restored at
+ * startup, or one selected later from the pane. It is shown once per
+ * landing; dismissing it returns the decision to `pending`.
+ */
+export function landWithoutBackend(
+  state: StartupLandingState,
+  threadSelected: boolean,
+): { state: StartupLandingState; showNotice: boolean } {
+  if (state === "complete" || state === "notice-shown") {
+    return { state, showNotice: false };
+  }
+  return threadSelected
+    ? { state: "notice-shown", showNotice: true }
+    : { state: "pane-shown", showNotice: false };
+}
+
+/**
  * Shown when a profile that has already completed onboarding lands with no
  * selectable provider.
  *

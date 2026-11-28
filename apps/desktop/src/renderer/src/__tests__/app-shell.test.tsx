@@ -4947,7 +4947,8 @@ describe("App", () => {
 
     // `[onboarding] completed = true` says this operator already answered every
     // question the wizard asks. A missing provider is a health problem to point
-    // at, not setup to redo, so the wizard must stay closed.
+    // at, not setup to redo, so the wizard must stay closed. The restored
+    // thread covers the main pane's agent setup, so the notice points at it.
     expect(
       await screen.findByText("No agent backend is available"),
     ).toBeInTheDocument();
@@ -4957,6 +4958,104 @@ describe("App", () => {
     expect(
       screen.queryByRole("heading", { name: /A few short choices/i }),
     ).not.toBeInTheDocument();
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("turns an empty completed profile's main pane into agent setup when no backend is usable", async () => {
+    const ensureDirectoryLaunchpad = vi.fn();
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
+                terminalMinimumContrast: { value: false, source: "default" },
+                calmMotion: { value: false, source: "default" },
+                density: { value: "mission-control", source: "default" },
+                sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
+              },
+              codexProfileModel: { value: "shared", source: "default" },
+            },
+            onboarding: {
+              completed: { value: true, source: "config" },
+              completedSource: { value: "migrated", source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            models: {
+              codex: {
+                path: { value: "", source: "default" },
+                profile: { value: "", source: "default" },
+                discovery: {
+                  selectedCommand: undefined,
+                  candidates: [],
+                },
+                profiles: {
+                  profileRoot: "/home/example/.codex/profiles",
+                  effectiveCodexHome: "/home/example/.codex",
+                  profiles: [],
+                },
+              },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as unknown as DesktopSettingsSnapshot,
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      }),
+    });
+
+    // The pane is lazy, and its first import compiles Get started's module.
+    // Load it before rendering so the wait below doesn't race that compile on
+    // a slow lane.
+    await import("../features/onboarding/AgentSetupPane");
+    await renderApp();
+
+    // A fresh install that skipped Get started without an agent. The wizard
+    // stays closed (first run is done), but the window must still carry the
+    // next step: with no thread to show, the main pane is the agent setup,
+    // offering Codex's one-click install, and no warning toast repeats it.
+    const pane = await screen.findByTestId("agent-setup-pane", {}, { timeout: 3_000 });
+    expect(
+      within(pane).getByRole("heading", { name: "Set up an agent to start." }),
+    ).toBeInTheDocument();
+    expect(
+      await within(pane).findByRole("button", { name: "Install Codex" }),
+    ).toBeInTheDocument();
+    expect({
+      selectAThread: Boolean(screen.queryByText("Select a thread")),
+      notice: Boolean(screen.queryByText("No agent backend is available")),
+      wizard: Boolean(screen.queryByRole("dialog", { name: "Get started" })),
+    }).toEqual({ selectAThread: false, notice: false, wizard: false });
     expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 

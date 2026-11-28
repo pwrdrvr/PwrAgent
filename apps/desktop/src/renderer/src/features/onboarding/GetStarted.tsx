@@ -603,7 +603,7 @@ const CLAUDE_SIGN_IN_COMMAND = "claude auth login";
 
 type AgentRow = { definition: AgentDefinition; state: GetStartedAgentState };
 
-type AgentsModel = {
+export type AgentsModel = {
   rows: AgentRow[];
   refreshing: boolean;
   error?: string;
@@ -643,12 +643,27 @@ function acpEnabled(snapshot: DesktopSettingsSnapshot | undefined, id: AcpAgentI
  * after an install or a browser sign-in. Nothing installs or signs in
  * until its button is clicked.
  */
-function useGetStartedAgents(params: {
+export function useGetStartedAgents(params: {
   settings: DesktopSettingsState;
   desktopApi?: DesktopApi;
   separateLogin: boolean;
+  /**
+   * The Codex login Codex's row checks and signs in to. First run signs in
+   * to this computer's own (`""`, `~/.codex/`); an existing profile signs in
+   * to the one it runs Codex with.
+   */
+  codexAuthProfile?: string;
+  /**
+   * When coming back to the window rechecks every agent. Get started does
+   * while no agent is ready yet; a page that can stay up indefinitely only
+   * after the user opened an install or sign-in step from it.
+   */
+  recheckOnFocus?: "while-not-ready" | "after-setup-step";
 }): AgentsModel {
   const { settings, desktopApi, separateLogin } = params;
+  const codexAuthProfile = params.codexAuthProfile ?? "";
+  const codexAuthProfileRef = useRef(codexAuthProfile);
+  codexAuthProfileRef.current = codexAuthProfile;
   // Read here, not from the app's backend summaries, which first run does
   // not load. Claude Code's row is drawn from it.
   const [backends, setBackends] = useState<readonly BackendSummary[]>();
@@ -677,7 +692,7 @@ function useGetStartedAgents(params: {
       || (current.kind === "signed-out" && current.cancelled === true);
     setCodexSignIn((current) => keep(current) ? current : { kind: "checking" });
     try {
-      const result = await api.checkCodexAuthProfileStatus({ profile: "" });
+      const result = await api.checkCodexAuthProfileStatus({ profile: codexAuthProfileRef.current });
       setCodexSignIn((current) => result.authenticated
         ? { kind: "signed-in", email: result.email, planType: result.planType }
         : keep(current)
@@ -781,8 +796,8 @@ function useGetStartedAgents(params: {
     setupStepOpenedRef.current = true;
     setCodexSignIn({ kind: "starting" });
     try {
-      // This computer's own login: the empty profile is `~/.codex/`.
-      const result = await api.startCodexAuthProfileLogin({ profile: "" });
+      // First run: this computer's own login, the empty profile `~/.codex/`.
+      const result = await api.startCodexAuthProfileLogin({ profile: codexAuthProfileRef.current });
       if (result.authenticated) {
         await checkCodexSignIn();
         return;
@@ -842,7 +857,7 @@ function useGetStartedAgents(params: {
   }), [acpEntries, backends, codexDiscovering, codexSignIn, optimisticEnabled, separateLogin, snapshot]);
 
   recheckOnFocusRef.current = codexSignIn.kind === "waiting"
-    || !canStartWithAgents(rows.map((row) => row.state));
+    || (params.recheckOnFocus !== "after-setup-step" && !canStartWithAgents(rows.map((row) => row.state)));
 
   return {
     rows,
@@ -913,7 +928,7 @@ function useCodexInstall(params: {
   };
 }
 
-function AgentList(props: {
+export function AgentList(props: {
   agents: AgentsModel;
   desktopApi?: DesktopApi;
   claudeSignIn?: ClaudeSignInControls;
