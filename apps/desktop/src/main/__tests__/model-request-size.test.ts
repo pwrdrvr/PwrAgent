@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -172,6 +173,12 @@ function turnMetrics(samples: Sample[], prompt: string, agentInstructions?: stri
       !largest || sample.bytes >= largest.bytes ? sample : largest, undefined);
   expect(primary, "primary model request carries the configured prompt and instructions").toBeDefined();
   const { body, bytes } = primary!;
+  // A benchmark started from the contributor checkout must still use only
+  // its temporary project, even if the harness also inspects its launch cwd.
+  for (const { body: request } of samples) {
+    const hasCheckoutRules = /# PwrAgent Repository Guidance|# Desktop App Guidance/.test(JSON.stringify(request));
+    expect.soft(hasCheckoutRules, "benchmark includes instructions from the contributor checkout").toBe(false);
+  }
   const input = body.input ?? body.messages ?? body.contents ?? [];
   const messageRole = (item: unknown): unknown =>
     item && typeof item === "object" && "role" in item ? item.role : undefined;
@@ -270,7 +277,7 @@ async function startModelEndpoint(provider: BenchmarkCase) {
 
 type Comparison = { cwd: string; mode: "desktop" | "cli" };
 type Capture = { metrics: TurnMetrics; requests: Sample[]; toolRequests?: Sample[] };
-type BenchmarkOptions = { comparison?: Comparison; largeMcpCatalog?: "measure" | "exercise" };
+type BenchmarkOptions = { projectInstructionsCwd?: string; comparison?: Comparison; largeMcpCatalog?: "measure" | "exercise" };
 
 const selectedTool = "fixture_reviews_lookup_79";
 const toolPrompt = "Find the selected review lookup tool and use it.";
@@ -656,11 +663,11 @@ async function captureModelRequests(
   scenario: BenchmarkCase,
   codexExecutable: string,
   antigravityExecutable: string,
-  { comparison, largeMcpCatalog }: BenchmarkOptions = {},
+  { comparison, largeMcpCatalog, projectInstructionsCwd }: BenchmarkOptions = {},
 ): Promise<Capture[]> {
   const provider = scenario === kimi ? "codex" : scenario;
   const home = await mkdtemp(path.join(os.tmpdir(), "pwragent-model-request-"));
-  const cwd = comparison?.cwd ?? home;
+  const cwd = projectInstructionsCwd ?? comparison?.cwd ?? home;
   const codexPolicy = comparison && provider === "codex"
     ? { approvalPolicy: "never", sandbox: "workspace-write" }
     : {};
@@ -826,6 +833,7 @@ async function captureModelRequests(
       return [await exerciseCodexAndClaudeTools(scenario, registry, threadId, endpoint, mcp, runTurn)];
     }
     const first = await measureTurn(0, initialPrompt);
+    if (projectInstructionsCwd) return [first];
     const next = await measureTurn(1, nextPrompt);
     // Antigravity also makes its native title request for the helper session.
     const expectedHelperCalls = provider === antigravity ? 2 : provider === "codex" ? 1 : 0;
@@ -1033,3 +1041,80 @@ it.runIf(Boolean(comparisonPath))("compares Desktop first turns and follow-ups w
     await rm(cwd, { recursive: true, force: true });
   }
 }, 120_000);
+
+// The byte at the 32 KiB chain cutoff starts a new, uniquely numbered rule.
+// Keep it non-whitespace so a harness-added newline cannot mimic another byte.
+function projectInstructionFile(scope: "root" | "child") {
+  const prose = "Keep this example record in its assigned project directory. ";
+  return Array.from({ length: 80 }, (_, index) => {
+    const label = `Fixture ${scope} rule ${String(index).padStart(3, "0")}. `;
+    return (label + prose.repeat(5)).slice(0, 254) + (index === 79 ? ".." : ".\n");
+  }).join("");
+}
+
+function projectInstructionBytes(body: RequestBody, text: string) {
+  // Providers place project rules in different roles, sometimes inside an
+  // existing message. Decode JSON escaping before measuring the file itself.
+  const label = text.slice(0, text.indexOf(".") + 1);
+  const lengths: number[] = [];
+  function inspect(value: unknown) {
+    if (typeof value === "string") {
+      for (const tail of value.split(label).slice(1)) {
+        let length = label.length;
+        while (length < text.length && tail[length - label.length] === text[length]) length++;
+        lengths.push(length);
+      }
+    } else if (value && typeof value === "object") {
+      Object.values(value).forEach(inspect);
+    }
+  }
+  inspect(body);
+  return lengths;
+}
+
+it.runIf(Boolean(artifactPath || (codexExecutable && antigravityExecutable)))(
+  "measures nested project instructions in the first model request", async () => {
+    if (!codexExecutable || !antigravityExecutable) throw new Error("Set both pinned agent executable paths.");
+    const project = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-rule-fixture-")));
+    const cwd = path.join(project, "child");
+    const root = projectInstructionFile("root");
+    const child = projectInstructionFile("child");
+    const rows = [
+      "### Nested project instructions on the first model request", "",
+      "| Backend | Project files | Root bytes | Child bytes |", "| --- | --- | ---: | ---: |",
+    ];
+    try {
+      await mkdir(cwd);
+      await promisify(execFile)("git", ["init", "--quiet", project]);
+      await writeFile(path.join(project, "AGENTS.md"), root);
+      await writeFile(path.join(cwd, "AGENTS.md"), child);
+      const cases = [
+        ...catalogCases.map((provider) => ({ provider, claudeAliases: false })),
+        { provider: "claude" as const, claudeAliases: true },
+      ];
+      for (const { provider, claudeAliases } of cases) {
+        if (claudeAliases) {
+          for (const dir of [project, cwd]) await symlink("AGENTS.md", path.join(dir, "CLAUDE.md"));
+        }
+        const [capture] = await captureModelRequests(provider, codexExecutable, antigravityExecutable, { projectInstructionsCwd: cwd });
+        const primary = capture!.requests.find(({ bytes }) => bytes === capture!.metrics.primaryBytes)!;
+        const rootBytes = projectInstructionBytes(primary.body, root);
+        const childBytes = projectInstructionBytes(primary.body, child);
+        const files = claudeAliases ? "AGENTS.md + CLAUDE.md symlinks" : "AGENTS.md";
+        rows.push(`| ${provider} | ${files} | ${rootBytes.join(" + ") || 0} | ${childBytes.join(" + ") || 0} |`);
+        const childLimit = provider === "codex" || provider === kimi ? 12 * 1024 : 20 * 1024;
+        expect.soft(rootBytes, `${provider} ${files} root`).toEqual([20 * 1024]);
+        expect.soft(childBytes, `${provider} ${files} child`).toEqual([childLimit]);
+        // A matching prefix alone would miss a provider appending a tail or a
+        // second partial copy. Check every rule label in the primary request.
+        const labels = /Fixture (?:root|child) rule \d{3}/g;
+        expect.soft(JSON.stringify(primary.body).match(labels)?.sort()).toEqual(
+          (root + child.slice(0, childLimit)).match(labels)!.sort(),
+        );
+      }
+      if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, rows.join("\n") + "\n");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }, 90_000,
+);

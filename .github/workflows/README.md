@@ -93,6 +93,13 @@ normal thread and turn entry points. Local fake model endpoints answer the
 first turn and a follow-up with synthetic responses. No provider login or
 real credential is needed. The artifact contains only byte and call counts.
 
+The job summary also reports how many bytes from two generated 20 KiB
+`AGENTS.md` files reach the first conversation request. The thread starts
+in the child of a temporary Git project. Each rule has a unique label so
+the test detects truncation and duplicate delivery. A separate Claude case
+adds `CLAUDE.md` symlinks at both levels. The empty-workspace and 240-tool
+budgets run separately from this fixture.
+
 The check budgets each provider's total request body bytes, number of
 model calls, primary request body, input and history, instructions, and tools.
 The primary request is the largest request for the conversation turn. Instruction
