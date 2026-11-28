@@ -17,6 +17,7 @@ import { DurableTurnRequestError } from "./errors";
 export type FederationRouterConnection = {
   peerDirectoryPaging?: boolean;
   navigationQueryProtocol?: 2;
+  resourceCheckoutProtocol?: 2;
   peerId: FederationInstanceId;
   capabilities: readonly FederationCapability[];
   /** Authenticated protocol support before the receiver's role restriction. */

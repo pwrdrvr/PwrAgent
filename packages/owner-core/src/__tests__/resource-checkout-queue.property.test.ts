@@ -51,8 +51,23 @@ function memoryStore(): CheckoutStore {
     },
     recordReceipt: (actor: string, key: string, receipt: CheckoutReceipt) => { receipts.set(`${actor}\0${key}`, JSON.stringify(receipt)); },
   };
-  return { change: (apply) => apply(tx), readAll: () => tx.list(), receipt: tx.receipt };
+  return { change: (apply) => apply(tx), read: tx.read, readAll: () => tx.list(), receipt: tx.receipt };
 }
+
+it("decodes one stored record per advertised checkout", () => {
+  const store = memoryStore();
+  let decoded = 0;
+  const authority = new ResourceCheckoutAuthority({
+    ...store,
+    read(id) { const record = store.read(id); decoded += Number(!!record); return record; },
+    readAll() { const records = store.readAll(); decoded += records.length; return records; },
+  }, () => 1, () => "id");
+  const keys = Array.from({ length: 8 }, (_, index) => `lab:r${index}`);
+  for (const key of keys) authority.ensure({ ...definition(1), resourceId: key, canonicalKey: key });
+  decoded = 0;
+  for (const key of keys) expect(authority.records(key)[0]?.definition.resourceId).toBe(key);
+  expect(decoded).toBe(keys.length);
+});
 
 const ACTORS: CheckoutActor[] = ["a", "b", "c"].map((key) => ({
   key: `thread:claude:${key}`,

@@ -102,10 +102,11 @@ Unpackaged test roots use isolated stores.
 ## Federation external domains
 
 An operator can place `resource-checkout-authorities.json` at the PwrAgent
-root and restart the participating profiles. The same binding belongs on the
-hosting owner and each participating client. Obtain the authority's
-Federation instance ID from its health response, its machine ID from the
-root's `machine-id`, and peer instance IDs from the enrolled Federation.
+root of the authority and restart its profile. Obtain the authority's
+Federation instance ID from its health response and its machine ID from the
+root's `machine-id`. An enrolled full member discovers the resource in
+Resources. Enable **Settings → Experimental → Federation resources** on a
+requesting profile to let its agents discover and request the same resource.
 Use one configured owner per immutable external identity. This example
 declares an invented resource.
 
@@ -120,7 +121,6 @@ declares an invented resource.
       "kindLabel": "Test machine",
       "authorityInstanceId": "pwr_example_owner",
       "authorityMachineId": "mach_00000000-0000-4000-8000-000000000001",
-      "allowedInstances": ["pwr_example_member"],
       "epoch": 1,
       "revision": 1,
       "updatedAt": 1795291200000,
@@ -133,12 +133,34 @@ declares an invented resource.
 ```
 
 The designated instance opens `federation-resource-checkouts.db` and
-publishes the definition. An authenticated, allowlisted peer addresses it
-through the existing Federation connection. Its subject is scoped to its
-own instance. Other profiles cannot use the database as a substitute
-authority. A disconnection makes remote results stale and blocks new
-admission through that peer. Local machine admission remains available.
-Connectivity changes do not write external definitions or trigger adapters.
+serves the published resource over the existing authenticated Federation RPC
+route, directly or through the gateway. Each requester keeps its original
+instance identity across a relay. A gateway can host the allocator, or a
+full member behind it can host it. One owner serializes all reservations,
+including its own operator's requests. A checkout grants no AWS permission.
+
+Discovery negotiates checkout protocol v2 independently of capability grants.
+The client reads pages of up to four resources from each eligible owner, up
+to the manifest limit of 100 per owner. An empty catalog can be cached for
+one minute. A peer that has never answered contributes no rows. While an
+authorized owner is offline its last observed rows are marked unreachable
+and requests cannot be sent. Reconnection reads the same durable allocations.
+A revoked or contained peer loses access to remote catalogs and actions.
+Machine capacity, drafts and the provider's execution approval remain local
+to their existing authorities.
+
+**Upgrading.** Upgrade the authority, clients and any gateway used as a
+relay. Mixed-version peers cannot discover or operate remote checkouts.
+Existing grants, generations and queue positions stay in the authority database
+across the upgrade. Version 1 JSON remains
+readable without a rewrite. On upgraded owners, every published external
+resource becomes available to full Federation members, including members
+omitted from a former `allowedInstances` list. Remove a domain before
+upgrading if it should no longer be published. Delete copied client entries
+when convenient. A legacy copy can label an enrolled offline owner's row
+for the local operator. Only a live owner advertisement supplies a route.
+A fresh client needs no manifest. If two remote owners claim the same key,
+the client omits it until the operators correct the definitions.
 
 The operator can submit a local draft from Resources. With
 `allowAgentDrafts`, a local agent can submit the same unpublished draft.
@@ -170,7 +192,7 @@ Use `resource_checkout_handoff` to delegate execution of an idle grant to an
 existing thread. Specify the exact allocation, generation, and epoch. For a
 remote target, specify its enrolled instance. A machine grant can delegate
 to a thread on its current instance. An external grant can delegate to a
-thread on its configured authority or an allowlisted instance. The
+thread on its configured authority or a connected full member. The
 authority records the executor under the same allocation, generation,
 deadline, and FIFO history. The original requester keeps release authority.
 Only the named executor can bind a managed job after delegation.
@@ -239,9 +261,9 @@ inspector shows both, and a button when the case has a resolution.
 | The root has no valid `machine-id` | None | Make sure the file is readable, then restart. |
 | A packaged app runs from an alternate root | None | Run machine work from the primary root. |
 | The machine store can't be opened | None | Read `pwragent:resource-checkouts` in the main-process log, correct the cause, and restart. |
-| A binding names this instance on another machine | None | If the profile was copied from that machine, run the authority there. Otherwise correct `authorityMachineId` on every participating instance and restart them. |
+| A binding names this instance on another machine | None | If the profile was copied from that machine, run the authority there. Otherwise correct `authorityMachineId` on the authority and restart it. |
 | This instance hosts a binding but has no Federation store | None | Hosting needs the platform machine identity. Read the log, correct the cause, and restart. |
-| This instance hosts a binding, but `federation-resource-checkouts.db` was created on another machine | None | Host it from the machine that created the root, or bind it to another instance on every participant. Federation peers hold those checkouts, so adopting the copy would hand out capacity twice. |
+| This instance hosts a binding, but `federation-resource-checkouts.db` was created on another machine | None | Host it from the machine that created the root, or establish its binding on the intended authority. Federation peers hold those checkouts, so adopting the copy would hand out capacity twice. |
 
 The cases without a resolution have nothing for the app to choose between:
 the fix is a file, a path or a restart.

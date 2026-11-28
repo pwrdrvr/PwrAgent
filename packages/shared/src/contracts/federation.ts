@@ -514,6 +514,7 @@ export type FederationPeerSummary = {
   protocolVersion?: number;
   /** Negotiated bounded application read contract; independent of grants. */
   navigationQueryProtocol?: 2;
+  resourceCheckoutProtocol?: 2;
   endpoint?: string;
   profileName?: string;
   /** Assigned celestial identity icon, when the assignment map knows one. */

@@ -87,6 +87,7 @@ export interface CheckoutTransaction {
 
 export interface CheckoutStore {
   change<T>(apply: (tx: CheckoutTransaction) => T): T;
+  read(resourceId: string): CheckoutDomainRecord | undefined;
   readAll(): CheckoutDomainRecord[];
   receipt(actor: string, key: string): CheckoutReceipt | undefined;
 }

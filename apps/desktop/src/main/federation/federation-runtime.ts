@@ -1330,10 +1330,74 @@ export class DesktopFederationRuntime {
     return this.ensureLocalInstanceId();
   }
 
-  requestResourceCheckout<T>(instanceId: FederationInstanceId, request: unknown): Promise<T> {
-    return this.rpcFor({ scope: "remote", instanceId }).request({
+  // Only a directory received from the enrolled upstream gateway may vouch for a sibling.
+  private checkoutGatewayDirectory = new Map<string, FederationPeerSummary>();
+
+  private checkoutRoster?: {
+    gateway?: string; authFailed: boolean; externalVersion: number;
+    peers: ReadonlyMap<string, "connected" | "disconnected">;
+  };
+
+  private checkoutPeerState(
+    id: string, direct: ReturnType<FederationRouter["getConnection"]>,
+    enrolled: FederationPeerSummary | undefined, gateway: string | undefined,
+  ): "connected" | "disconnected" | undefined {
+    const upstream = gateway && this.router?.getConnection(gateway);
+    const sibling = gateway === this.gatewayInstanceId && gateway && this.lastConnectionFailureKind !== "auth"
+      ? this.checkoutGatewayDirectory.get(id) : undefined;
+    if (this.assignedRoles.get(id) === "contained" || enrolled?.permissionRole === "contained" || enrolled?.status === "revoked" || enrolled?.revokedAt
+      || (sibling?.permissionRole !== undefined && sibling.permissionRole !== "full") || sibling?.status === "revoked" || sibling?.status === "rejected" || sibling?.revokedAt) return;
+    if (id === gateway && this.lastConnectionFailureKind === "auth") return;
+    if (direct) return direct.resourceCheckoutProtocol === 2 ? "connected" : undefined;
+    if (id === gateway) return "disconnected";
+    if (upstream && upstream.resourceCheckoutProtocol === 2 && sibling?.status === "connected") {
+      return sibling.resourceCheckoutProtocol === 2 ? "connected" : undefined;
+    }
+    if (enrolled || sibling?.resourceCheckoutProtocol === 2) return "disconnected";
+    return undefined;
+  }
+
+  private checkoutGatewayId(): string | undefined {
+    return isAppStateInitialized() ? desktopFederationState.read("gatewayInstanceId") || undefined : this.gatewayInstanceId;
+  }
+
+  resourceCheckoutPeerConnected(id: string): boolean {
+    return localMemberRole() === "full" && this.checkoutPeerState(id, this.router?.getConnection(id),
+      this.store().getPeer(id), this.checkoutGatewayId()) === "connected";
+  }
+
+  resourceCheckoutPeers(known: Iterable<string> = []): ReadonlyMap<string, "connected" | "disconnected"> {
+    if (localMemberRole() !== "full") return new Map();
+    if (!this.router && !this.checkoutGatewayDirectory.size && known[Symbol.iterator]().next().done) return new Map();
+    const gateway = this.checkoutGatewayId();
+    const authFailed = this.lastConnectionFailureKind === "auth";
+    // Another process sharing the profile can revoke an enrollment. Local changes invalidate at their source.
+    const externalVersion = isAppStateInitialized() ? desktopFederationState.externalChangeVersion() : 0;
+    const cached = this.checkoutRoster;
+    if (cached && cached.gateway === gateway && cached.authFailed === authFailed && cached.externalVersion === externalVersion) {
+      return cached.peers;
+    }
+    const peers = new Map<string, "connected" | "disconnected">();
+    const ids = new Set(this.checkoutGatewayDirectory.keys());
+    for (const connection of this.router?.listConnections() ?? []) ids.add(connection.peerId);
+    if (gateway) ids.add(gateway);
+    const enrolled = new Map(this.store().listPeers({ includeRevoked: true }).map(peer => [peer.id, peer]));
+    for (const id of enrolled.keys()) ids.add(id);
+    for (const id of ids) {
+      const status = this.checkoutPeerState(id, this.router?.getConnection(id), enrolled.get(id), gateway);
+      if (status) peers.set(id, status);
+    }
+    this.checkoutRoster = { gateway, authFailed, externalVersion, peers };
+    return peers;
+  }
+
+  async requestResourceCheckout<T>(instanceId: FederationInstanceId, request: unknown): Promise<T> {
+    if (!this.resourceCheckoutPeerConnected(instanceId)) throw new FederationRoleDeniedError("Checkout authority unavailable.");
+    const result = await this.rpcFor({ scope: "remote", instanceId }).request<T>({
       method: CHECKOUT_FEDERATION_METHOD, params: request, timeoutMs: 1_500,
     });
+    if (!this.resourceCheckoutPeerConnected(instanceId)) throw new FederationRoleDeniedError("Checkout authority unavailable.");
+    return result;
   }
 
   messagingSourceInstanceId(): FederationInstanceId {
@@ -1611,7 +1675,7 @@ export class DesktopFederationRuntime {
   private readonly remoteBackendEventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
-  private readonly peerStatusListeners = new Set<(instanceId: FederationInstanceId) => void>();
+  private readonly peerStatusListeners = new Set<(instanceId: FederationInstanceId, status: FederationConnectionState) => void>();
   private readonly shortNameListeners = new Set<() => void>();
   private readonly desiredEventSubscriptions = new Map<
     string,
@@ -1913,7 +1977,7 @@ export class DesktopFederationRuntime {
    * Fires whenever any peer's connection status changes. Used by the
    * application menu to keep its Remote Instances listing current.
    */
-  onPeerStatusChanged(listener: (instanceId: FederationInstanceId) => void): () => void {
+  onPeerStatusChanged(listener: (instanceId: FederationInstanceId, status: FederationConnectionState) => void): () => void {
     this.peerStatusListeners.add(listener);
     return () => {
       this.peerStatusListeners.delete(listener);
@@ -2085,6 +2149,8 @@ export class DesktopFederationRuntime {
     this.router = undefined;
     this.listenUrl = undefined;
     this.gatewayUrl = undefined;
+    this.checkoutRoster = undefined;
+    this.checkoutGatewayDirectory.clear();
     this.gatewayInstanceId = undefined;
     this.configuredEndpoints = [];
     this.endpointStatuses.clear();
@@ -2521,6 +2587,7 @@ export class DesktopFederationRuntime {
    */
   private recordAssignedRole(peerId: string, role: FederationPeerRole): void {
     const previous = this.assignedRoles.get(peerId);
+    if (previous !== role) this.checkoutRoster = undefined;
     this.assignedRoles.set(peerId, role);
     if (peerId === this.gatewayInstanceId) {
       const { before, after } = recordGatewayAssignedMemberRole(peerId, role);
@@ -2534,6 +2601,7 @@ export class DesktopFederationRuntime {
   }
 
   async setPeerRole(peerId: string, role: FederationPeerRole): Promise<FederationPeerSummary> {
+    this.checkoutRoster = undefined;
     this.store().setPeerRole(peerId, role, Date.now());
     const connection = this.router?.getConnection(peerId);
     if (connection && role === "contained") {
@@ -2558,6 +2626,7 @@ export class DesktopFederationRuntime {
       throw new Error("Federation peer is not enrolled.");
     }
     const revokedAt = Date.now();
+    this.checkoutRoster = undefined;
     store.revokePeer(peerId, revokedAt);
     this.server?.closePeer(peerId);
     this.unregisterPeer(peerId);
@@ -4568,8 +4637,8 @@ export class DesktopFederationRuntime {
     registerFederationOperatorQuestionHandlers(router);
     registerFederationResearchHandlers(router, localResearchOperations);
     router.registerHandler(CHECKOUT_FEDERATION_METHOD, (envelope) => {
-      if (!this.resourceCheckoutHandler || this.peerRole(envelope.sourceInstanceId) !== "full") {
-        throw new Error("This Federation owner does not provide checkout access to the peer.");
+      if (!this.resourceCheckoutHandler || !this.resourceCheckoutPeerConnected(envelope.sourceInstanceId)) {
+        throw new FederationRoleDeniedError("This Federation owner does not provide checkout access to the peer.");
       }
       return this.resourceCheckoutHandler(envelope.sourceInstanceId, envelope.params);
     });
@@ -5199,10 +5268,12 @@ export class DesktopFederationRuntime {
     }
     this.installEgressPolicy(client);
     this.client = client;
+    this.checkoutRoster = undefined;
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
       capabilities: client.capabilities,
       peerDirectoryPaging: client.peerDirectoryPaging,
+      resourceCheckoutProtocol: client.resourceCheckoutProtocol,
       navigationQueryProtocol: client.navigationQueryProtocol,
       sendEnvelope: (envelope) => client.sendEnvelope(envelope),
       sendEnvelopeWithBackpressure: async (envelope) => {
@@ -5519,11 +5590,13 @@ export class DesktopFederationRuntime {
 
     this.rpcByPeer.get(connection.peerId)?.rejectAll(new FederationPeerUnavailableError(connection.peerId));
     this.rpcByPeer.delete(connection.peerId);
+    this.checkoutRoster = undefined;
     this.router?.registerConnection({
       peerId: connection.peerId,
       capabilities: connection.capabilities,
       relaySupported: connection.relaySupported ?? connection.capabilities.includes("gateway_relay"),
       peerDirectoryPaging: connection.peerDirectoryPaging,
+      resourceCheckoutProtocol: connection.resourceCheckoutProtocol,
       navigationQueryProtocol: connection.navigationQueryProtocol,
       sendEnvelope: connection.sendEnvelope,
       sendEnvelopeWithBackpressure: connection.sendEnvelopeWithBackpressure,
@@ -5567,6 +5640,7 @@ export class DesktopFederationRuntime {
     this.shutdown.disconnected(peerId);
     this.peerDirectoryReceivers.delete(peerId);
     this.removeEventSubscriptionsForPeer(peerId);
+    this.checkoutRoster = undefined;
     this.router?.unregisterConnection(peerId);
     // Remote PTY sessions this peer opened get the 10s reap grace; if the
     // peer reconnects first, registerGatewayConnection cancels the reap.
@@ -5640,7 +5714,7 @@ export class DesktopFederationRuntime {
       return;
     }
     if (this.shutdown.receive(envelope, sourcePeerId)) return;
-    if (this.applyPeerDirectory(envelope)) {
+    if (this.applyPeerDirectory(envelope, sourcePeerId)) {
       return;
     }
     if (this.applyCelestialIcons(envelope, sourcePeerId)) {
@@ -5667,10 +5741,11 @@ export class DesktopFederationRuntime {
         ? this.rpcByPeer.get(sourceInstanceId)
         : undefined;
       const handledByOrigin = originatingRpc?.receiveEnvelope(envelope) ?? false;
-      const handled = handledByOrigin || [...this.rpcByPeer.entries()].some(
+      // A gateway may report a relay failure. Successful results belong to the addressed owner.
+      const handled = handledByOrigin || (envelope.kind === "error" && [...this.rpcByPeer.entries()].some(
         ([peerId, rpc]) =>
           peerId !== sourceInstanceId && rpc.receiveEnvelope(envelope),
-      );
+      ));
       if (handled) return;
     }
     await this.router?.routeEnvelope({ envelope, sourcePeerId });
@@ -5932,6 +6007,7 @@ export class DesktopFederationRuntime {
         permissionRole: existing?.permissionRole,
         status: "connected",
         capabilities: [...connection.capabilities],
+        resourceCheckoutProtocol: connection.resourceCheckoutProtocol,
         navigationQueryProtocol: connection.navigationQueryProtocol,
         protocolVersion: existing?.protocolVersion,
         endpoint: existing?.endpoint,
@@ -6014,6 +6090,7 @@ export class DesktopFederationRuntime {
         ),
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         navigationQueryProtocol: 2,
+        resourceCheckoutProtocol: 2,
         profileName: localProfileName,
         celestialIcon: this.celestialIconFor(localInstanceId),
         notes: this.instanceNotes || undefined,
@@ -6068,7 +6145,7 @@ export class DesktopFederationRuntime {
     }
   }
 
-  private applyPeerDirectory(envelope: FederationProtocolEnvelope): boolean {
+  private applyPeerDirectory(envelope: FederationProtocolEnvelope, sourcePeerId?: string): boolean {
     if (
       envelope.kind !== "notification" ||
       (envelope.method !== FEDERATION_PEER_DIRECTORY_METHOD
@@ -6096,6 +6173,20 @@ export class DesktopFederationRuntime {
       const complete = receiver.accept(envelope.params as FederationReplacementPage<FederationPeerSummary>);
       if (!complete) return true;
       peers = complete;
+    }
+    if (sourcePeerId && sourcePeerId === this.gatewayInstanceId && sourcePeerId === envelope.sourceInstanceId) {
+      this.checkoutRoster = undefined;
+      this.checkoutGatewayDirectory = new Map(peers.map(peer => {
+        // An offline directory entry carries enrollment only. Retain negotiated support solely for
+        // a previously observed member, until a new connection, removal or role change supersedes it.
+        const previous = this.checkoutGatewayDirectory.get(peer.id);
+        if (peer.status === "disconnected" && peer.permissionRole !== "contained" && !peer.revokedAt
+          && previous?.resourceCheckoutProtocol === 2 && previous.permissionRole !== "contained" && !previous.revokedAt
+          && (previous.status === "connected" || previous.status === "disconnected")) {
+          return [peer.id, { ...peer, resourceCheckoutProtocol: 2 }];
+        }
+        return [peer.id, peer];
+      }));
     }
     const previousPeers = new Map(this.remotePeerDirectory);
     this.connectedDefaultLabels = undefined;
@@ -7433,7 +7524,7 @@ export class DesktopFederationRuntime {
     }
     for (const listener of this.peerStatusListeners) {
       try {
-        listener(instanceId);
+        listener(instanceId, status);
       } catch (error) {
         log.warn("federation peer status listener failed", {
           error: error instanceof Error ? error.message : String(error),

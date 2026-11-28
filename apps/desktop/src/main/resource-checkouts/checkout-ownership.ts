@@ -45,7 +45,7 @@ export const OWNERSHIP_CONFLICTS = {
   },
   federationCopiedRoot: {
     reason: "This instance hosts the resource, but its Federation checkout store was created on another machine.",
-    remedy: "Host it from the machine that created this root, or bind it to another instance in resource-checkout-authorities.json and restart every participating instance.",
+    remedy: "Host it from the machine that created this root, or bind it to another instance in resource-checkout-authorities.json on the intended authority and restart it.",
   },
   definitionChanged: {
     reason: "The configured owner, epoch or capacity differs from the resource's saved record.",
@@ -62,6 +62,6 @@ export const OWNERSHIP_CONFLICTS = {
 export function misboundAuthorityConflict(authorityMachineId: string): ResourceOwnershipConflict {
   return {
     reason: `The authorities file binds this resource to this instance on machine ${authorityMachineId}, not on this machine.`,
-    remedy: "If this profile was copied from that machine, run the authority there. Otherwise correct authorityMachineId in resource-checkout-authorities.json on every participating instance and restart them.",
+    remedy: "If this profile was copied from that machine, run the authority there. Otherwise correct authorityMachineId in resource-checkout-authorities.json on the authority and restart it.",
   };
 }

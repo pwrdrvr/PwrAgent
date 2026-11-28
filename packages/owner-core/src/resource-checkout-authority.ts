@@ -332,13 +332,13 @@ export class ResourceCheckoutAuthority {
 
   records(resourceId?: string): CheckoutDomainRecord[] {
     const now = this.now();
-    const matches = (record: CheckoutDomainRecord) => resourceId === undefined || record.definition.resourceId === resourceId;
-    const existing = this.store.readAll().filter(matches);
+    const one = (record: CheckoutDomainRecord | undefined) => record ? [record] : [];
+    const existing = resourceId === undefined ? this.store.readAll() : one(this.store.read(resourceId));
     if (!existing.some(({ grants }) => grants.some((grant) => grant.state !== "recovery_required" && grant.deadlineAt <= now))) {
       return existing;
     }
     return this.store.change((tx) => {
-      const records = tx.list().filter(matches);
+      const records = resourceId === undefined ? tx.list() : one(tx.read(resourceId));
       for (const record of records) {
         if (reconcile(record, this.now())) tx.save(record);
       }
@@ -447,7 +447,7 @@ export class ResourceCheckoutAuthority {
     action: Extract<ResourceCheckoutActionRequest, { kind: "delegate_execution" }>,
     executor: CheckoutActor,
   ): boolean {
-    const record = this.store.readAll().find(({ definition }) => definition.resourceId === action.resourceId);
+    const record = this.store.read(action.resourceId);
     return record?.definition.epoch === action.authorityEpoch && record.grants.some((grant) =>
       grant.id === action.allocationId && grant.generation === action.generation
       && grant.actor.key === actor.key && grant.executor?.key === executor.key
@@ -455,7 +455,7 @@ export class ResourceCheckoutAuthority {
   }
 
   executionDeadline(actor: CheckoutActor, token: CheckoutToken): number | undefined {
-    const record = this.store.readAll().find(({ definition }) => definition.resourceId === token.resourceId);
+    const record = this.store.read(token.resourceId);
     if (record?.definition.epoch !== token.epoch) return undefined;
     return record.grants.find((grant) => grant.id === token.allocationId && grant.generation === token.generation
       && grant.state === "granted" && grant.deadlineAt > this.now() && executionOwner(grant).key === actor.key)?.deadlineAt;

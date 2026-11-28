@@ -46,7 +46,6 @@ const NO_PEERS = async (): Promise<never> => {
 type BindingScenario = {
   owner: "self" | "peer";
   ownerMachine: "self" | "other";
-  allowsSelf: boolean;
   /** The saved record has another epoch than the configuration. */
   changed: boolean;
 };
@@ -76,7 +75,6 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.record({
   bindings: fc.array(fc.record({
     owner: fc.constantFrom("self", "peer"),
     ownerMachine: fc.constantFrom("self", "other"),
-    allowsSelf: fc.boolean(),
     changed: fc.boolean(),
   }), { maxLength: 4 }),
 });
@@ -87,7 +85,6 @@ function bindingFor(index: number, scenario: BindingScenario): ExternalBinding {
   return {
     authorityInstanceId: owner,
     authorityMachineId: scenario.ownerMachine === "self" ? MACHINE : OTHER_MACHINE,
-    allowedInstances: scenario.allowsSelf ? [SELF] : [],
     definition: {
       resourceId: canonicalKey, canonicalKey, displayName: `Resource ${index}`, kindLabel: "Fixture",
       scope: "federation", counted: false, capacity: 1, authorityId: `checkout:${owner}:${canonicalKey}`,
@@ -99,8 +96,7 @@ function bindingFor(index: number, scenario: BindingScenario): ExternalBinding {
 /** The oracle: `undefined` when the resource is not listed at all, `null` when it is bound. */
 function expectedConflict(scenario: BindingScenario, externalStore: boolean): ResourceOwnershipConflict | null | undefined {
   const local = scenario.owner === "self" && scenario.ownerMachine === "self";
-  if (!local && !scenario.allowsSelf) return undefined;
-  if (scenario.owner === "peer") return null;
+  if (scenario.owner === "peer") return undefined;
   if (!local) return misboundAuthorityConflict(OTHER_MACHINE);
   if (!externalStore) return OWNERSHIP_CONFLICTS.federationStoreUnavailable;
   return scenario.changed ? OWNERSHIP_CONFLICTS.definitionChanged : null;
@@ -287,11 +283,10 @@ describe("unresolved checkout ownership", () => {
   it("lets only this instance's operator resolve ownership, never a peer", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-checkout-ownership-"));
     const externalStore = openResourceCheckoutStore(path.join(root, "federation.db"), IDENTITY);
-    const binding = bindingFor(0, { owner: "self", ownerMachine: "self", allowsSelf: false, changed: true });
-    binding.allowedInstances = [PEER];
+    const binding = bindingFor(0, { owner: "self", ownerMachine: "self", changed: true });
     saveConflicting(externalStore, binding.definition);
     const service = new DesktopResourceCheckoutService({
-      viewer: VIEWER, externalStore, bindings: [binding], requestPeer: NO_PEERS, warn: () => {},
+      viewer: VIEWER, externalStore, bindings: [binding], checkoutPeers: () => new Map([[PEER, "connected"]]), requestPeer: NO_PEERS, warn: () => {},
     });
     const id = binding.definition.resourceId;
     try {
