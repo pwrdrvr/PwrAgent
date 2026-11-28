@@ -527,6 +527,7 @@ function DesktopAppShell(props: {
     launchpadConnectionsDock,
     threadJump,
     closeThreadJump,
+    toggleSidebar,
     setSidebarHiddenPersisted,
     setContextRailPinnedPersisted,
     setProjectIndexHiddenPersisted,
@@ -537,7 +538,7 @@ function DesktopAppShell(props: {
     setLaunchpadConnectionsDockPersisted,
     resizeSidebar,
     startSidebarResize,
-  } = useShellLayout(props.settings);
+  } = useShellLayout(props.settings, () => windowBackendSummaries.requestAntigravityQuota());
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
   // The open thread whose title strip holds a rename field.
@@ -2015,16 +2016,6 @@ function DesktopAppShell(props: {
   const backendSummaries = selectedPeerCatalog
     ? selectedPeerBackendSummaries
     : windowBackendSummaries;
-  const toggleSidebar = useEventCallback(() => {
-    if (sidebarHidden) windowBackendSummaries.requestAntigravityQuota();
-    setSidebarHiddenPersisted(!sidebarHidden);
-  });
-  // Bind once per window so each layout chord runs exactly one action.
-  useLayoutChordHotkeys({
-    onToggleSidebar: toggleSidebar,
-    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
-    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
-  });
   const remoteSidebarBackends = useSidebarOwnerBackends(desktopApi, navigation.threads, {
     enabled: normalAppEnabled,
     windowInstanceId: windowFederationTarget?.instanceId,
@@ -5411,7 +5402,7 @@ function isSettingsSection(
 }
 
 // Own window layout, including live drag width and startup preference adoption.
-function useShellLayout(settings: DesktopSettingsState) {
+function useShellLayout(settings: DesktopSettingsState, onSidebarOpened: () => void) {
   const [sidebarWidth, setSidebarWidth] = useState(408);
   // Live mirror of `sidebarWidth`. A pointer drag updates this ref (and the
   // DOM) on every move WITHOUT calling setState, so the `.app-shell` rerender
@@ -5506,6 +5497,16 @@ function useShellLayout(settings: DesktopSettingsState) {
     },
     [writeConfig],
   );
+  const toggleSidebar = useEventCallback(() => {
+    if (sidebarHidden) onSidebarOpened();
+    setSidebarHiddenPersisted(!sidebarHidden);
+  });
+  // Bind once per window so each layout chord runs exactly one action.
+  useLayoutChordHotkeys({
+    onToggleSidebar: toggleSidebar,
+    onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
+    onToggleProjectIndex: () => setProjectIndexHiddenPersisted(!projectIndexHidden),
+  });
   // Called once per drag and once per arrow-key run, on release.
   const setProjectIndexWidthPersisted = useCallback(
     (next: number | null) => {
@@ -5694,6 +5695,7 @@ function useShellLayout(settings: DesktopSettingsState) {
     launchpadConnectionsDock,
     threadJump,
     closeThreadJump,
+    toggleSidebar,
     setSidebarHiddenPersisted,
     setContextRailPinnedPersisted,
     setProjectIndexHiddenPersisted,
