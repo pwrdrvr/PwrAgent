@@ -190,39 +190,16 @@ export function partitionTokenMiserGateLines(
   return { displayLines, gateLinesByTurn, orphanGroupsByAnchor };
 }
 
-export function tokenMiserDecisionsForTurn(
-  accounting: ThreadTokenMiserAccounting | undefined,
-  turnId: string | undefined,
-): ThreadTokenMiserInterceptionAccounting[] | undefined {
-  if (!accounting?.interceptions || !turnId) {
-    return undefined;
+function indexTokenMiserGateDecisions(accounting: ThreadTokenMiserAccounting | undefined) {
+  const byTurn = new Map<string, ThreadTokenMiserInterceptionAccounting[]>();
+  for (const decision of accounting?.interceptions ?? []) {
+    if (decision.boundedCapture) continue;
+    const { turnId } = decision;
+    const decisions = byTurn.get(turnId);
+    if (decisions) decisions.push(decision);
+    else byTurn.set(turnId, [decision]);
   }
-  const decisions = accounting.interceptions.filter((decision) =>
-    decision.turnId === turnId
-  );
-  return decisions.length > 0 ? decisions : undefined;
-}
-
-export function tokenMiserDecisionsForGateLines(params: {
-  accounting?: ThreadTokenMiserAccounting;
-  gates: readonly PricingUsageLine[];
-  subAgentsById: Map<string, ThreadSubAgentSummary>;
-}): ThreadTokenMiserInterceptionAccounting[] | undefined {
-  if (!params.accounting?.interceptions) {
-    return undefined;
-  }
-  const turnIds = new Set(
-    params.gates.flatMap((gate) => {
-      const turnId = gate.sourceItemId
-        ? params.subAgentsById.get(gate.sourceItemId)?.parentTurnId
-        : undefined;
-      return turnId ? [turnId] : [];
-    }),
-  );
-  const decisions = params.accounting.interceptions.filter((decision) =>
-    turnIds.has(decision.turnId)
-  );
-  return decisions.length > 0 ? decisions : undefined;
+  return byTurn;
 }
 
 export const COMPACTION_TURN_KEY_PREFIX = "turn:";
@@ -574,6 +551,7 @@ export function buildThreadPricingDisplay(params: {
   const claimedCompactionTurns = new Set<string>();
   const gatesForLine = (line: PricingUsageLine) => partition?.orphanGroupsByAnchor.get(line.usageLineId)
     ?? (line.scope !== "monitor" && line.turnId ? partition?.gateLinesByTurn.get(line.turnId) ?? [] : []);
+  let gateDecisions: ReturnType<typeof indexTokenMiserGateDecisions> | undefined;
   const buildRow = (line: PricingUsageLine, nested = false): PricingUsageRowData => {
     const orphanGroup = nested ? undefined : partition?.orphanGroupsByAnchor.get(line.usageLineId);
     const prepared = nested ? undefined : page?.groups?.get(line.usageLineId);
@@ -584,8 +562,19 @@ export function buildThreadPricingDisplay(params: {
     if (prepared && page?.savings) {
       decisions = prepared.decisions;
     } else if (prepared || gates.length) {
-      decisions = orphanGroup ? tokenMiserDecisionsForGateLines({ accounting: params.tokenMiserAccounting, gates, subAgentsById })
-        : tokenMiserDecisionsForTurn(params.tokenMiserAccounting, prepared?.parentTurnId ?? line.turnId);
+      let turnId = prepared?.parentTurnId ?? line.turnId;
+      if (orphanGroup) {
+        // Orphan gates share a parent or have no known parent at all.
+        turnId = undefined;
+        for (const gate of orphanGroup) {
+          const parent = gate.sourceItemId && subAgentsById.get(gate.sourceItemId)?.parentTurnId;
+          if (parent) {
+            turnId = parent;
+            break;
+          }
+        }
+      }
+      if (turnId) decisions = (gateDecisions ??= indexTokenMiserGateDecisions(params.tokenMiserAccounting)).get(turnId);
       if (!prepared) gateSummary = buildPricingGateGroupDisplay({ gates, subAgentsById, decisions });
       else if (decisions) gateSummary = { ...prepared.summary, ...decisionCounts(decisions), count: decisions.length, hasDecisions: true };
     }

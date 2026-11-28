@@ -18,17 +18,21 @@ type AccountingRow = MetadataRow & {
   digest: Buffer;
 };
 
-type Decisions = {
-  rows: Map<string, AccountingRow>;
-  helperDecisionCount: number; policyDecisionCount: number;
-  helperPassThroughCount: number; policyPassThroughCount: number;
+type TurnAccounting = {
+  gates: Map<string, AccountingRow>;
+  captureIds?: Set<string>;
+  legacyGateIds?: Set<string>;
+  counts: {
+    helperDecisionCount: number; policyDecisionCount: number;
+    helperPassThroughCount: number; policyPassThroughCount: number;
+  };
 };
 
 /** Pricing needs the three dollar terms, decision counts and (only on
  * expansion) two decision fields. The Explorer still owns the full report. */
 export class TokenMiserPricingPage {
   private readonly rows = new Map<string, AccountingRow>();
-  private readonly turns = new Map<string, Decisions>();
+  private readonly turns = new Map<string, TurnAccounting>();
   private readonly dirty = new Set<string>();
   private readonly metadataChanges: Set<string>;
   private readonly checksum = Buffer.alloc(32);
@@ -59,7 +63,10 @@ export class TokenMiserPricingPage {
     if (line.sourceItemId?.startsWith("system:token-miser:")) this.dirty.add(line.sourceItemId.slice("system:token-miser:".length));
     if (line.scope !== "monitor" && line.model) {
       for (const turn of [line.turnId, line.usageTurnId]) {
-        if (turn) for (const id of this.turns.get(turn)?.rows.keys() ?? []) this.dirty.add(id);
+        if (!turn) continue;
+        const group = this.turns.get(turn);
+        for (const id of group?.gates.keys() ?? []) this.dirty.add(id);
+        for (const id of group?.captureIds ?? []) this.dirty.add(id);
       }
     }
   }
@@ -67,27 +74,35 @@ export class TokenMiserPricingPage {
   private update(row: AccountingRow, add: boolean): void {
     const sign = add ? 1 : -1;
     const { entry, decision } = row;
-    const group = this.turns.get(entry.turnId) ?? {
-      rows: new Map<string, AccountingRow>(), helperDecisionCount: 0, policyDecisionCount: 0, helperPassThroughCount: 0, policyPassThroughCount: 0,
+    const group: TurnAccounting = this.turns.get(entry.turnId) ?? {
+      gates: new Map(), counts: { helperDecisionCount: 0, policyDecisionCount: 0, helperPassThroughCount: 0, policyPassThroughCount: 0 },
     };
-    if (add) {
-      this.rows.set(entry.objectId, row);
-      group.rows.set(entry.objectId, row);
+    const id = entry.objectId;
+    if (add) this.rows.set(id, row);
+    else this.rows.delete(id);
+    if (decision) {
+      if (add) group.gates.set(id, row);
+      else group.gates.delete(id);
+      if (entry.replayTrackingVersion !== 2) {
+        if (add) (group.legacyGateIds ??= new Set()).add(id);
+        else group.legacyGateIds?.delete(id);
+        this.legacyCount += sign;
+      }
+    } else if (add) {
+      (group.captureIds ??= new Set()).add(id);
     } else {
-      this.rows.delete(entry.objectId);
-      group.rows.delete(entry.objectId);
+      group.captureIds?.delete(id);
     }
-    if (group.rows.size) this.turns.set(entry.turnId, group);
+    if (group.gates.size || group.captureIds?.size) this.turns.set(entry.turnId, group);
     else this.turns.delete(entry.turnId);
-    if (decision?.decisionSource === "policy") group.policyDecisionCount += sign;
-    else if (decision) group.helperDecisionCount += sign;
+    if (decision?.decisionSource === "policy") group.counts.policyDecisionCount += sign;
+    else if (decision) group.counts.helperDecisionCount += sign;
     if (decision?.disposition === "passed_through") {
-      if (decision.decisionSource === "policy") group.policyPassThroughCount += sign;
-      else group.helperPassThroughCount += sign;
+      if (decision.decisionSource === "policy") group.counts.policyPassThroughCount += sign;
+      else group.counts.helperPassThroughCount += sign;
       this.passed += sign;
     }
     if (entry.helperUsage) this.helpers += sign;
-    if (decision && entry.replayTrackingVersion !== 2) this.legacyCount += sign;
     this.avoided += sign * (entry.baselineParentTokens - estimateTokenCount(entry.replacementCharacters) - estimateTokenCount(entry.retrievedCharacters));
     this.totals = addTokenMiserGateAccountingTotals(this.totals, row.terms, sign);
     for (let i = 0; i < row.digest.length; i++) this.checksum[i] = this.checksum[i]! ^ row.digest[i]!;
@@ -118,9 +133,7 @@ export class TokenMiserPricingPage {
       const next = new Map([...byTurn].map(([turn, rows]) => [turn, JSON.stringify(rows)]));
       for (const turn of new Set([...next.keys(), ...this.legacyTurns.keys()])) {
         if (next.get(turn) === this.legacyTurns.get(turn)) continue;
-        for (const [id, row] of this.turns.get(turn)?.rows ?? []) {
-          if (row.decision && row.entry.replayTrackingVersion !== 2) this.dirty.add(id);
-        }
+        for (const id of this.turns.get(turn)?.legacyGateIds ?? []) this.dirty.add(id);
       }
       this.legacyTurns = next;
     }
@@ -176,14 +189,11 @@ export class TokenMiserPricingPage {
       gateTotals: savings ? gateTotals : { ...gateTotals, pricedCount: 0 },
     }) };
     for (const group of page.groups?.values() ?? []) {
-      const decisions = group.parentTurnId && this.turns.get(group.parentTurnId);
-      if (!decisions) continue;
-      const { rows, ...counts } = decisions;
-      const count = counts.helperDecisionCount + counts.policyDecisionCount;
-      if (!count) continue;
-      group.summary = { ...group.summary, ...counts, hasDecisions: true, count };
-      if (!defer) group.decisions = [...rows.values()].sort((a, b) => b.createdAt - a.createdAt || b.rowid - a.rowid)
-        .flatMap((row) => row.decision ?? []);
+      const turn = group.parentTurnId && this.turns.get(group.parentTurnId);
+      if (!turn || !turn.gates.size) continue;
+      group.summary = { ...group.summary, ...turn.counts, hasDecisions: true, count: turn.gates.size };
+      if (!defer) group.decisions = [...turn.gates.values()].sort((a, b) => b.createdAt - a.createdAt || b.rowid - a.rowid)
+        .map((row) => row.decision!);
     }
     page.revision += this.checksum.toString("base64url") + JSON.stringify(page.savings);
   }
