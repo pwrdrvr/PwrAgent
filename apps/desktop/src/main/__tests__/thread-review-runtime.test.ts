@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { buildPullRequestStatusKey, buildThreadIdentityKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { StateDb } from "../state/state-db";
@@ -15,6 +17,8 @@ import {
   getReviewAutoFixArming,
   readReviewAutoFixStatus,
   resetReviewAutoFixArmingForTests,
+  ReviewAutoFixDispatcher,
+  type ReviewStackHoldObservation,
 } from "../thread-reviews/review-auto-fix";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -46,7 +50,7 @@ describe("review tracking runtime eligibility", () => {
   const submitTurn = vi.fn(async () => ({ status: "queued" }));
   const submitTurnIfIdle = vi.fn(async ({ canAdmit }: { canAdmit: () => Promise<boolean> }) =>
     await canAdmit() ? { status: "started", turnId: "fix-turn" } : { status: "busy" });
-  function install(readReviewStackHold?: () => Promise<string | undefined>) {
+  function install(readReviewStackHold?: Parameters<typeof installThreadTodoRuntime>[0]["readReviewStackHold"]) {
     submitTurn.mockClear();
     submitTurnIfIdle.mockClear();
     const registry = {
@@ -200,15 +204,172 @@ describe("review tracking runtime eligibility", () => {
    * turn, sends nothing.
    */
   describe("auto-fix", () => {
-    const findingsOutput = (turnId: string, id: string) => ({ backend: THREAD.backend, notification: {
-      method: "item/completed" as const, params: { threadId: THREAD.threadId, turnId, item: {
-        id, type: "exitedReviewMode", review: "",
-        data: { reviewOutput: claudeReviewOutput({ findings: [
-          { file: "src/a.ts", line: 3, summary: "Minor naming.", failureScenario: "Confuses readers." },
-          { file: "src/b.ts", line: 9, summary: "Drops a write.", failureScenario: "Loses data." },
-        ] }, "/repo") },
-      } },
-    } }) as AgentEvent;
+    const findingsOutput = (turnId: string, id: string, thread = THREAD, pullRequest?: typeof PR) => ({
+      backend: thread.backend,
+      notification: {
+        method: "item/completed",
+        params: { threadId: thread.threadId, turnId, item: {
+          id, type: "exitedReviewMode", review: "",
+          data: {
+            ...(pullRequest ? { context: { workspacePath: "/repo", pullRequest } } : {}),
+            reviewOutput: claudeReviewOutput({ findings: [
+              { file: "src/a.ts", line: 3, summary: "Minor naming.", failureScenario: "Confuses readers." },
+              { file: "src/b.ts", line: 9, summary: "Drops a write.", failureScenario: "Loses data." },
+            ] }, "/repo"),
+          },
+        } },
+      },
+    }) as AgentEvent;
+
+    it("bounds SQLite review reads for unrelated turn and forge events", async () => {
+      let hold: string | undefined = "CI running";
+      const readHold = vi.fn(async () => hold);
+      install(readHold);
+      const second = { ...THREAD, threadId: "second-owner" };
+      const otherPr = { ...PR, repo: "other", url: "https://github.com/example/other/pull/7" };
+      for (const [thread, pr] of [[THREAD, PR], [second, otherPr]] as const) {
+        getReviewAutoFixArming().starting(thread, "auto-fix").accepted("review-turn");
+        onEvent(findingsOutput("review-turn", thread.threadId, thread, pr));
+      }
+      const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+      await settle();
+      expect(readHold).toHaveBeenCalledTimes(2);
+      const terminal: AgentEvent["notification"] = { method: "turn/completed", params: {
+        threadId: THREAD.threadId, turnId: "unrelated-turn", turn: { id: "unrelated-turn", status: "completed", output: [] },
+      } };
+      const pr: PrSummary = { ...PR, repo: "new-repo", number: 6, url: "https://github.com/example/new-repo/pull/6", state: "passing" };
+      const forge: AgentEvent["notification"] = { method: "pullRequest/status/updated", params: {
+        prKey: buildPullRequestStatusKey(pr), pr,
+      } };
+      const lowerLayerUpdated: AgentEvent = {
+        backend: "claude", notification: forge, navigationPullRequestKeyAliases: ["github.com/example/atlas#6"],
+      };
+      const lookup = vi.spyOn(getThreadReviewService(), "get");
+      const checkWork = async (event: AgentEvent, reviewLookups: number, stackChecks: number) => {
+        lookup.mockClear();
+        readHold.mockClear();
+        onEvent(event);
+        await settle();
+        expect({ reviewLookups: lookup.mock.calls.length, stackChecks: readHold.mock.calls.length })
+          .toEqual({ reviewLookups, stackChecks });
+      };
+      try {
+        // A terminal event only revisits its own backend and thread.
+        await checkWork({ backend: "claude", notification: terminal }, 0, 0);
+        await checkWork({ backend: "codex", notification: terminal }, 2, 1);
+        // A PR event can unblock a different thread, even after a repository rename.
+        await checkWork({ backend: "claude", notification: forge }, 0, 0);
+        await checkWork(lowerLayerUpdated, 2, 1);
+        // A stack operation with no repository identity can affect either review.
+        await checkWork({ backend: "claude", notification: {
+          method: "thread/stackHold/updated", params: { threadId: "lower-layer", opId: "restack", held: false },
+        } }, 4, 2);
+        hold = undefined;
+        await checkWork(lowerLayerUpdated, 2, 2);
+        await checkWork(lowerLayerUpdated, 0, 0);
+        expect(submitTurnIfIdle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(THREAD));
+      } finally {
+        lookup.mockRestore();
+      }
+    });
+
+    it("records forge changes during a hold check without revisiting in-flight reviews", async () => {
+      const hold = "CI running";
+      const readHold = vi.fn(async () => hold);
+      install(readHold);
+      const threads = [THREAD, { ...THREAD, threadId: "second-owner" }];
+      for (const thread of threads) {
+        getReviewAutoFixArming().starting(thread, "auto-fix").accepted("review-turn");
+        onEvent(findingsOutput("review-turn", thread.threadId, thread, PR));
+      }
+      const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+      await settle();
+      expect(readHold).toHaveBeenCalledTimes(2);
+
+      const checks = Promise.withResolvers<string>();
+      readHold.mockClear();
+      readHold.mockImplementation(() => checks.promise);
+      const dispatch = vi.spyOn(ReviewAutoFixDispatcher.prototype, "dispatch");
+      try {
+        // Separate observations can arrive while the initial hold checks wait
+        // on I/O. Each review needs one recheck of the latest observation.
+        for (const number of [1, 2, 3, 4]) {
+          const pr: PrSummary = { ...PR, number, url: `https://github.com/example/atlas/pull/${number}`, state: "passing" };
+          onEvent({ backend: "claude", notification: {
+            method: "pullRequest/status/updated", params: { prKey: buildPullRequestStatusKey(pr), pr },
+          } });
+          await settle();
+        }
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(readHold).toHaveBeenCalledTimes(2);
+        checks.resolve(hold);
+        await settle();
+        expect(readHold).toHaveBeenCalledTimes(4);
+        expect(submitTurnIfIdle).not.toHaveBeenCalled();
+      } finally {
+        checks.resolve(hold);
+        await settle();
+        dispatch.mockRestore();
+      }
+    });
+
+    it.each([
+      { inFlight: false, queued: false },
+      { inFlight: true, queued: false },
+      { inFlight: false, queued: true },
+    ])("wakes only the upper review after its lower layer completes ($inFlight in flight, $queued queued)", async ({ inFlight, queued }) => {
+      const lower = { backend: "claude" as const, threadId: "lower-repair" };
+      const blocker = buildThreadIdentityKey(lower.backend, lower.threadId);
+      const unrelated = { ...THREAD, threadId: "unrelated-stack" };
+      const finishObservation = Promise.withResolvers<void>();
+      const reason = "Held by #6: repair in progress";
+      let repairing = true;
+      const readHold = vi.fn(async (review: ThreadReview, observation?: ReviewStackHoldObservation) => {
+        if (review.threadId !== THREAD.threadId) return "Held by #20: CI running";
+        observation?.readActivity(blocker);
+        const wasRepairing = repairing;
+        if (inFlight) await finishObservation.promise;
+        if (wasRepairing) {
+          observation?.heldBy(blocker);
+          return reason;
+        }
+      });
+      install(readHold);
+      for (const thread of [THREAD, unrelated]) {
+        getReviewAutoFixArming().starting(thread, "auto-fix").accepted("review-turn");
+        onEvent(findingsOutput("review-turn", thread.threadId, thread, PR));
+      }
+      const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+      await settle();
+      expect(readHold).toHaveBeenCalledTimes(2);
+      const lookup = vi.spyOn(getThreadReviewService(), "get");
+      try {
+        const notification: AgentEvent["notification"] = queued
+          ? { method: "thread/turnQueue/updated", params: {
+            threadId: lower.threadId, queueEntryId: "repair-entry", origin: "automation", status: "cancelled",
+          } }
+          : { method: "turn/completed", params: {
+            threadId: lower.threadId, turnId: "repair", turn: { id: "repair", status: "completed", output: [] },
+          } };
+        // Identical thread IDs on other providers cannot settle this lower layer.
+        onEvent({ backend: "codex", notification });
+        await settle();
+        expect(lookup).not.toHaveBeenCalled();
+        expect(submitTurnIfIdle).not.toHaveBeenCalled();
+
+        repairing = false;
+        onEvent({ backend: lower.backend, notification });
+        finishObservation.resolve();
+        await settle();
+        expect(submitTurnIfIdle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(THREAD));
+        expect(readHold.mock.calls.slice(2).map(([review]) => review.threadId)).toEqual([THREAD.threadId, THREAD.threadId]);
+        expect(lookup.mock.calls.length).toBe(inFlight ? 3 : 2);
+      } finally {
+        finishObservation.resolve();
+        await settle();
+        lookup.mockRestore();
+      }
+    });
 
     it("sends the thread's agent the open findings when an armed review lands", async () => {
       install();
@@ -255,7 +416,9 @@ describe("review tracking runtime eligibility", () => {
       await vi.waitFor(() => expect(readHold).toHaveBeenCalledTimes(3));
       expect(readReviewAutoFixStatus(THREAD).runs[review!.id]?.phase).toBe("queued");
       hold = undefined;
-      observe();
+      onEvent({ backend: THREAD.backend, notification: {
+        method: "navigation/providerThreads/refreshed", params: { failedProviders: 0 },
+      } });
       await vi.waitFor(() => expect(readHold).toHaveBeenCalledTimes(5));
       observe();
       expect(submitTurnIfIdle).toHaveBeenCalledTimes(2);
