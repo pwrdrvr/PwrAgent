@@ -14,7 +14,7 @@ import {
   openFederationCheckoutStorage,
   openMachineCheckoutStorage,
 } from "../storage/resource-checkout-storage";
-import { readExternalCheckoutBindings, type ExternalBinding } from "./checkout-configuration";
+import { readExternalCheckoutBindings } from "./checkout-configuration";
 import { OWNERSHIP_CONFLICTS } from "./checkout-ownership";
 import { createMachineCpuBudgetPublisher } from "./machine-cpu-budget-file";
 import type { ApprovedLabCheckout } from "./pwrsuitelab-checkout-adapter";
@@ -61,7 +61,8 @@ export async function initializeResourceCheckouts(
   const warn = (error: unknown) => {
     getMainLogger("pwragent:resource-checkouts").warn("Checkout authority unavailable", { error: String(error) });
   };
-  let bindings: ExternalBinding[] = [];
+  let bindings: ReturnType<typeof readExternalCheckoutBindings>["bindings"] = [];
+  let factoryCpuBindings: ReturnType<typeof readExternalCheckoutBindings>["factoryCpuBindings"] | undefined;
   let allowAgentDrafts = false;
   let machineStore;
   let machineUnresolved: ResourceOwnershipConflict = OWNERSHIP_CONFLICTS.machineIdMissing;
@@ -71,6 +72,7 @@ export async function initializeResourceCheckouts(
   try {
     const config = readExternalCheckoutBindings(root);
     bindings = config.bindings;
+    factoryCpuBindings = config.factoryCpuBindings;
     allowAgentDrafts = config.allowAgentDrafts;
   } catch (error) {
     warn(error);
@@ -108,7 +110,7 @@ export async function initializeResourceCheckouts(
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
     machineStore, machineUnresolved, adoptMachineStore, machineCpuCount: cpus().length, externalStore, externalUnresolved,
-    bindings, allowAgentDrafts, approvedLabCheckouts, agentToolsEnabled, machineCpuBudgetPublisher, warn,
+    bindings, factoryCpuBindings, allowAgentDrafts, approvedLabCheckouts, agentToolsEnabled, machineCpuBudgetPublisher, warn,
     bootId: evidence.hostBinding ? evidence.bootId : undefined,
     readMachineAdvertisements: () => buildDockProfileSnapshot().profiles
       .filter((entry) => entry.name !== profile)
@@ -120,6 +122,7 @@ export async function initializeResourceCheckouts(
     checkoutPeers: (known) => federation.resourceCheckoutPeers(known),
     peerConnected: (id) => federation.resourceCheckoutPeerConnected(id),
     requestPeer: (id, request) => federation.requestResourceCheckout(id, request),
+    requestFactoryCpu: (id, request) => federation.requestFactoryCpu(id, request),
     threadTitle: (thread) => thread.instanceId === undefined || thread.instanceId === instanceId
       ? localThreadTitle?.(thread)
       : federation.remoteThreadSummaries().cachedThreadNameFromPeer({
@@ -127,6 +130,8 @@ export async function initializeResourceCheckouts(
       })?.title,
   });
   federation.setResourceCheckoutHandler((source, request) => runtime?.receivePeer(source, request));
+  const authority = runtime;
+  federation.setFactoryCpuHandler((source, request) => authority.receiveFactoryCpu(source, request));
   unsubscribe = federation.onPeerStatusChanged((instanceId, status) => {
     void runtime?.refreshPeers({ instanceId, connected: status === "connected" });
   });

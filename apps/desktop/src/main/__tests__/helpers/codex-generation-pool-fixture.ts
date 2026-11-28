@@ -99,6 +99,12 @@ export function fakeGeneration(
       loaded.add(threadId);
       return { threadId };
     }),
+    startFactoryBuilderTurn: vi.fn(async ({ threadId }: { threadId: string }) => {
+      call("startFactoryBuilderTurn", threadId);
+      const turnId = `g${id}-builder`;
+      running.set(threadId, turnId);
+      return { threadId, turnId };
+    }),
     startTurn: vi.fn(async (params: { threadId: string }) => {
       call("startTurn", params.threadId);
       launch();

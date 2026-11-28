@@ -296,6 +296,18 @@ describe("AutomationStore", () => {
     });
   });
 
+  it("keeps every non-deleted automation attached to its worker even if its payload is unreadable", () => {
+    const target = { backend: "codex" as const, threadId: "worker" };
+    store.createAutomation({ ...target, id: "one", name: "Fixture", taskPrompt: "Fixture",
+      schedule: { kind: "interval", every: 1, unit: "minutes" }, nextRunAt: 1000, now: 1 });
+    stateDb.raw.prepare("UPDATE automations SET payload = ? WHERE thread_id = ?").run("{", target.threadId);
+    for (const status of ["enabled", "paused", "future-status", "deleted"]) {
+      stateDb.raw.prepare("UPDATE automations SET status = ? WHERE thread_id = ?").run(status, target.threadId);
+      expect(store.hasNonDeletedThreadAutomation(target)).toBe(status !== "deleted");
+      expect(store.hasNonDeletedThreadAutomation({ ...target, threadId: "another" })).toBe(false);
+    }
+  });
+
   it("persists run history, terminal updates, and thread summaries", () => {
     store.createAutomation({
       id: "automation-1",

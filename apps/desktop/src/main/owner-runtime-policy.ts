@@ -29,6 +29,8 @@ export interface OwnerRuntimePolicy {
   sandboxByMode: Readonly<Partial<Record<ThreadExecutionMode, OwnerSandboxMode>>>;
   /** Network for agent commands inside the sandbox. Absent means off. */
   agentNetwork?: boolean;
+  /** Set by the daemon after sandbox preflight on an operator-prepared host. */
+  factoryBuilderWorkspaceRoot?: string;
   /** This member's containment; see member-containment.ts. */
   memberRole: FederationPeerRole;
   /** Paths every Codex permission profile denies, including Codex credentials; see outpost-codex-sandbox.ts. */

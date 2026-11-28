@@ -6,7 +6,7 @@ import { call } from "./client.js";
 import { serve } from "./daemon.js";
 import { formatVersion, packageVersion } from "./version.js";
 
-const commands = new Set(["status", "list", "show", "factory-board", "start-thread", "register-directory", "submit", "receipt", "pause", "resume", "move", "cancel", "release", "interrupt",
+const commands = new Set(["status", "list", "show", "factory-board", "factory-admission", "start-thread", "register-directory", "submit", "receipt", "pause", "resume", "move", "cancel", "release", "interrupt",
   "federation-status", "federation-join", "federation-invite", "federation-leave", "federation-revoke"]);
 const help = `PwrAgent Outpost (Linux/macOS, Node 24+)
 

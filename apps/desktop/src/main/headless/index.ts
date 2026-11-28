@@ -27,7 +27,9 @@ export async function shutdownHeadlessHost(source: string) {
   finally { if (isAppStateInitialized()) { disposeOwnerServicesSync(); disposeAppState(); } }
 }
 
-export async function startHeadlessHost(runtime = readNodeRuntimeMetadata(), options: { manageSignals?: boolean; exitedRuntimeInstanceIds?: readonly string[] } = {}) {
+export async function startHeadlessHost(runtime = readNodeRuntimeMetadata(), options: {
+  manageSignals?: boolean; exitedRuntimeInstanceIds?: readonly string[]; factoryBuilderWorkspaceRoot?: string;
+} = {}) {
   if (!runtime) throw new Error("The headless runtime manifest is missing. Run build:headless before starting the Node host.");
   const decision = resolveProfileBootDecision();
   if (decision.kind !== "open") throw new Error("The Node host requires an existing PwrAgent profile. Select it with PWRAGENT_PROFILE or --profile.");
@@ -41,7 +43,8 @@ export async function startHeadlessHost(runtime = readNodeRuntimeMetadata(), opt
     process.on("SIGTERM", signal);
   }
   process.once("exit", () => { if (isAppStateInitialized()) { try { disposeOwnerServicesSync(); } finally { disposeAppState(); } } });
-  const runtimePolicy = { ...createOutpostRuntimePolicy(), exitedRuntimeInstanceIds: options.exitedRuntimeInstanceIds ?? [] };
+  const runtimePolicy = { ...createOutpostRuntimePolicy(), exitedRuntimeInstanceIds: options.exitedRuntimeInstanceIds ?? [],
+    factoryBuilderWorkspaceRoot: options.factoryBuilderWorkspaceRoot };
   const host = createHeadlessOwnerHostServices({ runtime, profileDirectory, onQuit: () => signal("owner-request"), runtimePolicy });
   try {
     const services = await startOwnerServices(host, { bootMode: "active-profile", startedAt: Date.now() });

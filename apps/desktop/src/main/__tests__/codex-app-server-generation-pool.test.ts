@@ -292,6 +292,23 @@ describe("Codex app server selection changes", () => {
     vi.useRealTimers();
   });
 
+  it("awaits the selected generation before a restricted Factory turn enters its worker", async () => {
+    const fixture = poolFixture();
+    const { threadId } = await fixture.pool.startThread({});
+    let release!: () => void;
+    fixture.handshakes.push(new Promise<void>((resolve) => { release = resolve; }));
+    fixture.select("/opt/codex-factory");
+    const switching = fixture.pool.rolloverAppServer({ selection: 1 });
+    await vi.waitFor(() => expect(fixture.generations).toHaveLength(2));
+    const start = fixture.pool.startFactoryBuilderTurn({
+      threadId, cwd: "/fixture", permissionProfile: "workspace", input: [], onBeforeStart: async () => true,
+    });
+    release();
+    await switching;
+    await expect(start).resolves.toMatchObject({ threadId, turnId: "g2-builder" });
+    expect(fixture.gen(1).calls.some(({ method }) => method === "startFactoryBuilderTurn")).toBe(false);
+  });
+
   it("moves new work to a newly selected command while a turn drains on the old one", async () => {
     const fixture = poolFixture();
     const running = (await fixture.pool.startThread({})).threadId;

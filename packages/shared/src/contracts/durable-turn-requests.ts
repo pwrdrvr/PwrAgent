@@ -14,9 +14,15 @@ export function durableFederationCallerScope(sourceInstanceId: string, callerSco
 }
 
 export const DURABLE_TURN_REQUEST_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const FACTORY_BUILDER_ISOLATION = "local-only-v1" as const;
+export type BoundedDurableTurnStart = { before: number; worktreePath: string; repository: string };
 export type DurableTurnPayload = Omit<StartTurnRequest, "queueEntryId" | "federationTarget"> & {
   messageOrigin?: AppServerThreadMessageOrigin;
   delivery?: "new_turn";
+  /** A bounded start refuses busy threads and never joins their FIFO. */
+  boundedStart?: BoundedDurableTurnStart;
+  /** Top-level so receivers predating isolation reject the request's shape. */
+  factoryBuilderIsolation?: typeof FACTORY_BUILDER_ISOLATION;
 };
 export type SubmitDurableTurnRequest = {
   clientRequest: { version: 1; id: string; createdAt: number; payloadHash: string };

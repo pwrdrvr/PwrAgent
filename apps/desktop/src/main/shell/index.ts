@@ -1412,7 +1412,7 @@ export function bootstrapApp(): void {
     // window's renderer when the window manager maximizes it.
     wireWindowControlsBridge();
     installWindowFrameSync(app);
-    registerAppServerIpcHandlers();
+    registerAppServerIpcHandlers(ownerServices.factoryAdmission);
     if (bootMode === "active-profile") {
       // Projects checked on Get started, handed over by the bootstrap
       // profile. Registered once, like adding each folder by hand. Every

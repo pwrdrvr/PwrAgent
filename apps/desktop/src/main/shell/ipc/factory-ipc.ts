@@ -1,7 +1,9 @@
+import type { FactoryAdmission } from "@pwragent/owner-core/factory-admission";
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import { parseThreadUrl } from "@pwragent/shared/contracts/thread-link";
 import type { FactoryProjectOption, FactoryProjectProjection } from "@pwragent/shared/factory-projection";
 import {
+  FACTORY_ADMISSION_CHANNEL,
   FACTORY_OPEN_THREAD_CHANNEL,
   FACTORY_OPEN_WINDOW_CHANNEL,
   FACTORY_PROJECT_READ_CHANNEL,
@@ -13,6 +15,7 @@ import { isFactoryWindowWebContents, isLocalMainWindowWebContents } from "../win
 import { requestShowThread } from "../window-show-thread";
 
 const channels = [
+  FACTORY_ADMISSION_CHANNEL,
   FACTORY_PROJECT_READ_CHANNEL,
   FACTORY_PROJECTS_CHANNEL,
   FACTORY_OPEN_WINDOW_CHANNEL,
@@ -32,8 +35,15 @@ function requireFactoryWindow(event: IpcMainInvokeEvent): void {
 export function registerFactoryIpcHandlers(owner: {
   readFactoryProject(request: unknown): Promise<FactoryProjectProjection>;
   listFactoryProjects(): Promise<FactoryProjectOption[]>;
-}): void {
+}, admission?: Pick<FactoryAdmission, "command">): void {
   disposeFactoryIpcHandlers();
+  ipcMain.handle(FACTORY_ADMISSION_CHANNEL, (event, request: unknown) => {
+    if (!isTopFrame(event) || !isLocalMainWindowWebContents(event.sender)) {
+      throw new Error("Factory admission is available to this profile's local operator.");
+    }
+    if (!admission) throw new Error("Factory requires an active owner profile.");
+    return admission.command(request);
+  });
   ipcMain.handle(FACTORY_PROJECT_READ_CHANNEL, (event, request: unknown) => {
     if (!isTopFrame(event)
       || (!isLocalMainWindowWebContents(event.sender) && !isFactoryWindowWebContents(event.sender))) {

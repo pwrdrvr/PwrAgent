@@ -1132,3 +1132,5 @@ export const NAVIGATION_CONTINUE_THREAD_ENVIRONMENT_STARTUP_CHANNEL =
 export const THREAD_PULL_REQUEST_READ_MERGE_CHANNEL = "thread-pull-request:read-merge";
 /** Merges one of a local thread's attached PRs from its PR card. */
 export const THREAD_PULL_REQUEST_MERGE_CHANNEL = "thread-pull-request:merge";
+
+export const FACTORY_ADMISSION_CHANNEL = "factory:admission";

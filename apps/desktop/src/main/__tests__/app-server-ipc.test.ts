@@ -1145,6 +1145,7 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("../shell/window-channels", () => ({
+  isLocalMainWindowWebContents: (sender: { id?: number } | undefined) => sender?.id === 44,
   federationTargetForChannelSubscriber: () => undefined,
   subscribersForChannel: vi.fn(() => [
     {
@@ -1452,6 +1453,21 @@ async function disposeAppServerIpcHandlers(): Promise<void> {
 }
 
 describe("app server ipc", () => {
+  it("allows Factory commands only from the local main frame", async () => {
+    const { FACTORY_ADMISSION_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const command = vi.fn(async () => ({ row: { phase: "armed" } }));
+    registerAppServerShellIpcHandlers({ command } as unknown as Parameters<typeof registerAppServerShellIpcHandlers>[0]);
+    const handle = handlers.get(FACTORY_ADMISSION_CHANNEL)!;
+    const mainFrame = {};
+    const request = { action: "arm" };
+    expect(() => handle({ sender: { id: 999, mainFrame }, senderFrame: mainFrame }, request)).toThrow("local operator");
+    expect(() => handle({ sender: { id: 44, mainFrame }, senderFrame: {} }, request)).toThrow("local operator");
+    await expect(handle({ sender: { id: 44, mainFrame }, senderFrame: mainFrame }, request))
+      .resolves.toMatchObject({ row: { phase: "armed" } });
+    expect(command).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
   it("routes remote directory pins and moves to the selected owner", async () => {
     const { NAVIGATION_SET_DIRECTORY_PIN_CHANNEL, NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL } = await import("../../shared/ipc");
     registerAppServerIpcHandlers();

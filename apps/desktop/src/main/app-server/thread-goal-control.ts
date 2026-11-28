@@ -122,9 +122,14 @@ export class ThreadGoalControl {
     void this.publish(threadId, control).catch(() => undefined);
   }
 
+  hasActiveWork(threadId: string): boolean {
+    const control = this.controls.get(threadId);
+    return !!control && (control.goal?.status === "active" || !!control.pausedForMessage || !!control.activation || !!control.arming);
+  }
+
   *activeThreads(): IterableIterator<string> {
-    for (const [threadId, control] of this.controls) {
-      if (control.goal?.status === "active" || control.pausedForMessage || control.activation || control.arming) yield threadId;
+    for (const threadId of this.controls.keys()) {
+      if (this.hasActiveWork(threadId)) yield threadId;
     }
   }
 

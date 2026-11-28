@@ -1,4 +1,6 @@
+import type { FactoryCpuRequest, FactoryCpuStatus } from "@pwragent/owner-core/resource-checkout-authority";
 import { CHECKOUT_FEDERATION_METHOD } from "../resource-checkouts/resource-checkout-service";
+import { FACTORY_CPU_FEDERATION_METHOD, registerFactoryCpuFederationHandler } from "../resource-checkouts/factory-cpu-federation";
 import { readDirectoryGitRevisions } from "@pwragent/shared/navigation-metadata-dependencies";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { FederationRoleDeniedError } from "@pwragent/federation/federation-router";
@@ -465,6 +467,7 @@ import {
   steerInputOutcome,
   type CreatedThread,
 } from "./turn-input-viewers";
+import { FACTORY_BUILDER_ISOLATION } from "@pwragent/shared/contracts/durable-turn-requests";
 import type {
   SubmitDurableTurnRequest,
   GetDurableTurnRequest,
@@ -1417,6 +1420,21 @@ export class DesktopFederationRuntime {
     return result;
   }
 
+  private factoryCpuHandler?: (gateway: string, request: unknown) => FactoryCpuStatus | null;
+
+  setFactoryCpuHandler(handler: (gateway: string, request: unknown) => FactoryCpuStatus | null): void {
+    this.factoryCpuHandler = handler;
+  }
+
+  async requestFactoryCpu(instanceId: FederationInstanceId, request: FactoryCpuRequest): Promise<FactoryCpuStatus | null> {
+    if (localMemberRole() !== "full" || !this.router?.getConnection(instanceId)) {
+      throw new FederationRoleDeniedError("The selected Factory CPU authority is unavailable.");
+    }
+    return await this.rpcFor({ scope: "remote", instanceId }).request({
+      method: FACTORY_CPU_FEDERATION_METHOD, params: request, timeoutMs: 1_500,
+    });
+  }
+
   messagingSourceInstanceId(): FederationInstanceId {
     return this.ensureLocalInstanceId();
   }
@@ -1453,6 +1471,20 @@ export class DesktopFederationRuntime {
       method: FEDERATION_MESSAGING_DESTINATION_METHOD, params: operation, timeoutMs: 30_000,
     });
   }
+  /** Factory probes only the explicitly selected executor on this gateway. */
+  factoryExecutorHost(instanceId: FederationInstanceId): FederationHostInfo | undefined {
+    if (instanceId === this.knownLocalInstanceId()) return this.localHostInfo;
+    if (localMemberRole() !== "full") return undefined;
+    const connection = this.router?.getConnection(instanceId);
+    if (!connection || !connection.capabilities.includes("thread_navigation")
+        || !connection.capabilities.includes("turn_control") || !connection.capabilities.includes("durable_turn_requests_v1")) return undefined;
+    const peer = this.store().getPeer(instanceId);
+    if (peer?.status === "connected" && !peer.revokedAt && (!peer.permissionRole || peer.permissionRole === "full")) {
+      return peer.host;
+    }
+    return undefined;
+  }
+
   private durableTurnRequests?: DurableTurnRequestService;
   private unsubscribeDurableTurnEvents?: () => void;
   /** Which peer viewers sent input to each running turn on this owner. */
@@ -4693,6 +4725,20 @@ export class DesktopFederationRuntime {
         throw new FederationRoleDeniedError("This Federation owner does not provide checkout access to the peer.");
       }
       return this.resourceCheckoutHandler(envelope.sourceInstanceId, envelope.params);
+    });
+    registerFactoryCpuFederationHandler({
+      router,
+      enrolledPeer: (instanceId) => this.store().getPeer(instanceId),
+      // The upstream gateway is authenticated by its pinned enrollment,
+      // even when it has no downstream peer-store row.
+      pinnedGateway: () => this.gatewayInstanceId === desktopFederationState.read("gatewayInstanceId")
+        && desktopFederationState.read("gatewayPublicKey") ? this.gatewayInstanceId : undefined,
+      execute: (gateway, request) => {
+        if (localMemberRole() !== "full" || !this.factoryCpuHandler) {
+          throw new FederationRoleDeniedError("Factory CPU is unavailable.");
+        }
+        return this.factoryCpuHandler(gateway, request);
+      },
     });
     registerFederationBackendHandlers({
       router,
@@ -8191,8 +8237,9 @@ function localBackendOperations(
       return await getDesktopBackendRegistry().isThreadActiveForService({ backend: "codex", threadId });
     },
     async resolveThreadAdmissionState(request) {
-      return await new DesktopMessagingBackendBridge()
-        .getThreadAdmissionState(request);
+      const state = await new DesktopMessagingBackendBridge().getThreadAdmissionState(request);
+      return await getDesktopBackendRegistry().isFactoryBuilderPrepared(request, state.thread)
+        ? { ...state, factoryBuilderIsolation: FACTORY_BUILDER_ISOLATION } : state;
     },
     async readThread(
       request: AppServerReadThreadRequest,

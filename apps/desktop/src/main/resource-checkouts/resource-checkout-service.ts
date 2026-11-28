@@ -4,6 +4,7 @@ import { isEnvironmentGroupGone } from "./checkout-machine-evidence";
 import { createHash, randomUUID } from "node:crypto";
 import {
   CheckoutDefinitionConflictError, ResourceCheckoutAuthority, MAX_CHECKOUT_HOLD_MS, rejectCheckout, type CheckoutStatus, type CheckoutToken,
+  type FactoryCpuRequest, type FactoryCpuStatus,
 } from "@pwragent/owner-core/resource-checkout-authority";
 import type {
   CheckoutActor, CheckoutDefinition, CheckoutDomainRecord, CheckoutStore,
@@ -16,7 +17,7 @@ import {
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseCheckoutAction, parseCheckoutToken, object, text } from "./checkout-input";
-import type { ExternalBinding } from "./checkout-configuration";
+import { FACTORY_CPU_MACHINE_ID, type ExternalBinding, type FactoryCpuBinding } from "./checkout-configuration";
 import { labelResourceThreads, projectCheckoutDomain, UNEXPLAINED_OWNERSHIP_CONFLICT } from "./checkout-projection";
 import { misboundAuthorityConflict, OWNERSHIP_CONFLICTS } from "./checkout-ownership";
 import type { MachineCpuBudgetPublisher } from "./machine-cpu-budget-file";
@@ -24,6 +25,7 @@ import { ResourceUsageRecorder } from "./checkout-usage-history";
 import { CheckoutPeerCatalog, catalogPage, type CheckoutPeers, type CheckoutView as ExternalView, type CheckoutRoute } from "./checkout-peer-catalog";
 
 export const CHECKOUT_FEDERATION_METHOD = "resourceCheckouts.authority.v2";
+const FACTORY_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const REFRESH_MS = 2_000;
 
 type Store = CheckoutStore & { close(): void };
@@ -44,6 +46,7 @@ type Options = {
   /** Why no Federation store was passed, for the operator. */
   externalUnresolved?: ResourceOwnershipConflict;
   bindings: ExternalBinding[];
+  factoryCpuBindings?: ReadonlyMap<string, FactoryCpuBinding>;
   checkoutPeers?: (known: Iterable<string>) => CheckoutPeers;
   peerConnected?: (instanceId: string) => boolean;
   allowAgentDrafts?: boolean;
@@ -51,6 +54,7 @@ type Options = {
   bootId?: string;
   readMachineAdvertisements?: () => ResourceAdvertisement[];
   requestPeer: <T>(instanceId: string, request: unknown) => Promise<T>;
+  requestFactoryCpu?: (instanceId: string, request: FactoryCpuRequest) => Promise<FactoryCpuStatus | null>;
   /**
    * A thread's current title, when this instance can name it: its own
    * threads, and peers' threads it has seen. Holders are stored with the
@@ -169,7 +173,7 @@ export class DesktopResourceCheckoutService {
     this.timer.unref();
   }
 
-  private isLocalAuthority(binding: ExternalBinding): boolean {
+  private isLocalAuthority(binding: Pick<ExternalBinding, "authorityInstanceId" | "authorityMachineId">): boolean {
     return binding.authorityInstanceId === this.options.viewer.instanceId
       && binding.authorityMachineId === this.options.viewer.machineId;
   }
@@ -207,6 +211,54 @@ export class DesktopResourceCheckoutService {
 
   localMachineResourceId(): string {
     return this.machineDefinition.resourceId;
+  }
+
+  factoryCpuResource(machineId: string): string | undefined {
+    if (this.closing || this.closed || !FACTORY_CPU_MACHINE_ID.test(machineId)) return undefined;
+    if (machineId === this.options.viewer.machineId) {
+      return this.machine && !this.machineConflict ? this.localMachineResourceId() : undefined;
+    }
+    return this.factoryCpuRoute(machineId) ? `machine:${machineId}:cpu` : undefined;
+  }
+
+  private factoryCpuRoute(machineId: string): FactoryCpuBinding | undefined {
+    const binding = this.options.factoryCpuBindings?.get(machineId);
+    return binding && binding.authorityInstanceId !== this.options.viewer.instanceId
+      && binding.allowedInstances.has(this.options.viewer.instanceId) ? binding : undefined;
+  }
+
+  async factoryCpu(request: FactoryCpuRequest): Promise<FactoryCpuStatus | null> {
+    const machineId = /^machine:([^:]+):cpu$/.exec(request.resourceId)?.[1];
+    if (!machineId || !FACTORY_CPU_MACHINE_ID.test(machineId) || this.closing || this.closed) {
+      throw new Error("Factory machine capacity is unavailable.");
+    }
+    if (machineId === this.options.viewer.machineId) {
+      return this.performLocalFactoryCpu(this.options.viewer.instanceId, request);
+    }
+    const binding = this.factoryCpuRoute(machineId);
+    if (!binding || !this.options.requestFactoryCpu) throw new Error("Factory machine capacity is unavailable.");
+    return this.options.requestFactoryCpu(binding.authorityInstanceId, request);
+  }
+
+  receiveFactoryCpu(gatewayInstanceId: string, value: unknown): FactoryCpuStatus | null {
+    const request = object(value);
+    const { action, requestId, resourceId } = request;
+    if ((action !== "reserve" && action !== "status" && action !== "release") || Object.keys(request).length !== 3
+        || typeof requestId !== "string" || !FACTORY_REQUEST_ID.test(requestId) || resourceId !== this.localMachineResourceId()) {
+      throw new Error("Invalid Factory CPU request.");
+    }
+    const binding = this.options.factoryCpuBindings?.get(this.options.viewer.machineId ?? "");
+    if (!binding || !this.isLocalAuthority(binding) || !binding.allowedInstances.has(gatewayInstanceId)) {
+      throw new Error("This gateway is not approved for Factory machine capacity.");
+    }
+    return this.performLocalFactoryCpu(gatewayInstanceId, { action, requestId, resourceId });
+  }
+
+  private performLocalFactoryCpu(gatewayInstanceId: string, request: FactoryCpuRequest): FactoryCpuStatus | null {
+    if (this.closing || this.closed || !this.machine || this.machineConflict || request.resourceId !== this.localMachineResourceId()) {
+      throw new Error("Factory machine capacity is unavailable.");
+    }
+    return this.machine.factoryCpu(gatewayInstanceId, request);
   }
 
   isCountedResource(resourceId: string): boolean {

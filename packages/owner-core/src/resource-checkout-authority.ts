@@ -8,6 +8,18 @@ export const MIN_CHECKOUT_CONTINUATION_HOLD_MS = 5_000;
 export const MAX_CHECKOUT_RENEWALS = 1;
 const MAX_QUEUE_LENGTH = 100;
 export const MAX_CHECKOUT_HOLD_MS = 4 * 60 * 60 * 1_000;
+export const FACTORY_CPU_HOLD_MS = 30 * 60_000;
+
+export type FactoryCpuRequest = {
+  action: "reserve" | "status" | "release";
+  resourceId: string;
+  requestId: string;
+};
+
+export type FactoryCpuStatus = Omit<FactoryCpuRequest, "action"> & (
+  | { state: "granted"; allocationId: string; generation: number; deadlineAt: number }
+  | { state: "ended" }
+);
 
 export type CheckoutToken = {
   resourceId: string;
@@ -391,6 +403,63 @@ export class ResourceCheckoutAuthority {
       }
       tx.recordReceipt(actor.key, action.idempotencyKey, { result, fingerprint, resourceId: resourceId! });
       return result;
+    });
+  }
+
+  /**
+   * Factory shares the physical pool under its authenticated gateway's own
+   * namespace. Reserve immediately or record a refusal; never leave a waiter
+   * behind a lost reply. Release also closes a key that has yet to arrive.
+   */
+  factoryCpu(gatewayInstanceId: string, { action, resourceId, requestId }: FactoryCpuRequest): FactoryCpuStatus | null {
+    const actor: CheckoutActor = {
+      key: JSON.stringify({ factoryGateway: gatewayInstanceId }),
+      holder: { kind: "automation", label: `Factory · ${gatewayInstanceId}` },
+      manage: false,
+    };
+    const base = { resourceId, requestId };
+    const ended = { ...base, state: "ended" as const };
+    return this.store.change((tx) => {
+      const record = tx.read(resourceId);
+      if (record?.definition.scope !== "machine" || !record.definition.counted
+          || record.definition.publication !== "published") throw new Error("Factory machine capacity is unavailable.");
+      const previous = tx.receipt(actor.key, requestId);
+      if (!previous && action === "status") return null;
+      const now = this.now();
+      let changed = reconcile(record, now);
+      if (previous) {
+        if (previous.resourceId !== resourceId || previous.fingerprint !== "factory-cpu-v1") {
+          throw new Error("Factory reservation identity changed.");
+        }
+        const saved = previous.result;
+        const grant = saved.outcome === "granted"
+          ? record.grants.find((entry) => entry.id === saved.allocationId && entry.actor.key === actor.key) : undefined;
+        if (grant && (grant.state !== "granted" || grant.job)) throw new Error("Factory capacity needs authority recovery.");
+        if (grant && action === "release") {
+          record.grants.splice(record.grants.indexOf(grant), 1);
+          wake(record, now);
+          changed = true;
+        }
+        if (changed) tx.save(record);
+        return grant && action !== "release" ? {
+          ...base, state: "granted", allocationId: grant.id, generation: grant.generation, deadlineAt: grant.deadlineAt,
+        } : ended;
+      }
+      const canReserve = action === "reserve" && record.queue.length === 0
+        && !record.grants.some((grant) => grant.actor.key === actor.key || grant.state === "recovery_required")
+        && record.grants.reduce((units, grant) => units + grant.units, 0) < record.definition.capacity;
+      const result = canReserve ? applyCheckout(record, actor, {
+        kind: "request", resourceId, idempotencyKey: requestId, purpose: "Factory admission",
+        units: 1, expectedDurationMs: FACTORY_CPU_HOLD_MS,
+      }, now, this.newId) : rejectCheckout("not_applicable", "Factory reservation is closed or capacity is unavailable.");
+      if (result.outcome !== "granted" && result.outcome !== "rejected") {
+        throw new Error("Factory CPU cannot queue or transfer a reservation.");
+      }
+      if (changed || result.outcome === "granted") tx.save(record);
+      tx.recordReceipt(actor.key, requestId, { resourceId, fingerprint: "factory-cpu-v1", result });
+      return result.outcome === "granted" ? {
+        ...base, state: "granted", allocationId: result.allocationId, generation: result.generation, deadlineAt: now + FACTORY_CPU_HOLD_MS,
+      } : ended;
     });
   }
 
