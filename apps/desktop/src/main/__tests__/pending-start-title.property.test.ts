@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { buildDirectorySummaries } from "@pwragent/shared/directory-navigation";
@@ -13,6 +13,7 @@ const RUNS = Number(process.env.MBT_RUNS ?? 9);
 
 type Command =
   | { kind: "rename"; n: number }
+  | { kind: "renameDuringListing"; n: number }
   | { kind: "generated"; n: number }
   | { kind: "echo" }
   | { kind: "materialize" }
@@ -23,6 +24,7 @@ type Command =
 
 const command: fc.Arbitrary<Command> = fc.oneof(
   fc.record({ kind: fc.constant("rename" as const), n: fc.integer({ min: 1, max: 3 }) }),
+  fc.record({ kind: fc.constant("renameDuringListing" as const), n: fc.integer({ min: 1, max: 3 }) }),
   fc.record({ kind: fc.constant("generated" as const), n: fc.integer({ min: 1, max: 3 }) }),
   fc.constant({ kind: "echo" as const }),
   fc.constant({ kind: "materialize" as const }),
@@ -37,16 +39,15 @@ const command: fc.Arbitrary<Command> = fc.oneof(
 // operator rename, a generated title). Codex's point read can carry that name
 // before thread/list does, or before thread/list includes the thread at all.
 // Once named, every settled read serves the owner's latest name.
-it("every settled read shows the owner's latest name for a started thread", async () => {
-  // `lag`: thread/list shows a name set before it listed one only after catchUp.
-  const scenario = fc.tuple(fc.boolean(), fc.array(command, { minLength: 1, maxLength: 24, size: "max" }));
-  await fc.assert(fc.asyncProperty(scenario, async ([lag, commands]) => {
+describe("started thread titles", () => {
+  async function replay([lag, commands]: [lag: boolean, commands: Command[]]): Promise<void> {
     const id = "thread-1";
     // What Codex itself knows, and what its listing reports.
     let codexName: string | undefined;
     let listedName: string | undefined;
     let materialized = false;
     let nativeFails = false;
+    let delayNextListing: (() => Promise<void>) | undefined;
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list", "thread/start", "thread/name/set"] }, threads: [],
     });
@@ -61,7 +62,13 @@ it("every settled read shows the owner's latest name for a started thread", asyn
         if (!lag || listedName !== undefined) listedName = codexName;
         return { threadId: params.threadId };
       },
-      listThreads: async () => materialized ? [codexRow(listedName)] : [],
+      listThreads: async () => {
+        const rows = materialized ? [codexRow(listedName)] : [];
+        const delay = delayNextListing;
+        delayNextListing = undefined;
+        await delay?.();
+        return rows;
+      },
       readThreadSummary: async () => {
         if (nativeFails) throw new Error("thread not loaded");
         return codexRow(codexName);
@@ -118,9 +125,34 @@ it("every settled read shows the owner's latest name for a started thread", asyn
       await registry.startThread({ backend: "codex", cwd: "/repo-a" });
       for (const [step, cmd] of commands.entries()) {
         const label = `${step}:${JSON.stringify(cmd)}`;
-        if (cmd.kind === "rename") {
-          await registry.renameThread({ backend: "codex", threadId: id, name: `Name ${cmd.n}` });
-          expected = `Name ${cmd.n}`;
+        if (cmd.kind === "rename" || cmd.kind === "renameDuringListing") {
+          const name = `Name ${cmd.n}`;
+          const rename = () => registry.renameThread({ backend: "codex", threadId: id, name });
+          if (cmd.kind === "renameDuringListing") {
+            // Exercise a listing that has already read a different explicit name.
+            if (!materialized || listedName === undefined || listedName === name) continue;
+            const started = Promise.withResolvers<void>();
+            const release = Promise.withResolvers<void>();
+            delayNextListing = () => {
+              started.resolve();
+              return release.promise;
+            };
+            const pending = registry.listThreads({ backend: "codex", forceRefresh: true });
+            try {
+              await Promise.race([started.promise, pending.then(() => {
+                throw new Error("listing finished before reaching the provider");
+              })]);
+              await rename();
+            } finally {
+              release.resolve();
+            }
+            expect((await pending).find((thread) => thread.id === id), label).toMatchObject({
+              title: name, titleSource: "explicit",
+            });
+          } else {
+            await rename();
+          }
+          expected = name;
           named = true;
           explicit = true;
         } else if (cmd.kind === "generated") {
@@ -164,16 +196,28 @@ it("every settled read shows the owner's latest name for a started thread", asyn
       live.close();
       await registry.close();
     }
-  }), { numRuns: RUNS, examples: [
-    // A point read acknowledged the rename while thread/list omitted the
-    // thread; the listing served the pending start's "Untitled thread".
-    [[false, [{ kind: "rename", n: 1 }, { kind: "nav", method: "thread/started" }]]],
-    // The same acknowledgment while thread/list lists the thread unnamed.
-    [[true, [{ kind: "materialize" }, { kind: "rename", n: 1 }]]],
-    // The unnamed listing's preview, also `derived`, retired a generated title.
-    [[true, [{ kind: "generated", n: 1 }, { kind: "materialize" }, { kind: "read" }, { kind: "rename", n: 1 }]]],
-    // A listing that held only the pending start's placeholder, which carries
-    // the rename, retired it before thread/list listed the thread unnamed.
-    [[true, [{ kind: "rename", n: 1 }, { kind: "read" }, { kind: "materialize" }, { kind: "nav", method: "thread/started" }]]],
-  ] });
+  }
+
+  // A listing captures the first explicit name, then returns it after the second
+  // rename has been accepted.
+  it("keeps an explicit rename when an earlier listing completes", () => replay([
+    false, [{ kind: "materialize" }, { kind: "rename", n: 1 }, { kind: "renameDuringListing", n: 2 }],
+  ]));
+
+  it("every settled read shows the owner's latest name for a started thread", async () => {
+    // `lag`: thread/list shows a name set before it listed one only after catchUp.
+    const scenario = fc.tuple(fc.boolean(), fc.array(command, { minLength: 1, maxLength: 24, size: "max" }));
+    await fc.assert(fc.asyncProperty(scenario, replay), { numRuns: RUNS, examples: [
+      // A point read acknowledged the rename while thread/list omitted the
+      // thread; the listing served the pending start's "Untitled thread".
+      [[false, [{ kind: "rename", n: 1 }, { kind: "nav", method: "thread/started" }]]],
+      // The same acknowledgment while thread/list lists the thread unnamed.
+      [[true, [{ kind: "materialize" }, { kind: "rename", n: 1 }]]],
+      // The unnamed listing's preview, also `derived`, retired a generated title.
+      [[true, [{ kind: "generated", n: 1 }, { kind: "materialize" }, { kind: "read" }, { kind: "rename", n: 1 }]]],
+      // A listing that held only the pending start's placeholder, which carries
+      // the rename, retired it before thread/list listed the thread unnamed.
+      [[true, [{ kind: "rename", n: 1 }, { kind: "read" }, { kind: "materialize" }, { kind: "nav", method: "thread/started" }]]],
+    ] });
+  });
 });
