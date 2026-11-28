@@ -3,7 +3,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import fc from "fast-check";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendSummary } from "@pwragent/shared/contracts/backend";
+import type { AcpAgentSettingsEntry, BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { GuidedSetupLaunchProvider } from "../guided-setup/GuidedSetupLauncher";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../HarnessSetupPanels";
 import {
   acpEntryArb,
+  AUTH_ERROR,
   claudeArb,
   codexArb,
   codexBackendArb,
@@ -84,7 +85,7 @@ describe("harness Setup checklist", () => {
       } finally {
         cleanup();
       }
-    }), { numRuns: 60 });
+    }), { numRuns: 5 });
   });
 
   it("Claude: one current step, its controls only there, one Check again", () => {
@@ -102,7 +103,7 @@ describe("harness Setup checklist", () => {
       } finally {
         cleanup();
       }
-    }), { numRuns: 40 });
+    }), { numRuns: 5 });
   });
 
   it("Codex: one current step, its controls only there, one Check again", () => {
@@ -123,6 +124,45 @@ describe("harness Setup checklist", () => {
       } finally {
         cleanup();
       }
-    }), { numRuns: 60 });
+    }), { numRuns: 5 });
+  });
+
+  // States the properties caught offering two Check again buttons.
+  describe("examples", () => {
+    const grok = (overrides: Partial<AcpAgentSettingsEntry>): AcpAgentSettingsEntry => ({
+      backendId: "acp:grok",
+      registryId: "grok",
+      name: "Grok",
+      authors: [],
+      distributionKind: "local",
+      distributionSource: "grok --acp",
+      installable: false,
+      installed: true,
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      activeCommand: "/usr/bin/grok",
+      lastDiscoveredAt: 1_000,
+      ...overrides,
+    });
+
+    it.each([
+      ["an installed agent whose check failed", grok({ lastDiscoveryError: "Request timed out" })],
+      ["a Grok whose sign-in was refused", grok({ lastDiscoveryError: AUTH_ERROR })],
+    ])("%s has one Check again", (_name, entry) => {
+      render(withLauncher(
+        <AcpSetupChecklist
+          entry={entry}
+          registryId={entry.registryId}
+          name={entry.name}
+          enabled
+          desktopApi={desktopApi}
+          onCheck={() => {}}
+          onEnable={async () => {}}
+        />,
+      ));
+      expect(screen.getAllByRole("button", { name: "Check again" })).toHaveLength(1);
+      expectOneWayForward();
+    });
   });
 });

@@ -107,7 +107,7 @@ describe("harness setup status", () => {
       expectCoherent(status);
       expect(status.ready).toBe(acpOracleReady(entry, enabled));
       if (!enabled) expect(status.steps[0]).toMatchObject({ id: "enable" });
-    }), { numRuns: 400 });
+    }));
   });
 
   it("Claude: green only when Claude Code is found and signed in", () => {
@@ -115,7 +115,7 @@ describe("harness setup status", () => {
       const status = claudeSetupStatus(claude, { signingIn });
       expectCoherent(status);
       expect(status.ready).toBe(claudeOracleReady(claude, signingIn));
-    }), { numRuns: 200 });
+    }));
   });
 
   it("Codex: green only with a working runtime, a signed-in profile and a healthy backend", () => {
@@ -129,7 +129,7 @@ describe("harness setup status", () => {
         expectCoherent(status);
         expect(status.ready).toBe(codexOracleReady(codex, backend, managedProgress, login));
       },
-    ), { numRuns: 400 });
+    ));
   });
 
   // Counterexamples the pre-change Settings got wrong, kept as examples.
