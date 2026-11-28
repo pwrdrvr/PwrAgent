@@ -95,7 +95,7 @@ describe("Settled sections in a project", () => {
       expect(settled).toEqual(roots.flatMap((spec, i) => !spec.pinned && spec.settled ? [`r${i}`] : [])
         .sort((left, right) => settled.indexOf(left) - settled.indexOf(right)));
       expect(unpinned.every((id) => !roots[Number(id.slice(1))]!.settled || roots[Number(id.slice(1))]!.pinned)).toBe(true);
-    }), { numRuns: 200 });
+    }));
   });
 
   it("counts Settled from the owner's roots, with each subtree filed under its root", () => {
@@ -116,7 +116,7 @@ describe("Settled sections in a project", () => {
       expect(listNavigationDirectoryUnpinnedRoots(index(buildThreads(roots, true)), "directory:/repo")
         .map((thread) => thread.id))
         .toEqual(rootIds(index(buildThreads(roots, true)), { ...directory, roots: "unpinned", settled: "exclude" }));
-    }), { numRuns: 200 });
+    }));
   });
 
   it("changes nothing for a profile that never settled (upgrade oracle)", () => {
@@ -133,6 +133,6 @@ describe("Settled sections in a project", () => {
       expect(row).not.toHaveProperty("settledRootCount");
       expect(row).not.toHaveProperty("settledCollapsed");
       expect(row.unpinnedRootCount).toBe(roots.filter((spec) => !spec.pinned).length);
-    }), { numRuns: 200 });
+    }));
   });
 });

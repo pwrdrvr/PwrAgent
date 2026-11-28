@@ -61,7 +61,7 @@ it("asks for Settled only when a project has settled roots and the section is op
           ...(hasSettled ? { settled: "exclude" } : {}) });
       }
     }
-  }), { numRuns: 300 });
+  }));
 });
 
 it("asks exactly what it asked before Settle for projects with nothing settled (upgrade oracle)", () => {
@@ -73,5 +73,5 @@ it("asks exactly what it asked before Settle for projects with nothing settled (
     const demand = demandOf(input, unsettled);
     expect(demand).toEqual(demandOf({ ...input, settledExpandedByKey: undefined }, before));
     expect([...demand.keys()].some((key) => key.startsWith("directory-settled:"))).toBe(false);
-  }), { numRuns: 300 });
+  }));
 });

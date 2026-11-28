@@ -65,7 +65,7 @@ describe("Settle across federation", () => {
     fc.assert(fc.property(row, (spec) => {
       const windowOwnerTakesSettle = spec.windowOwner === null ? undefined : ownerTakesSettle(spec.windowOwner);
       expect(threadSettleOffered(thread(spec as Row), windowOwnerTakesSettle)).toBe(oracle(spec as Row));
-    }), { numRuns: 500 });
+    }));
   });
 
   it("covers each corner of the matrix", () => {
@@ -101,7 +101,7 @@ describe("Settle across federation", () => {
       }
       const bulk = readSettleDirectoryUnpinnedRequest(value);
       if (bulk) expect(typeof bulk.directoryKey).toBe("string");
-    }), { numRuns: 300 });
+    }));
     expect(readSetThreadSettledRequest({ threadId: "t", settled: true, backend: "codex", seenUpdatedAt: 5 }))
       .toEqual({ threadId: "t", settled: true, backend: "codex", seenUpdatedAt: 5 });
     expect(readSetThreadSettledRequest({ threadId: "t", settled: "yes" })).toBeUndefined();

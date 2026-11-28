@@ -125,7 +125,21 @@ describe("Settle state on the owner's store", () => {
           expect(Boolean(overlay?.pinnedRank) && overlay?.settledAt !== undefined).toBe(false);
         }
       }
-    }), { numRuns: 60 });
+    }), {
+      // A real StateDb: a few generated runs, and the transitions that matter as named sequences.
+      numRuns: 5,
+      examples: [
+        // Settle clears a pin and marks read; a turn start un-settles; pinning again then Settle once more.
+        [[{ kind: "pin", thread: "a" }, { kind: "settle", threads: ["a"], seenUpdatedAt: 10 },
+          { kind: "turn-start", thread: "a" }, { kind: "pin", thread: "a" }, { kind: "settle", threads: ["a", "b"] }]],
+        // A repeated bulk Settle writes only for the threads that change; archive and restore clear it.
+        [[{ kind: "settle", threads: ["a", "b"], seenUpdatedAt: 5 }, { kind: "settle", threads: ["a", "c"], seenUpdatedAt: 3 },
+          { kind: "unsettle", thread: "b" }, { kind: "archive", thread: "a" }, { kind: "restore", thread: "c" }]],
+        // Pinning un-settles; a turn start or Unsettle on an unsettled thread writes nothing.
+        [[{ kind: "settle", threads: ["d"] }, { kind: "pin", thread: "d" }, { kind: "unsettle", thread: "d" },
+          { kind: "turn-start", thread: "d" }, { kind: "unpin", thread: "d" }]],
+      ],
+    });
   });
 
   it("settles a pinned thread, a bulk list and a turn start within the budget", async () => {
